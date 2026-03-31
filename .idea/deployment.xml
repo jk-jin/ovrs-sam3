@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="PublishConfigData" autoUpload="Always" serverName="root@connect.westd.seetacloud.com:35180 password" remoteFilesAllowedToDisappearOnAutoupload="false">
+    <serverData>
+      <paths name="root@connect.westd.seetacloud.com:35180 password">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/root/autodl-tmp/ovrs_sam3" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+          <excludedPaths>
+            <excludedPath path="/root/autodl-tmp/ovrs_sam3/weights" />
+            <excludedPath path="/root/autodl-tmp/ovrs_sam3/data/datasets" />
+          </excludedPaths>
+        </serverdata>
+      </paths>
+    </serverData>
+    <option name="myAutoUpload" value="ALWAYS" />
+  </component>
+</project>
