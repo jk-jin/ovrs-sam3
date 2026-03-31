@@ -9,7 +9,6 @@ from typing import Dict, Iterable, Optional, Sequence
 import torch
 from torch.amp import GradScaler, autocast
 
-from ..losses.target_converter import TargetConverter
 from .checkpoint import CheckpointManager, CheckpointManagerConfig
 from .evaluator import evaluate_model
 from .hooks import Hook, HookManager, LoggerHook
@@ -192,7 +191,12 @@ class Trainer:
         self.hook_manager.call('after_val_epoch', self, epoch, stats)
         return stats
 
-    def save_checkpoint(self, epoch: int, train_stats: Dict[str, float], val_stats: Optional[Dict[str, float]] = None) -> Path:
+    def save_checkpoint(
+            self,
+            epoch: int,
+            train_stats: Dict[str, float],
+            val_stats: Optional[Dict[str, float]] = None,
+    ) -> Path:
         ckpt_path = self.checkpoint_manager.save(
             epoch=epoch,
             model=self.model,
@@ -201,7 +205,10 @@ class Trainer:
             scheduler=self.lr_scheduler,
             train_stats=train_stats,
             val_stats=val_stats or {},
-            extra={'task': self.cfg.task},
+            extra={
+                'monitor': self.cfg.monitor,
+                'monitor_mode': self.cfg.monitor_mode,
+            },
         )
         self.hook_manager.call('after_save_checkpoint', self, epoch, str(ckpt_path))
         return ckpt_path

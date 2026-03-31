@@ -208,7 +208,7 @@ class Sam3Image(torch.nn.Module):
         query_embed = self.transformer.decoder.query_embed.weight
         tgt = query_embed.unsqueeze(1).repeat(1, bs, 1)
 
-        apply_dac = self.transformer.decoder.dac and self.training
+        apply_dac = self.transformer.decoder.dac and self.transformer.decoder.training
         hs, reference_boxes, dec_presence_out, dec_presence_feats = (
             self.transformer.decoder(
                 tgt=tgt,
@@ -252,7 +252,7 @@ class Sam3Image(torch.nn.Module):
         dec_presence_out=None,
         is_instance_prompt=False,
     ):
-        apply_dac = self.transformer.decoder.dac and self.training
+        apply_dac = self.transformer.decoder.dac and self.transformer.decoder.training
         num_o2o = (hs.size(2) // 2) if apply_dac else hs.size(2)
         num_o2m = hs.size(2) - num_o2o
         assert num_o2m == (num_o2o if apply_dac else 0)
@@ -283,7 +283,7 @@ class Sam3Image(torch.nn.Module):
 
         if dec_presence_out is not None:
             _update_out(
-                out, "presence_logit_dec", dec_presence_out, update_aux=self.training
+                out, "presence_logit_dec", dec_presence_out, update_aux=self.transformer.decoder.training
             )
 
         if self.supervise_joint_box_scores:
@@ -297,35 +297,35 @@ class Sam3Image(torch.nn.Module):
             ).clamp(min=-10.0, max=10.0)
 
         _update_out(
-            out, "pred_logits", outputs_class[:, :, :num_o2o], update_aux=self.training
+            out, "pred_logits", outputs_class[:, :, :num_o2o],
+            update_aux=self.transformer.decoder.training
         )
         _update_out(
-            out, "pred_boxes", outputs_coord[:, :, :num_o2o], update_aux=self.training
+            out, "pred_boxes", outputs_coord[:, :, :num_o2o],
+            update_aux=self.transformer.decoder.training
         )
         _update_out(
-            out,
-            "pred_boxes_xyxy",
-            outputs_boxes_xyxy[:, :, :num_o2o],
-            update_aux=self.training,
+            out, "pred_boxes_xyxy", outputs_boxes_xyxy[:, :, :num_o2o],
+            update_aux=self.transformer.decoder.training
         )
-        if num_o2m > 0 and self.training:
+        if num_o2m > 0 and self.transformer.decoder.training:
             _update_out(
                 out,
                 "pred_logits_o2m",
                 outputs_class[:, :, num_o2o:],
-                update_aux=self.training,
+                update_aux=self.transformer.decoder.training,
             )
             _update_out(
                 out,
                 "pred_boxes_o2m",
                 outputs_coord[:, :, num_o2o:],
-                update_aux=self.training,
+                update_aux=self.transformer.decoder.training,
             )
             _update_out(
                 out,
                 "pred_boxes_xyxy_o2m",
                 outputs_boxes_xyxy[:, :, num_o2o:],
-                update_aux=self.training,
+                update_aux=self.transformer.decoder.training,
             )
 
     def _run_segmentation_heads(
@@ -339,7 +339,7 @@ class Sam3Image(torch.nn.Module):
         prompt_mask,
         hs,
     ):
-        apply_dac = self.transformer.decoder.dac and self.training
+        apply_dac = self.transformer.decoder.dac and self.transformer.decoder.training
         if self.segmentation_head is not None:
             num_o2o = (hs.size(2) // 2) if apply_dac else hs.size(2)
             num_o2m = hs.size(2) - num_o2o
@@ -349,7 +349,7 @@ class Sam3Image(torch.nn.Module):
                 obj_queries=obj_queries,
                 image_ids=img_ids,
                 encoder_hidden_states=encoder_hidden_states,
-                act_ckpt_enable=self.training and self.use_act_checkpoint_seg_head,
+                act_ckpt_enable=self.segmentation_head.training and self.use_act_checkpoint_seg_head,
                 prompt=prompt,
                 prompt_mask=prompt_mask,
             )
@@ -368,32 +368,33 @@ class Sam3Image(torch.nn.Module):
         else:
             backbone_out.pop("backbone_fpn", None)
 
-    def forward_grounding(
-        self,
-        backbone_out,
-        find_input,
-        find_target,
-        geometric_prompt: Prompt,
-    ):
-        with torch.profiler.record_function("SAM3Image._encode_prompt"):
+    def forward_grounding_raw(
+            self,
+            backbone_out: Dict[str, torch.Tensor],
+            find_input,
+            geometric_prompt: Prompt,
+    ) -> Dict[str, torch.Tensor]:
+        with torch.profiler.record_function("Sam3Image._encode_prompt"):
             prompt, prompt_mask, backbone_out = self._encode_prompt(
                 backbone_out, find_input, geometric_prompt
             )
-        # Run the encoder
-        with torch.profiler.record_function("SAM3Image._run_encoder"):
+
+        with torch.profiler.record_function("Sam3Image._run_encoder"):
             backbone_out, encoder_out, _ = self._run_encoder(
                 backbone_out, find_input, prompt, prompt_mask
             )
+
         out = {
             "encoder_hidden_states": encoder_out["encoder_hidden_states"],
             "prev_encoder_out": {
                 "encoder_out": encoder_out,
                 "backbone_out": backbone_out,
             },
+            "prompt": prompt,
+            "prompt_mask": prompt_mask,
         }
 
-        # Run the decoder
-        with torch.profiler.record_function("SAM3Image._run_decoder"):
+        with torch.profiler.record_function("Sam3Image._run_decoder"):
             out, hs = self._run_decoder(
                 memory=out["encoder_hidden_states"],
                 pos_embed=encoder_out["pos_embed"],
@@ -404,8 +405,7 @@ class Sam3Image(torch.nn.Module):
                 encoder_out=encoder_out,
             )
 
-        # Run segmentation heads
-        with torch.profiler.record_function("SAM3Image._run_segmentation_heads"):
+        with torch.profiler.record_function("Sam3Image._run_segmentation_heads"):
             self._run_segmentation_heads(
                 out=out,
                 backbone_out=backbone_out,
@@ -417,11 +417,9 @@ class Sam3Image(torch.nn.Module):
                 hs=hs,
             )
 
-        if self.training or self.num_interactive_steps_val > 0:
-            self._compute_matching(out, self.back_convert(find_target))
         return out
 
-    def forward(self, input: BatchedDatapoint):
+    def forward(self, input: BatchedDatapoint) -> Dict[str, torch.Tensor]:
         device = self.device
 
         backbone_out = self.backbone.forward_image(input.img_batch)
@@ -429,9 +427,10 @@ class Sam3Image(torch.nn.Module):
             self.backbone.forward_text(input.find_text_batch, device=device)
         )
 
-        assert len(input.find_inputs) == 1
+        assert len(input.find_inputs) == 1, (
+            "Current semantic-only pipeline assumes exactly one find stage per batch."
+        )
         find_input = input.find_inputs[0]
-        find_target = input.find_targets[0] if self.training else None
 
         geometric_prompt = Prompt(
             box_embeddings=find_input.input_boxes,
@@ -439,31 +438,8 @@ class Sam3Image(torch.nn.Module):
             box_labels=find_input.input_boxes_label,
         )
 
-        out = self.forward_grounding(
+        return self.forward_grounding_raw(
             backbone_out=backbone_out,
             find_input=find_input,
-            find_target=find_target,
             geometric_prompt=geometric_prompt,
         )
-        return out
-
-    def _compute_matching(self, out, targets):
-        out["indices"] = self.matcher(out, targets)
-        for aux_out in out.get("aux_outputs", []):
-            aux_out["indices"] = self.matcher(aux_out, targets)
-
-    def back_convert(self, targets):
-        batched_targets = {
-            "boxes": targets.boxes.view(-1, 4),
-            "boxes_xyxy": box_cxcywh_to_xyxy(targets.boxes.view(-1, 4)),
-            "boxes_padded": targets.boxes_padded,
-            "positive_map": targets.boxes.new_ones(len(targets.boxes), 1),
-            "num_boxes": targets.num_boxes,
-            "masks": targets.segments,
-            "semantic_masks": targets.semantic_segments,
-            "is_valid_mask": targets.is_valid_segment,
-            "is_exhaustive": targets.is_exhaustive,
-            "object_ids_packed": targets.object_ids,
-            "object_ids_padded": targets.object_ids_padded,
-        }
-        return batched_targets

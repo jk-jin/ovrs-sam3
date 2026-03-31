@@ -25,7 +25,8 @@ from .models.model_misc import (
 from .models.necks import Sam3DualViTDetNeck
 from .models.position_encoding import PositionEmbeddingSine
 from .models.sam3_image import Sam3Image
-from .models.segmentor_builder import build_segmentor_from_sam3_image
+from .models.adapters.semantic_adapter import QueryMaskSemanticAdapter
+from .models.segmentor import SAM3Segmentor
 from .models.text_encoder_ve import VETextEncoder
 from .models.tokenizer_ve import SimpleTokenizer
 from .models.vitdet import ViT
@@ -98,13 +99,11 @@ class FrozenModuleMixin:
             return
         for p in module.parameters():
             p.requires_grad = requires_grad
-        module.train(requires_grad)
 
     @staticmethod
     def set_model_requires_grad(model: nn.Module, requires_grad: bool) -> None:
         for p in model.parameters():
             p.requires_grad = requires_grad
-        model.train(requires_grad)
 
     @staticmethod
     def get_named_modules(model: nn.Module) -> dict[str, nn.Module]:
@@ -452,19 +451,29 @@ class SAM3ModelBuilder(FrozenModuleMixin):
     @classmethod
     def build_segmentor(cls, cfg: SegmentorBuildConfig) -> nn.Module:
         sam3_image_model = cls.build_sam3_image_model(cfg)
-        model = build_segmentor_from_sam3_image(
-            sam3_image_model,
-            semantic_topk=cfg.semantic_topk,
-            semantic_aggregation=cfg.semantic_aggregation,
+
+        # semantic-only: make intent explicit
+        sam3_image_model.matcher = None
+
+        model = SAM3Segmentor(
+            core=sam3_image_model,
+            semantic_adapter=QueryMaskSemanticAdapter(
+                topk=cfg.semantic_topk,
+                aggregation=cfg.semantic_aggregation,
+            ),
         )
 
         model = model.to(cfg.device)
+        cls.apply_freeze_cfg(model, cfg.freeze_cfg)
+
+        if hasattr(cfg, "prompt_chunk_size"):
+            model.core.prompt_chunk_size = cfg.prompt_chunk_size
+
         if cfg.eval_mode:
             model.eval()
         else:
             model.train()
 
-        cls.apply_freeze_cfg(model, cfg.freeze_cfg)
         return model
 
 
