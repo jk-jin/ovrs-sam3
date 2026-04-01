@@ -89,6 +89,7 @@ class SegmentorBuildConfig:
     compile: bool = False
     semantic_topk: Optional[int] = 20
     semantic_aggregation: str = "weighted_sum"
+    prompt_chunk_size: Optional[int] = None
     freeze_cfg: FreezeConfig = field(default_factory=FreezeConfig)
 
 
@@ -466,8 +467,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         model = model.to(cfg.device)
         cls.apply_freeze_cfg(model, cfg.freeze_cfg)
 
-        if hasattr(cfg, "prompt_chunk_size"):
-            model.core.prompt_chunk_size = cfg.prompt_chunk_size
+        if cfg.prompt_chunk_size is not None:
+            model.core.prompt_chunk_size = int(cfg.prompt_chunk_size)
 
         if cfg.eval_mode:
             model.eval()
