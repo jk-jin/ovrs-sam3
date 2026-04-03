@@ -7,7 +7,7 @@ from typing import Dict, Optional
 
 import torch
 from .vl_combiner import SAM3VLBackbone
-from .data_misc import BatchedDatapoint
+from .data_misc import BatchedDatapoint, FindStage
 
 from .act_ckpt_utils import activation_ckpt_wrapper
 from .box_ops import box_cxcywh_to_xyxy
@@ -88,6 +88,7 @@ class Sam3Image(torch.nn.Module):
 
         self.use_instance_query = use_instance_query
         self.multimask_output = multimask_output
+        self.prompt_chunk_size = None
 
     @property
     def device(self):
@@ -98,6 +99,118 @@ class Sam3Image(torch.nn.Module):
         # clear cached _device in case the model is moved to a different device
         self._device = None
         return super().to(*args, **kwargs)
+
+    def _get_prompt_chunk_size(self, num_classes: int) -> int:
+        chunk_size = getattr(self, "prompt_chunk_size", None)
+        if chunk_size is None:
+            return num_classes
+        chunk_size = int(chunk_size)
+        if chunk_size <= 0:
+            return num_classes
+        return min(chunk_size, num_classes)
+
+    @staticmethod
+    def _has_nonempty_geometric_prompt(find_input: Optional[FindStage]) -> bool:
+        if find_input is None:
+            return False
+
+        tensor_fields = [
+            getattr(find_input, "input_boxes", None),
+            getattr(find_input, "input_points", None),
+        ]
+        for x in tensor_fields:
+            if isinstance(x, torch.Tensor) and x.numel() > 0:
+                return True
+        return False
+
+    def _build_prompt_expanded_find_stage(
+        self,
+        batch_size: int,
+        num_chunk_classes: int,
+        device: torch.device,
+        base_find_input: Optional[FindStage] = None,
+    ) -> FindStage:
+        if self._has_nonempty_geometric_prompt(base_find_input):
+            raise NotImplementedError(
+                "Current stage-1 internal chunking only supports semantic-only batches "
+                "without non-empty geometric prompts."
+            )
+
+        num_pairs = batch_size * num_chunk_classes
+
+        img_ids = torch.arange(batch_size, device=device, dtype=torch.long).repeat_interleave(num_chunk_classes)
+        text_ids = torch.arange(num_chunk_classes, device=device, dtype=torch.long).repeat(batch_size)
+
+        return FindStage(
+            img_ids=img_ids,
+            text_ids=text_ids,
+            input_boxes=torch.zeros((0, num_pairs, 4), dtype=torch.float32, device=device),
+            input_boxes_mask=torch.zeros((num_pairs, 0), dtype=torch.bool, device=device),
+            input_boxes_label=torch.zeros((0, num_pairs), dtype=torch.long, device=device),
+            input_points=torch.zeros((0, num_pairs, 2), dtype=torch.float32, device=device),
+            input_points_mask=torch.zeros((num_pairs, 0), dtype=torch.bool, device=device),
+        )
+
+    @staticmethod
+    def _reshape_prompt_first_tensor(
+        x: Optional[torch.Tensor],
+        batch_size: int,
+        num_chunk_classes: int,
+        key: str,
+    ) -> Optional[torch.Tensor]:
+        if x is None:
+            return None
+
+        expected = batch_size * num_chunk_classes
+        if x.shape[0] != expected:
+            raise ValueError(
+                f"Cannot reshape key={key}: expected first dim = {expected}, got {tuple(x.shape)}"
+            )
+
+        return x.reshape(batch_size, num_chunk_classes, *x.shape[1:])
+
+    def _extract_and_reshape_chunk_outputs(
+        self,
+        raw_outputs: Dict[str, torch.Tensor],
+        batch_size: int,
+        num_chunk_classes: int,
+    ) -> Dict[str, torch.Tensor]:
+        keep_keys = [
+            "pred_masks",
+            "pred_logits",
+            "semantic_seg",
+            "presence_logit",
+            "presence_logit_dec",
+        ]
+
+        out = {}
+        for key in keep_keys:
+            if key in raw_outputs and raw_outputs[key] is not None:
+                out[key] = self._reshape_prompt_first_tensor(
+                    raw_outputs[key],
+                    batch_size=batch_size,
+                    num_chunk_classes=num_chunk_classes,
+                    key=key,
+                )
+        return out
+
+    @staticmethod
+    def _merge_chunk_outputs(chunk_outputs: list[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+        if len(chunk_outputs) == 0:
+            raise ValueError("chunk_outputs is empty.")
+
+        all_keys = set()
+        for chunk_out in chunk_outputs:
+            all_keys.update(chunk_out.keys())
+
+        merged = {}
+        for key in all_keys:
+            values = [chunk_out[key] for chunk_out in chunk_outputs if key in chunk_out]
+            if len(values) == 0:
+                continue
+            merged[key] = torch.cat(values, dim=1)
+
+        return merged
 
     def _get_img_feats(self, backbone_out, img_ids):
         vis_feats = backbone_out["backbone_fpn"][-self.num_feature_levels:]
@@ -422,24 +535,60 @@ class Sam3Image(torch.nn.Module):
     def forward(self, input: BatchedDatapoint) -> Dict[str, torch.Tensor]:
         device = self.device
 
-        backbone_out = self.backbone.forward_image(input.img_batch)
-        backbone_out.update(
-            self.backbone.forward_text(input.find_text_batch, device=device)
-        )
+        if len(input.find_inputs) != 1:
+            raise ValueError(
+                "Current semantic-only pipeline assumes exactly one find stage per batch."
+            )
 
-        assert len(input.find_inputs) == 1, (
-            "Current semantic-only pipeline assumes exactly one find stage per batch."
-        )
-        find_input = input.find_inputs[0]
+        base_find_input = input.find_inputs[0]
 
-        geometric_prompt = Prompt(
-            box_embeddings=find_input.input_boxes,
-            box_mask=find_input.input_boxes_mask,
-            box_labels=find_input.input_boxes_label,
-        )
+        class_texts = list(input.find_text_batch)
+        if len(class_texts) == 0:
+            raise ValueError("find_text_batch is empty. It should contain the shared class vocabulary.")
 
-        return self.forward_grounding_raw(
-            backbone_out=backbone_out,
-            find_input=find_input,
-            geometric_prompt=geometric_prompt,
-        )
+        batch_size = int(input.img_batch.shape[0])
+        num_classes = len(class_texts)
+        chunk_size = self._get_prompt_chunk_size(num_classes)
+
+        image_backbone_out = self.backbone.forward_image(input.img_batch)
+
+        chunk_outputs = []
+
+        for start in range(0, num_classes, chunk_size):
+            end = min(start + chunk_size, num_classes)
+            chunk_texts = class_texts[start:end]
+            num_chunk_classes = len(chunk_texts)
+
+            text_backbone_out = self.backbone.forward_text(chunk_texts, device=device)
+
+            chunk_backbone_out = dict(image_backbone_out)
+            chunk_backbone_out.update(text_backbone_out)
+
+            chunk_find_input = self._build_prompt_expanded_find_stage(
+                batch_size=batch_size,
+                num_chunk_classes=num_chunk_classes,
+                device=device,
+                base_find_input=base_find_input,
+            )
+
+            geometric_prompt = Prompt(
+                box_embeddings=chunk_find_input.input_boxes,
+                box_mask=chunk_find_input.input_boxes_mask,
+                box_labels=chunk_find_input.input_boxes_label,
+            )
+
+            chunk_raw_outputs = self.forward_grounding_raw(
+                backbone_out=chunk_backbone_out,
+                find_input=chunk_find_input,
+                geometric_prompt=geometric_prompt,
+            )
+
+            chunk_out = self._extract_and_reshape_chunk_outputs(
+                raw_outputs=chunk_raw_outputs,
+                batch_size=batch_size,
+                num_chunk_classes=num_chunk_classes,
+            )
+            chunk_outputs.append(chunk_out)
+
+        merged_outputs = self._merge_chunk_outputs(chunk_outputs)
+        return merged_outputs

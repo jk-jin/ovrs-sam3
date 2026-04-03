@@ -13,12 +13,23 @@ model = dict(
     device='cuda',
     eval_mode=False,
     compile=False,
+
     semantic_topk=20,
     semantic_aggregation='weighted_sum',
-    prompt_chunk_size=16,
+
+    semantic_use_query_branch=True,
+    semantic_use_semantic_branch=True,
+    semantic_fusion_mode='max',
+
+    semantic_use_presence_score=True,
+    semantic_presence_reduce='max',
+
+    prompt_chunk_size=8,
+
     freeze_cfg=dict(
-        train_adapters_only=True,
+        train_adapters_only=False,
         trainable_modules=[],
+        frozen_modules=[],
     ),
 )
 

@@ -9,18 +9,17 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
-
 @dataclass
 class VisualizerConfig:
     enabled: bool = False
     save_dir: str = './visualizations'
-    save_stage: str = 'val'   # val | train | all
+    save_stage: str = 'val'
     alpha: float = 0.45
 
     save_original: bool = True
     save_prediction: bool = True
     save_ground_truth: bool = True
-    save_overlay: bool = True
+    save_dense_prediction: bool = True
 
     max_samples: Optional[int] = None
     image_folder_pattern: str = 'image_{image_id:06d}'
@@ -170,6 +169,20 @@ class VisualizationManager:
         out = np.clip(out, 0, 255).astype(np.uint8)
         return Image.fromarray(out, mode='RGB')
 
+    @staticmethod
+    def _extract_pred_from_logits(
+        logits: Optional[torch.Tensor],
+    ) -> Optional[torch.Tensor]:
+        """
+        输入 logits: [B, C, H, W]
+        输出 pred:   [B, H, W]
+        """
+        if logits is None:
+            return None
+        if logits.dim() != 4:
+            raise ValueError(f'Expected logits [B,C,H,W], got {tuple(logits.shape)}')
+        return logits.argmax(dim=1)
+
     def save_semantic_batch(
         self,
         batch: Any,
@@ -182,9 +195,16 @@ class VisualizationManager:
         if not self.should_save(stage):
             return
 
-        logits = semantic_outputs['semantic_logits']   # [B,C,H,W]
-        pred = logits.argmax(dim=1)                    # [B,H,W]
-        gt = semantic_targets['label_map']             # [B,H,W]
+        if 'semantic_logits' not in semantic_outputs:
+            raise ValueError("semantic_outputs must contain 'semantic_logits'.")
+
+        fused_logits = semantic_outputs['semantic_logits']             # [B,C,H,W]
+        fused_pred = self._extract_pred_from_logits(fused_logits)     # [B,H,W]
+
+        dense_logits = semantic_outputs.get('semantic_logits_dense', None)
+        dense_pred = self._extract_pred_from_logits(dense_logits) if dense_logits is not None else None
+
+        gt = semantic_targets['label_map']                            # [B,H,W]
 
         if gt.dim() == 4:
             if gt.shape[1] != 1:
@@ -193,8 +213,8 @@ class VisualizationManager:
         if gt.dim() != 3:
             raise ValueError(f'Expected gt [B,H,W], got {tuple(gt.shape)}')
 
-        num_classes = int(logits.shape[1])
-        bsz = int(logits.shape[0])
+        num_classes = int(fused_logits.shape[1])
+        bsz = int(fused_logits.shape[0])
 
         for b in range(bsz):
             if self.cfg.max_samples is not None and self._num_saved >= self.cfg.max_samples:
@@ -206,21 +226,33 @@ class VisualizationManager:
             image = self._extract_original_image(batch, b)
             out_hw = image.size[::-1]
 
-            pred_label = self._prepare_label_map(pred[b], out_hw)
+            fused_pred_label = self._prepare_label_map(fused_pred[b], out_hw)
             gt_label = self._prepare_label_map(gt[b], out_hw)
+
+            dense_pred_label = None
+            if dense_pred is not None:
+                dense_pred_label = self._prepare_label_map(dense_pred[b], out_hw)
 
             if self.cfg.save_original:
                 image.save(sample_dir / 'original.png')
+
             if self.cfg.save_prediction:
-                self._colorize_label_map(pred_label, num_classes).save(sample_dir / 'pred_color.png')
+                self._overlay_label_map(image, fused_pred_label, num_classes).save(
+                    sample_dir / 'pred_overlay.png'
+                )
+
+            if self.cfg.save_dense_prediction and dense_pred_label is not None:
+                self._overlay_label_map(image, dense_pred_label, num_classes).save(
+                    sample_dir / 'pred_semantic_overlay.png'
+                )
+
             if self.cfg.save_ground_truth:
-                self._colorize_label_map(gt_label, num_classes).save(sample_dir / 'gt_color.png')
-            if self.cfg.save_overlay:
-                self._overlay_label_map(image, pred_label, num_classes).save(sample_dir / 'pred_overlay.png')
-                self._overlay_label_map(image, gt_label, num_classes).save(sample_dir / 'gt_overlay.png')
+                self._overlay_label_map(image, gt_label, num_classes).save(
+                    sample_dir / 'gt_overlay.png'
+                )
 
             try:
-                class_names: List[str] = batch.find_metadatas[0].class_names[b]
+                class_names: List[str] = batch.find_metadatas[0].class_names
                 with open(sample_dir / 'classes.txt', 'w', encoding='utf-8') as f:
                     for i, name in enumerate(class_names):
                         f.write(f'{i}\t{name}\n')

@@ -11,25 +11,22 @@ MyTensor = Union[torch.Tensor, List[Any]]
 
 @dataclass
 class FindStage:
-    img_ids: MyTensor
-    img_ids__type = torch.long
+    img_ids: Optional[MyTensor] = None
+    text_ids: Optional[MyTensor] = None
 
-    text_ids: MyTensor
-    text_ids__type = torch.long
-
-    input_boxes: MyTensor
+    input_boxes: Optional[MyTensor] = None
     input_boxes__type = torch.float
 
-    input_boxes_mask: MyTensor
+    input_boxes_mask: Optional[MyTensor] = None
     input_boxes_mask__type = torch.bool
 
-    input_boxes_label: MyTensor
+    input_boxes_label: Optional[MyTensor] = None
     input_boxes_label__type = torch.long
 
-    input_points: MyTensor
+    input_points: Optional[MyTensor] = None
     input_points__type = torch.float
 
-    input_points_mask: MyTensor
+    input_points_mask: Optional[MyTensor] = None
     input_points_mask__type = torch.bool
 
 
@@ -47,23 +44,18 @@ class BatchedInferenceMetadata:
     original_size: MyTensor
     original_size__type = torch.long
 
-    prompt_img_ids: MyTensor
-    prompt_img_ids__type = torch.long
-
-    prompt_class_ids: MyTensor
-    prompt_class_ids__type = torch.long
-
-    class_counts: MyTensor
-    class_counts__type = torch.long
-
-    class_names: List[List[str]]
+    num_classes: int
+    class_names: List[str]
 
 
 @dataclass
 class BatchedDatapoint:
     img_batch: torch.Tensor
+
     find_text_batch: List[str]
+
     find_inputs: List[FindStage]
     find_targets: List[BatchedFindTarget]
     find_metadatas: List[BatchedInferenceMetadata]
+
     raw_images: Optional[List[Any]] = None

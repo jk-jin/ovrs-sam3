@@ -87,9 +87,19 @@ class SegmentorBuildConfig:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     eval_mode: bool = True
     compile: bool = False
+
     semantic_topk: Optional[int] = 20
     semantic_aggregation: str = "weighted_sum"
+
+    semantic_use_query_branch: bool = True
+    semantic_use_semantic_branch: bool = True
+    semantic_fusion_mode: str = "max"
+
+    semantic_use_presence_score: bool = True
+    semantic_presence_reduce: str = "max"
+
     prompt_chunk_size: Optional[int] = None
+
     freeze_cfg: FreezeConfig = field(default_factory=FreezeConfig)
 
 
@@ -397,6 +407,35 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         _ = hf_hub_download(repo_id=model_id, filename="config.json")
         return hf_hub_download(repo_id=model_id, filename="sam3.pt")
 
+    @staticmethod
+    def validate_semantic_cfg(cfg: SegmentorBuildConfig) -> None:
+        if not cfg.semantic_use_query_branch and not cfg.semantic_use_semantic_branch:
+            raise ValueError(
+                "At least one semantic branch must be enabled: "
+                "semantic_use_query_branch or semantic_use_semantic_branch."
+            )
+
+        valid_fusion_modes = {"query_only", "semantic_only", "max", "sum"}
+        if cfg.semantic_fusion_mode not in valid_fusion_modes:
+            raise ValueError(
+                f"Unknown semantic_fusion_mode: {cfg.semantic_fusion_mode}. "
+                f"Valid options are: {sorted(valid_fusion_modes)}"
+            )
+
+        valid_presence_reduce = {"max", "mean"}
+        if cfg.semantic_presence_reduce not in valid_presence_reduce:
+            raise ValueError(
+                f"Unknown semantic_presence_reduce: {cfg.semantic_presence_reduce}. "
+                f"Valid options are: {sorted(valid_presence_reduce)}"
+            )
+
+        valid_aggregations = {"max", "logsumexp", "weighted_sum"}
+        if cfg.semantic_aggregation not in valid_aggregations:
+            raise ValueError(
+                f"Unknown semantic_aggregation: {cfg.semantic_aggregation}. "
+                f"Valid options are: {sorted(valid_aggregations)}"
+            )
+
     @classmethod
     def apply_freeze_cfg(cls, model: nn.Module, freeze_cfg: FreezeConfig) -> None:
         if freeze_cfg.train_adapters_only:
@@ -451,6 +490,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
     @classmethod
     def build_segmentor(cls, cfg: SegmentorBuildConfig) -> nn.Module:
+        cls.validate_semantic_cfg(cfg)
+
         sam3_image_model = cls.build_sam3_image_model(cfg)
 
         # semantic-only: make intent explicit
@@ -461,6 +502,11 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             semantic_adapter=QueryMaskSemanticAdapter(
                 topk=cfg.semantic_topk,
                 aggregation=cfg.semantic_aggregation,
+                use_query_branch=cfg.semantic_use_query_branch,
+                use_semantic_branch=cfg.semantic_use_semantic_branch,
+                fusion_mode=cfg.semantic_fusion_mode,
+                use_presence_score=cfg.semantic_use_presence_score,
+                presence_reduce=cfg.semantic_presence_reduce,
             ),
         )
 
@@ -469,6 +515,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         if cfg.prompt_chunk_size is not None:
             model.core.prompt_chunk_size = int(cfg.prompt_chunk_size)
+        else:
+            model.core.prompt_chunk_size = None
 
         if cfg.eval_mode:
             model.eval()
