@@ -1,6 +1,10 @@
 potsdam_classes = [
-    'impervious surface', 'building', 'low vegetation',
-    'tree', 'car', 'clutter background'
+    'road',
+    'building',
+    'grass',
+    'tree',
+    'car',
+    'clutter'
 ]
 
 val_dataloader = dict(
@@ -11,13 +15,13 @@ val_dataloader = dict(
     persistent_workers=True,
     dataset=dict(
         type='data.dataset.OVSemanticSegDataset',
-        img_dir='data/datasets/PotsdamSplit/img_dir/val',
-        ann_dir='data/datasets/PotsdamSplit/ann_dir/val',
+        img_dir='data/datasets/potsdam/img_dir/val',
+        ann_dir='data/datasets/potsdam/ann_dir/val',
         classes=potsdam_classes,
         img_suffix='.png',
         seg_suffix='.png',
         ignore_index=255,
-        reduce_zero_label=True,
+        reduce_zero_label=False,
         return_raw_image=True,
         transforms=[
             dict(type='ToTensor'),

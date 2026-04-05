@@ -1,6 +1,6 @@
 floodnet_classes = [
-    'background', 'building_flooded', 'building_non_flooded',
-    'road_flooded', 'road_non_flooded', 'water', 'tree',
+    'background', 'building flooded', 'building non flooded',
+    'road flooded', 'road_non flooded', 'water', 'tree',
     'vehicle', 'pool', 'grass'
 ]
 
@@ -15,10 +15,10 @@ val_dataloader = dict(
         img_dir='data/datasets/FloodNet/val+test/img',
         ann_dir='data/datasets/FloodNet/val+test/lbl',
         classes=floodnet_classes,
-        img_suffix='.png',
+        img_suffix='.jpg',
         seg_suffix='.png',
         ignore_index=255,
-        reduce_zero_label=True,
+        reduce_zero_label=False,
         return_raw_image=True,
         transforms=[
             dict(type='ToTensor'),

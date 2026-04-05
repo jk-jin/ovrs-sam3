@@ -1,8 +1,8 @@
 gid15_classes = [
-    'industrial_land', 'urban_residential', 'rural_residential',
-    'traffic_land', 'paddy_field', 'irrigated_land', 'dry_cropland',
-    'garden_plot', 'arbor_woodland', 'shrub_land', 'natural_grassland',
-    'artificial_grassland', 'river', 'lake', 'pond'
+    'industrial land', 'urban residential', 'rural residential',
+    'traffic land', 'paddy field', 'irrigated land', 'dry cropland',
+    'garden plot', 'arbor woodland', 'shrub land', 'natural grassland',
+    'artificial grassland', 'river', 'lake', 'pond'
 ]
 
 train_dataloader = dict(
@@ -73,7 +73,7 @@ val_dataloader = dict(
         img_suffix='.png',
         seg_suffix='.png',
         ignore_index=255,
-        reduce_zero_label=True,
+        reduce_zero_label=False,
         return_raw_image=True,
         transforms=[
             dict(type='ToTensor'),

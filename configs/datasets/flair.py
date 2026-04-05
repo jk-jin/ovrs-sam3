@@ -1,7 +1,7 @@
 flair_classes = [
-    'building', 'pervious_surface', 'impervious_surface', 'bare_soil',
+    'building', 'pervious surface', 'impervious surface', 'bare soil',
     'water', 'coniferous', 'deciduous', 'brushwood', 'vineyard',
-    'herbaceous_vegetation', 'agricultural_land', 'plowed_land', 'other'
+    'herbaceous vegetation', 'agricultural land', 'plowed land', 'other'
 ]
 
 val_dataloader = dict(
@@ -18,7 +18,7 @@ val_dataloader = dict(
         img_suffix='.png',
         seg_suffix='.png',
         ignore_index=255,
-        reduce_zero_label=True,
+        reduce_zero_label=False,
         return_raw_image=True,
         transforms=[
             dict(type='ToTensor'),

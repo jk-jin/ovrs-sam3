@@ -1,12 +1,10 @@
-fast_classes = [
-    'Passenger Ship', 'Motorboat', 'Fishing Boat', 'Tugboat', 'other-ship',
-    'Engineering Ship', 'Liquid Cargo Ship', 'Dry Cargo Ship', 'Warship',
-    'Small Car', 'Bus', 'Cargo Truck', 'Dump Truck', 'other-vehicle',
-    'Van', 'Trailer', 'Tractor', 'Excavator', 'Truck Tractor',
-    'Boeing737', 'Boeing747', 'Boeing777', 'Boeing787', 'ARJ21',
-    'C919', 'A220', 'A321', 'A330', 'A350', 'other-airplane',
-    'Baseball Field', 'Basketball Court', 'Football Field', 'Tennis Court',
-    'Roundabout', 'Intersection', 'Bridge'
+vaihingen_classes = [
+    'road',
+    'building',
+    'grass',
+    'tree',
+    'car',
+    'clutter',
 ]
 
 val_dataloader = dict(
@@ -17,9 +15,9 @@ val_dataloader = dict(
     persistent_workers=True,
     dataset=dict(
         type='data.dataset.OVSemanticSegDataset',
-        img_dir='data/datasets/Fast/val/images',
-        ann_dir='data/datasets/Fast/val/semlabels/gray',
-        classes=fast_classes,
+        img_dir='data/datasets/vaihingen/img_dir/val',
+        ann_dir='data/datasets/vaihingen/ann_dir/val',
+        classes=vaihingen_classes,
         img_suffix='.png',
         seg_suffix='.png',
         ignore_index=255,

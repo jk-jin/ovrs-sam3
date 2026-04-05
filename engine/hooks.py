@@ -163,7 +163,7 @@ class LoggerHook(Hook):
         iter_part = f'[{step}/{total_iters}]' if total_iters is not None else f'[{step}/?]'
 
         msg = (
-            f'[val-loss] Epoch [{epoch_id}/{max_epochs}]'
+            f'[val] Epoch [{epoch_id}/{max_epochs}]'
             f'{iter_part} '
             f'eta: {eta} '
             f'time: {iter_time:.3f} '

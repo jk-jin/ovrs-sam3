@@ -1,20 +1,20 @@
 isaid_classes = [
     'background'
-    'plane',
     'ship',
-    'storage_tank',
-    'baseball_diamond',
-    'tennis_court',
-    'basketball_court',
-    'ground_track_field',
-    'harbor',
+    'store tank',
+    'baseball diamond',
+    'tennis court',
+    'basketball court',
+    'ground track field',
     'bridge',
-    'large_vehicle',
-    'small_vehicle',
+    'large vehicle',
+    'small vehicle',
     'helicopter',
+    'swimming pool',
     'roundabout',
-    'soccer_ball_field',
-    'swimming_pool',
+    'soccer ball field',
+    'plane',
+    'harbor',
 ]
 
 val_dataloader = dict(
@@ -25,13 +25,13 @@ val_dataloader = dict(
     persistent_workers=True,
     dataset=dict(
         type='data.dataset.OVSemanticSegDataset',
-        img_dir='data/datasets/isaid/img_dir/val',
-        ann_dir='data/datasets/isaid/ann_dir/val',
+        img_dir='data/datasets/iSAID/img_dir/val',
+        ann_dir='data/datasets/iSAID/ann_dir/val',
         classes=isaid_classes,
         img_suffix='.png',
         seg_suffix='.png',
         ignore_index=255,
-        reduce_zero_label=True,
+        reduce_zero_label=False,
         return_raw_image=True,
         transforms=[
             dict(type='ToTensor'),

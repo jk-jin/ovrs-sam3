@@ -92,11 +92,6 @@ class OVSemanticSegDataset(Dataset):
         return len(self.img_paths)
 
     def _process_label_map(self, label_map: torch.Tensor) -> torch.Tensor:
-        """
-        reduce_zero_label=True 时：
-        - 原始 0 类视为背景，改成 ignore_index
-        - 原始 1..K 类改成 0..K-1
-        """
         label_map = label_map.long()
 
         if self.reduce_zero_label:
@@ -121,10 +116,10 @@ class OVSemanticSegDataset(Dataset):
 
         sample = {
             'image': image,
-            'label_map': label_map,               # [H, W], long
-            'class_texts': self.classes,          # 所有类别文本
+            'label_map': label_map,
+            'class_texts': self.classes,
             'image_id': index,
-            'original_size': image.size[::-1],    # (H, W)
+            'original_size': image.size[::-1],
             'img_path': str(img_path),
             'seg_path': str(seg_path),
         }

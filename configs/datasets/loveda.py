@@ -1,10 +1,10 @@
 loveda_classes = [
     'background',
-    'building',
+    'building,house',
     'road',
     'water',
-    'barren',
-    'forest',
+    'barren,bareland,soil',
+    'forest,tree',
     'agricultural',
 ]
 

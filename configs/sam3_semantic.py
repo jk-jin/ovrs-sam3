@@ -3,7 +3,7 @@ _base_ = [
     './_base_/optimizer.py',
     './_base_/schedule.py',
     './_base_/visualization.py',
-    './datasets/potsdam.py'
+    './datasets/loveda.py'
 ]
 
 model = dict(
