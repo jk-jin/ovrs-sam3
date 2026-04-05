@@ -129,6 +129,7 @@ def main():
         device=str(cfg.train_cfg.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')),
         auto_resume=bool(args.auto_resume or cfg.train_cfg.get('auto_resume', False)),
         tta_cfg=cfg.get('tta_cfg', None),
+        eval_cfg=cfg.get('eval_cfg', None),
     )
 
     if args.eval_only:

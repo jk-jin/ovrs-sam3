@@ -36,6 +36,7 @@ class TrainerConfig:
     device: str = 'cuda'
     auto_resume: bool = False
     tta_cfg: Optional[Dict] = None
+    eval_cfg: Optional[Dict] = None
 
 
 class Trainer:
@@ -339,7 +340,8 @@ class Trainer:
         self._val_data_time_history.clear()
         self._val_stat_history.clear()
 
-        evaluator = MulticlassSemanticEvaluator()
+        eval_cfg = dict(self.cfg.eval_cfg or {})
+        evaluator = MulticlassSemanticEvaluator(**eval_cfg)
         stats_list: list[Dict[str, float]] = []
         class_names = None
 

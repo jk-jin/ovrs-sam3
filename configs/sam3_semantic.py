@@ -3,7 +3,7 @@ _base_ = [
     './_base_/optimizer.py',
     './_base_/schedule.py',
     './_base_/visualization.py',
-    './datasets/loveda.py'
+    './datasets/potsdam.py'
 ]
 
 model = dict(
@@ -14,16 +14,14 @@ model = dict(
     eval_mode=False,
     compile=False,
 
-    semantic_topk=20,
-    semantic_aggregation='weighted_sum',
+    semantic_aggregation='max',
 
     semantic_use_query_branch=True,
     semantic_use_semantic_branch=True,
     semantic_fusion_mode='max',
 
     semantic_use_presence_score=True,
-    semantic_presence_reduce='max',
-
+    confidence_threshold=0.5,
     prompt_chunk_size=8,
 
     freeze_cfg=dict(
@@ -31,6 +29,13 @@ model = dict(
         trainable_modules=[],
         frozen_modules=[],
     ),
+)
+
+eval_cfg = dict(
+    ignore_index=255,
+    prob_thd=0.2,
+    bg_idx=5,
+    use_score_map=True,
 )
 
 train_cfg = dict(

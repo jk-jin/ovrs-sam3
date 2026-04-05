@@ -2,19 +2,12 @@
 """
 Source notice
 -------------
-This file is adapted for the OVRS-SAM3 project from the official
+This file is adapted for the user's OVRS-SAM3 project from the official
 MMSegmentation dataset converter style.
 
 Original project: OpenMMLab / MMSegmentation
-Original license: Apache License 2.0
-
-This rewritten version removes the runtime dependency on mmseg/mmcv/mmengine
-and only uses Python standard library + NumPy + Pillow so it can be used
-directly inside the current project.
-
-Please keep this notice when redistributing the file.
+License of original project: Apache License 2.0
 """
-
 
 import argparse
 import glob
@@ -22,14 +15,12 @@ import multiprocessing as mp
 import os
 import os.path as osp
 import shutil
-import tempfile
 import zipfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
-
 
 ORIGINAL_SOURCE = (
     'https://github.com/open-mmlab/mmsegmentation/blob/main/'
@@ -104,7 +95,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description='Convert iSAID dataset to mmsegmentation-style layout')
     parser.add_argument('dataset_path', help='iSAID folder path')
-    parser.add_argument('--tmp_dir', help='Temporary directory root')
+    parser.add_argument('--tmp_dir', help='Kept only for CLI compatibility; unused in this version')
     parser.add_argument('-o', '--out_dir', help='Output path')
     parser.add_argument('--patch_width', default=896, type=int,
                         help='Width of the cropped image patch')
@@ -115,6 +106,25 @@ def parse_args():
     parser.add_argument('--crop_test', action='store_true',
                         help='Also crop test images. Official mmseg script does not crop test by default.')
     return parser.parse_args()
+
+
+def _extract_dir_for_archive(archive_path):
+    parent = osp.dirname(archive_path)
+    stem = osp.splitext(osp.basename(archive_path))[0]
+    return osp.join(parent, f'{stem}_extracted')
+
+
+def _extract_archive_to_sibling(archive_path):
+    extract_root = _extract_dir_for_archive(archive_path)
+    if osp.isdir(extract_root) and any(True for _ in os.scandir(extract_root)):
+        return extract_root
+    if osp.isdir(extract_root):
+        shutil.rmtree(extract_root)
+    ensure_dir(extract_root)
+    print(f'[Info] Extracting {osp.basename(archive_path)} -> {extract_root}')
+    with zipfile.ZipFile(archive_path) as zf:
+        zf.extractall(extract_root)
+    return extract_root
 
 
 def _positions(length, patch, step):
@@ -163,7 +173,7 @@ def _worker_crop_image(task):
 def _worker_copy_image(task):
     src_path, out_dir, mode = task
     dst = osp.join(out_dir, 'img_dir', mode, osp.basename(src_path))
-    shutil.move(src_path, dst)
+    shutil.copy2(src_path, dst)
     return osp.basename(src_path), 1
 
 
@@ -193,7 +203,7 @@ def _get_num_workers():
         except ValueError:
             pass
     cpu = os.cpu_count() or 1
-    return max(1, min(cpu, 8))
+    return max(1, min(cpu, 4))
 
 
 def _run_tasks(tasks, worker_fn, prefix):
@@ -206,19 +216,18 @@ def _run_tasks(tasks, worker_fn, prefix):
             name, saved = worker_fn(task)
             print(f'    [{i}/{len(tasks)}] {name} -> {saved}')
         return
-
-    with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context('fork')) as executor:
+    with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context('spawn')) as executor:
         future_map = {executor.submit(worker_fn, task): task for task in tasks}
         for idx, future in enumerate(as_completed(future_map), start=1):
             name, saved = future.result()
             print(f'    [{idx}/{len(tasks)}] {name} -> {saved}')
 
 
-def _extract_archives(archives, dst):
-    ensure_dir(dst)
-    for archive in archives:
-        with zipfile.ZipFile(archive) as zf:
-            zf.extractall(dst)
+def _collect_pngs_from_extracted_dirs(extracted_dirs):
+    pngs = []
+    for root in extracted_dirs:
+        pngs.extend(sorted(glob.glob(osp.join(root, '**', '*.png'), recursive=True)))
+    return pngs
 
 
 def main():
@@ -231,6 +240,7 @@ def main():
     print(f'[Source] Adapted from: {ORIGINAL_SOURCE}')
     print(f'[Input]  {dataset_path}')
     print(f'[Output] {out_dir}')
+    print('[Info] Archives will be extracted next to the zip files, not to /tmp.')
 
     ensure_dir(osp.join(out_dir, 'img_dir', 'train'))
     ensure_dir(osp.join(out_dir, 'img_dir', 'val'))
@@ -243,39 +253,33 @@ def main():
         if not osp.exists(osp.join(dataset_path, split)):
             raise FileNotFoundError(f'{split} is not in {dataset_path}')
 
-    with tempfile.TemporaryDirectory(dir=args.tmp_dir) as tmp_dir:
-        for split in ['train', 'val', 'test']:
-            print(f'Extracting split: {split}')
-            img_archives = sorted(glob.glob(osp.join(dataset_path, split, 'images', '*.zip')))
-            if not img_archives:
-                raise FileNotFoundError(f'No image archives found under {dataset_path}/{split}/images')
-            img_extract_root = osp.join(tmp_dir, split, 'img')
-            _extract_archives(img_archives, img_extract_root)
+    for split in ['train', 'val', 'test']:
+        print(f'Extracting split: {split}')
+        img_archives = sorted(glob.glob(osp.join(dataset_path, split, 'images', '*.zip')))
+        if not img_archives:
+            raise FileNotFoundError(f'No image archives found under {dataset_path}/{split}/images')
+        img_extract_roots = [_extract_archive_to_sibling(p) for p in img_archives]
+        img_paths = _collect_pngs_from_extracted_dirs(img_extract_roots)
+        if not img_paths:
+            raise FileNotFoundError(f'No extracted images found for split={split}')
 
-            img_paths = sorted(glob.glob(osp.join(img_extract_root, '**', '*.png'), recursive=True))
-            img_paths = [p for p in img_paths if osp.basename(osp.dirname(p)).lower() == 'images' or '/images/' in p.replace('\\', '/')]
-            if not img_paths:
-                raise FileNotFoundError(f'No extracted images found for split={split}')
+        if split != 'test' or args.crop_test:
+            tasks = [(img_path, out_dir, split, patch_h, patch_w, overlap) for img_path in img_paths]
+            _run_tasks(tasks, _worker_crop_image, f'{split} images')
+        else:
+            tasks = [(img_path, out_dir, split) for img_path in img_paths]
+            _run_tasks(tasks, _worker_copy_image, f'{split} images')
 
-            if split != 'test' or args.crop_test:
-                tasks = [(img_path, out_dir, split, patch_h, patch_w, overlap) for img_path in img_paths]
-                _run_tasks(tasks, _worker_crop_image, f'{split} images')
-            else:
-                tasks = [(img_path, out_dir, split) for img_path in img_paths]
-                _run_tasks(tasks, _worker_copy_image, f'{split} images')
-
-            if split != 'test':
-                label_archives = sorted(glob.glob(osp.join(dataset_path, split, 'Semantic_masks', '*.zip')))
-                if not label_archives:
-                    raise FileNotFoundError(f'No label archives found under {dataset_path}/{split}/Semantic_masks')
-                label_extract_root = osp.join(tmp_dir, split, 'lab')
-                _extract_archives(label_archives, label_extract_root)
-                label_paths = sorted(glob.glob(osp.join(label_extract_root, '**', '*.png'), recursive=True))
-                label_paths = [p for p in label_paths if osp.basename(osp.dirname(p)).lower() == 'images' or '/images/' in p.replace('\\', '/')]
-                if not label_paths:
-                    raise FileNotFoundError(f'No extracted labels found for split={split}')
-                tasks = [(label_path, out_dir, split, patch_h, patch_w, overlap) for label_path in label_paths]
-                _run_tasks(tasks, _worker_crop_label, f'{split} labels')
+        if split != 'test':
+            label_archives = sorted(glob.glob(osp.join(dataset_path, split, 'Semantic_masks', '*.zip')))
+            if not label_archives:
+                raise FileNotFoundError(f'No label archives found under {dataset_path}/{split}/Semantic_masks')
+            label_extract_roots = [_extract_archive_to_sibling(p) for p in label_archives]
+            label_paths = _collect_pngs_from_extracted_dirs(label_extract_roots)
+            if not label_paths:
+                raise FileNotFoundError(f'No extracted labels found for split={split}')
+            tasks = [(label_path, out_dir, split, patch_h, patch_w, overlap) for label_path in label_paths]
+            _run_tasks(tasks, _worker_crop_label, f'{split} labels')
     print('Done!')
 
 

@@ -88,15 +88,14 @@ class SegmentorBuildConfig:
     eval_mode: bool = True
     compile: bool = False
 
-    semantic_topk: Optional[int] = 20
-    semantic_aggregation: str = "weighted_sum"
+    semantic_aggregation: str = "max"
 
     semantic_use_query_branch: bool = True
     semantic_use_semantic_branch: bool = True
     semantic_fusion_mode: str = "max"
 
     semantic_use_presence_score: bool = True
-    semantic_presence_reduce: str = "max"
+    confidence_threshold: Optional[float] = None
 
     prompt_chunk_size: Optional[int] = None
 
@@ -422,13 +421,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 f"Valid options are: {sorted(valid_fusion_modes)}"
             )
 
-        valid_presence_reduce = {"max", "mean"}
-        if cfg.semantic_presence_reduce not in valid_presence_reduce:
-            raise ValueError(
-                f"Unknown semantic_presence_reduce: {cfg.semantic_presence_reduce}. "
-                f"Valid options are: {sorted(valid_presence_reduce)}"
-            )
-
         valid_aggregations = {"max", "logsumexp", "weighted_sum"}
         if cfg.semantic_aggregation not in valid_aggregations:
             raise ValueError(
@@ -500,13 +492,12 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         model = SAM3Segmentor(
             core=sam3_image_model,
             semantic_adapter=QueryMaskSemanticAdapter(
-                topk=cfg.semantic_topk,
                 aggregation=cfg.semantic_aggregation,
                 use_query_branch=cfg.semantic_use_query_branch,
                 use_semantic_branch=cfg.semantic_use_semantic_branch,
                 fusion_mode=cfg.semantic_fusion_mode,
                 use_presence_score=cfg.semantic_use_presence_score,
-                presence_reduce=cfg.semantic_presence_reduce,
+                confidence_threshold=cfg.confidence_threshold,
             ),
         )
 

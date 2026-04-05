@@ -26,16 +26,14 @@ class QueryMaskSemanticAdapter(nn.Module):
 
     def __init__(
         self,
-        topk: Optional[int] = None,
-        aggregation: str = "weighted_sum",
+        aggregation: str = "max",
         use_query_branch: bool = True,
         use_semantic_branch: bool = True,
         fusion_mode: str = "max",
         use_presence_score: bool = True,
-        presence_reduce: str = "max",
+        confidence_threshold: Optional[float] = None,
     ):
         super().__init__()
-        self.topk = topk
         self.aggregation = aggregation
 
         self.use_query_branch = bool(use_query_branch)
@@ -43,32 +41,35 @@ class QueryMaskSemanticAdapter(nn.Module):
         self.fusion_mode = fusion_mode
 
         self.use_presence_score = bool(use_presence_score)
-        self.presence_reduce = presence_reduce
+        self.confidence_threshold = confidence_threshold
 
-    def _select_topk(
-        self,
-        query_scores: torch.Tensor,   # [B, C, Q]
-        query_masks: torch.Tensor,    # [B, C, Q, H, W]
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        if self.topk is None:
-            return query_scores, query_masks
+    def _extract_query_presence_prob(
+            self,
+            raw_outputs: Dict[str, torch.Tensor],
+    ) -> Optional[torch.Tensor]:
+        presence_logit_dec = raw_outputs.get("presence_logit_dec", None)
+        if presence_logit_dec is None:
+            return None
 
-        num_queries = int(query_scores.shape[2])
-        k = min(int(self.topk), num_queries)
-        if k <= 0 or k >= num_queries:
-            return query_scores, query_masks
+        if presence_logit_dec.dim() == 4:
+            if presence_logit_dec.shape[-1] != 1:
+                raise ValueError(
+                    f"Expected presence_logit_dec as [B, C, Q, 1], got {tuple(presence_logit_dec.shape)}"
+                )
+            presence_logit_dec = presence_logit_dec.squeeze(-1)
 
-        topk_scores, topk_idx = torch.topk(query_scores, k=k, dim=2)
-        gather_idx = topk_idx[..., None, None].expand(
-            -1, -1, -1, query_masks.size(-2), query_masks.size(-1)
-        )
-        topk_masks = torch.gather(query_masks, dim=2, index=gather_idx)
-        return topk_scores, topk_masks
+        if presence_logit_dec.dim() != 3:
+            raise ValueError(
+                f"Expected presence_logit_dec as [B, C, Q], got {tuple(presence_logit_dec.shape)}"
+            )
+
+        return presence_logit_dec.sigmoid()  # [B, C, Q]
 
     def _aggregate_query_logits(
-        self,
-        pred_logits: torch.Tensor,    # [B, C, Q, 1]
-        pred_masks: torch.Tensor,     # [B, C, Q, H, W]
+            self,
+            pred_logits: torch.Tensor,  # [B, C, Q, 1]
+            pred_masks: torch.Tensor,  # [B, C, Q, H, W]
+            raw_outputs: Dict[str, torch.Tensor],
     ) -> torch.Tensor:
         if pred_logits.dim() != 4:
             raise ValueError(
@@ -78,26 +79,43 @@ class QueryMaskSemanticAdapter(nn.Module):
             raise ValueError(
                 f"Expected pred_masks as [B, C, Q, H, W], got {tuple(pred_masks.shape)}"
             )
-
         if pred_logits.shape[-1] != 1:
             raise ValueError(
                 f"Expected pred_logits last dim = 1, got {tuple(pred_logits.shape)}"
             )
 
         query_scores = pred_logits.squeeze(-1).sigmoid()  # [B, C, Q]
-        query_scores, pred_masks = self._select_topk(query_scores, pred_masks)
+
+        query_presence = self._extract_query_presence_prob(raw_outputs)
+        if self.use_presence_score and query_presence is not None:
+            query_scores = query_scores * query_presence
+
+        pred_masks = pred_masks.sigmoid()  # [B, C, Q, H, W]
+
+        if self.confidence_threshold is not None:
+            keep = query_scores > float(self.confidence_threshold)  # [B, C, Q]
+        else:
+            keep = torch.ones_like(query_scores, dtype=torch.bool)
+
+        keep_f = keep.to(dtype=pred_masks.dtype)
 
         if self.aggregation == "max":
-            weighted_masks = pred_masks * query_scores[..., None, None]
-            query_logits = weighted_masks.max(dim=2).values
-
-        elif self.aggregation == "logsumexp":
-            weighted_masks = pred_masks + query_scores.clamp(min=1e-6).log()[..., None, None]
-            query_logits = torch.logsumexp(weighted_masks, dim=2)
+            weighted_masks = pred_masks * query_scores[..., None, None] * keep_f[..., None, None]
+            query_logits = weighted_masks.max(dim=2).values  # [B, C, H, W]
 
         elif self.aggregation == "weighted_sum":
-            weights = query_scores / query_scores.sum(dim=2, keepdim=True).clamp(min=1e-6)
+            filtered_scores = query_scores * keep_f
+            weights = filtered_scores / filtered_scores.sum(dim=2, keepdim=True).clamp(min=1e-6)
             query_logits = (pred_masks * weights[..., None, None]).sum(dim=2)
+
+        elif self.aggregation == "logsumexp":
+            minus_inf = torch.full_like(pred_masks, -1e4)
+            masked = torch.where(
+                keep[..., None, None],
+                pred_masks * query_scores[..., None, None],
+                minus_inf,
+            )
+            query_logits = torch.logsumexp(masked, dim=2)
 
         else:
             raise ValueError(f"Unknown aggregation: {self.aggregation}")
@@ -127,53 +145,31 @@ class QueryMaskSemanticAdapter(nn.Module):
                 f"Expected semantic_seg as [B, C, 1, H, W] or [B, C, H, W], got {tuple(semantic_seg.shape)}"
             )
 
-        return semantic_seg
+        return semantic_seg.sigmoid()
 
     def _extract_presence_prob(
-        self,
-        raw_outputs: Dict[str, torch.Tensor],
+            self,
+            raw_outputs: Dict[str, torch.Tensor],
     ) -> Optional[torch.Tensor]:
         if not self.use_presence_score:
             return None
 
         presence_logit = raw_outputs.get("presence_logit", None)
-        if presence_logit is not None:
-            if presence_logit.dim() == 3:
-                if presence_logit.shape[-1] != 1:
-                    raise ValueError(
-                        f"Expected presence_logit as [B, C, 1], got {tuple(presence_logit.shape)}"
-                    )
-                presence_logit = presence_logit.squeeze(-1)
-            elif presence_logit.dim() != 2:
+        if presence_logit is None:
+            return None
+
+        if presence_logit.dim() == 3:
+            if presence_logit.shape[-1] != 1:
                 raise ValueError(
-                    f"Expected presence_logit as [B, C] or [B, C, 1], got {tuple(presence_logit.shape)}"
+                    f"Expected presence_logit as [B, C, 1], got {tuple(presence_logit.shape)}"
                 )
-            return presence_logit.sigmoid()  # [B, C]
+            presence_logit = presence_logit.squeeze(-1)
+        elif presence_logit.dim() != 2:
+            raise ValueError(
+                f"Expected presence_logit as [B, C] or [B, C, 1], got {tuple(presence_logit.shape)}"
+            )
 
-        presence_logit_dec = raw_outputs.get("presence_logit_dec", None)
-        if presence_logit_dec is not None:
-            if presence_logit_dec.dim() == 4:
-                if presence_logit_dec.shape[-1] != 1:
-                    raise ValueError(
-                        f"Expected presence_logit_dec as [B, C, Q, 1], got {tuple(presence_logit_dec.shape)}"
-                    )
-                presence_logit_dec = presence_logit_dec.squeeze(-1)
-
-            if presence_logit_dec.dim() != 3:
-                raise ValueError(
-                    f"Expected presence_logit_dec as [B, C, Q], got {tuple(presence_logit_dec.shape)}"
-                )
-
-            presence_prob_dec = presence_logit_dec.sigmoid()  # [B, C, Q]
-
-            if self.presence_reduce == "max":
-                return presence_prob_dec.max(dim=2).values   # [B, C]
-            elif self.presence_reduce == "mean":
-                return presence_prob_dec.mean(dim=2)         # [B, C]
-            else:
-                raise ValueError(f"Unknown presence_reduce: {self.presence_reduce}")
-
-        return None
+        return presence_logit.sigmoid()  # [B, C]
 
     @staticmethod
     def _resize_to_match(
@@ -234,7 +230,11 @@ class QueryMaskSemanticAdapter(nn.Module):
                 raise ValueError(
                     "Query branch is enabled, but pred_masks or pred_logits is missing."
                 )
-            query_branch_logits = self._aggregate_query_logits(pred_logits, pred_masks)
+            query_branch_logits = self._aggregate_query_logits(
+                pred_logits=pred_logits,
+                pred_masks=pred_masks,
+                raw_outputs=raw_outputs,
+            )
 
         semantic_branch_logits = None
         if self.use_semantic_branch:
@@ -257,20 +257,15 @@ class QueryMaskSemanticAdapter(nn.Module):
             semantic_logits=semantic_branch_logits,
         )
 
-        presence_prob = self._extract_presence_prob(raw_outputs)
-        if presence_prob is not None:
-            fused_logits = fused_logits * presence_prob[..., None, None]
-
         out = {
-            "semantic_logits": fused_logits,   # [B, C, H, W]
+            "semantic_logits": fused_logits,
+            "semantic_score_map": fused_logits,
         }
 
         if query_branch_logits is not None:
             out["semantic_logits_query"] = query_branch_logits
         if semantic_branch_logits is not None:
             out["semantic_logits_dense"] = semantic_branch_logits
-        if presence_prob is not None:
-            out["presence_prob"] = presence_prob
 
         if len(batch.find_metadatas) > 0:
             meta = batch.find_metadatas[0]

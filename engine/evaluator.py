@@ -10,9 +10,18 @@ import torch.nn.functional as F
 TensorDict = Dict[str, torch.Tensor]
 
 class MulticlassSemanticEvaluator:
-    def __init__(self, ignore_index: int = 255):
-        self.ignore_index = int(ignore_index)
+    def __init__(
+            self,
+            ignore_index: int = 255,
+            prob_thd: Optional[float] = None,
+            bg_idx: int = 0,
+            use_score_map: bool = True,
+    ):
         self.num_classes: Optional[int] = None
+        self.ignore_index = int(ignore_index)
+        self.prob_thd = prob_thd
+        self.bg_idx = int(bg_idx)
+        self.use_score_map = bool(use_score_map)
         self.reset()
 
     def reset(self):
@@ -62,16 +71,34 @@ class MulticlassSemanticEvaluator:
         if 'label_map' not in targets:
             raise ValueError('label_map is required in semantic targets.')
 
-        logits = outputs['semantic_logits']            # [B, C, H, W]
-        pred = logits.argmax(dim=1)                   # [B, H, W]
+        if self.use_score_map and 'semantic_score_map' in outputs:
+            score_map = outputs['semantic_score_map']  # [B, C, H, W]
+        else:
+            score_map = outputs['semantic_logits']  # [B, C, H, W]
+
+        if score_map.dim() != 4:
+            raise ValueError(f"Expected [B,C,H,W], got {tuple(score_map.shape)}")
+
+        num_classes = score_map.shape[1]
+        if not (0 <= self.bg_idx < num_classes):
+            raise ValueError(
+                f"bg_idx={self.bg_idx} is out of range for num_classes={num_classes}"
+            )
+
+        if self.prob_thd is None:
+            pred = score_map.argmax(dim=1)  # [B, H, W]
+        else:
+            max_score, pred = score_map.max(dim=1)  # [B, H, W]
+            pred = pred.clone()
+            pred[max_score < float(self.prob_thd)] = self.bg_idx
+
         target = self._prepare_target(
             label_map=targets['label_map'],
-            out_hw=logits.shape[-2:],
-            device=logits.device,
+            out_hw=score_map.shape[-2:],
+            device=score_map.device,
         )
 
-        num_classes = logits.shape[1]
-        self._ensure_buffers(num_classes=num_classes, device=logits.device)
+        self._ensure_buffers(num_classes=num_classes, device=score_map.device)
 
         valid = target != self.ignore_index
         self.correct += float(((pred == target) & valid).sum().item())
