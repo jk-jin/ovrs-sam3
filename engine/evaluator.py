@@ -66,15 +66,15 @@ class MulticlassSemanticEvaluator:
         return label_map
 
     def update(self, outputs: TensorDict, targets: TensorDict):
-        if 'semantic_logits' not in outputs:
-            raise ValueError('semantic_logits is required in semantic outputs.')
+        if 'fused_pred' not in outputs:
+            raise ValueError('fused_pred is required in semantic outputs.')
         if 'label_map' not in targets:
             raise ValueError('label_map is required in semantic targets.')
 
-        if self.use_score_map and 'semantic_score_map' in outputs:
-            score_map = outputs['semantic_score_map']  # [B, C, H, W]
+        if self.use_score_map and 'fused_score_map' in outputs:
+            score_map = outputs['fused_score_map']  # [B, C, H, W]
         else:
-            score_map = outputs['semantic_logits']  # [B, C, H, W]
+            score_map = outputs['fused_pred']  # [B, C, H, W]
 
         if score_map.dim() != 4:
             raise ValueError(f"Expected [B,C,H,W], got {tuple(score_map.shape)}")
