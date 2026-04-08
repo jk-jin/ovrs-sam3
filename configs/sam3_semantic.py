@@ -3,7 +3,7 @@ _base_ = [
     './_base_/optimizer.py',
     './_base_/schedule.py',
     './_base_/visualization.py',
-    './datasets/potsdam.py'
+    './datasets/isaid.py'
 ]
 
 model = dict(
@@ -34,7 +34,7 @@ model = dict(
 eval_cfg = dict(
     ignore_index=255,
     prob_thd=0.2,
-    bg_idx=5,
+    bg_idx=0,
     use_score_map=True,
 )
 

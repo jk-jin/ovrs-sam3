@@ -1,5 +1,5 @@
 isaid_classes = [
-    'background'
+    'background',
     'ship',
     'store tank',
     'baseball diamond',
@@ -29,7 +29,7 @@ val_dataloader = dict(
         ann_dir='data/datasets/iSAID/ann_dir/val',
         classes=isaid_classes,
         img_suffix='.png',
-        seg_suffix='.png',
+        seg_suffix='_instance_color_RGB.png',
         ignore_index=255,
         reduce_zero_label=False,
         return_raw_image=True,
