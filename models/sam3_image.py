@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Dict, Optional
 
 import torch
+import torch.nn.functional as F
 from .vl_combiner import SAM3VLBackbone
 from .data_misc import BatchedDatapoint, FindStage
 
@@ -134,6 +135,9 @@ class Sam3Image(torch.nn.Module):
         if chunk_size <= 0:
             return num_classes
         return min(chunk_size, num_classes)
+
+    def _normalize_prompt_tokens(self, x: torch.Tensor) -> torch.Tensor:
+        return F.layer_norm(x, normalized_shape=(x.shape[-1],))
 
     @staticmethod
     def _has_nonempty_geometric_prompt(find_input: Optional[FindStage]) -> bool:
@@ -314,6 +318,10 @@ class Sam3Image(torch.nn.Module):
                 dtype=geo_masks.dtype,
             )
         if encode_text:
+            txt_feats = self._normalize_prompt_tokens(txt_feats)
+            if clip_txt_feats is not None:
+                clip_txt_feats = self._normalize_prompt_tokens(clip_txt_feats)
+
             prompt_list = [txt_feats]
             prompt_mask_list = [txt_masks]
 

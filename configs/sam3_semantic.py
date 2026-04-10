@@ -38,7 +38,7 @@ model = dict(
             'an aerial image of {}.',
         ],
         num_extra_tokens=2,
-        text_token_gate_init=1.0,
+        text_token_gate_init=0.0,
         normalize_label_for_clip=True,
     ),
 
