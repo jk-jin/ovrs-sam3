@@ -66,21 +66,21 @@ class OpenCLIPTextEncoder(nn.Module):
         return attn_mask
 
     def _encode_token_features(
-        self,
-        tokenized: torch.Tensor,
+            self,
+            tokenized: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Returns:
             token_features: [B, L, C_text]
-            input_embeds:  [B, L, C_text]
+            input_embeds:   [B, L, C_text]
         """
         seq_len = tokenized.shape[1]
 
         input_embeds = self.token_embedding(tokenized)  # [B, L, C_text]
-        x = input_embeds + self.positional_embedding[:seq_len].to(input_embeds.dtype)
-
-        # OpenCLIP text transformer convention: [L, B, C_text]
-        x = x.permute(1, 0, 2)
+        x = input_embeds + self.positional_embedding[:seq_len].to(
+            device=input_embeds.device,
+            dtype=input_embeds.dtype,
+        )
 
         attn_mask = self._get_attn_mask(
             seq_len=seq_len,
@@ -88,8 +88,7 @@ class OpenCLIPTextEncoder(nn.Module):
             dtype=x.dtype,
         )
 
-        x = self.transformer(x, attn_mask=attn_mask)  # [L, B, C_text]
-        x = x.permute(1, 0, 2)  # [B, L, C_text]
+        x = self.transformer(x, attn_mask=attn_mask)  # [B, L, C_text]
         x = self.ln_final(x)
 
         return x, input_embeds
@@ -133,6 +132,42 @@ class OpenCLIPTextEncoder(nn.Module):
             f"Unknown output_mode={output_mode}. "
             "Supported modes are: token_features, pooled, all."
         )
+
+    def encode_prompt_templates(
+            self,
+            class_names: List[str],
+            templates: List[str],
+            device: Optional[torch.device] = None,
+            normalize_label: bool = True,
+    ) -> torch.Tensor:
+        if len(class_names) == 0:
+            raise ValueError("class_names is empty.")
+        if len(templates) == 0:
+            raise ValueError("templates is empty.")
+
+        def normalize_name(x: str) -> str:
+            x = x.strip()
+            if normalize_label:
+                x = x.replace("_", " ").replace("-", " ")
+                x = " ".join(x.split())
+            return x
+
+        flat_texts = []
+        for name in class_names:
+            name = normalize_name(name)
+            for tpl in templates:
+                flat_texts.append(tpl.format(name))
+
+        _, pooled, _ = self.encode_text(
+            text=flat_texts,
+            device=device,
+            output_mode="pooled",
+        )
+
+        num_classes = len(class_names)
+        num_templates = len(templates)
+        pooled = pooled.view(num_classes, num_templates, self.d_model)  # [B, K, 256]
+        return pooled
 
     def forward(
         self,

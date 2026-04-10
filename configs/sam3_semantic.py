@@ -3,7 +3,7 @@ _base_ = [
     './_base_/optimizer.py',
     './_base_/schedule.py',
     './_base_/visualization.py',
-    './datasets/ld50k.py'
+    './datasets/loveda.py'
 ]
 
 model = dict(
@@ -27,17 +27,26 @@ model = dict(
     openclip_cfg=dict(
         enabled=True,
         model_name='ViT-L-14',
-        pretrained=None,
-        checkpoint_path='weights/RemoteCLIP-ViT-L-14.pt',
+        pretrained='weights/RemoteCLIP-ViT-L-14.pt',
 
         freeze_visual=True,
         freeze_text=True,
         freeze_logit_scale=True,
+
+        extra_token_templates=[
+            'a remote sensing image of {}.',
+            'an aerial image of {}.',
+        ],
+        num_extra_tokens=2,
+        text_token_gate_init=1.0,
+        normalize_label_for_clip=True,
     ),
 
     freeze_cfg=dict(
-        train_adapters_only=False,
-        trainable_modules=[],
+        train_adapters_only=True,
+        trainable_modules=[
+            'core.clip_text_encoder.resizer',
+        ],
         frozen_modules=[],
     ),
 )
@@ -49,8 +58,29 @@ eval_cfg = dict(
     use_score_map=True,
 )
 
+optim_wrapper = dict(
+    optimizer=dict(
+        type='AdamW',
+        lr=5e-4,
+        weight_decay=0.01,
+        betas=(0.9, 0.999),
+        paramwise_cfg=dict(
+            norm_decay_mult=0.0,
+            custom_keys={
+                'core.clip_text_encoder.resizer': dict(lr_mult=1.0, decay_mult=1.0),
+            },
+        ),
+    )
+)
+
+param_scheduler = dict(
+    type='CosineAnnealingLR',
+    T_max=4,
+    eta_min=1e-6,
+)
+
 train_cfg = dict(
-    max_epochs=12,
+    max_epochs=4,
     log_interval=20,
     use_amp=True,
     grad_clip_norm=0.1,

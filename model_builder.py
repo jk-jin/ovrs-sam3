@@ -91,6 +91,15 @@ class OpenCLIPConfig:
     freeze_text: bool = False
     freeze_logit_scale: bool = True
 
+    extra_token_templates: list[str] = field(default_factory=lambda: [
+        "a remote sensing image of {}.",
+        "an aerial image of {}.",
+    ])
+    num_extra_tokens: int = 2
+
+    text_token_gate_init: float = 0.0
+    normalize_label_for_clip: bool = True
+
 @dataclass
 class SegmentorBuildConfig:
     bpe_path: Optional[str] = None
@@ -230,17 +239,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             model_name=openclip_cfg.model_name,
             pretrained=openclip_cfg.pretrained,
         )
-
-        if openclip_cfg.checkpoint_path is not None:
-            with g_pathmgr.open(openclip_cfg.checkpoint_path, "rb") as f:
-                ckpt = torch.load(f, map_location="cpu")
-            state_dict = SAM3ModelBuilder._unwrap_state_dict(ckpt)
-            missing_keys, unexpected_keys = clip_model.load_state_dict(state_dict, strict=False)
-            if len(missing_keys) > 0 or len(unexpected_keys) > 0:
-                print(
-                    f"Loaded {openclip_cfg.checkpoint_path} with "
-                    f"missing_keys={missing_keys} and unexpected_keys={unexpected_keys}"
-                )
 
         tokenizer = open_clip.get_tokenizer(openclip_cfg.model_name)
 
@@ -452,6 +450,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         dot_prod_scoring,
         clip_image_encoder=None,
         clip_text_encoder=None,
+        openclip_cfg=None,
     ):
         common_params = {
             "backbone": backbone,
@@ -466,6 +465,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             "matcher": None,
             "clip_image_encoder": clip_image_encoder,
             "clip_text_encoder": clip_text_encoder,
+            "openclip_cfg": openclip_cfg,
         }
         return Sam3Image(**common_params)
 
@@ -584,6 +584,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             dot_prod_scoring=dot_prod_scoring,
             clip_image_encoder=clip_image_encoder,
             clip_text_encoder=clip_text_encoder,
+            openclip_cfg=cfg.openclip_cfg,
         )
 
         checkpoint_path = cfg.checkpoint_path

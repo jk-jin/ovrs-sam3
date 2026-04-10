@@ -97,6 +97,16 @@ class LoggerHook(Hook):
             return f'{lr_min:.3e}'
         return f'{lr_min:.3e}~{lr_max:.3e}'
 
+    @staticmethod
+    def _format_extra_value(v) -> str:
+        if isinstance(v, bool):
+            return str(v)
+        if isinstance(v, int):
+            return str(v)
+        if isinstance(v, float):
+            return f'{v:.4f}'
+        return str(v)
+
     def after_train_iter(self, trainer, epoch: int, step: int, batch, outputs: Dict[str, float]):
         state = getattr(trainer, 'log_state', None)
         if not state or state.get('mode') != 'train':
@@ -119,6 +129,7 @@ class LoggerHook(Hook):
         lr_str = self._format_lr(state.get('lrs', []))
         memory_mb = state.get('memory_mb', None)
         log_vars = state.get('log_vars', {})
+        extra_log_vars = state.get('extra_log_vars', {})
 
         iter_part = f'[{step}/{iters_per_epoch}]' if iters_per_epoch is not None else f'[{step}/?]'
         global_part = f'[{global_iter}/{max_iters}]' if max_iters is not None else f'[{global_iter}/?]'
@@ -138,6 +149,9 @@ class LoggerHook(Hook):
 
         for k, v in sorted(log_vars.items()):
             msg += f" {k}: {v:.4f}"
+
+        for k, v in sorted(extra_log_vars.items()):
+            msg += f" {k}: {self._format_extra_value(v)}"
 
         print(msg)
 
@@ -159,6 +173,7 @@ class LoggerHook(Hook):
         iter_time = state.get('iter_time', 0.0)
         data_time = state.get('data_time', 0.0)
         log_vars = state.get('log_vars', {})
+        extra_log_vars = state.get('extra_log_vars', {})
 
         iter_part = f'[{step}/{total_iters}]' if total_iters is not None else f'[{step}/?]'
 
@@ -172,6 +187,9 @@ class LoggerHook(Hook):
 
         for k, v in sorted(log_vars.items()):
             msg += f' {k}: {v:.4f}'
+
+        for k, v in sorted(extra_log_vars.items()):
+            msg += f' {k}: {self._format_extra_value(v)}'
 
         print(msg)
 

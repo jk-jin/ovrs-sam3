@@ -87,6 +87,25 @@ def build_hooks(cfg) -> List[object]:
         )
     ]
 
+def build_log_getters(cfg) -> List[object]:
+    def project_log_getter(trainer):
+        out = {}
+
+        model = trainer.model
+        core = getattr(model, 'core', None)
+        if core is None:
+            return out
+
+        if hasattr(core, 'clip_text_token_gate'):
+            gate = core.clip_text_token_gate.detach()
+            if gate.numel() == 1:
+                out['clip_gate_raw'] = float(gate.item())
+                out['clip_gate_tanh'] = float(torch.tanh(gate).item())
+
+        return out
+
+    return [project_log_getter]
+
 
 def main():
     parser = argparse.ArgumentParser(description='Train/Eval SAM3 semantic-only segmentor with simple mmseg-style config.')
@@ -177,6 +196,9 @@ def main():
         hooks=build_hooks(cfg),
         visualizer=visualizer,
     )
+
+    for getter in build_log_getters(cfg):
+        trainer.register_log_getter(getter)
 
     if args.resume_from:
         trainer.resume_from(args.resume_from)

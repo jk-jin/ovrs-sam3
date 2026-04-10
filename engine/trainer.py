@@ -89,6 +89,7 @@ class Trainer:
 
         self.global_iter = 0
         self.log_state: Dict[str, object] = {}
+        self._log_getters = []
 
         self._iter_time_history = deque(maxlen=self.cfg.log_window_size)
         self._data_time_history = deque(maxlen=self.cfg.log_window_size)
@@ -151,7 +152,6 @@ class Trainer:
         return self.criterion(outputs, targets)
 
     def train_step(self, batch) -> Dict[str, float]:
-        self.model.train()
         batch = self._move_to_device(batch)
         self.optimizer.zero_grad(set_to_none=True)
 
@@ -219,6 +219,38 @@ class Trainer:
             return 0.0
         return float(sum(values) / len(values))
 
+    def register_log_getter(self, fn):
+        if fn is None:
+            return
+        self._log_getters.append(fn)
+
+    def _to_loggable_scalar(self, value):
+        if isinstance(value, torch.Tensor):
+            if value.numel() == 1:
+                return float(value.detach().item())
+            return None
+        if isinstance(value, (float, int, bool, str)):
+            return value
+        return None
+
+    def _collect_extra_log_vars(self) -> Dict[str, object]:
+        out: Dict[str, object] = {}
+        for fn in self._log_getters:
+            try:
+                values = fn(self)
+            except Exception as e:
+                out[f'log_getter_error_{len(out)}'] = str(e)
+                continue
+
+            if not isinstance(values, dict):
+                continue
+
+            for k, v in values.items():
+                vv = self._to_loggable_scalar(v)
+                if vv is not None:
+                    out[str(k)] = vv
+        return out
+
     def _update_train_log_state(
         self,
         epoch: int,
@@ -254,6 +286,7 @@ class Trainer:
             'data_time': avg_data_time,
             'memory_mb': self._get_memory_mb(),
             'log_vars': avg_stats,
+            'extra_log_vars': self._collect_extra_log_vars(),
         }
 
     def _update_val_log_state(
@@ -287,10 +320,12 @@ class Trainer:
             'iter_time': avg_iter_time,
             'data_time': avg_data_time,
             'log_vars': avg_stats,
+            'extra_log_vars': self._collect_extra_log_vars(),
         }
 
     def train_epoch(self, epoch: int) -> Dict[str, float]:
         self.hook_manager.call('before_train_epoch', self, epoch)
+        self.model.train()
         epoch_stats: list[Dict[str, float]] = []
 
         end = time.perf_counter()
@@ -363,7 +398,8 @@ class Trainer:
                 class_names = extract_class_names_from_batch(batch)
 
             if self.visualizer is not None:
-                self.visualizer.save_semantic_batch(
+                self.visualizer.run(
+                    model=self.model,
                     batch=batch,
                     semantic_outputs=outputs,
                     semantic_targets=targets,

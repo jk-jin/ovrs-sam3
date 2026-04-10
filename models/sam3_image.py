@@ -47,6 +47,7 @@ class Sam3Image(torch.nn.Module):
         num_interactive_steps_val: int = 0,
         clip_image_encoder=None,
         clip_text_encoder=None,
+        openclip_cfg=None,
         **kwargs,
     ):
         super().__init__()
@@ -68,6 +69,27 @@ class Sam3Image(torch.nn.Module):
         self.use_dot_prod_scoring = use_dot_prod_scoring
         self.clip_image_encoder = clip_image_encoder
         self.clip_text_encoder = clip_text_encoder
+
+        self.clip_extra_token_templates = []
+        self.num_clip_extra_tokens = 0
+        self.normalize_label_for_clip = True
+
+        if openclip_cfg is not None:
+            self.clip_extra_token_templates = list(
+                getattr(openclip_cfg, "extra_token_templates", [])
+            )
+            self.num_clip_extra_tokens = int(
+                getattr(openclip_cfg, "num_extra_tokens", len(self.clip_extra_token_templates))
+            )
+            self.clip_extra_token_templates = self.clip_extra_token_templates[:self.num_clip_extra_tokens]
+            self.normalize_label_for_clip = bool(
+                getattr(openclip_cfg, "normalize_label_for_clip", True)
+            )
+
+        self.clip_text_token_norm = torch.nn.LayerNorm(self.hidden_dim)
+        self.clip_text_token_gate = torch.nn.Parameter(
+            torch.tensor(float(getattr(openclip_cfg, "text_token_gate_init", 0.0)))
+        )
 
         if self.use_dot_prod_scoring:
             assert dot_prod_scoring is not None
@@ -154,6 +176,28 @@ class Sam3Image(torch.nn.Module):
             input_points=torch.zeros((0, num_pairs, 2), dtype=torch.float32, device=device),
             input_points_mask=torch.zeros((num_pairs, 0), dtype=torch.bool, device=device),
         )
+
+    def _build_clip_extra_text_tokens(self, class_names, device):
+        if self.clip_text_encoder is None:
+            return None
+        if len(self.clip_extra_token_templates) == 0:
+            return None
+
+        pooled_tokens = self.clip_text_encoder.encode_prompt_templates(
+            class_names=class_names,
+            templates=self.clip_extra_token_templates,
+            device=device,
+            normalize_label=self.normalize_label_for_clip,
+        )  # [B, K, 256]
+
+        pooled_tokens = self.clip_text_token_norm(pooled_tokens)
+
+        gate = torch.tanh(self.clip_text_token_gate)
+        pooled_tokens = gate * pooled_tokens
+
+        # [B, K, 256] -> [K, B, 256]
+        pooled_tokens = pooled_tokens.permute(1, 0, 2).contiguous()
+        return pooled_tokens
 
     @staticmethod
     def _reshape_prompt_first_tensor(
@@ -242,6 +286,12 @@ class Sam3Image(torch.nn.Module):
         txt_feats = backbone_out["language_features"][:, txt_ids]
         txt_masks = backbone_out["language_mask"][txt_ids]
 
+        clip_txt_feats = None
+        clip_txt_masks = None
+        if "clip_language_features" in backbone_out:
+            clip_txt_feats = backbone_out["clip_language_features"][:, txt_ids]
+            clip_txt_masks = backbone_out["clip_language_mask"][txt_ids]
+
         feat_tuple = self._get_img_feats(backbone_out, find_input.img_ids)
         backbone_out, img_feats, img_pos_embeds, vis_feat_sizes = feat_tuple
 
@@ -264,8 +314,18 @@ class Sam3Image(torch.nn.Module):
                 dtype=geo_masks.dtype,
             )
         if encode_text:
-            prompt = torch.cat([txt_feats, geo_feats, visual_prompt_embed], dim=0)
-            prompt_mask = torch.cat([txt_masks, geo_masks, visual_prompt_mask], dim=1)
+            prompt_list = [txt_feats]
+            prompt_mask_list = [txt_masks]
+
+            if clip_txt_feats is not None:
+                prompt_list.append(clip_txt_feats)
+                prompt_mask_list.append(clip_txt_masks)
+
+            prompt_list.extend([geo_feats, visual_prompt_embed])
+            prompt_mask_list.extend([geo_masks, visual_prompt_mask])
+
+            prompt = torch.cat(prompt_list, dim=0)
+            prompt_mask = torch.cat(prompt_mask_list, dim=1)
         else:
             prompt = torch.cat([geo_feats, visual_prompt_embed], dim=0)
             prompt_mask = torch.cat([geo_masks, visual_prompt_mask], dim=1)
@@ -567,6 +627,19 @@ class Sam3Image(torch.nn.Module):
 
             chunk_backbone_out = dict(image_backbone_out)
             chunk_backbone_out.update(text_backbone_out)
+
+            clip_extra_tokens = self._build_clip_extra_text_tokens(
+                chunk_texts,
+                device=device,
+            )
+
+            if clip_extra_tokens is not None:
+                chunk_backbone_out["clip_language_features"] = clip_extra_tokens
+                chunk_backbone_out["clip_language_mask"] = torch.zeros(
+                    (num_chunk_classes, clip_extra_tokens.shape[0]),
+                    dtype=torch.bool,
+                    device=device,
+                )
 
             chunk_find_input = self._build_prompt_expanded_find_stage(
                 batch_size=batch_size,
