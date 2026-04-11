@@ -3,10 +3,9 @@
 # pyre-unsafe
 
 from copy import deepcopy
-from typing import Dict, Optional
+from typing import Dict, Optional, Iterator, Any
 
 import torch
-import torch.nn.functional as F
 from .vl_combiner import SAM3VLBackbone
 from .data_misc import BatchedDatapoint, FindStage
 
@@ -136,8 +135,119 @@ class Sam3Image(torch.nn.Module):
             return num_classes
         return min(chunk_size, num_classes)
 
-    def _normalize_prompt_tokens(self, x: torch.Tensor) -> torch.Tensor:
-        return F.layer_norm(x, normalized_shape=(x.shape[-1],))
+    def _detach_tree(self, obj: Any):
+        if isinstance(obj, torch.Tensor):
+            return obj.detach()
+        if isinstance(obj, dict):
+            return {k: self._detach_tree(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [self._detach_tree(v) for v in obj]
+        if isinstance(obj, tuple):
+            return tuple(self._detach_tree(v) for v in obj)
+        return obj
+
+    def iter_chunk_raw_outputs(
+        self,
+        input: BatchedDatapoint,
+    ) -> Iterator[Dict[str, Any]]:
+        device = self.device
+
+        if len(input.find_inputs) != 1:
+            raise ValueError(
+                "Current semantic-only pipeline assumes exactly one find stage per batch."
+            )
+
+        base_find_input = input.find_inputs[0]
+
+        class_texts = list(input.find_text_batch)
+        if len(class_texts) == 0:
+            raise ValueError(
+                "find_text_batch is empty. It should contain the shared class vocabulary."
+            )
+
+        batch_size = int(input.img_batch.shape[0])
+        num_classes = len(class_texts)
+        chunk_size = self._get_prompt_chunk_size(num_classes)
+
+        # image backbone is frozen: run once without grad and reuse across chunks
+        with torch.no_grad():
+            image_backbone_out = self.backbone.forward_image(input.img_batch)
+        image_backbone_out = self._detach_tree(image_backbone_out)
+
+        for start in range(0, num_classes, chunk_size):
+            end = min(start + chunk_size, num_classes)
+            chunk_texts = class_texts[start:end]
+            num_chunk_classes = len(chunk_texts)
+            chunk_class_ids = list(range(start, end))
+
+            # text encoder is frozen: run per chunk without grad
+            with torch.no_grad():
+                text_backbone_out = self.backbone.forward_text(
+                    chunk_texts,
+                    device=device,
+                )
+            text_backbone_out = self._detach_tree(text_backbone_out)
+
+            chunk_backbone_out = dict(image_backbone_out)
+            chunk_backbone_out.update(text_backbone_out)
+
+            # OpenCLIP text encoder is frozen, but post-processing layers in this
+            # module may still be trainable, so only the encoder call is wrapped
+            # by no_grad; the post-processing stays in the graph.
+            clip_extra_tokens = None
+            if self.clip_text_encoder is not None and len(self.clip_extra_token_templates) > 0:
+                with torch.no_grad():
+                    clip_extra_tokens = self.clip_text_encoder.encode_prompt_templates(
+                        class_names=chunk_texts,
+                        templates=self.clip_extra_token_templates,
+                        device=device,
+                        normalize_label=self.normalize_label_for_clip,
+                    )  # [num_chunk_classes, K, 256]
+
+                clip_extra_tokens = self.clip_text_token_norm(clip_extra_tokens)
+                gate = torch.tanh(self.clip_text_token_gate)
+                clip_extra_tokens = gate * clip_extra_tokens
+                clip_extra_tokens = clip_extra_tokens.permute(1, 0, 2).contiguous()  # [K, num_chunk_classes, 256]
+
+                chunk_backbone_out["clip_language_features"] = clip_extra_tokens
+                chunk_backbone_out["clip_language_mask"] = torch.zeros(
+                    (num_chunk_classes, clip_extra_tokens.shape[0]),
+                    dtype=torch.bool,
+                    device=device,
+                )
+
+            chunk_find_input = self._build_prompt_expanded_find_stage(
+                batch_size=batch_size,
+                num_chunk_classes=num_chunk_classes,
+                device=device,
+                base_find_input=base_find_input,
+            )
+
+            geometric_prompt = Prompt(
+                box_embeddings=chunk_find_input.input_boxes,
+                box_mask=chunk_find_input.input_boxes_mask,
+                box_labels=chunk_find_input.input_boxes_label,
+            )
+
+            chunk_raw_outputs = self.forward_grounding_raw(
+                backbone_out=chunk_backbone_out,
+                find_input=chunk_find_input,
+                geometric_prompt=geometric_prompt,
+            )
+
+            chunk_out = self._extract_and_reshape_chunk_outputs(
+                raw_outputs=chunk_raw_outputs,
+                batch_size=batch_size,
+                num_chunk_classes=num_chunk_classes,
+            )
+
+            yield {
+                "chunk_start": start,
+                "chunk_end": end,
+                "chunk_class_ids": chunk_class_ids,
+                "chunk_class_names": chunk_texts,
+                "raw_outputs": chunk_out,
+            }
 
     @staticmethod
     def _has_nonempty_geometric_prompt(find_input: Optional[FindStage]) -> bool:
@@ -318,10 +428,6 @@ class Sam3Image(torch.nn.Module):
                 dtype=geo_masks.dtype,
             )
         if encode_text:
-            txt_feats = self._normalize_prompt_tokens(txt_feats)
-            if clip_txt_feats is not None:
-                clip_txt_feats = self._normalize_prompt_tokens(clip_txt_feats)
-
             prompt_list = [txt_feats]
             prompt_mask_list = [txt_masks]
 
@@ -605,75 +711,9 @@ class Sam3Image(torch.nn.Module):
         return out
 
     def forward(self, input: BatchedDatapoint) -> Dict[str, torch.Tensor]:
-        device = self.device
-
-        if len(input.find_inputs) != 1:
-            raise ValueError(
-                "Current semantic-only pipeline assumes exactly one find stage per batch."
-            )
-
-        base_find_input = input.find_inputs[0]
-
-        class_texts = list(input.find_text_batch)
-        if len(class_texts) == 0:
-            raise ValueError("find_text_batch is empty. It should contain the shared class vocabulary.")
-
-        batch_size = int(input.img_batch.shape[0])
-        num_classes = len(class_texts)
-        chunk_size = self._get_prompt_chunk_size(num_classes)
-
-        image_backbone_out = self.backbone.forward_image(input.img_batch)
-
         chunk_outputs = []
-
-        for start in range(0, num_classes, chunk_size):
-            end = min(start + chunk_size, num_classes)
-            chunk_texts = class_texts[start:end]
-            num_chunk_classes = len(chunk_texts)
-
-            text_backbone_out = self.backbone.forward_text(chunk_texts, device=device)
-
-            chunk_backbone_out = dict(image_backbone_out)
-            chunk_backbone_out.update(text_backbone_out)
-
-            clip_extra_tokens = self._build_clip_extra_text_tokens(
-                chunk_texts,
-                device=device,
-            )
-
-            if clip_extra_tokens is not None:
-                chunk_backbone_out["clip_language_features"] = clip_extra_tokens
-                chunk_backbone_out["clip_language_mask"] = torch.zeros(
-                    (num_chunk_classes, clip_extra_tokens.shape[0]),
-                    dtype=torch.bool,
-                    device=device,
-                )
-
-            chunk_find_input = self._build_prompt_expanded_find_stage(
-                batch_size=batch_size,
-                num_chunk_classes=num_chunk_classes,
-                device=device,
-                base_find_input=base_find_input,
-            )
-
-            geometric_prompt = Prompt(
-                box_embeddings=chunk_find_input.input_boxes,
-                box_mask=chunk_find_input.input_boxes_mask,
-                box_labels=chunk_find_input.input_boxes_label,
-            )
-
-            chunk_raw_outputs = self.forward_grounding_raw(
-                backbone_out=chunk_backbone_out,
-                find_input=chunk_find_input,
-                geometric_prompt=geometric_prompt,
-            )
-
-            chunk_out = self._extract_and_reshape_chunk_outputs(
-                raw_outputs=chunk_raw_outputs,
-                batch_size=batch_size,
-                num_chunk_classes=num_chunk_classes,
-            )
-            chunk_outputs.append(chunk_out)
+        for chunk in self.iter_chunk_raw_outputs(input):
+            chunk_outputs.append(chunk["raw_outputs"])
 
         merged_outputs = self._merge_chunk_outputs(chunk_outputs)
         return merged_outputs

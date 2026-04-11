@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, Optional, Sequence
 
 import torch
 import torch.nn as nn
@@ -22,10 +22,20 @@ class SemanticCriterion(nn.Module):
     Multi-class semantic segmentation criterion.
 
     Expected outputs:
-        semantic_logits: [B, C, H, W]
+        fused_score_map: [B, C, H, W]
 
     Expected targets:
         label_map: [B, H, W]
+
+    Supports two modes:
+    1. Full-class mode:
+       - chunk_class_ids is None
+       - outputs channels correspond to the full class space
+
+    2. Chunk mode:
+       - chunk_class_ids is a list of global class ids covered by the current chunk
+       - outputs channels correspond only to these chunk-local classes
+       - target labels outside this chunk are mapped to ignore_index
     """
 
     def __init__(
@@ -72,6 +82,28 @@ class SemanticCriterion(nn.Module):
 
         return label_map
 
+    def _remap_target_to_chunk(
+        self,
+        target: torch.Tensor,
+        chunk_class_ids: Sequence[int],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if len(chunk_class_ids) == 0:
+            raise ValueError("chunk_class_ids is empty.")
+
+        local_target = torch.full_like(target, fill_value=self.ignore_index)
+
+        seen = set()
+        for local_id, global_id in enumerate(chunk_class_ids):
+            global_id = int(global_id)
+            if global_id in seen:
+                raise ValueError(f"Duplicate class id found in chunk_class_ids: {global_id}")
+            seen.add(global_id)
+
+            local_target[target == global_id] = int(local_id)
+
+        valid_mask = local_target != self.ignore_index
+        return local_target, valid_mask
+
     def _multiclass_dice_loss(
         self,
         logits: torch.Tensor,   # [B, C, H, W]
@@ -80,12 +112,12 @@ class SemanticCriterion(nn.Module):
         num_classes = logits.shape[1]
         probs = torch.softmax(logits, dim=1)  # [B, C, H, W]
 
-        valid_mask = target != self.ignore_index           # [B, H, W]
+        valid_mask = target != self.ignore_index
         target_safe = target.clone()
         target_safe[~valid_mask] = 0
 
         one_hot = F.one_hot(target_safe, num_classes=num_classes).permute(0, 3, 1, 2).float()
-        valid_mask = valid_mask.unsqueeze(1)               # [B, 1, H, W]
+        valid_mask = valid_mask.unsqueeze(1)  # [B, 1, H, W]
 
         probs = probs * valid_mask
         one_hot = one_hot * valid_mask
@@ -101,25 +133,65 @@ class SemanticCriterion(nn.Module):
 
         return logits.sum() * 0.0
 
-    def forward(self, outputs: TensorDict, targets: TensorDict) -> TensorDict:
+    def forward(
+        self,
+        outputs: TensorDict,
+        targets: TensorDict,
+        chunk_class_ids: Optional[Sequence[int]] = None,
+        reduction: str = "mean",
+    ) -> TensorDict:
         if "fused_score_map" not in outputs:
             raise ValueError("fused_score_map is required in semantic outputs.")
 
-        semantic_logits = outputs["fused_score_map"]   # [B, C, H, W]
+        if reduction not in {"mean", "sum"}:
+            raise ValueError(f"Unsupported reduction={reduction}. Expected 'mean' or 'sum'.")
+
+        semantic_logits = outputs["fused_score_map"]  # [B, C, H, W]
+        if semantic_logits.dim() != 4:
+            raise ValueError(
+                f"Expected fused_score_map as [B, C, H, W], got {tuple(semantic_logits.shape)}"
+            )
+
         target = self._prepare_target(
             targets=targets,
             out_hw=semantic_logits.shape[-2:],
             device=semantic_logits.device,
         )
 
+        if chunk_class_ids is not None:
+            if semantic_logits.shape[1] != len(chunk_class_ids):
+                raise ValueError(
+                    f"Chunk class count mismatch: logits has {semantic_logits.shape[1]} channels, "
+                    f"but chunk_class_ids has length {len(chunk_class_ids)}."
+                )
+            target, valid_mask = self._remap_target_to_chunk(target, chunk_class_ids)
+        else:
+            valid_mask = target != self.ignore_index
+
+        num_valid = valid_mask.sum()
+        if int(num_valid.item()) == 0:
+            zero = semantic_logits.sum() * 0.0
+            return {
+                "loss_ce": zero,
+                "loss_dice": zero,
+                "total_loss": zero,
+                "num_valid": num_valid,
+            }
+
+        ce_reduction = "sum" if reduction == "sum" else "mean"
         loss_ce = F.cross_entropy(
             semantic_logits,
             target,
             ignore_index=self.ignore_index,
+            reduction=ce_reduction,
         )
 
         if self.weights.loss_dice > 0:
-            loss_dice = self._multiclass_dice_loss(semantic_logits, target)
+            dice_base = self._multiclass_dice_loss(semantic_logits, target)
+            if reduction == "sum":
+                loss_dice = dice_base * num_valid.to(dtype=semantic_logits.dtype)
+            else:
+                loss_dice = dice_base
         else:
             loss_dice = semantic_logits.sum() * 0.0
 
@@ -129,4 +201,5 @@ class SemanticCriterion(nn.Module):
             "loss_ce": loss_ce,
             "loss_dice": loss_dice,
             "total_loss": total,
+            "num_valid": num_valid,
         }

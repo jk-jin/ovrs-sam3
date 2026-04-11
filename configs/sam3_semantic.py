@@ -3,7 +3,7 @@ _base_ = [
     './_base_/optimizer.py',
     './_base_/schedule.py',
     './_base_/visualization.py',
-    './datasets/loveda.py'
+    './datasets/ld50k.py'
 ]
 
 model = dict(
@@ -21,7 +21,7 @@ model = dict(
     semantic_fusion_mode='max',
 
     semantic_use_presence_score=True,
-    confidence_threshold=0.5,
+    confidence_threshold=0.2,
     prompt_chunk_size=8,
 
     openclip_cfg=dict(
@@ -38,7 +38,7 @@ model = dict(
             'an aerial image of {}.',
         ],
         num_extra_tokens=2,
-        text_token_gate_init=0.0,
+        text_token_gate_init=1.0,
         normalize_label_for_clip=True,
     ),
 
@@ -46,15 +46,21 @@ model = dict(
         train_adapters_only=True,
         trainable_modules=[
             'core.clip_text_encoder.resizer',
+            'core.clip_text_token_gate',
         ],
         frozen_modules=[],
     ),
 )
 
+train_dataloader = dict(
+    batch_size=2,
+    num_workers=4,
+)
+
 eval_cfg = dict(
     ignore_index=255,
-    prob_thd=0.2,
-    bg_idx=0,
+    prob_thd=0.1,
+    bg_idx=5,
     use_score_map=True,
 )
 

@@ -141,29 +141,41 @@ class FrozenModuleMixin:
     def get_named_modules(model: nn.Module) -> dict[str, nn.Module]:
         return dict(model.named_modules())
 
+    @staticmethod
+    def get_named_parameters(model: nn.Module) -> dict[str, nn.Parameter]:
+        return dict(model.named_parameters())
+
     @classmethod
     def set_modules_requires_grad(
-        cls,
-        model: nn.Module,
-        module_names: list[str],
-        requires_grad: bool,
-        strict: bool = True,
+            cls,
+            model: nn.Module,
+            module_names: list[str],
+            requires_grad: bool,
+            strict: bool = True,
     ) -> None:
         if not module_names:
             return
 
         named_modules = cls.get_named_modules(model)
+        named_parameters = cls.get_named_parameters(model)
 
         for name in module_names:
-            if name not in named_modules:
-                if strict:
-                    available = '\n'.join(sorted(named_modules.keys()))
-                    raise KeyError(
-                        f'Unknown module name: {name}\n'
-                        f'Available module names are:\n{available}'
-                    )
+            if name in named_modules:
+                cls.set_requires_grad(named_modules[name], requires_grad)
                 continue
-            cls.set_requires_grad(named_modules[name], requires_grad)
+
+            if name in named_parameters:
+                named_parameters[name].requires_grad = requires_grad
+                continue
+
+            if strict:
+                available_modules = '\n'.join(sorted(named_modules.keys()))
+                available_parameters = '\n'.join(sorted(named_parameters.keys()))
+                raise KeyError(
+                    f'Unknown module/parameter name: {name}\n'
+                    f'Available module names are:\n{available_modules}\n\n'
+                    f'Available parameter names are:\n{available_parameters}'
+                )
 
 
 class SAM3ModelBuilder(FrozenModuleMixin):

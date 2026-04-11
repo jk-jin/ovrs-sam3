@@ -30,8 +30,8 @@ class QueryMaskSemanticAdapter(nn.Module):
         self.confidence_threshold = confidence_threshold
 
     def _extract_presence_prob(
-            self,
-            raw_outputs: Dict[str, torch.Tensor],
+        self,
+        raw_outputs: Dict[str, torch.Tensor],
     ) -> Optional[torch.Tensor]:
         if not self.use_presence_score:
             return None
@@ -54,10 +54,10 @@ class QueryMaskSemanticAdapter(nn.Module):
         return None
 
     def _aggregate_instance_logits(
-            self,
-            pred_logits: torch.Tensor,  # [B, C, Q, 1]
-            pred_masks: torch.Tensor,  # [B, C, Q, H, W]
-            raw_outputs: Dict[str, torch.Tensor],
+        self,
+        pred_logits: torch.Tensor,  # [B, C, Q, 1]
+        pred_masks: torch.Tensor,   # [B, C, Q, H, W]
+        raw_outputs: Dict[str, torch.Tensor],
     ) -> torch.Tensor:
         if pred_logits.dim() != 4:
             raise ValueError(
@@ -143,8 +143,8 @@ class QueryMaskSemanticAdapter(nn.Module):
 
     def _fuse_branches(
         self,
-        query_logits: Optional[torch.Tensor],      # [B, C, H, W] or None
-        semantic_logits: Optional[torch.Tensor],   # [B, C, H, W] or None
+        query_logits: Optional[torch.Tensor],     # [B, C, H, W] or None
+        semantic_logits: Optional[torch.Tensor],  # [B, C, H, W] or None
     ) -> torch.Tensor:
         if query_logits is None and semantic_logits is None:
             raise ValueError("At least one of instance branch or semantic branch must be enabled.")
@@ -175,7 +175,12 @@ class QueryMaskSemanticAdapter(nn.Module):
 
         raise ValueError(f"Unknown fusion_mode: {self.fusion_mode}")
 
-    def forward(self, raw_outputs, batch: BatchedDatapoint):
+    def forward(
+        self,
+        raw_outputs: Dict[str, torch.Tensor],
+        batch: BatchedDatapoint,
+        expected_num_classes: Optional[int] = None,
+    ) -> Dict[str, torch.Tensor]:
         instance_branch_score_map = None
         if self.use_instance_branch:
             pred_masks = raw_outputs.get("pred_masks", None)
@@ -227,13 +232,17 @@ class QueryMaskSemanticAdapter(nn.Module):
         if semantic_branch_score_map is not None:
             out["semantic_score_map"] = semantic_branch_score_map
 
-        if len(batch.find_metadatas) > 0:
-            meta = batch.find_metadatas[0]
-            expected_num_classes = int(meta.num_classes)
+        if expected_num_classes is None and len(batch.find_metadatas) > 0:
+            try:
+                expected_num_classes = int(batch.find_metadatas[0].num_classes)
+            except Exception:
+                expected_num_classes = None
+
+        if expected_num_classes is not None:
             actual_num_classes = int(fused_score_map.shape[1])
             if expected_num_classes != actual_num_classes:
                 raise ValueError(
-                    f"Class count mismatch: metadata says {expected_num_classes}, "
+                    f"Class count mismatch: expected {expected_num_classes}, "
                     f"but semantic_logits has {actual_num_classes} channels."
                 )
 

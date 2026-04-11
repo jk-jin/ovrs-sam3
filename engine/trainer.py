@@ -155,18 +155,77 @@ class Trainer:
         batch = self._move_to_device(batch)
         self.optimizer.zero_grad(set_to_none=True)
 
-        use_amp = self.cfg.use_amp and self.device.type == 'cuda'
-        with autocast(device_type=self.device.type, enabled=use_amp):
-            loss_dict = self._compute_losses(batch)
-            total_loss = loss_dict['total_loss']
+        if not hasattr(self.model, 'iter_chunk_outputs'):
+            raise AttributeError(
+                'Model does not provide iter_chunk_outputs(batch). '
+                'The chunked training pipeline requires this interface.'
+            )
 
-        self.scaler.scale(total_loss).backward()
-        if self.cfg.grad_clip_norm is not None:
+        label_map = batch.find_targets[0].semantic_label_map
+        use_amp = self.cfg.use_amp and self.device.type == 'cuda'
+
+        loss_ce_sum = 0.0
+        loss_dice_sum = 0.0
+        total_loss_sum = 0.0
+        total_valid_pixels = 0
+        did_backward = False
+
+        chunk_iter = self.model.iter_chunk_outputs(batch)
+
+        while True:
+            try:
+                with autocast(device_type=self.device.type, enabled=use_amp):
+                    chunk = next(chunk_iter)
+                    loss_dict = self.criterion(
+                        chunk['semantic_outputs'],
+                        {'label_map': label_map},
+                        chunk_class_ids=chunk['chunk_class_ids'],
+                        reduction='sum',
+                    )
+                    chunk_total_loss = loss_dict['total_loss']
+            except StopIteration:
+                break
+
+            chunk_num_valid = int(loss_dict['num_valid'].detach().item())
+
+            loss_ce_sum += float(loss_dict['loss_ce'].detach().item())
+            loss_dice_sum += float(loss_dict['loss_dice'].detach().item())
+            total_loss_sum += float(loss_dict['total_loss'].detach().item())
+            total_valid_pixels += chunk_num_valid
+
+            if chunk_num_valid > 0:
+                self.scaler.scale(chunk_total_loss).backward()
+                did_backward = True
+
+            del chunk
+            del loss_dict
+            del chunk_total_loss
+
+        if did_backward and total_valid_pixels > 0:
             self.scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.grad_clip_norm)
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
-        return {k: float(v.detach().item()) for k, v in loss_dict.items() if torch.is_tensor(v) and v.ndim == 0}
+
+            grad_scale = 1.0 / float(total_valid_pixels)
+            for param in self.model.parameters():
+                if param.grad is not None:
+                    param.grad.mul_(grad_scale)
+
+            if self.cfg.grad_clip_norm is not None:
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.grad_clip_norm)
+
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+
+            return {
+                'loss_ce': loss_ce_sum / float(total_valid_pixels),
+                'loss_dice': loss_dice_sum / float(total_valid_pixels),
+                'total_loss': total_loss_sum / float(total_valid_pixels),
+            }
+
+        return {
+            'loss_ce': 0.0,
+            'loss_dice': 0.0,
+            'total_loss': 0.0,
+        }
 
     def _forward_val_outputs(self, batch) -> Dict[str, torch.Tensor]:
         use_amp = self.cfg.use_amp and self.device.type == 'cuda'
@@ -175,9 +234,9 @@ class Trainer:
         return outputs
 
     def _compute_val_losses(
-            self,
-            outputs: Dict[str, torch.Tensor],
-            batch,
+        self,
+        outputs: Dict[str, torch.Tensor],
+        batch,
     ) -> Dict[str, float]:
         targets = extract_semantic_targets_from_batch(batch)
 
@@ -432,10 +491,10 @@ class Trainer:
         return stats
 
     def save_checkpoint(
-            self,
-            epoch: int,
-            train_stats: Dict[str, float],
-            val_stats: Optional[Dict[str, float]] = None,
+        self,
+        epoch: int,
+        train_stats: Dict[str, float],
+        val_stats: Optional[Dict[str, float]] = None,
     ) -> Path:
         ckpt_path = self.checkpoint_manager.save(
             epoch=epoch,
