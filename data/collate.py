@@ -16,7 +16,12 @@ from ..models.data_misc import (
 Sample = MutableMapping[str, Any]
 
 
-def _pad_tensor_hw(x: torch.Tensor, out_h: int, out_w: int, value: float = 0.0) -> torch.Tensor:
+def _pad_tensor_hw(
+    x: torch.Tensor,
+    out_h: int,
+    out_w: int,
+    value: float = 0.0,
+) -> torch.Tensor:
     h, w = x.shape[-2:]
     pad_h = max(0, out_h - h)
     pad_w = max(0, out_w - w)
@@ -41,7 +46,7 @@ class OVSemanticCollator:
         self.label_pad_value = int(label_pad_value)
 
     def _collate_images(self, samples: Sequence[Sample]):
-        sizes = [(int(s['image'].shape[-2]), int(s['image'].shape[-1])) for s in samples]
+        sizes = [(int(s["image"].shape[-2]), int(s["image"].shape[-1])) for s in samples]
         max_h = max(h for h, _ in sizes)
         max_w = max(w for _, w in sizes)
 
@@ -49,13 +54,25 @@ class OVSemanticCollator:
             max_h = _round_up(max_h, self.pad_size_divisor)
             max_w = _round_up(max_w, self.pad_size_divisor)
 
-        imgs = [_pad_tensor_hw(s['image'], max_h, max_w, self.image_pad_value) for s in samples]
+        imgs = [
+            _pad_tensor_hw(s["image"], max_h, max_w, self.image_pad_value)
+            for s in samples
+        ]
         return torch.stack(imgs, dim=0), sizes, (max_h, max_w)
+
+    def _collect_optional_images(
+        self,
+        samples: Sequence[Sample],
+        key: str,
+    ) -> list[Any] | None:
+        if not any(key in s and s[key] is not None for s in samples):
+            return None
+        return [s.get(key, None) for s in samples]
 
     def __call__(self, samples: Sequence[Sample]) -> BatchedDatapoint:
         samples = list(samples)
         if len(samples) == 0:
-            raise ValueError('Empty batch.')
+            raise ValueError("Empty batch.")
 
         img_batch, image_sizes, padded_hw = self._collate_images(samples)
         batch_size = len(samples)
@@ -67,18 +84,18 @@ class OVSemanticCollator:
         shared_class_texts = None
 
         for b, sample in enumerate(samples):
-            texts = [str(x) for x in sample['class_texts']]
+            texts = [str(x) for x in sample["class_texts"]]
 
             if shared_class_texts is None:
                 shared_class_texts = texts
             else:
                 if texts != shared_class_texts:
                     raise ValueError(
-                        'All samples in one batch must share the same class_texts order. '
-                        f'Got mismatch at sample index {b}.'
+                        "All samples in one batch must share the same class_texts order. "
+                        f"Got mismatch at sample index {b}."
                     )
 
-            label_map = sample['label_map'].long()
+            label_map = sample["label_map"].long()
             if tuple(label_map.shape[-2:]) != tuple(padded_hw):
                 label_map = _pad_tensor_hw(
                     label_map,
@@ -88,12 +105,12 @@ class OVSemanticCollator:
                 ).long()
             label_maps.append(label_map)
 
-            image_id_list.append(int(sample.get('image_id', b)))
-            orig_h, orig_w = sample.get('original_size', image_sizes[b])
+            image_id_list.append(int(sample.get("image_id", b)))
+            orig_h, orig_w = sample.get("original_size", image_sizes[b])
             original_size_list.append(torch.tensor([orig_h, orig_w], dtype=torch.long))
 
         if shared_class_texts is None:
-            raise ValueError('shared_class_texts is None.')
+            raise ValueError("shared_class_texts is None.")
 
         find_stage = FindStage(
             img_ids=None,
@@ -106,7 +123,7 @@ class OVSemanticCollator:
         )
 
         find_target = BatchedFindTarget(
-            semantic_label_map=torch.stack(label_maps, dim=0),   # [B, H, W]
+            semantic_label_map=torch.stack(label_maps, dim=0),  # [B, H, W]
         )
 
         metadata = BatchedInferenceMetadata(
@@ -116,7 +133,8 @@ class OVSemanticCollator:
             class_names=shared_class_texts,
         )
 
-        raw_images = [s.get('raw_image') for s in samples] if any('raw_image' in s for s in samples) else None
+        raw_images = self._collect_optional_images(samples, "raw_image")
+        raw_images_original = self._collect_optional_images(samples, "raw_image_original")
 
         return BatchedDatapoint(
             img_batch=img_batch,
@@ -125,4 +143,5 @@ class OVSemanticCollator:
             find_targets=[find_target],
             find_metadatas=[metadata],
             raw_images=raw_images,
+            raw_images_original=raw_images_original,
         )

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import random
-from typing import Any, Dict, Iterable, List, MutableMapping, Sequence, Tuple
+from typing import Any, MutableMapping, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -16,19 +16,22 @@ def _to_tensor_image(image: Any) -> torch.Tensor:
     if isinstance(image, torch.Tensor):
         if image.ndim == 3:
             return image.float()
-        raise ValueError(f'Unsupported image tensor shape: {tuple(image.shape)}')
+        raise ValueError(f"Unsupported image tensor shape: {tuple(image.shape)}")
+
     if isinstance(image, Image.Image):
         image = np.array(image)
+
     if isinstance(image, np.ndarray):
         if image.ndim == 2:
             image = image[..., None]
         if image.ndim != 3:
-            raise ValueError(f'Unsupported image array shape: {image.shape}')
+            raise ValueError(f"Unsupported image array shape: {image.shape}")
         tensor = torch.from_numpy(image)
         if tensor.shape[-1] in (1, 3, 4):
             tensor = tensor.permute(2, 0, 1)
         return tensor.float()
-    raise TypeError(f'Unsupported image type: {type(image)}')
+
+    raise TypeError(f"Unsupported image type: {type(image)}")
 
 
 def _to_tensor_mask(mask: Any) -> torch.Tensor:
@@ -40,25 +43,26 @@ def _to_tensor_mask(mask: Any) -> torch.Tensor:
         mask = np.array(mask)
     if isinstance(mask, np.ndarray):
         return torch.from_numpy(mask)
-    raise TypeError(f'Unsupported mask type: {type(mask)}')
+    raise TypeError(f"Unsupported mask type: {type(mask)}")
 
 
 def _resize_tensor_image(image: torch.Tensor, size: Tuple[int, int]) -> torch.Tensor:
-    if image.ndim == 3:
-        image = image[None]
-        out = F.interpolate(image, size=size, mode='bilinear', align_corners=False)
-        return out[0]
-    raise ValueError(f'Unsupported image shape: {tuple(image.shape)}')
+    if image.ndim != 3:
+        raise ValueError(f"Unsupported image shape: {tuple(image.shape)}")
+    image = image[None]
+    out = F.interpolate(image, size=size, mode="bilinear", align_corners=False)
+    return out[0]
 
 
 def _resize_label_map(label_map: torch.Tensor, size: Tuple[int, int]) -> torch.Tensor:
     if label_map is None:
         return None
     if label_map.ndim != 2:
-        raise ValueError(f'Unsupported label_map shape: {tuple(label_map.shape)}')
+        raise ValueError(f"Unsupported label_map shape: {tuple(label_map.shape)}")
     label_map = label_map[None, None].float()
-    label_map = F.interpolate(label_map, size=size, mode='nearest')[0, 0]
+    label_map = F.interpolate(label_map, size=size, mode="nearest")[0, 0]
     return label_map.long()
+
 
 def _compute_keep_ratio_size(
     src_hw: Tuple[int, int],
@@ -72,17 +76,29 @@ def _compute_keep_ratio_size(
     return out_h, out_w
 
 
-def _crop_last_two_dims(x: torch.Tensor, top: int, left: int, crop_h: int, crop_w: int) -> torch.Tensor:
+def _crop_last_two_dims(
+    x: torch.Tensor,
+    top: int,
+    left: int,
+    crop_h: int,
+    crop_w: int,
+) -> torch.Tensor:
     return x[..., top:top + crop_h, left:left + crop_w]
 
 
-def _pad_last_two_dims(x: torch.Tensor, out_h: int, out_w: int, value: float = 0.0) -> torch.Tensor:
+def _pad_last_two_dims(
+    x: torch.Tensor,
+    out_h: int,
+    out_w: int,
+    value: float = 0.0,
+) -> torch.Tensor:
     h, w = x.shape[-2:]
     pad_h = max(0, out_h - h)
     pad_w = max(0, out_w - w)
     if pad_h == 0 and pad_w == 0:
         return x
     return F.pad(x, (0, pad_w, 0, pad_h), value=value)
+
 
 class Compose:
     def __init__(self, transforms: Sequence):
@@ -95,20 +111,17 @@ class Compose:
 
 
 class ToTensor:
-    """Convert common image / mask containers into torch tensors.
-
-    Expected keys (all optional except ``image``):
-    - image
-    - semantic_mask
-    - instance_masks
-    - boxes
-    """
-
     def __call__(self, sample: Sample) -> Sample:
         sample = dict(sample)
-        sample['image'] = _to_tensor_image(sample['image'])
-        if 'label_map' in sample:
-            sample['label_map'] = _to_tensor_mask(sample.get('label_map')).long()
+
+        sample["image"] = _to_tensor_image(sample["image"])
+
+        if "raw_image" in sample and sample["raw_image"] is not None:
+            sample["raw_image"] = _to_tensor_image(sample["raw_image"])
+
+        if "label_map" in sample and sample["label_map"] is not None:
+            sample["label_map"] = _to_tensor_mask(sample["label_map"]).long()
+
         return sample
 
 
@@ -124,53 +137,55 @@ class ConvertImageDtype:
 
         if isinstance(dtype, str):
             key = dtype.strip().lower()
-
             mapping = {
-                'float16': torch.float16,
-                'fp16': torch.float16,
-                'half': torch.float16,
-
-                'float32': torch.float32,
-                'fp32': torch.float32,
-                'float': torch.float32,
-
-                'float64': torch.float64,
-                'fp64': torch.float64,
-                'double': torch.float64,
-
-                'uint8': torch.uint8,
-                'int8': torch.int8,
-                'int16': torch.int16,
-                'short': torch.int16,
-                'int32': torch.int32,
-                'int': torch.int32,
-                'int64': torch.int64,
-                'long': torch.int64,
-
-                'bool': torch.bool,
+                "float16": torch.float16,
+                "fp16": torch.float16,
+                "half": torch.float16,
+                "float32": torch.float32,
+                "fp32": torch.float32,
+                "float": torch.float32,
+                "float64": torch.float64,
+                "fp64": torch.float64,
+                "double": torch.float64,
+                "uint8": torch.uint8,
+                "int8": torch.int8,
+                "int16": torch.int16,
+                "short": torch.int16,
+                "int32": torch.int32,
+                "int": torch.int32,
+                "int64": torch.int64,
+                "long": torch.int64,
+                "bool": torch.bool,
             }
-
             if key not in mapping:
                 raise ValueError(
-                    f'Unsupported dtype string: {dtype}. '
-                    f'Supported keys are: {sorted(mapping.keys())}'
+                    f"Unsupported dtype string: {dtype}. "
+                    f"Supported keys are: {sorted(mapping.keys())}"
                 )
             return mapping[key]
 
-        raise TypeError(f'Unsupported dtype type: {type(dtype)}')
+        raise TypeError(f"Unsupported dtype type: {type(dtype)}")
+
+    def _convert_image_like(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.to(self.dtype)
+        if self.scale and x.max() > 1.0:
+            x = x / 255.0
+        return x
 
     def __call__(self, sample: Sample) -> Sample:
         sample = dict(sample)
-        image = sample['image']
+
+        image = sample["image"]
         if not isinstance(image, torch.Tensor):
-            raise TypeError('ConvertImageDtype expects image to be a torch.Tensor')
+            raise TypeError("ConvertImageDtype expects image to be a torch.Tensor")
+        sample["image"] = self._convert_image_like(image)
 
-        image = image.to(self.dtype)
+        if "raw_image" in sample and sample["raw_image"] is not None:
+            raw_image = sample["raw_image"]
+            if not isinstance(raw_image, torch.Tensor):
+                raise TypeError("ConvertImageDtype expects raw_image to be a torch.Tensor")
+            sample["raw_image"] = self._convert_image_like(raw_image)
 
-        if self.scale and image.max() > 1.0:
-            image = image / 255.0
-
-        sample['image'] = image
         return sample
 
 
@@ -181,8 +196,11 @@ class Normalize:
 
     def __call__(self, sample: Sample) -> Sample:
         sample = dict(sample)
-        image = sample['image']
-        sample['image'] = (image - self.mean.to(image.device, image.dtype)) / self.std.to(image.device, image.dtype)
+        image = sample["image"]
+        sample["image"] = (
+            image - self.mean.to(image.device, image.dtype)
+        ) / self.std.to(image.device, image.dtype)
+        # 不对 raw_image 做 Normalize
         return sample
 
 
@@ -193,7 +211,7 @@ class Resize:
 
     def __call__(self, sample: Sample) -> Sample:
         sample = dict(sample)
-        image = sample['image']
+        image = sample["image"]
         h, w = image.shape[-2:]
 
         if self.keep_ratio:
@@ -201,13 +219,16 @@ class Resize:
         else:
             out_h, out_w = self.size
 
-        sample['image'] = _resize_tensor_image(image, (out_h, out_w))
+        sample["image"] = _resize_tensor_image(image, (out_h, out_w))
 
-        if 'label_map' in sample and sample['label_map'] is not None:
-            sample['label_map'] = _resize_label_map(sample['label_map'], (out_h, out_w))
+        if "raw_image" in sample and sample["raw_image"] is not None:
+            sample["raw_image"] = _resize_tensor_image(sample["raw_image"], (out_h, out_w))
 
-        sample['img_shape'] = (out_h, out_w)
-        sample['scale_factor'] = (out_w / w, out_h / h)
+        if "label_map" in sample and sample["label_map"] is not None:
+            sample["label_map"] = _resize_label_map(sample["label_map"], (out_h, out_w))
+
+        sample["img_shape"] = (out_h, out_w)
+        sample["scale_factor"] = (out_w / w, out_h / h)
         return sample
 
 
@@ -216,12 +237,13 @@ class ResizeLongestSide:
         self.long_side = int(long_side)
 
     def __call__(self, sample: Sample) -> Sample:
-        image = sample['image']
+        image = sample["image"]
         h, w = image.shape[-2:]
         scale = self.long_side / max(h, w)
         out_h = max(1, int(round(h * scale)))
         out_w = max(1, int(round(w * scale)))
         return Resize((out_h, out_w))(sample)
+
 
 class RandomResizeByRatio:
     def __init__(
@@ -242,6 +264,7 @@ class RandomResizeByRatio:
         target_w = max(1, int(round(self.base_scale[1] * ratio)))
 
         return Resize((target_h, target_w), keep_ratio=self.keep_ratio)(sample)
+
 
 class RandomCrop:
     def __init__(
@@ -270,7 +293,7 @@ class RandomCrop:
         if not valid.any():
             return True
 
-        labels, counts = torch.unique(label_map[valid], return_counts=True)
+        _, counts = torch.unique(label_map[valid], return_counts=True)
         if counts.numel() == 0:
             return True
 
@@ -281,19 +304,29 @@ class RandomCrop:
         sample = dict(sample)
         crop_h, crop_w = self.crop_size
 
-        image = sample['image']
-        label_map = sample.get('label_map', None)
+        image = sample["image"]
+        raw_image = sample.get("raw_image", None)
+        label_map = sample.get("label_map", None)
 
         if self.pad_if_needed:
             image = _pad_last_two_dims(image, crop_h, crop_w, self.image_pad_value)
+
+            if raw_image is not None:
+                raw_image = _pad_last_two_dims(raw_image, crop_h, crop_w, self.image_pad_value)
+
             if label_map is not None:
-                label_map = _pad_last_two_dims(label_map, crop_h, crop_w, self.ignore_index).long()
+                label_map = _pad_last_two_dims(
+                    label_map,
+                    crop_h,
+                    crop_w,
+                    self.ignore_index,
+                ).long()
 
         h, w = image.shape[-2:]
         if h < crop_h or w < crop_w:
             raise ValueError(
-                f'Image size {(h, w)} is smaller than crop size {(crop_h, crop_w)} '
-                'and pad_if_needed=False.'
+                f"Image size {(h, w)} is smaller than crop size {(crop_h, crop_w)} "
+                "and pad_if_needed=False."
             )
 
         chosen_top = 0
@@ -315,12 +348,29 @@ class RandomCrop:
             chosen_top = random.randint(0, h - crop_h)
             chosen_left = random.randint(0, w - crop_w)
 
-        sample['image'] = _crop_last_two_dims(image, chosen_top, chosen_left, crop_h, crop_w)
-        if label_map is not None:
-            sample['label_map'] = _crop_last_two_dims(label_map, chosen_top, chosen_left, crop_h, crop_w).long()
+        sample["image"] = _crop_last_two_dims(image, chosen_top, chosen_left, crop_h, crop_w)
 
-        sample['img_shape'] = (crop_h, crop_w)
+        if raw_image is not None:
+            sample["raw_image"] = _crop_last_two_dims(
+                raw_image,
+                chosen_top,
+                chosen_left,
+                crop_h,
+                crop_w,
+            )
+
+        if label_map is not None:
+            sample["label_map"] = _crop_last_two_dims(
+                label_map,
+                chosen_top,
+                chosen_left,
+                crop_h,
+                crop_w,
+            ).long()
+
+        sample["img_shape"] = (crop_h, crop_w)
         return sample
+
 
 class RandomVerticalFlip:
     def __init__(self, prob: float = 0.5):
@@ -331,12 +381,16 @@ class RandomVerticalFlip:
             return sample
 
         sample = dict(sample)
-        sample['image'] = torch.flip(sample['image'], dims=[-2])
+        sample["image"] = torch.flip(sample["image"], dims=[-2])
 
-        if 'label_map' in sample and sample['label_map'] is not None:
-            sample['label_map'] = torch.flip(sample['label_map'], dims=[-2])
+        if "raw_image" in sample and sample["raw_image"] is not None:
+            sample["raw_image"] = torch.flip(sample["raw_image"], dims=[-2])
+
+        if "label_map" in sample and sample["label_map"] is not None:
+            sample["label_map"] = torch.flip(sample["label_map"], dims=[-2])
 
         return sample
+
 
 class RandomRotate90:
     def __init__(self, prob: float = 0.5):
@@ -349,12 +403,16 @@ class RandomRotate90:
         sample = dict(sample)
         k = random.randint(1, 3)
 
-        sample['image'] = torch.rot90(sample['image'], k=k, dims=(-2, -1))
+        sample["image"] = torch.rot90(sample["image"], k=k, dims=(-2, -1))
 
-        if 'label_map' in sample and sample['label_map'] is not None:
-            sample['label_map'] = torch.rot90(sample['label_map'], k=k, dims=(-2, -1)).long()
+        if "raw_image" in sample and sample["raw_image"] is not None:
+            sample["raw_image"] = torch.rot90(sample["raw_image"], k=k, dims=(-2, -1))
+
+        if "label_map" in sample and sample["label_map"] is not None:
+            sample["label_map"] = torch.rot90(sample["label_map"], k=k, dims=(-2, -1)).long()
 
         return sample
+
 
 class RandomResize:
     def __init__(self, scales: Sequence[Tuple[int, int]]):
@@ -372,17 +430,26 @@ class RandomHorizontalFlip:
     def __call__(self, sample: Sample) -> Sample:
         if random.random() >= self.prob:
             return sample
-        sample = dict(sample)
-        sample['image'] = torch.flip(sample['image'], dims=[-1])
 
-        if 'label_map' in sample and sample['label_map'] is not None:
-            sample['label_map'] = torch.flip(sample['label_map'], dims=[-1])
+        sample = dict(sample)
+        sample["image"] = torch.flip(sample["image"], dims=[-1])
+
+        if "raw_image" in sample and sample["raw_image"] is not None:
+            sample["raw_image"] = torch.flip(sample["raw_image"], dims=[-1])
+
+        if "label_map" in sample and sample["label_map"] is not None:
+            sample["label_map"] = torch.flip(sample["label_map"], dims=[-1])
 
         return sample
 
 
 class PadToSize:
-    def __init__(self, size: Tuple[int, int], image_pad_value: float = 0.0, label_pad_value: int = 255):
+    def __init__(
+        self,
+        size: Tuple[int, int],
+        image_pad_value: float = 0.0,
+        label_pad_value: int = 255,
+    ):
         self.size = tuple(size)
         self.image_pad_value = float(image_pad_value)
         self.label_pad_value = int(label_pad_value)
@@ -398,11 +465,17 @@ class PadToSize:
 
     def __call__(self, sample: Sample) -> Sample:
         sample = dict(sample)
-        sample['image'] = self._pad_last_two_dims(sample['image'], self.image_pad_value)
 
-        if 'label_map' in sample and sample['label_map'] is not None:
-            sample['label_map'] = self._pad_last_two_dims(sample['label_map'], self.label_pad_value).long()
+        sample["image"] = self._pad_last_two_dims(sample["image"], self.image_pad_value)
 
-        sample['pad_shape'] = self.size
+        if "raw_image" in sample and sample["raw_image"] is not None:
+            sample["raw_image"] = self._pad_last_two_dims(sample["raw_image"], self.image_pad_value)
+
+        if "label_map" in sample and sample["label_map"] is not None:
+            sample["label_map"] = self._pad_last_two_dims(
+                sample["label_map"],
+                self.label_pad_value,
+            ).long()
+
+        sample["pad_shape"] = self.size
         return sample
-

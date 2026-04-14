@@ -12,7 +12,7 @@ from . import transforms as T
 
 
 def _load_image(path: Path) -> Image.Image:
-    return Image.open(path).convert('RGB')
+    return Image.open(path).convert("RGB")
 
 
 def _load_label_map(path: Path) -> torch.Tensor:
@@ -32,32 +32,31 @@ def _build_transform_from_cfg(cfg: Any) -> Optional[Callable]:
         transforms = [x for x in transforms if x is not None]
         return T.Compose(transforms)
     if not isinstance(cfg, dict):
-        raise TypeError(f'Unsupported transform cfg type: {type(cfg)}')
+        raise TypeError(f"Unsupported transform cfg type: {type(cfg)}")
 
     cfg = dict(cfg)
-    t_type = cfg.pop('type')
-    if '.' in t_type:
-        module_name, class_name = t_type.rsplit('.', 1)
+    t_type = cfg.pop("type")
+    if "." in t_type:
+        module_name, class_name = t_type.rsplit(".", 1)
         mod = __import__(module_name, fromlist=[class_name])
         cls = getattr(mod, class_name)
     else:
         cls = getattr(T, t_type)
 
-    if 'transforms' in cfg:
-        cfg['transforms'] = [_build_transform_from_cfg(x) for x in cfg['transforms']]
+    if "transforms" in cfg:
+        cfg["transforms"] = [_build_transform_from_cfg(x) for x in cfg["transforms"]]
     return cls(**cfg)
 
 
 class OVSemanticSegDataset(Dataset):
-
     def __init__(
         self,
         img_dir: str,
         ann_dir: str,
         classes: list[str],
         transforms: Optional[Any] = None,
-        img_suffix: str = '.png',
-        seg_suffix: str = '.png',
+        img_suffix: str = ".png",
+        seg_suffix: str = ".png",
         ignore_index: int = 255,
         reduce_zero_label: bool = False,
         return_raw_image: bool = False,
@@ -74,19 +73,19 @@ class OVSemanticSegDataset(Dataset):
         self.transforms = _build_transform_from_cfg(transforms)
 
         if not self.img_dir.exists():
-            raise FileNotFoundError(f'img_dir not found: {self.img_dir}')
+            raise FileNotFoundError(f"img_dir not found: {self.img_dir}")
         if not self.ann_dir.exists():
-            raise FileNotFoundError(f'ann_dir not found: {self.ann_dir}')
+            raise FileNotFoundError(f"ann_dir not found: {self.ann_dir}")
 
-        self.img_paths = sorted(self.img_dir.glob(f'*{self.img_suffix}'))
+        self.img_paths = sorted(self.img_dir.glob(f"*{self.img_suffix}"))
         if len(self.img_paths) == 0:
-            raise ValueError(f'No images found in {self.img_dir} with suffix {self.img_suffix}')
+            raise ValueError(f"No images found in {self.img_dir} with suffix {self.img_suffix}")
 
-        self.seg_paths = [self.ann_dir / f'{p.stem}{self.seg_suffix}' for p in self.img_paths]
+        self.seg_paths = [self.ann_dir / f"{p.stem}{self.seg_suffix}" for p in self.img_paths]
         missing = [str(p) for p in self.seg_paths if not p.exists()]
         if missing:
-            preview = '\n'.join(missing[:20])
-            raise FileNotFoundError(f'Some segmentation labels are missing:\n{preview}')
+            preview = "\n".join(missing[:20])
+            raise FileNotFoundError(f"Some segmentation labels are missing:\n{preview}")
 
     def __len__(self) -> int:
         return len(self.img_paths)
@@ -109,35 +108,39 @@ class OVSemanticSegDataset(Dataset):
         seg_path = self.seg_paths[index]
 
         image = _load_image(img_path)
+
+        raw_image_original = image.copy() if self.return_raw_image else None
         raw_image = image.copy() if self.return_raw_image else None
 
         label_map = _load_label_map(seg_path)
         label_map = self._process_label_map(label_map)
 
         sample = {
-            'image': image,
-            'label_map': label_map,
-            'class_texts': self.classes,
-            'image_id': index,
-            'original_size': image.size[::-1],
-            'img_path': str(img_path),
-            'seg_path': str(seg_path),
+            "image": image,
+            "label_map": label_map,
+            "class_texts": self.classes,
+            "image_id": index,
+            "original_size": image.size[::-1],
+            "img_path": str(img_path),
+            "seg_path": str(seg_path),
         }
 
         if raw_image is not None:
-            sample['raw_image'] = raw_image
+            sample["raw_image"] = raw_image
+        if raw_image_original is not None:
+            sample["raw_image_original"] = raw_image_original
 
         if self.transforms is not None:
             sample = self.transforms(sample)
 
-        if not isinstance(sample['image'], torch.Tensor):
-            raise TypeError('Dataset expects transforms to convert `image` to torch.Tensor.')
+        if not isinstance(sample["image"], torch.Tensor):
+            raise TypeError("Dataset expects transforms to convert `image` to torch.Tensor.")
 
-        if sample['image'].dtype != torch.float32:
-            sample['image'] = sample['image'].float()
+        if sample["image"].dtype != torch.float32:
+            sample["image"] = sample["image"].float()
 
-        if not isinstance(sample['label_map'], torch.Tensor):
-            raise TypeError('`label_map` must be torch.Tensor after transforms.')
+        if not isinstance(sample["label_map"], torch.Tensor):
+            raise TypeError("`label_map` must be torch.Tensor after transforms.")
 
-        sample['label_map'] = sample['label_map'].long()
+        sample["label_map"] = sample["label_map"].long()
         return sample

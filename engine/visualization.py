@@ -4,19 +4,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import hashlib
 import numpy as np
 import torch
 import torch.nn.functional as F
-import hashlib
 from PIL import Image
 
 from ..models.geometry_encoders import Prompt
 
+
 @dataclass
 class VisualizerConfig:
     enabled: bool = False
-    save_dir: str = './visualizations'
-    save_stage: str = 'val'
+    save_dir: str = "./visualizations"
+    save_stage: str = "val"
     alpha: float = 0.45
 
     save_original: bool = True
@@ -28,8 +29,9 @@ class VisualizerConfig:
     max_samples_per_epoch: Optional[int] = 50
     vis_seed: int = 42
 
-    image_folder_pattern: str = 'image_{image_id:06d}'
+    image_folder_pattern: str = "image_{image_id:06d}"
     ignore_index: int = 255
+
 
 @dataclass
 class VisualizationContext:
@@ -43,67 +45,101 @@ class VisualizationContext:
 
 
 class VisualizationTask:
-    name = 'base'
+    name = "base"
 
-    def run(self, manager: 'VisualizationManager', ctx: VisualizationContext) -> None:
+    def run(self, manager: "VisualizationManager", ctx: VisualizationContext) -> None:
         raise NotImplementedError
 
-class BaseSemanticOverlayTask(VisualizationTask):
-    name = 'base_semantic_overlay'
 
-    def run(self, manager: 'VisualizationManager', ctx: VisualizationContext) -> None:
+class BaseSemanticOverlayTask(VisualizationTask):
+    name = "base_semantic_overlay"
+
+    def run(self, manager: "VisualizationManager", ctx: VisualizationContext) -> None:
         semantic_outputs = ctx.semantic_outputs
         semantic_targets = ctx.semantic_targets
         batch = ctx.batch
 
-        if 'fused_score_map' not in semantic_outputs:
+        if "fused_score_map" not in semantic_outputs:
             raise ValueError("outputs must contain 'fused_score_map'.")
 
-        fused_score_map = semantic_outputs['fused_score_map']
+        fused_score_map = semantic_outputs["fused_score_map"]
         fused_pred = manager._extract_pred_from_logits(fused_score_map)
 
-        semantic_score_map = semantic_outputs.get('semantic_score_map', None)
+        semantic_score_map = semantic_outputs.get("semantic_score_map", None)
         semantic_pred = (
             manager._extract_pred_from_logits(semantic_score_map)
             if semantic_score_map is not None else None
         )
 
-        gt = semantic_targets['label_map']
+        gt = semantic_targets["label_map"]
         if gt.dim() == 4:
             gt = gt[:, 0]
 
-        num_classes = int(fused_score_map.shape[1])
+        pred_num_classes = int(fused_score_map.shape[1])
+
+        try:
+            class_names: List[str] = batch.find_metadatas[0].class_names
+            gt_num_classes = len(class_names)
+        except Exception:
+            gt_num_classes = manager._infer_num_classes_from_label_map(
+                gt,
+                ignore_index=manager.cfg.ignore_index,
+                fallback=pred_num_classes,
+            )
+            class_names = None
+
+        semantic_num_classes = pred_num_classes
+        if semantic_score_map is not None:
+            semantic_num_classes = int(semantic_score_map.shape[1])
 
         for b in ctx.selected_indices:
             image_id = manager._extract_image_id(batch, b)
-            sample_dir = manager._resolve_sample_dir(image_id=image_id, epoch=ctx.epoch, stage=ctx.stage)
+            sample_dir = manager._resolve_sample_dir(
+                image_id=image_id,
+                epoch=ctx.epoch,
+                stage=ctx.stage,
+            )
 
-            image = manager._extract_original_image(batch, b)
-            out_hw = image.size[::-1]
+            overlay_image = manager._extract_overlay_image(batch, b)
+            original_image = manager._extract_original_reference_image(batch, b)
+            out_hw = overlay_image.size[::-1]
 
             fused_pred_label = manager._prepare_label_map(fused_pred[b], out_hw)
             gt_label = manager._prepare_label_map(gt[b], out_hw)
 
-            image.save(sample_dir / 'original.png')
-            manager._overlay_label_map(image, fused_pred_label, num_classes).save(sample_dir / 'pred_overlay.png')
-            manager._overlay_label_map(image, gt_label, num_classes).save(sample_dir / 'gt_overlay.png')
+            if manager.cfg.save_original:
+                original_image.save(sample_dir / "original.png")
 
-            if semantic_pred is not None:
+            if manager.cfg.save_prediction:
+                manager._overlay_label_map(
+                    overlay_image,
+                    fused_pred_label,
+                    pred_num_classes,
+                ).save(sample_dir / "pred_overlay.png")
+
+            if manager.cfg.save_ground_truth:
+                manager._overlay_label_map(
+                    overlay_image,
+                    gt_label,
+                    gt_num_classes,
+                ).save(sample_dir / "gt_overlay.png")
+
+            if semantic_pred is not None and manager.cfg.save_semantic_prediction:
                 semantic_pred_label = manager._prepare_label_map(semantic_pred[b], out_hw)
-                manager._overlay_label_map(image, semantic_pred_label, num_classes).save(
-                    sample_dir / 'pred_semantic_overlay.png'
-                )
+                manager._overlay_label_map(
+                    overlay_image,
+                    semantic_pred_label,
+                    semantic_num_classes,
+                ).save(sample_dir / "pred_semantic_overlay.png")
 
-            try:
-                class_names: List[str] = batch.find_metadatas[0].class_names
-                with open(sample_dir / 'classes.txt', 'w', encoding='utf-8') as f:
+            if class_names is not None:
+                with open(sample_dir / "classes.txt", "w", encoding="utf-8") as f:
                     for i, name in enumerate(class_names):
-                        f.write(f'{i}\t{name}\n')
-            except Exception:
-                pass
+                        f.write(f"{i}\t{name}\n")
+
 
 class EncoderLayerSemanticProbeTask(VisualizationTask):
-    name = 'encoder_layer_semantic_probe'
+    name = "encoder_layer_semantic_probe"
 
     @staticmethod
     def _semantic_score_from_encoder_hidden(
@@ -158,7 +194,7 @@ class EncoderLayerSemanticProbeTask(VisualizationTask):
             chunk_backbone_out = dict(image_backbone_out)
             chunk_backbone_out.update(text_backbone_out)
 
-            if hasattr(core, '_build_clip_extra_text_tokens'):
+            if hasattr(core, "_build_clip_extra_text_tokens"):
                 clip_extra_tokens = core._build_clip_extra_text_tokens(chunk_texts, device=device)
                 if clip_extra_tokens is not None:
                     chunk_backbone_out["clip_language_features"] = clip_extra_tokens
@@ -212,7 +248,6 @@ class EncoderLayerSemanticProbeTask(VisualizationTask):
                 per_layer_chunk_outputs = [[] for _ in range(len(captured_layer_outputs))]
 
             for layer_idx, layer_out in enumerate(captured_layer_outputs):
-                # layer_out: [N_pair, HW, C] -> seg head 需要 [HW, N_pair, C]
                 encoder_hidden_states = layer_out.transpose(0, 1).contiguous()
 
                 semantic_seg = self._semantic_score_from_encoder_hidden(
@@ -228,13 +263,13 @@ class EncoderLayerSemanticProbeTask(VisualizationTask):
                     semantic_seg,
                     batch_size=batch_size,
                     num_chunk_classes=num_chunk_classes,
-                    key=f'layer_{layer_idx}_semantic_seg',
+                    key=f"layer_{layer_idx}_semantic_seg",
                 )  # [B,C_chunk,1,H,W]
 
                 per_layer_chunk_outputs[layer_idx].append({"semantic_seg": semantic_seg})
 
         layer_score_maps = []
-        for layer_idx, chunk_outputs in enumerate(per_layer_chunk_outputs):
+        for _, chunk_outputs in enumerate(per_layer_chunk_outputs):
             merged = core._merge_chunk_outputs(chunk_outputs)
             semantic_seg = merged["semantic_seg"]  # [B,C,1,H,W]
             semantic_score_map = semantic_seg[:, :, 0].sigmoid()  # [B,C,H,W]
@@ -242,16 +277,16 @@ class EncoderLayerSemanticProbeTask(VisualizationTask):
 
         return layer_score_maps
 
-    def run(self, manager: 'VisualizationManager', ctx: VisualizationContext) -> None:
+    def run(self, manager: "VisualizationManager", ctx: VisualizationContext) -> None:
         if len(ctx.selected_indices) == 0:
             return
 
         model = ctx.model
-        core = getattr(model, 'core', None)
+        core = getattr(model, "core", None)
         if core is None:
             return
 
-        seg_head = getattr(core, 'segmentation_head', None)
+        seg_head = getattr(core, "segmentation_head", None)
         if seg_head is None:
             return
 
@@ -270,16 +305,17 @@ class EncoderLayerSemanticProbeTask(VisualizationTask):
                     epoch=ctx.epoch,
                     stage=ctx.stage,
                 )
-                image = manager._extract_original_image(ctx.batch, b)
-                out_hw = image.size[::-1]
+                overlay_image = manager._extract_overlay_image(ctx.batch, b)
+                out_hw = overlay_image.size[::-1]
 
                 pred_label = manager._prepare_label_map(pred[b], out_hw)
 
                 manager._overlay_label_map(
-                    image,
+                    overlay_image,
                     pred_label,
                     num_classes,
-                ).save(sample_dir / f'encoder_layer_{layer_idx:02d}_semantic_overlay.png')
+                ).save(sample_dir / f"encoder_layer_{layer_idx:02d}_semantic_overlay.png")
+
 
 class VisualizationManager:
     def __init__(self, cfg: VisualizerConfig):
@@ -300,7 +336,7 @@ class VisualizationManager:
         cls,
         cfg_dict: Optional[Dict[str, Any]],
         work_dir: Optional[str] = None,
-    ) -> Optional['VisualizationManager']:
+    ) -> Optional["VisualizationManager"]:
         if cfg_dict is None:
             return None
         cfg = VisualizerConfig(**cfg_dict)
@@ -315,14 +351,14 @@ class VisualizationManager:
     def should_save(self, stage: str) -> bool:
         if not self.cfg.enabled:
             return False
-        if self.cfg.save_stage == 'all':
+        if self.cfg.save_stage == "all":
             return True
         return self.cfg.save_stage == stage
 
     @staticmethod
     def _to_uint8_image(image: Any) -> Image.Image:
         if isinstance(image, Image.Image):
-            return image.convert('RGB')
+            return image.convert("RGB")
 
         if isinstance(image, torch.Tensor):
             x = image.detach().cpu()
@@ -334,7 +370,7 @@ class VisualizationManager:
                 x = x.repeat(3, 1, 1)
             x = x.float().clamp(0, 1)
             arr = (x.permute(1, 2, 0).numpy() * 255.0).astype(np.uint8)
-            return Image.fromarray(arr, mode='RGB')
+            return Image.fromarray(arr, mode="RGB")
 
         if isinstance(image, np.ndarray):
             arr = image
@@ -342,15 +378,31 @@ class VisualizationManager:
                 arr = np.stack([arr] * 3, axis=-1)
             if arr.dtype != np.uint8:
                 arr = np.clip(arr, 0, 255).astype(np.uint8)
-            return Image.fromarray(arr, mode='RGB')
+            return Image.fromarray(arr, mode="RGB")
 
-        raise TypeError(f'Unsupported image type: {type(image)}')
+        raise TypeError(f"Unsupported image type: {type(image)}")
 
     @staticmethod
-    def _extract_original_image(batch: Any, batch_index: int) -> Image.Image:
-        raw_images = getattr(batch, 'raw_images', None)
+    def _extract_overlay_image(batch: Any, batch_index: int) -> Image.Image:
+        raw_images = getattr(batch, "raw_images", None)
         if raw_images is not None and batch_index < len(raw_images) and raw_images[batch_index] is not None:
             return VisualizationManager._to_uint8_image(raw_images[batch_index])
+        return VisualizationManager._to_uint8_image(batch.img_batch[batch_index])
+
+    @staticmethod
+    def _extract_original_reference_image(batch: Any, batch_index: int) -> Image.Image:
+        raw_images_original = getattr(batch, "raw_images_original", None)
+        if (
+            raw_images_original is not None
+            and batch_index < len(raw_images_original)
+            and raw_images_original[batch_index] is not None
+        ):
+            return VisualizationManager._to_uint8_image(raw_images_original[batch_index])
+
+        raw_images = getattr(batch, "raw_images", None)
+        if raw_images is not None and batch_index < len(raw_images) and raw_images[batch_index] is not None:
+            return VisualizationManager._to_uint8_image(raw_images[batch_index])
+
         return VisualizationManager._to_uint8_image(batch.img_batch[batch_index])
 
     @staticmethod
@@ -364,7 +416,7 @@ class VisualizationManager:
     def _resolve_sample_dir(self, image_id: int, epoch: Optional[int], stage: str) -> Path:
         parts = [self.save_dir, stage]
         if epoch is not None:
-            parts.append(Path(f'epoch_{epoch:03d}'))
+            parts.append(Path(f"epoch_{epoch:03d}"))
         parts.append(Path(self.cfg.image_folder_pattern.format(image_id=image_id)))
         sample_dir = Path(*parts)
         sample_dir.mkdir(parents=True, exist_ok=True)
@@ -375,16 +427,37 @@ class VisualizationManager:
         x = label_map.detach().cpu()
         if x.dim() == 3:
             if x.shape[0] != 1:
-                raise ValueError(f'Expected [1,H,W] or [H,W], got {tuple(x.shape)}')
+                raise ValueError(f"Expected [1,H,W] or [H,W], got {tuple(x.shape)}")
             x = x[0]
         if x.dim() != 2:
-            raise ValueError(f'Expected [H,W], got {tuple(x.shape)}')
+            raise ValueError(f"Expected [H,W], got {tuple(x.shape)}")
 
         if tuple(x.shape[-2:]) != tuple(out_hw):
-            x = F.interpolate(x[None, None].float(), size=out_hw, mode='nearest')[0, 0].long()
+            x = F.interpolate(x[None, None].float(), size=out_hw, mode="nearest")[0, 0].long()
         else:
             x = x.long()
         return x
+
+    @staticmethod
+    def _infer_num_classes_from_label_map(
+        label_map: torch.Tensor,
+        ignore_index: int,
+        fallback: int,
+    ) -> int:
+        x = label_map.detach().cpu().long()
+        if x.dim() == 4:
+            if x.shape[1] != 1:
+                raise ValueError(f"Expected [B,1,H,W] or [B,H,W], got {tuple(x.shape)}")
+            x = x[:, 0]
+        elif x.dim() != 3:
+            raise ValueError(f"Expected [B,H,W], got {tuple(x.shape)}")
+
+        valid = x != int(ignore_index)
+        if not valid.any():
+            return int(fallback)
+
+        max_label = int(x[valid].max().item())
+        return max(int(fallback), max_label + 1)
 
     @staticmethod
     def _build_palette(num_classes: int) -> np.ndarray:
@@ -403,15 +476,21 @@ class VisualizationManager:
     def _colorize_label_map(self, label_map: torch.Tensor, num_classes: int) -> Image.Image:
         label_map_np = label_map.cpu().numpy().astype(np.int64)
         h, w = label_map_np.shape
+
+        valid = label_map_np != self.cfg.ignore_index
+        if valid.any():
+            max_label = int(label_map_np[valid].max())
+            num_classes = max(int(num_classes), max_label + 1)
+        else:
+            num_classes = int(num_classes)
+
         palette = self._build_palette(num_classes)
 
         color = np.zeros((h, w, 3), dtype=np.uint8)
-        valid = label_map_np != self.cfg.ignore_index
-
         safe_label = label_map_np.copy()
         safe_label[~valid] = 0
         color[valid] = palette[safe_label[valid]]
-        return Image.fromarray(color, mode='RGB')
+        return Image.fromarray(color, mode="RGB")
 
     def _overlay_label_map(
         self,
@@ -419,7 +498,7 @@ class VisualizationManager:
         label_map: torch.Tensor,
         num_classes: int,
     ) -> Image.Image:
-        base = np.asarray(image.convert('RGB')).astype(np.float32)
+        base = np.asarray(image.convert("RGB")).astype(np.float32)
         color = np.asarray(self._colorize_label_map(label_map, num_classes)).astype(np.float32)
 
         valid = (label_map.cpu().numpy() != self.cfg.ignore_index)[..., None]
@@ -429,7 +508,7 @@ class VisualizationManager:
             + self.cfg.alpha * color[valid[..., 0]]
         )
         out = np.clip(out, 0, 255).astype(np.uint8)
-        return Image.fromarray(out, mode='RGB')
+        return Image.fromarray(out, mode="RGB")
 
     @staticmethod
     def _extract_pred_from_logits(
@@ -438,7 +517,7 @@ class VisualizationManager:
         if logits is None:
             return None
         if logits.dim() != 4:
-            raise ValueError(f'Expected logits [B,C,H,W], got {tuple(logits.shape)}')
+            raise ValueError(f"Expected logits [B,C,H,W], got {tuple(logits.shape)}")
         return logits.argmax(dim=1)
 
     def _get_epoch_key(self, stage: str, epoch: Optional[int]) -> Tuple[str, int]:
@@ -453,10 +532,10 @@ class VisualizationManager:
         self._saved_counts[key] = self._get_saved_count(stage, epoch) + 1
 
     def _should_save_sample(
-            self,
-            image_id: int,
-            stage: str,
-            epoch: Optional[int],
+        self,
+        image_id: int,
+        stage: str,
+        epoch: Optional[int],
     ) -> bool:
         if not self.should_save(stage):
             return False
@@ -473,21 +552,21 @@ class VisualizationManager:
             return True
 
         epoch_value = -1 if epoch is None else int(epoch)
-        token = f'{self.cfg.vis_seed}:{stage}:{epoch_value}:{int(image_id)}'
-        digest = hashlib.sha1(token.encode('utf-8')).hexdigest()
+        token = f"{self.cfg.vis_seed}:{stage}:{epoch_value}:{int(image_id)}"
+        digest = hashlib.sha1(token.encode("utf-8")).hexdigest()
         value = int(digest[:8], 16) / float(16 ** 8 - 1)
 
         return value < float(self.cfg.vis_prob)
 
     def run(
-            self,
-            model: torch.nn.Module,
-            batch: Any,
-            semantic_outputs: Dict[str, torch.Tensor],
-            semantic_targets: Dict[str, torch.Tensor],
-            *,
-            epoch: Optional[int],
-            stage: str = 'val',
+        self,
+        model: torch.nn.Module,
+        batch: Any,
+        semantic_outputs: Dict[str, torch.Tensor],
+        semantic_targets: Dict[str, torch.Tensor],
+        *,
+        epoch: Optional[int],
+        stage: str = "val",
     ) -> None:
         if not self.should_save(stage):
             return

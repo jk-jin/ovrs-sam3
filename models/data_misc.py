@@ -59,3 +59,4 @@ class BatchedDatapoint:
     find_metadatas: List[BatchedInferenceMetadata]
 
     raw_images: Optional[List[Any]] = None
+    raw_images_original: Optional[List[Any]] = None

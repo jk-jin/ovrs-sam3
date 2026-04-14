@@ -41,8 +41,8 @@ class Sam3Image(torch.nn.Module):
         interactivity_in_encoder: bool = True,
         matcher=None,
         use_dot_prod_scoring=True,
-        supervise_joint_box_scores: bool = False,  # only relevant if using presence token/score
-        detach_presence_in_joint_score: bool = False,  # only relevant if using presence token/score
+        supervise_joint_box_scores: bool = False,
+        detach_presence_in_joint_score: bool = False,
         separate_scorer_for_instance: bool = False,
         num_interactive_steps_val: int = 0,
         clip_image_encoder=None,
@@ -106,7 +106,6 @@ class Sam3Image(torch.nn.Module):
         self.supervise_joint_box_scores = supervise_joint_box_scores
         self.detach_presence_in_joint_score = detach_presence_in_joint_score
 
-        # verify the number of queries for O2O and O2M
         num_o2o_static = self.transformer.decoder.num_queries
         num_o2m_static = self.transformer.decoder.num_o2m_queries
         assert num_o2m_static == (num_o2o_static if self.transformer.decoder.dac else 0)
@@ -122,7 +121,6 @@ class Sam3Image(torch.nn.Module):
         return self._device
 
     def to(self, *args, **kwargs):
-        # clear cached _device in case the model is moved to a different device
         self._device = None
         return super().to(*args, **kwargs)
 
@@ -169,7 +167,6 @@ class Sam3Image(torch.nn.Module):
         num_classes = len(class_texts)
         chunk_size = self._get_prompt_chunk_size(num_classes)
 
-        # image backbone is frozen: run once without grad and reuse across chunks
         with torch.no_grad():
             image_backbone_out = self.backbone.forward_image(input.img_batch)
         image_backbone_out = self._detach_tree(image_backbone_out)
@@ -180,7 +177,6 @@ class Sam3Image(torch.nn.Module):
             num_chunk_classes = len(chunk_texts)
             chunk_class_ids = list(range(start, end))
 
-            # text encoder is frozen: run per chunk without grad
             with torch.no_grad():
                 text_backbone_out = self.backbone.forward_text(
                     chunk_texts,
@@ -191,18 +187,18 @@ class Sam3Image(torch.nn.Module):
             chunk_backbone_out = dict(image_backbone_out)
             chunk_backbone_out.update(text_backbone_out)
 
-            # OpenCLIP text encoder is frozen, but post-processing layers in this
-            # module may still be trainable, so only the encoder call is wrapped
-            # by no_grad; the post-processing stays in the graph.
             clip_extra_tokens = None
             if self.clip_text_encoder is not None and len(self.clip_extra_token_templates) > 0:
-                with torch.no_grad():
-                    clip_extra_tokens = self.clip_text_encoder.encode_prompt_templates(
-                        class_names=chunk_texts,
-                        templates=self.clip_extra_token_templates,
-                        device=device,
-                        normalize_label=self.normalize_label_for_clip,
-                    )  # [num_chunk_classes, K, 256]
+                # 这里不能再额外包 no_grad。
+                # OpenCLIPTextEncoder 内部已经保证：
+                # - 文本塔冻结
+                # - resizer 保留梯度
+                clip_extra_tokens = self.clip_text_encoder.encode_prompt_templates(
+                    class_names=chunk_texts,
+                    templates=self.clip_extra_token_templates,
+                    device=device,
+                    normalize_label=self.normalize_label_for_clip,
+                )  # [num_chunk_classes, K, 256]
 
                 clip_extra_tokens = self.clip_text_token_norm(clip_extra_tokens)
                 gate = torch.tanh(self.clip_text_token_gate)
@@ -309,7 +305,6 @@ class Sam3Image(torch.nn.Module):
         gate = torch.tanh(self.clip_text_token_gate)
         pooled_tokens = gate * pooled_tokens
 
-        # [B, K, 256] -> [K, B, 256]
         pooled_tokens = pooled_tokens.permute(1, 0, 2).contiguous()
         return pooled_tokens
 
@@ -394,8 +389,6 @@ class Sam3Image(torch.nn.Module):
         encode_text=True,
         prev_mask_pred=None,
     ):
-        # index text features (note that regardless of early or late fusion, the batch size of
-        # `txt_feats` is always the number of *prompts* in the encoder)
         txt_ids = find_input.text_ids
         txt_feats = backbone_out["language_features"][:, txt_ids]
         txt_masks = backbone_out["language_mask"][txt_ids]
@@ -411,13 +404,14 @@ class Sam3Image(torch.nn.Module):
 
         if prev_mask_pred is not None:
             img_feats = [img_feats[-1] + prev_mask_pred]
-        # Encode geometry
+
         geo_feats, geo_masks = self.geometry_encoder(
             geo_prompt=geometric_prompt,
             img_feats=img_feats,
             img_sizes=vis_feat_sizes,
             img_pos_embeds=img_pos_embeds,
         )
+
         if visual_prompt_embed is None:
             visual_prompt_embed = torch.zeros(
                 (0, *geo_feats.shape[1:]), device=geo_feats.device
@@ -427,6 +421,7 @@ class Sam3Image(torch.nn.Module):
                 device=geo_masks.device,
                 dtype=geo_masks.dtype,
             )
+
         if encode_text:
             prompt_list = [txt_feats]
             prompt_mask_list = [txt_masks]
@@ -443,6 +438,7 @@ class Sam3Image(torch.nn.Module):
         else:
             prompt = torch.cat([geo_feats, visual_prompt_embed], dim=0)
             prompt_mask = torch.cat([geo_masks, visual_prompt_mask], dim=1)
+
         return prompt, prompt_mask, backbone_out
 
     def _run_encoder(
@@ -456,9 +452,7 @@ class Sam3Image(torch.nn.Module):
         feat_tuple = self._get_img_feats(backbone_out, find_input.img_ids)
         backbone_out, img_feats, img_pos_embeds, vis_feat_sizes = feat_tuple
 
-        # Run the encoder
         prompt_pos_embed = torch.zeros_like(prompt)
-        # make a copy of the image feature lists since the encoder may modify these lists in-place
         memory = self.transformer.encoder(
             src=img_feats.copy(),
             src_key_padding_mask=None,
@@ -469,8 +463,8 @@ class Sam3Image(torch.nn.Module):
             feat_sizes=vis_feat_sizes,
             encoder_extra_kwargs=encoder_extra_kwargs,
         )
+
         encoder_out = {
-            # encoded image features
             "encoder_hidden_states": memory["memory"],
             "pos_embed": memory["pos_embed"],
             "padding_mask": memory["padding_mask"],
@@ -478,7 +472,6 @@ class Sam3Image(torch.nn.Module):
             "spatial_shapes": memory["spatial_shapes"],
             "valid_ratios": memory["valid_ratios"],
             "vis_feat_sizes": vis_feat_sizes,
-            # encoded text features (or other prompts)
             "prompt_before_enc": prompt,
             "prompt_after_enc": memory.get("memory_text", prompt),
             "prompt_mask": prompt_mask,
@@ -500,26 +493,24 @@ class Sam3Image(torch.nn.Module):
         tgt = query_embed.unsqueeze(1).repeat(1, bs, 1)
 
         apply_dac = self.transformer.decoder.dac and self.transformer.decoder.training
-        hs, reference_boxes, dec_presence_out, dec_presence_feats = (
-            self.transformer.decoder(
-                tgt=tgt,
-                memory=memory,
-                memory_key_padding_mask=src_mask,
-                pos=pos_embed,
-                reference_boxes=None,
-                level_start_index=encoder_out["level_start_index"],
-                spatial_shapes=encoder_out["spatial_shapes"],
-                valid_ratios=encoder_out["valid_ratios"],
-                tgt_mask=None,
-                memory_text=prompt,
-                text_attention_mask=prompt_mask,
-                apply_dac=apply_dac,
-            )
+        hs, reference_boxes, dec_presence_out, dec_presence_feats = self.transformer.decoder(
+            tgt=tgt,
+            memory=memory,
+            memory_key_padding_mask=src_mask,
+            pos=pos_embed,
+            reference_boxes=None,
+            level_start_index=encoder_out["level_start_index"],
+            spatial_shapes=encoder_out["spatial_shapes"],
+            valid_ratios=encoder_out["valid_ratios"],
+            tgt_mask=None,
+            memory_text=prompt,
+            text_attention_mask=prompt_mask,
+            apply_dac=apply_dac,
         )
-        hs = hs.transpose(1, 2)  # seq-first to batch-first
-        reference_boxes = reference_boxes.transpose(1, 2)  # seq-first to batch-first
+
+        hs = hs.transpose(1, 2)
+        reference_boxes = reference_boxes.transpose(1, 2)
         if dec_presence_out is not None:
-            # seq-first to batch-first
             dec_presence_out = dec_presence_out.transpose(1, 2)
 
         out["presence_feats"] = dec_presence_feats
@@ -547,8 +538,9 @@ class Sam3Image(torch.nn.Module):
         num_o2o = (hs.size(2) // 2) if apply_dac else hs.size(2)
         num_o2m = hs.size(2) - num_o2o
         assert num_o2m == (num_o2o if apply_dac else 0)
-        out["queries"] = hs[-1][:, :num_o2o]  # remove o2m queries if there are any
-        # score prediction
+
+        out["queries"] = hs[-1][:, :num_o2o]
+
         if self.use_dot_prod_scoring:
             dot_prod_scoring_head = self.dot_prod_scoring
             if is_instance_prompt and self.instance_dot_prod_scoring is not None:
@@ -560,13 +552,10 @@ class Sam3Image(torch.nn.Module):
                 class_embed_head = self.instance_class_embed
             outputs_class = class_embed_head(hs)
 
-        # box prediction
         box_head = self.transformer.decoder.bbox_embed
-        if (
-            is_instance_prompt
-            and self.transformer.decoder.instance_bbox_embed is not None
-        ):
+        if is_instance_prompt and self.transformer.decoder.instance_bbox_embed is not None:
             box_head = self.transformer.decoder.instance_bbox_embed
+
         anchor_box_offsets = box_head(hs)
         reference_boxes_inv_sig = inverse_sigmoid(reference_boxes)
         outputs_coord = (reference_boxes_inv_sig + anchor_box_offsets).sigmoid()
@@ -574,7 +563,10 @@ class Sam3Image(torch.nn.Module):
 
         if dec_presence_out is not None:
             _update_out(
-                out, "presence_logit_dec", dec_presence_out, update_aux=self.transformer.decoder.training
+                out,
+                "presence_logit_dec",
+                dec_presence_out,
+                update_aux=self.transformer.decoder.training,
             )
 
         if self.supervise_joint_box_scores:
@@ -588,17 +580,24 @@ class Sam3Image(torch.nn.Module):
             ).clamp(min=-10.0, max=10.0)
 
         _update_out(
-            out, "pred_logits", outputs_class[:, :, :num_o2o],
-            update_aux=self.transformer.decoder.training
+            out,
+            "pred_logits",
+            outputs_class[:, :, :num_o2o],
+            update_aux=self.transformer.decoder.training,
         )
         _update_out(
-            out, "pred_boxes", outputs_coord[:, :, :num_o2o],
-            update_aux=self.transformer.decoder.training
+            out,
+            "pred_boxes",
+            outputs_coord[:, :, :num_o2o],
+            update_aux=self.transformer.decoder.training,
         )
         _update_out(
-            out, "pred_boxes_xyxy", outputs_boxes_xyxy[:, :, :num_o2o],
-            update_aux=self.transformer.decoder.training
+            out,
+            "pred_boxes_xyxy",
+            outputs_boxes_xyxy[:, :, :num_o2o],
+            update_aux=self.transformer.decoder.training,
         )
+
         if num_o2m > 0 and self.transformer.decoder.training:
             _update_out(
                 out,
@@ -644,15 +643,16 @@ class Sam3Image(torch.nn.Module):
                 prompt=prompt,
                 prompt_mask=prompt_mask,
             )
-            aux_masks = False  # self.aux_loss and self.segmentation_head.aux_masks
+            aux_masks = False
             for k, v in seg_head_outputs.items():
                 if k in self.segmentation_head.instance_keys:
                     _update_out(out, k, v[:, :num_o2o], auxiliary=aux_masks)
-                    if (
-                        self.o2m_mask_predict and num_o2m > 0
-                    ):  # handle o2m mask prediction
+                    if self.o2m_mask_predict and num_o2m > 0:
                         _update_out(
-                            out, f"{k}_o2m", v[:, num_o2o:], auxiliary=aux_masks
+                            out,
+                            f"{k}_o2m",
+                            v[:, num_o2o:],
+                            auxiliary=aux_masks,
                         )
                 else:
                     out[k] = v
@@ -660,10 +660,10 @@ class Sam3Image(torch.nn.Module):
             backbone_out.pop("backbone_fpn", None)
 
     def forward_grounding_raw(
-            self,
-            backbone_out: Dict[str, torch.Tensor],
-            find_input,
-            geometric_prompt: Prompt,
+        self,
+        backbone_out: Dict[str, torch.Tensor],
+        find_input,
+        geometric_prompt: Prompt,
     ) -> Dict[str, torch.Tensor]:
         with torch.profiler.record_function("Sam3Image._encode_prompt"):
             prompt, prompt_mask, backbone_out = self._encode_prompt(
