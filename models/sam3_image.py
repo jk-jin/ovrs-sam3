@@ -1,11 +1,10 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
-
-# pyre-unsafe
-
 from copy import deepcopy
-from typing import Dict, Optional, Iterator, Any
+from typing import Dict, Optional, Iterator, Any, List, Tuple
 
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 from .vl_combiner import SAM3VLBackbone
 from .data_misc import BatchedDatapoint, FindStage
 
@@ -86,10 +85,55 @@ class Sam3Image(torch.nn.Module):
                 getattr(openclip_cfg, "normalize_label_for_clip", True)
             )
 
-        self.clip_text_token_norm = torch.nn.LayerNorm(self.hidden_dim)
-        self.clip_text_token_gate = torch.nn.Parameter(
+        self.clip_text_token_norm = nn.LayerNorm(self.hidden_dim)
+        self.clip_text_token_gate = nn.Parameter(
             torch.tensor(float(getattr(openclip_cfg, "text_token_gate_init", 0.0)))
         )
+
+        self.register_buffer(
+            "openclip_image_mean",
+            torch.tensor([0.48145466, 0.4578275, 0.40821073], dtype=torch.float32).view(1, 3, 1, 1),
+            persistent=False,
+        )
+        self.register_buffer(
+            "openclip_image_std",
+            torch.tensor([0.26862954, 0.26130258, 0.27577711], dtype=torch.float32).view(1, 3, 1, 1),
+            persistent=False,
+        )
+
+        self.clip_text_dim = None
+        self.clip_text_proj = None
+        if self.clip_text_encoder is not None:
+            self.clip_text_dim = self._infer_clip_text_dim()
+            self.clip_text_proj = nn.Linear(self.clip_text_dim, self.hidden_dim)
+
+        self.clip_image_dim = None
+        self.clip_image_proj = None
+        if self.clip_image_encoder is not None:
+            self.clip_image_dim = self._infer_clip_image_dim()
+            self.clip_image_proj = nn.Linear(self.clip_image_dim, self.hidden_dim)
+
+        self.clip_text_to_image_attn = None
+        self.clip_text_to_image_norm = None
+        if self.clip_text_encoder is not None and self.clip_image_encoder is not None:
+            self.clip_text_to_image_attn = nn.MultiheadAttention(
+                embed_dim=self.hidden_dim,
+                num_heads=8,
+                dropout=0.0,
+                batch_first=True,
+            )
+            self.clip_text_to_image_norm = nn.LayerNorm(self.hidden_dim)
+
+        self.clip_to_sam3_text_attn = None
+        self.clip_to_sam3_text_norm = None
+        if self.clip_text_encoder is not None:
+            self.clip_to_sam3_text_attn = nn.MultiheadAttention(
+                embed_dim=self.hidden_dim,
+                num_heads=8,
+                dropout=0.0,
+                batch_first=True,
+            )
+            self.clip_to_sam3_text_norm = nn.LayerNorm(self.hidden_dim)
 
         if self.use_dot_prod_scoring:
             assert dot_prod_scoring is not None
@@ -98,7 +142,7 @@ class Sam3Image(torch.nn.Module):
             if separate_scorer_for_instance:
                 self.instance_dot_prod_scoring = deepcopy(dot_prod_scoring)
         else:
-            self.class_embed = torch.nn.Linear(self.hidden_dim, 1)
+            self.class_embed = nn.Linear(self.hidden_dim, 1)
             self.instance_class_embed = None
             if separate_scorer_for_instance:
                 self.instance_class_embed = deepcopy(self.class_embed)
@@ -144,9 +188,433 @@ class Sam3Image(torch.nn.Module):
             return tuple(self._detach_tree(v) for v in obj)
         return obj
 
-    def iter_chunk_raw_outputs(
+    def _infer_clip_text_dim(self) -> int:
+        if self.clip_text_encoder is None:
+            raise ValueError("clip_text_encoder is None.")
+
+        width = getattr(self.clip_text_encoder, "width", None)
+        if isinstance(width, int) and width > 0:
+            return width
+
+        raise AttributeError(
+            "Cannot infer clip text feature dimension from clip_text_encoder.width."
+        )
+
+    def _infer_clip_image_dim(self) -> int:
+        if self.clip_image_encoder is None:
+            raise ValueError("clip_image_encoder is None.")
+
+        channel_list = getattr(self.clip_image_encoder, "channel_list", None)
+        if isinstance(channel_list, list) and len(channel_list) > 0:
+            value = channel_list[-1]
+            if isinstance(value, int) and value > 0:
+                return value
+
+        visual = getattr(self.clip_image_encoder, "visual", None)
+        candidates = [
+            getattr(visual, "width", None),
+            getattr(getattr(visual, "transformer", None), "width", None),
+            getattr(visual, "num_features", None),
+            getattr(visual, "embed_dim", None),
+        ]
+        for value in candidates:
+            if isinstance(value, int) and value > 0:
+                return value
+
+        raise AttributeError(
+            "Cannot infer clip image feature dimension from clip_image_encoder."
+        )
+
+    def _get_openclip_patch_size(self) -> Tuple[int, int]:
+        if self.clip_image_encoder is None:
+            return (1, 1)
+
+        visual = self.clip_image_encoder.visual
+        patch_size = getattr(visual, "patch_size", None)
+        if isinstance(patch_size, int):
+            return (patch_size, patch_size)
+        if isinstance(patch_size, (tuple, list)) and len(patch_size) == 2:
+            return (int(patch_size[0]), int(patch_size[1]))
+
+        conv1 = getattr(visual, "conv1", None)
+        if conv1 is not None:
+            kernel_size = getattr(conv1, "kernel_size", None)
+            if isinstance(kernel_size, int):
+                return (kernel_size, kernel_size)
+            if isinstance(kernel_size, tuple) and len(kernel_size) == 2:
+                return (int(kernel_size[0]), int(kernel_size[1]))
+
+        raise AttributeError(
+            "Cannot infer OpenCLIP patch size from visual.patch_size or visual.conv1.kernel_size."
+        )
+
+    @staticmethod
+    def _round_up_to_multiple(value: int, multiple: int) -> int:
+        if multiple <= 1:
+            return int(value)
+        return ((int(value) + multiple - 1) // multiple) * multiple
+
+    @staticmethod
+    def _pad_chw_image(x: torch.Tensor, out_h: int, out_w: int) -> torch.Tensor:
+        if x.ndim != 3:
+            raise ValueError(f"Expected raw image as [C, H, W], got {tuple(x.shape)}")
+        h, w = int(x.shape[-2]), int(x.shape[-1])
+        pad_h = max(0, out_h - h)
+        pad_w = max(0, out_w - w)
+        if pad_h == 0 and pad_w == 0:
+            return x
+        return F.pad(x, (0, pad_w, 0, pad_h), value=0.0)
+
+    def _prepare_openclip_image_batch(
+        self,
+        raw_images: List[torch.Tensor],
+        device: torch.device,
+    ) -> torch.Tensor:
+        if len(raw_images) == 0:
+            raise ValueError("raw_images is empty.")
+
+        processed = []
+        for i, x in enumerate(raw_images):
+            if not isinstance(x, torch.Tensor):
+                raise TypeError(
+                    f"Each raw image must be a torch.Tensor, got index={i}, type={type(x)}"
+                )
+            if x.ndim != 3:
+                raise ValueError(
+                    f"Each raw image must have shape [C, H, W], got index={i}, shape={tuple(x.shape)}"
+                )
+            if x.shape[0] != 3:
+                raise ValueError(
+                    f"Each raw image must have 3 channels, got index={i}, shape={tuple(x.shape)}"
+                )
+            x = x.to(device=device, dtype=torch.float32)
+            processed.append(x)
+
+        patch_h, patch_w = self._get_openclip_patch_size()
+        max_h = max(int(x.shape[-2]) for x in processed)
+        max_w = max(int(x.shape[-1]) for x in processed)
+
+        max_h = self._round_up_to_multiple(max_h, patch_h)
+        max_w = self._round_up_to_multiple(max_w, patch_w)
+
+        batch = torch.stack(
+            [self._pad_chw_image(x, max_h, max_w) for x in processed],
+            dim=0,
+        )
+
+        batch = (batch - self.openclip_image_mean) / self.openclip_image_std
+        return batch
+
+    def _build_clip_image_token_mask(
+        self,
+        raw_images: List[torch.Tensor],
+        grid_hw: Tuple[int, int],
+        device: torch.device,
+    ) -> torch.Tensor:
+        patch_h, patch_w = self._get_openclip_patch_size()
+        grid_h, grid_w = int(grid_hw[0]), int(grid_hw[1])
+
+        mask_list = []
+        for i, x in enumerate(raw_images):
+            if not isinstance(x, torch.Tensor):
+                raise TypeError(
+                    f"Each raw image must be a torch.Tensor, got index={i}, type={type(x)}"
+                )
+            if x.ndim != 3:
+                raise ValueError(
+                    f"Each raw image must have shape [C, H, W], got index={i}, shape={tuple(x.shape)}"
+                )
+
+            img_h = int(x.shape[-2])
+            img_w = int(x.shape[-1])
+
+            valid_h = (img_h + patch_h - 1) // patch_h
+            valid_w = (img_w + patch_w - 1) // patch_w
+            valid_h = min(valid_h, grid_h)
+            valid_w = min(valid_w, grid_w)
+
+            mask = torch.ones((grid_h, grid_w), dtype=torch.bool, device=device)
+            mask[:valid_h, :valid_w] = False
+            mask_list.append(mask.reshape(-1))
+
+        return torch.stack(mask_list, dim=0)  # [B, N]
+
+    def _build_clip_image_cache(
         self,
         input: BatchedDatapoint,
+        device: torch.device,
+    ) -> Optional[Dict[str, torch.Tensor]]:
+        if self.clip_image_encoder is None:
+            return None
+
+        if input.raw_images is None:
+            raise ValueError(
+                "clip_image_encoder is enabled, but BatchedDatapoint.raw_images is None."
+            )
+
+        clip_img_batch = self._prepare_openclip_image_batch(
+            raw_images=input.raw_images,
+            device=device,
+        )
+
+        with torch.no_grad():
+            clip_feat_map_native = self.clip_image_encoder(clip_img_batch)
+
+        if not isinstance(clip_feat_map_native, torch.Tensor):
+            raise TypeError(
+                "clip_image_encoder must return a torch.Tensor in this stage."
+            )
+        if clip_feat_map_native.ndim != 4:
+            raise ValueError(
+                "Expected clip image feature map as [B, C, H, W], "
+                f"got {tuple(clip_feat_map_native.shape)}"
+            )
+
+        clip_feat_map_native = clip_feat_map_native.detach().contiguous()
+        clip_tokens_native = clip_feat_map_native.flatten(2).transpose(1, 2).contiguous()
+
+        if self.clip_image_proj is None:
+            raise RuntimeError(
+                "clip_image_encoder is enabled, but clip_image_proj is not initialized."
+            )
+
+        grid_h = int(clip_feat_map_native.shape[-2])
+        grid_w = int(clip_feat_map_native.shape[-1])
+        clip_token_mask = self._build_clip_image_token_mask(
+            raw_images=input.raw_images,
+            grid_hw=(grid_h, grid_w),
+            device=device,
+        )
+
+        return {
+            "clip_image_feat_map_native": clip_feat_map_native,
+            "clip_image_tokens_native": clip_tokens_native,
+            "clip_image_token_mask": clip_token_mask,
+            "clip_image_grid_hw": (grid_h, grid_w),
+        }
+
+    def _expand_clip_text_tokens_to_pairs(
+        self,
+        clip_text_tokens: torch.Tensor,
+        batch_size: int,
+        device: torch.device,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            clip_text_tokens: [C, K, D]
+        Returns:
+            pair_tokens: [K, B*C, D]
+            pair_mask:   [B*C, K]
+        """
+        if clip_text_tokens.ndim != 3:
+            raise ValueError(
+                f"Expected clip_text_tokens as [C, K, D], got {tuple(clip_text_tokens.shape)}"
+            )
+
+        num_classes, num_tokens, dim = clip_text_tokens.shape
+        x = clip_text_tokens.unsqueeze(0).expand(batch_size, num_classes, num_tokens, dim)
+        x = x.reshape(batch_size * num_classes, num_tokens, dim).contiguous()
+        x = x.transpose(0, 1).contiguous()
+
+        mask = torch.zeros(
+            (batch_size * num_classes, num_tokens),
+            dtype=torch.bool,
+            device=device,
+        )
+        return x, mask
+
+    def _expand_sam3_text_to_pairs(
+        self,
+        sam3_text_feats: torch.Tensor,
+        sam3_text_mask: torch.Tensor,
+        batch_size: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            sam3_text_feats: [L, C, D]
+            sam3_text_mask:  [C, L]
+        Returns:
+            pair_feats: [B*C, L, D]
+            pair_mask:  [B*C, L]
+        """
+        if sam3_text_feats.ndim != 3:
+            raise ValueError(
+                f"Expected sam3_text_feats as [L, C, D], got {tuple(sam3_text_feats.shape)}"
+            )
+        if sam3_text_mask.ndim != 2:
+            raise ValueError(
+                f"Expected sam3_text_mask as [C, L], got {tuple(sam3_text_mask.shape)}"
+            )
+
+        seq_len, num_classes, dim = sam3_text_feats.shape
+        if sam3_text_mask.shape != (num_classes, seq_len):
+            raise ValueError(
+                f"sam3_text_mask shape mismatch: expected {(num_classes, seq_len)}, "
+                f"got {tuple(sam3_text_mask.shape)}"
+            )
+
+        feats = sam3_text_feats.permute(1, 0, 2).contiguous()  # [C, L, D]
+        feats = feats.unsqueeze(0).expand(batch_size, num_classes, seq_len, dim)
+        feats = feats.reshape(batch_size * num_classes, seq_len, dim).contiguous()  # [B*C, L, D]
+
+        mask = sam3_text_mask.unsqueeze(0).expand(batch_size, num_classes, seq_len)
+        mask = mask.reshape(batch_size * num_classes, seq_len).contiguous()  # [B*C, L]
+
+        return feats, mask
+
+    def _fuse_clip_text_tokens_with_image(
+        self,
+        clip_text_tokens: torch.Tensor,
+        clip_image_tokens: torch.Tensor,
+        clip_image_token_mask: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            clip_text_tokens:      [C, K, D]
+            clip_image_tokens:     [B, N, D]
+            clip_image_token_mask: [B, N], True means ignore
+        Returns:
+            pair_tokens: [K, B*C, D]
+            pair_mask:   [B*C, K]
+        """
+        if self.clip_text_to_image_attn is None:
+            raise RuntimeError("clip_text_to_image_attn is not initialized.")
+        if self.clip_text_to_image_norm is None:
+            raise RuntimeError("clip_text_to_image_norm is not initialized.")
+
+        if clip_text_tokens.ndim != 3:
+            raise ValueError(
+                f"Expected clip_text_tokens as [C, K, D], got {tuple(clip_text_tokens.shape)}"
+            )
+        if clip_image_tokens.ndim != 3:
+            raise ValueError(
+                f"Expected clip_image_tokens as [B, N, D], got {tuple(clip_image_tokens.shape)}"
+            )
+        if clip_image_token_mask.ndim != 2:
+            raise ValueError(
+                f"Expected clip_image_token_mask as [B, N], got {tuple(clip_image_token_mask.shape)}"
+            )
+
+        num_classes, num_tokens, dim = clip_text_tokens.shape
+        batch_size, num_image_tokens, image_dim = clip_image_tokens.shape
+
+        if image_dim != dim:
+            raise ValueError(
+                f"Dimension mismatch between clip_text_tokens and clip_image_tokens: "
+                f"{dim} vs {image_dim}"
+            )
+        if clip_image_token_mask.shape != (batch_size, num_image_tokens):
+            raise ValueError(
+                f"clip_image_token_mask shape mismatch: expected {(batch_size, num_image_tokens)}, "
+                f"got {tuple(clip_image_token_mask.shape)}"
+            )
+
+        query = clip_text_tokens.unsqueeze(0).expand(batch_size, num_classes, num_tokens, dim)
+        query = query.reshape(batch_size * num_classes, num_tokens, dim).contiguous()  # [B*C, K, D]
+
+        key_value = clip_image_tokens.unsqueeze(1).expand(batch_size, num_classes, num_image_tokens, dim)
+        key_value = key_value.reshape(batch_size * num_classes, num_image_tokens, dim).contiguous()  # [B*C, N, D]
+
+        key_padding_mask = clip_image_token_mask.unsqueeze(1).expand(batch_size, num_classes, num_image_tokens)
+        key_padding_mask = key_padding_mask.reshape(batch_size * num_classes, num_image_tokens).contiguous()  # [B*C, N]
+
+        attn_out, _ = self.clip_text_to_image_attn(
+            query=query,
+            key=key_value,
+            value=key_value,
+            key_padding_mask=key_padding_mask,
+            need_weights=False,
+        )
+
+        fused = self.clip_text_to_image_norm(query + attn_out)
+
+        pair_tokens = fused.transpose(0, 1).contiguous()  # [K, B*C, D]
+        pair_mask = torch.zeros(
+            (batch_size * num_classes, num_tokens),
+            dtype=torch.bool,
+            device=fused.device,
+        )
+        return pair_tokens, pair_mask
+
+    def _align_clip_pair_tokens_with_sam3_text(
+        self,
+        clip_pair_tokens: torch.Tensor,
+        clip_pair_mask: torch.Tensor,
+        sam3_pair_text_feats: torch.Tensor,
+        sam3_pair_text_mask: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            clip_pair_tokens:     [K, B*C, D]
+            clip_pair_mask:       [B*C, K]
+            sam3_pair_text_feats: [B*C, L, D]
+            sam3_pair_text_mask:  [B*C, L]
+        Returns:
+            aligned_pair_tokens: [K, B*C, D]
+            pair_mask:           [B*C, K]
+        """
+        if self.clip_to_sam3_text_attn is None:
+            raise RuntimeError("clip_to_sam3_text_attn is not initialized.")
+        if self.clip_to_sam3_text_norm is None:
+            raise RuntimeError("clip_to_sam3_text_norm is not initialized.")
+
+        if clip_pair_tokens.ndim != 3:
+            raise ValueError(
+                f"Expected clip_pair_tokens as [K, B*C, D], got {tuple(clip_pair_tokens.shape)}"
+            )
+        if clip_pair_mask.ndim != 2:
+            raise ValueError(
+                f"Expected clip_pair_mask as [B*C, K], got {tuple(clip_pair_mask.shape)}"
+            )
+        if sam3_pair_text_feats.ndim != 3:
+            raise ValueError(
+                f"Expected sam3_pair_text_feats as [B*C, L, D], got {tuple(sam3_pair_text_feats.shape)}"
+            )
+        if sam3_pair_text_mask.ndim != 2:
+            raise ValueError(
+                f"Expected sam3_pair_text_mask as [B*C, L], got {tuple(sam3_pair_text_mask.shape)}"
+            )
+
+        num_tokens, num_pairs, dim = clip_pair_tokens.shape
+        if clip_pair_mask.shape != (num_pairs, num_tokens):
+            raise ValueError(
+                f"clip_pair_mask shape mismatch: expected {(num_pairs, num_tokens)}, "
+                f"got {tuple(clip_pair_mask.shape)}"
+            )
+        if sam3_pair_text_feats.shape[0] != num_pairs:
+            raise ValueError(
+                f"sam3_pair_text_feats first dim mismatch: expected {num_pairs}, "
+                f"got {sam3_pair_text_feats.shape[0]}"
+            )
+        if sam3_pair_text_feats.shape[2] != dim:
+            raise ValueError(
+                f"Feature dim mismatch: clip_pair_tokens dim={dim}, "
+                f"sam3_pair_text_feats dim={sam3_pair_text_feats.shape[2]}"
+            )
+        if sam3_pair_text_mask.shape[0] != num_pairs:
+            raise ValueError(
+                f"sam3_pair_text_mask first dim mismatch: expected {num_pairs}, "
+                f"got {sam3_pair_text_mask.shape[0]}"
+            )
+
+        query = clip_pair_tokens.transpose(0, 1).contiguous()  # [B*C, K, D]
+
+        attn_out, _ = self.clip_to_sam3_text_attn(
+            query=query,
+            key=sam3_pair_text_feats,
+            value=sam3_pair_text_feats,
+            key_padding_mask=sam3_pair_text_mask,
+            need_weights=False,
+        )
+
+        aligned = self.clip_to_sam3_text_norm(query + attn_out)  # [B*C, K, D]
+        aligned = aligned.transpose(0, 1).contiguous()  # [K, B*C, D]
+
+        return aligned, clip_pair_mask
+
+    def iter_chunk_raw_outputs(
+            self,
+            input: BatchedDatapoint,
     ) -> Iterator[Dict[str, Any]]:
         device = self.device
 
@@ -171,6 +639,11 @@ class Sam3Image(torch.nn.Module):
             image_backbone_out = self.backbone.forward_image(input.img_batch)
         image_backbone_out = self._detach_tree(image_backbone_out)
 
+        clip_image_cache = self._build_clip_image_cache(
+            input=input,
+            device=device,
+        )
+
         for start in range(0, num_classes, chunk_size):
             end = min(start + chunk_size, num_classes)
             chunk_texts = class_texts[start:end]
@@ -187,30 +660,65 @@ class Sam3Image(torch.nn.Module):
             chunk_backbone_out = dict(image_backbone_out)
             chunk_backbone_out.update(text_backbone_out)
 
-            clip_extra_tokens = None
             if self.clip_text_encoder is not None and len(self.clip_extra_token_templates) > 0:
-                # 这里不能再额外包 no_grad。
-                # OpenCLIPTextEncoder 内部已经保证：
-                # - 文本塔冻结
-                # - resizer 保留梯度
-                clip_extra_tokens = self.clip_text_encoder.encode_prompt_templates(
-                    class_names=chunk_texts,
-                    templates=self.clip_extra_token_templates,
-                    device=device,
-                    normalize_label=self.normalize_label_for_clip,
-                )  # [num_chunk_classes, K, 256]
+                with torch.no_grad():
+                    clip_text_tokens_native = self.clip_text_encoder.encode_prompt_templates(
+                        class_names=chunk_texts,
+                        templates=self.clip_extra_token_templates,
+                        device=device,
+                        normalize_label=self.normalize_label_for_clip,
+                    )  # [C, K, C_text]
 
-                clip_extra_tokens = self.clip_text_token_norm(clip_extra_tokens)
-                gate = torch.tanh(self.clip_text_token_gate)
-                clip_extra_tokens = gate * clip_extra_tokens
-                clip_extra_tokens = clip_extra_tokens.permute(1, 0, 2).contiguous()  # [K, num_chunk_classes, 256]
+                if self.clip_text_proj is None:
+                    raise RuntimeError(
+                        "clip_text_encoder is enabled, but clip_text_proj is not initialized."
+                    )
 
-                chunk_backbone_out["clip_language_features"] = clip_extra_tokens
-                chunk_backbone_out["clip_language_mask"] = torch.zeros(
-                    (num_chunk_classes, clip_extra_tokens.shape[0]),
-                    dtype=torch.bool,
-                    device=device,
+                clip_text_tokens = self.clip_text_proj(
+                    clip_text_tokens_native
+                )  # [C, K, 256]
+                clip_text_tokens = self.clip_text_token_norm(clip_text_tokens)
+
+                text_gate = torch.tanh(self.clip_text_token_gate)
+                clip_text_tokens = text_gate * clip_text_tokens
+
+                if clip_image_cache is not None:
+                    if self.clip_image_proj is None:
+                        raise RuntimeError(
+                            "clip_image_encoder is enabled, but clip_image_proj is not initialized."
+                        )
+
+                    clip_image_tokens = self.clip_image_proj(
+                        clip_image_cache["clip_image_tokens_native"]
+                    ).contiguous()  # [B, N, 256]
+
+                    pair_tokens, pair_mask = self._fuse_clip_text_tokens_with_image(
+                        clip_text_tokens=clip_text_tokens,
+                        clip_image_tokens=clip_image_tokens,
+                        clip_image_token_mask=clip_image_cache["clip_image_token_mask"],
+                    )
+                else:
+                    pair_tokens, pair_mask = self._expand_clip_text_tokens_to_pairs(
+                        clip_text_tokens=clip_text_tokens,
+                        batch_size=batch_size,
+                        device=device,
+                    )
+
+                sam3_pair_feats, sam3_pair_mask = self._expand_sam3_text_to_pairs(
+                    sam3_text_feats=text_backbone_out["language_features"],
+                    sam3_text_mask=text_backbone_out["language_mask"],
+                    batch_size=batch_size,
                 )
+
+                pair_tokens, pair_mask = self._align_clip_pair_tokens_with_sam3_text(
+                    clip_pair_tokens=pair_tokens,
+                    clip_pair_mask=pair_mask,
+                    sam3_pair_text_feats=sam3_pair_feats,
+                    sam3_pair_text_mask=sam3_pair_mask,
+                )
+
+                chunk_backbone_out["clip_language_features_pair"] = pair_tokens
+                chunk_backbone_out["clip_language_mask_pair"] = pair_mask
 
             chunk_find_input = self._build_prompt_expanded_find_stage(
                 batch_size=batch_size,
@@ -286,27 +794,6 @@ class Sam3Image(torch.nn.Module):
             input_points=torch.zeros((0, num_pairs, 2), dtype=torch.float32, device=device),
             input_points_mask=torch.zeros((num_pairs, 0), dtype=torch.bool, device=device),
         )
-
-    def _build_clip_extra_text_tokens(self, class_names, device):
-        if self.clip_text_encoder is None:
-            return None
-        if len(self.clip_extra_token_templates) == 0:
-            return None
-
-        pooled_tokens = self.clip_text_encoder.encode_prompt_templates(
-            class_names=class_names,
-            templates=self.clip_extra_token_templates,
-            device=device,
-            normalize_label=self.normalize_label_for_clip,
-        )  # [B, K, 256]
-
-        pooled_tokens = self.clip_text_token_norm(pooled_tokens)
-
-        gate = torch.tanh(self.clip_text_token_gate)
-        pooled_tokens = gate * pooled_tokens
-
-        pooled_tokens = pooled_tokens.permute(1, 0, 2).contiguous()
-        return pooled_tokens
 
     @staticmethod
     def _reshape_prompt_first_tensor(
@@ -389,15 +876,14 @@ class Sam3Image(torch.nn.Module):
         encode_text=True,
         prev_mask_pred=None,
     ):
-        txt_ids = find_input.text_ids
-        txt_feats = backbone_out["language_features"][:, txt_ids]
-        txt_masks = backbone_out["language_mask"][txt_ids]
+        txt_feats = backbone_out["language_features"][:, find_input.text_ids]
+        txt_masks = backbone_out["language_mask"][find_input.text_ids]
 
         clip_txt_feats = None
         clip_txt_masks = None
-        if "clip_language_features" in backbone_out:
-            clip_txt_feats = backbone_out["clip_language_features"][:, txt_ids]
-            clip_txt_masks = backbone_out["clip_language_mask"][txt_ids]
+        if "clip_language_features_pair" in backbone_out:
+            clip_txt_feats = backbone_out["clip_language_features_pair"]
+            clip_txt_masks = backbone_out["clip_language_mask_pair"]
 
         feat_tuple = self._get_img_feats(backbone_out, find_input.img_ids)
         backbone_out, img_feats, img_pos_embeds, vis_feat_sizes = feat_tuple

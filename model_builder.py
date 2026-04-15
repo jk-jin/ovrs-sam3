@@ -83,11 +83,12 @@ class FreezeConfig:
 
 
 @dataclass
-class OpenCLIPTextEncoderConfig:
+class OpenCLIPConfig:
     enabled: bool = False
     model_name: str = "ViT-L-14"
-    checkpoint_path: Optional[str] = None
     pretrained: Optional[str] = None
+    default_output: str = "feat_map"
+
     extra_token_templates: list[str] = field(default_factory=lambda: [
         "a remote sensing image of {}.",
         "an aerial image of {}.",
@@ -95,21 +96,6 @@ class OpenCLIPTextEncoderConfig:
     num_extra_tokens: int = 2
     text_token_gate_init: float = 0.0
     normalize_label_for_clip: bool = True
-
-
-@dataclass
-class OpenCLIPImageEncoderConfig:
-    enabled: bool = False
-    model_name: str = "ViT-L-14"
-    checkpoint_path: Optional[str] = None
-    pretrained: Optional[str] = None
-    default_output: str = "feat_map"
-
-
-@dataclass
-class OpenCLIPConfig:
-    text_encoder: OpenCLIPTextEncoderConfig = field(default_factory=OpenCLIPTextEncoderConfig)
-    image_encoder: OpenCLIPImageEncoderConfig = field(default_factory=OpenCLIPImageEncoderConfig)
 
 
 @dataclass
@@ -435,6 +421,92 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         )
 
     @staticmethod
+    def _coerce_openclip_cfg(obj) -> OpenCLIPConfig:
+        if isinstance(obj, OpenCLIPConfig):
+            return obj
+        if obj is None:
+            return OpenCLIPConfig()
+        if isinstance(obj, dict):
+            return OpenCLIPConfig(**dict(obj))
+        raise TypeError(f"Unsupported openclip_cfg type: {type(obj)}")
+
+    @classmethod
+    def _normalize_build_cfg(cls, cfg: SegmentorBuildConfig) -> SegmentorBuildConfig:
+        cfg.openclip_cfg = cls._coerce_openclip_cfg(cfg.openclip_cfg)
+        return cfg
+
+    @staticmethod
+    def _resolve_openclip_pretrained(
+            pretrained: Optional[str],
+    ) -> Optional[str]:
+        if pretrained is None:
+            return None
+
+        p = Path(str(pretrained)).expanduser()
+        if not p.is_file():
+            raise FileNotFoundError(
+                f"openclip_cfg.pretrained: expected a local checkpoint file, but got {pretrained!r}."
+            )
+
+        return str(p.resolve())
+
+    @classmethod
+    def validate_openclip_cfg(cls, openclip_cfg: OpenCLIPConfig) -> OpenCLIPConfig:
+        openclip_cfg = cls._coerce_openclip_cfg(openclip_cfg)
+
+        if openclip_cfg.enabled:
+            _ = cls._resolve_openclip_pretrained(openclip_cfg.pretrained)
+
+        return openclip_cfg
+
+    @classmethod
+    def _create_openclip_encoders(
+            cls,
+            openclip_cfg: OpenCLIPConfig,
+    ) -> tuple[OpenCLIPTextEncoder, OpenCLIPImageEncoder]:
+        import open_clip
+
+        pretrained = cls._resolve_openclip_pretrained(openclip_cfg.pretrained)
+        if pretrained is None:
+            raise ValueError(
+                "openclip_cfg.enabled=True, but openclip_cfg.pretrained is None."
+            )
+
+        clip_model = open_clip.create_model(
+            model_name=openclip_cfg.model_name,
+            pretrained=pretrained,
+            precision="fp32",
+            device="cpu",
+        )
+        clip_model.eval()
+
+        tokenizer = open_clip.get_tokenizer(openclip_cfg.model_name)
+
+        text_width = getattr(getattr(clip_model, "transformer", None), "width", None)
+        if text_width is None:
+            raise AttributeError(
+                "Cannot infer OpenCLIP text width from clip_model.transformer.width."
+            )
+
+        text_encoder = OpenCLIPTextEncoder(
+            tokenizer=tokenizer,
+            token_embedding=clip_model.token_embedding,
+            positional_embedding=clip_model.positional_embedding,
+            transformer=clip_model.transformer,
+            ln_final=clip_model.ln_final,
+            attn_mask=getattr(clip_model, "attn_mask", None),
+            context_length=getattr(clip_model, "context_length", 77),
+            width=text_width,
+        )
+
+        image_encoder = OpenCLIPImageEncoder(
+            visual=clip_model.visual,
+            default_output=openclip_cfg.default_output,
+        )
+
+        return text_encoder, image_encoder
+
+    @staticmethod
     def _load_checkpoint(model, checkpoint_path: str):
         with g_pathmgr.open(checkpoint_path, "rb") as f:
             ckpt = torch.load(f, map_location="cpu", weights_only=True)
@@ -461,77 +533,10 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         _ = hf_hub_download(repo_id=model_id, filename="config.json")
         return hf_hub_download(repo_id=model_id, filename="sam3.pt")
 
-    @staticmethod
-    def _coerce_openclip_text_cfg(obj) -> OpenCLIPTextEncoderConfig:
-        if isinstance(obj, OpenCLIPTextEncoderConfig):
-            return obj
-        if obj is None:
-            return OpenCLIPTextEncoderConfig()
-        if isinstance(obj, dict):
-            return OpenCLIPTextEncoderConfig(**dict(obj))
-        raise TypeError(f"Unsupported text_encoder cfg type: {type(obj)}")
-
-    @staticmethod
-    def _coerce_openclip_image_cfg(obj) -> OpenCLIPImageEncoderConfig:
-        if isinstance(obj, OpenCLIPImageEncoderConfig):
-            return obj
-        if obj is None:
-            return OpenCLIPImageEncoderConfig()
-        if isinstance(obj, dict):
-            return OpenCLIPImageEncoderConfig(**dict(obj))
-        raise TypeError(f"Unsupported image_encoder cfg type: {type(obj)}")
-
-    @classmethod
-    def _coerce_openclip_cfg(cls, obj) -> OpenCLIPConfig:
-        if isinstance(obj, OpenCLIPConfig):
-            text_cfg = cls._coerce_openclip_text_cfg(obj.text_encoder)
-            image_cfg = cls._coerce_openclip_image_cfg(obj.image_encoder)
-            return OpenCLIPConfig(
-                text_encoder=text_cfg,
-                image_encoder=image_cfg,
-            )
-
-        if obj is None:
-            return OpenCLIPConfig()
-
-        if isinstance(obj, dict):
-            raw = dict(obj)
-            text_cfg = cls._coerce_openclip_text_cfg(raw.get("text_encoder", None))
-            image_cfg = cls._coerce_openclip_image_cfg(raw.get("image_encoder", None))
-            return OpenCLIPConfig(
-                text_encoder=text_cfg,
-                image_encoder=image_cfg,
-            )
-
-        raise TypeError(f"Unsupported openclip_cfg type: {type(obj)}")
-
     @classmethod
     def _normalize_build_cfg(cls, cfg: SegmentorBuildConfig) -> SegmentorBuildConfig:
         cfg.openclip_cfg = cls._coerce_openclip_cfg(cfg.openclip_cfg)
         return cfg
-
-    @staticmethod
-    def _resolve_tower_checkpoint_path(
-        tower_name: str,
-        checkpoint_path: Optional[str],
-        pretrained: Optional[str],
-    ) -> Optional[str]:
-        if checkpoint_path is not None and pretrained is not None:
-            raise ValueError(
-                f"{tower_name}: only one of checkpoint_path or pretrained should be set."
-            )
-
-        candidate = checkpoint_path if checkpoint_path is not None else pretrained
-        if candidate is None:
-            return None
-
-        p = Path(str(candidate)).expanduser()
-        if not p.is_file():
-            raise FileNotFoundError(
-                f"{tower_name}: expected a local checkpoint file, but got {candidate!r}."
-            )
-
-        return str(p.resolve())
 
     @classmethod
     def validate_semantic_cfg(cls, cfg: SegmentorBuildConfig) -> None:
@@ -547,104 +552,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 f"Unknown semantic_fusion_mode: {cfg.semantic_fusion_mode}. "
                 f"Valid options are: {sorted(valid_fusion_modes)}"
             )
-
-    @classmethod
-    def validate_openclip_cfg(cls, openclip_cfg: OpenCLIPConfig) -> OpenCLIPConfig:
-        openclip_cfg = cls._coerce_openclip_cfg(openclip_cfg)
-
-        text_cfg = openclip_cfg.text_encoder
-        image_cfg = openclip_cfg.image_encoder
-
-        if text_cfg.enabled:
-            _ = cls._resolve_tower_checkpoint_path(
-                tower_name="openclip_cfg.text_encoder",
-                checkpoint_path=text_cfg.checkpoint_path,
-                pretrained=text_cfg.pretrained,
-            )
-
-        if image_cfg.enabled:
-            _ = cls._resolve_tower_checkpoint_path(
-                tower_name="openclip_cfg.image_encoder",
-                checkpoint_path=image_cfg.checkpoint_path,
-                pretrained=image_cfg.pretrained,
-            )
-
-        return openclip_cfg
-
-    @classmethod
-    def _create_openclip_text_encoder(
-        cls,
-        text_cfg: OpenCLIPTextEncoderConfig,
-    ) -> OpenCLIPTextEncoder:
-        import open_clip
-
-        checkpoint_path = cls._resolve_tower_checkpoint_path(
-            tower_name="openclip_cfg.text_encoder",
-            checkpoint_path=text_cfg.checkpoint_path,
-            pretrained=text_cfg.pretrained,
-        )
-
-        clip_model = open_clip.create_model(
-            model_name=text_cfg.model_name,
-            pretrained=None,
-            load_weights=False,
-            precision="fp32",
-            device="cpu",
-            pretrained_image=False,
-            pretrained_text=False,
-            pretrained_text_path=checkpoint_path,
-        )
-        clip_model.eval()
-
-        tokenizer = open_clip.get_tokenizer(text_cfg.model_name)
-
-        text_width = getattr(getattr(clip_model, "transformer", None), "width", None)
-        if text_width is None:
-            raise AttributeError(
-                "Cannot infer OpenCLIP text width from clip_model.transformer.width."
-            )
-
-        return OpenCLIPTextEncoder(
-            tokenizer=tokenizer,
-            token_embedding=clip_model.token_embedding,
-            positional_embedding=clip_model.positional_embedding,
-            transformer=clip_model.transformer,
-            ln_final=clip_model.ln_final,
-            attn_mask=getattr(clip_model, "attn_mask", None),
-            context_length=getattr(clip_model, "context_length", 77),
-            width=text_width,
-            d_model=256,
-        )
-
-    @classmethod
-    def _create_openclip_image_encoder(
-        cls,
-        image_cfg: OpenCLIPImageEncoderConfig,
-    ) -> OpenCLIPImageEncoder:
-        import open_clip
-
-        checkpoint_path = cls._resolve_tower_checkpoint_path(
-            tower_name="openclip_cfg.image_encoder",
-            checkpoint_path=image_cfg.checkpoint_path,
-            pretrained=image_cfg.pretrained,
-        )
-
-        clip_model = open_clip.create_model(
-            model_name=image_cfg.model_name,
-            pretrained=None,
-            load_weights=False,
-            precision="fp32",
-            device="cpu",
-            pretrained_image=False,
-            pretrained_text=False,
-            pretrained_image_path=checkpoint_path,
-        )
-        clip_model.eval()
-
-        return OpenCLIPImageEncoder(
-            visual=clip_model.visual,
-            default_output=image_cfg.default_output,
-        )
 
     @classmethod
     def apply_freeze_cfg(cls, model: nn.Module, freeze_cfg: FreezeConfig) -> None:
@@ -687,14 +594,13 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         clip_text_encoder = None
         clip_image_encoder = None
-        clip_text_cfg_for_model = None
+        openclip_cfg_for_model = None
 
-        if cfg.openclip_cfg.text_encoder.enabled:
-            clip_text_encoder = cls._create_openclip_text_encoder(cfg.openclip_cfg.text_encoder)
-            clip_text_cfg_for_model = cfg.openclip_cfg.text_encoder
-
-        if cfg.openclip_cfg.image_encoder.enabled:
-            clip_image_encoder = cls._create_openclip_image_encoder(cfg.openclip_cfg.image_encoder)
+        if cfg.openclip_cfg.enabled:
+            clip_text_encoder, clip_image_encoder = cls._create_openclip_encoders(
+                cfg.openclip_cfg
+            )
+            openclip_cfg_for_model = cfg.openclip_cfg
 
         transformer = cls._create_sam3_transformer()
         dot_prod_scoring = cls._create_dot_product_scoring()
@@ -709,7 +615,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             dot_prod_scoring=dot_prod_scoring,
             clip_image_encoder=clip_image_encoder,
             clip_text_encoder=clip_text_encoder,
-            openclip_cfg=clip_text_cfg_for_model,
+            openclip_cfg=openclip_cfg_for_model,
         )
 
         checkpoint_path = cfg.checkpoint_path

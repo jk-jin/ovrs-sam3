@@ -8,12 +8,12 @@ import torch.nn as nn
 
 class OpenCLIPTextEncoder(nn.Module):
     """
-    OpenCLIP text wrapper.
+    Pure frozen OpenCLIP text wrapper.
 
     设计原则：
     1. OpenCLIP 原始文本塔始终按冻结模块处理
-    2. 只让 self.resizer 参与训练
-    3. encode_text / encode_prompt_templates 对外仍然返回投影后的 d_model 特征
+    2. 本模块内部不再包含任何可训练投影层
+    3. 对外返回 native OpenCLIP 文本特征
     """
 
     def __init__(
@@ -26,7 +26,6 @@ class OpenCLIPTextEncoder(nn.Module):
         attn_mask: Optional[torch.Tensor],
         context_length: int,
         width: int,
-        d_model: int = 256,
         use_ln_post: bool = True,
     ) -> None:
         super().__init__()
@@ -36,9 +35,6 @@ class OpenCLIPTextEncoder(nn.Module):
         self.ln_final = ln_final if use_ln_post else nn.Identity()
         self.context_length = int(context_length)
         self.width = int(width)
-        self.d_model = int(d_model)
-
-        self.resizer = nn.Linear(self.width, self.d_model)
 
         self.register_buffer(
             "_positional_embedding_buffer",
@@ -66,17 +62,16 @@ class OpenCLIPTextEncoder(nn.Module):
             attn_mask = attn_mask.to(dtype=dtype)
         return attn_mask
 
-    def _encode_token_features_frozen(
+    def encode_text(
         self,
-        tokenized: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        冻结的 OpenCLIP 文本塔前向。
-        返回：
-            token_features_frozen: [B, L, C_text]
-            input_embeds_frozen:   [B, L, C_text]
-        这两个张量都已经 detach，不会反传到文本塔。
-        """
+        text: List[str],
+        device: Optional[torch.device] = None,
+        output_mode: str = "token_features",
+    ):
+        tokenized = self.tokenizer(text, context_length=self.context_length)
+        if device is not None:
+            tokenized = tokenized.to(device)
+
         seq_len = tokenized.shape[1]
 
         with torch.no_grad():
@@ -95,40 +90,28 @@ class OpenCLIPTextEncoder(nn.Module):
             x = self.transformer(x, attn_mask=attn_mask)  # [B, L, C_text]
             x = self.ln_final(x)
 
-        return x.detach(), input_embeds.detach()
-
-    def encode_text(
-        self,
-        text: List[str],
-        device: Optional[torch.device] = None,
-        output_mode: str = "token_features",
-    ):
-        tokenized = self.tokenizer(text, context_length=self.context_length)
-        if device is not None:
-            tokenized = tokenized.to(device)
-
-        token_features_frozen, input_embeds_frozen = self._encode_token_features_frozen(tokenized)
-        token_features_resized = self.resizer(token_features_frozen)
+        token_features = x.detach()
+        input_embeds = input_embeds.detach()
 
         if output_mode == "token_features":
-            return tokenized, token_features_resized, input_embeds_frozen
+            return tokenized, token_features, input_embeds
 
         if output_mode == "pooled":
-            pooled = token_features_resized[
-                torch.arange(token_features_resized.shape[0], device=token_features_resized.device),
+            pooled = token_features[
+                torch.arange(token_features.shape[0], device=token_features.device),
                 tokenized.argmax(dim=-1),
             ]
-            return tokenized, pooled, input_embeds_frozen
+            return tokenized, pooled, input_embeds
 
         if output_mode == "all":
-            pooled = token_features_resized[
-                torch.arange(token_features_resized.shape[0], device=token_features_resized.device),
+            pooled = token_features[
+                torch.arange(token_features.shape[0], device=token_features.device),
                 tokenized.argmax(dim=-1),
             ]
             return {
                 "tokenized": tokenized,
-                "token_features": token_features_resized,
-                "input_embeds": input_embeds_frozen,
+                "token_features": token_features,
+                "input_embeds": input_embeds,
                 "pooled": pooled,
             }
 
@@ -170,7 +153,7 @@ class OpenCLIPTextEncoder(nn.Module):
 
         num_classes = len(class_names)
         num_templates = len(templates)
-        pooled = pooled.view(num_classes, num_templates, self.d_model)  # [B, K, d_model]
+        pooled = pooled.view(num_classes, num_templates, self.width)  # [B, K, C_text]
         return pooled
 
     def forward(
@@ -189,14 +172,14 @@ class OpenCLIPTextEncoder(nn.Module):
                 "OpenCLIPTextEncoder currently expects a non-empty List[str]."
             )
 
-        tokenized, token_features_resized, input_embeds_frozen = self.encode_text(
+        tokenized, token_features, input_embeds = self.encode_text(
             text=text,
             device=device,
             output_mode="token_features",
         )
 
-        text_attention_mask = tokenized.eq(0)  # [B, L]
-        text_memory = token_features_resized.transpose(0, 1)  # [L, B, d_model]
-        text_embeds = input_embeds_frozen.transpose(0, 1)     # [L, B, C_text]
+        text_attention_mask = tokenized.eq(0)          # [B, L]
+        text_memory = token_features.transpose(0, 1)   # [L, B, C_text]
+        text_embeds = input_embeds.transpose(0, 1)     # [L, B, C_text]
 
         return text_attention_mask, text_memory, text_embeds
