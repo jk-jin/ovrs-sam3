@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterator
+from typing import Any, Dict, Iterator, List, Optional
 
 import torch
 import torch.nn as nn
@@ -23,6 +23,21 @@ class SAM3Segmentor(nn.Module):
     def train(self, mode: bool = True):
         super().train(mode)
         return self
+
+    def clear_text_cache(self) -> None:
+        self.core.clear_text_cache()
+
+    def prepare_text_cache(
+        self,
+        class_names: List[str],
+        device: Optional[torch.device] = None,
+        force: bool = False,
+    ) -> None:
+        self.core.prepare_text_cache(
+            class_texts=class_names,
+            device=device,
+            force=force,
+        )
 
     def iter_chunk_outputs(
         self,

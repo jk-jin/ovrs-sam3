@@ -163,7 +163,7 @@ def load_model_weights_only(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Train/Eval SAM3 semantic-only segmentor with simple mmseg-style config."
+        description="Train/Eval SAM3 semantic-only segmentor with iter-based training."
     )
     parser.add_argument("config", type=str, help="path to config file")
     parser.add_argument("--work-dir", type=str, default=None)
@@ -172,7 +172,12 @@ def main():
     parser.add_argument("--auto-resume", action="store_true")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--eval-only", action="store_true", help="only run validation")
-    parser.add_argument("--eval-epoch", type=int, default=0, help="epoch id used in eval-only outputs")
+    parser.add_argument(
+        "--eval-iter",
+        type=int,
+        default=0,
+        help="iter id used in eval-only outputs/logging",
+    )
     args = parser.parse_args()
 
     if args.resume_from is not None and args.load_model_from is not None:
@@ -198,13 +203,13 @@ def main():
     criterion = build_criterion(cfg)
 
     trainer_cfg = TrainerConfig(
-        max_epochs=int(cfg.train_cfg.max_epochs),
+        max_iters=int(cfg.train_cfg.max_iters),
         log_window_size=int(cfg.train_cfg.get("log_window_size", 20)),
         use_amp=bool(cfg.train_cfg.get("use_amp", True)),
         grad_clip_norm=cfg.train_cfg.get("grad_clip_norm", 0.1),
         save_dir=str(work_dir),
-        save_interval=int(cfg.train_cfg.get("save_interval", 1)),
-        eval_interval=int(cfg.train_cfg.get("eval_interval", 1)),
+        save_interval=int(cfg.train_cfg.get("save_interval", 1000)),
+        eval_interval=int(cfg.train_cfg.get("eval_interval", 1000)),
         monitor=str(cfg.train_cfg.get("monitor", "semantic.miou")),
         monitor_mode=str(cfg.train_cfg.get("monitor_mode", "max")),
         max_keep_ckpts=int(cfg.train_cfg.get("max_keep_ckpts", 5)),
@@ -235,8 +240,10 @@ def main():
 
         if args.resume_from:
             trainer.resume_from(args.resume_from)
+        else:
+            trainer.global_iter = int(args.eval_iter)
 
-        trainer.val_epoch(epoch=args.eval_epoch)
+        trainer.val()
         return
 
     print("Building train_dataloader...")

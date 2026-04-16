@@ -23,13 +23,13 @@ from .visualization import VisualizationManager
 
 @dataclass
 class TrainerConfig:
-    max_epochs: int = 12
+    max_iters: int = 10000
     log_window_size: int = 20
     use_amp: bool = True
     grad_clip_norm: Optional[float] = 0.1
     save_dir: str = "./work_dirs/default"
-    save_interval: int = 1
-    eval_interval: int = 1
+    save_interval: int = 1000
+    eval_interval: int = 1000
     monitor: str = "semantic.miou"
     monitor_mode: str = "max"
     max_keep_ckpts: int = 5
@@ -60,11 +60,13 @@ class Trainer:
         self.val_dataloader = val_dataloader
         self.lr_scheduler = lr_scheduler
         self.cfg = cfg or TrainerConfig()
+
         self.device = torch.device(self.cfg.device)
         self.scaler = GradScaler(
             device="cuda",
             enabled=self.cfg.use_amp and self.device.type == "cuda",
         )
+
         self.save_dir = Path(self.cfg.save_dir)
         self.save_dir.mkdir(parents=True, exist_ok=True)
         self.model.to(self.device)
@@ -82,17 +84,16 @@ class Trainer:
             )
         )
 
-        self.start_epoch = 1
-
-        self.iters_per_epoch = None
-        if self.train_dataloader is not None and hasattr(self.train_dataloader, "__len__"):
-            self.iters_per_epoch = len(self.train_dataloader)
-
-        self.max_iters = None
-        if self.iters_per_epoch is not None:
-            self.max_iters = self.cfg.max_epochs * self.iters_per_epoch
-
         self.global_iter = 0
+
+        self.iters_per_cycle = None
+        if self.train_dataloader is not None and hasattr(self.train_dataloader, "__len__"):
+            self.iters_per_cycle = len(self.train_dataloader)
+
+        self.val_iters_per_epoch = None
+        if self.val_dataloader is not None and hasattr(self.val_dataloader, "__len__"):
+            self.val_iters_per_epoch = len(self.val_dataloader)
+
         self.log_state: Dict[str, object] = {}
         self._log_getters = []
 
@@ -100,13 +101,12 @@ class Trainer:
         self._data_time_history = deque(maxlen=self.cfg.log_window_size)
         self._train_stat_history = deque(maxlen=self.cfg.log_window_size)
 
-        self.val_iters_per_epoch = None
-        if self.val_dataloader is not None and hasattr(self.val_dataloader, "__len__"):
-            self.val_iters_per_epoch = len(self.val_dataloader)
-
         self._val_iter_time_history = deque(maxlen=self.cfg.log_window_size)
         self._val_data_time_history = deque(maxlen=self.cfg.log_window_size)
         self._val_stat_history = deque(maxlen=self.cfg.log_window_size)
+
+        self._train_iterator = None
+        self._data_cycle = 0
 
     def maybe_resume_latest(self):
         if not self.cfg.auto_resume:
@@ -120,8 +120,8 @@ class Trainer:
             strict=False,
         )
         if ckpt is not None:
-            self.start_epoch = int(ckpt.get("epoch", 0)) + 1
-            print(f"Auto resumed from latest checkpoint, starting at epoch={self.start_epoch}")
+            self.global_iter = int(ckpt.get("global_iter", 0))
+            print(f"Auto resumed from latest checkpoint, starting at iter={self.global_iter}")
         return ckpt
 
     def resume_from(self, path: str):
@@ -133,8 +133,8 @@ class Trainer:
             scheduler=self.lr_scheduler,
             strict=False,
         )
-        self.start_epoch = int(ckpt.get("epoch", 0)) + 1
-        print(f"Resumed from {path}, starting at epoch={self.start_epoch}")
+        self.global_iter = int(ckpt.get("global_iter", 0))
+        print(f"Resumed from {path}, starting at iter={self.global_iter}")
         return ckpt
 
     def _move_to_device(self, obj):
@@ -243,7 +243,7 @@ class Trainer:
 
         return loss_sums, total_valid_pixels, did_backward
 
-    def train_step(self, batch) -> Dict[str, float]:
+    def train_step(self, batch) -> tuple[Dict[str, float], bool]:
         if self.optimizer is None:
             raise RuntimeError("Optimizer is None, cannot run train_step().")
 
@@ -255,6 +255,7 @@ class Trainer:
             do_backward=True,
         )
 
+        did_step = False
         if did_backward and total_valid_pixels > 0:
             self.scaler.unscale_(self.optimizer)
 
@@ -268,11 +269,16 @@ class Trainer:
 
             self.scaler.step(self.optimizer)
             self.scaler.update()
+            did_step = True
 
-        return self._normalize_loss_sums(
+            if self.lr_scheduler is not None:
+                self.lr_scheduler.step()
+
+        stats = self._normalize_loss_sums(
             loss_sums=loss_sums,
             total_valid_pixels=total_valid_pixels,
         )
+        return stats, did_step
 
     def _forward_val_outputs(self, batch) -> Dict[str, torch.Tensor]:
         use_amp = self.cfg.use_amp and self.device.type == "cuda"
@@ -325,6 +331,49 @@ class Trainer:
             return
         self._log_getters.append(fn)
 
+    @staticmethod
+    def _extract_class_names_from_dataloader(dataloader) -> Optional[list[str]]:
+        if dataloader is None:
+            return None
+
+        dataset = getattr(dataloader, "dataset", None)
+        while dataset is not None and hasattr(dataset, "dataset"):
+            dataset = dataset.dataset
+
+        if dataset is None:
+            return None
+
+        classes = getattr(dataset, "classes", None)
+        if classes is None:
+            return None
+
+        classes = [str(x) for x in classes]
+        if len(classes) == 0:
+            return None
+
+        return classes
+
+    def _prepare_text_cache_for_dataloader(
+        self,
+        dataloader,
+        force: bool = False,
+    ) -> None:
+        if dataloader is None:
+            return
+
+        if not hasattr(self.model, "prepare_text_cache"):
+            return
+
+        class_names = self._extract_class_names_from_dataloader(dataloader)
+        if class_names is None:
+            return
+
+        self.model.prepare_text_cache(
+            class_names=class_names,
+            device=self.device,
+            force=force,
+        )
+
     def _to_loggable_scalar(self, value):
         if isinstance(value, torch.Tensor):
             if value.numel() == 1:
@@ -352,10 +401,13 @@ class Trainer:
                     out[str(k)] = vv
         return out
 
+    def _estimate_data_cycle(self) -> Optional[int]:
+        if self.iters_per_cycle is None or self.iters_per_cycle <= 0:
+            return None
+        return (self.global_iter // self.iters_per_cycle) + 1
+
     def _update_train_log_state(
         self,
-        epoch: int,
-        step: int,
         stats: Dict[str, float],
         data_time: float,
         iter_time: float,
@@ -368,19 +420,15 @@ class Trainer:
         avg_iter_time = self._mean_of_history(self._iter_time_history)
         avg_stats = self._average_stats(list(self._train_stat_history))
 
-        eta_seconds = None
-        if self.max_iters is not None:
-            remaining_iters = max(self.max_iters - self.global_iter, 0)
-            eta_seconds = avg_iter_time * remaining_iters
+        remaining_iters = max(self.cfg.max_iters - self.global_iter, 0)
+        eta_seconds = avg_iter_time * remaining_iters
 
         self.log_state = {
             "mode": "train",
-            "epoch": int(epoch),
-            "max_epochs": int(self.cfg.max_epochs),
-            "iter": int(step),
-            "iters_per_epoch": self.iters_per_epoch,
-            "global_iter": int(self.global_iter),
-            "max_iters": self.max_iters,
+            "iter": int(self.global_iter),
+            "max_iters": int(self.cfg.max_iters),
+            "data_cycle": self._estimate_data_cycle(),
+            "iters_per_cycle": self.iters_per_cycle,
             "lrs": self._get_current_lrs(),
             "eta_seconds": eta_seconds,
             "iter_time": avg_iter_time,
@@ -392,8 +440,7 @@ class Trainer:
 
     def _update_val_log_state(
         self,
-        epoch: int,
-        step: int,
+        val_step: int,
         stats: Dict[str, float],
         data_time: float,
         iter_time: float,
@@ -408,15 +455,15 @@ class Trainer:
 
         eta_seconds = None
         if self.val_iters_per_epoch is not None:
-            remaining_iters = max(self.val_iters_per_epoch - step, 0)
+            remaining_iters = max(self.val_iters_per_epoch - val_step, 0)
             eta_seconds = avg_iter_time * remaining_iters
 
         self.log_state = {
             "mode": "val_loss",
-            "epoch": int(epoch),
-            "max_epochs": int(self.cfg.max_epochs),
-            "iter": int(step),
-            "iters_per_epoch": self.val_iters_per_epoch,
+            "iter": int(self.global_iter),
+            "max_iters": int(self.cfg.max_iters),
+            "val_iter": int(val_step),
+            "val_total_iters": self.val_iters_per_epoch,
             "eta_seconds": eta_seconds,
             "iter_time": avg_iter_time,
             "data_time": avg_data_time,
@@ -424,55 +471,66 @@ class Trainer:
             "extra_log_vars": self._collect_extra_log_vars(),
         }
 
-    def train_epoch(self, epoch: int) -> Dict[str, float]:
+    def _set_dataloader_cycle(self, cycle_index: int) -> None:
         if self.train_dataloader is None:
-            return {}
+            return
 
-        self.hook_manager.call("before_train_epoch", self, epoch)
-        self.model.train()
-        epoch_stats: list[Dict[str, float]] = []
+        sampler = getattr(self.train_dataloader, "sampler", None)
+        if sampler is not None and hasattr(sampler, "set_epoch"):
+            sampler.set_epoch(cycle_index)
 
-        end = time.perf_counter()
+        batch_sampler = getattr(self.train_dataloader, "batch_sampler", None)
+        if batch_sampler is not None and hasattr(batch_sampler, "set_epoch"):
+            batch_sampler.set_epoch(cycle_index)
 
-        for it, batch in enumerate(self.train_dataloader, start=1):
-            data_time = time.perf_counter() - end
+    def _build_train_iterator(self) -> None:
+        if self.train_dataloader is None:
+            self._train_iterator = None
+            return
 
-            if self.device.type == "cuda":
-                torch.cuda.reset_peak_memory_stats(self.device)
+        if self.iters_per_cycle is None or self.iters_per_cycle <= 0:
+            self._data_cycle = 0
+            self._set_dataloader_cycle(self._data_cycle)
+            self._train_iterator = iter(self.train_dataloader)
+            return
 
-            self.hook_manager.call("before_train_iter", self, epoch, it, batch)
+        completed_cycles = self.global_iter // self.iters_per_cycle
+        offset_in_cycle = self.global_iter % self.iters_per_cycle
 
-            stats = self.train_step(batch)
-            epoch_stats.append(stats)
+        self._data_cycle = int(completed_cycles)
+        self._set_dataloader_cycle(self._data_cycle)
+        self._train_iterator = iter(self.train_dataloader)
 
-            iter_time = time.perf_counter() - end
+        for _ in range(offset_in_cycle):
+            try:
+                next(self._train_iterator)
+            except StopIteration:
+                self._data_cycle += 1
+                self._set_dataloader_cycle(self._data_cycle)
+                self._train_iterator = iter(self.train_dataloader)
 
-            self.global_iter += 1
-            self._update_train_log_state(
-                epoch=epoch,
-                step=it,
-                stats=stats,
-                data_time=data_time,
-                iter_time=iter_time,
-            )
+    def _next_train_batch(self):
+        if self.train_dataloader is None:
+            raise RuntimeError("train_dataloader is None, cannot fetch training batch.")
 
-            self.hook_manager.call("after_train_iter", self, epoch, it, batch, stats)
+        if self._train_iterator is None:
+            self._build_train_iterator()
 
-            end = time.perf_counter()
-
-        if self.lr_scheduler is not None:
-            self.lr_scheduler.step()
-
-        train_stats = self._average_stats(epoch_stats)
-        self.hook_manager.call("after_train_epoch", self, epoch, train_stats)
-        return train_stats
+        try:
+            return next(self._train_iterator)
+        except StopIteration:
+            self._data_cycle += 1
+            self._set_dataloader_cycle(self._data_cycle)
+            self._train_iterator = iter(self.train_dataloader)
+            return next(self._train_iterator)
 
     @torch.no_grad()
-    def val_epoch(self, epoch: int) -> Dict[str, float]:
+    def val(self) -> Dict[str, float]:
         if self.val_dataloader is None:
             return {}
 
-        self.hook_manager.call("before_val_epoch", self, epoch)
+        self._prepare_text_cache_for_dataloader(self.val_dataloader, force=False)
+        self.hook_manager.call("before_val", self, self.global_iter)
 
         self.model.eval()
         self._val_iter_time_history.clear()
@@ -507,21 +565,20 @@ class Trainer:
                     batch=batch,
                     semantic_outputs=outputs,
                     semantic_targets=targets,
-                    epoch=epoch,
+                    epoch=self.global_iter,
                     stage="val",
                 )
 
             iter_time = time.perf_counter() - end
 
             self._update_val_log_state(
-                epoch=epoch,
-                step=it,
+                val_step=it,
                 stats=loss_stats,
                 data_time=data_time,
                 iter_time=iter_time,
             )
 
-            self.hook_manager.call("after_val_iter", self, epoch, it, batch, loss_stats)
+            self.hook_manager.call("after_val_iter", self, self.global_iter, it, batch, loss_stats)
 
             end = time.perf_counter()
 
@@ -532,17 +589,16 @@ class Trainer:
         if class_names is not None:
             stats["_class_names"] = class_names
 
-        self.hook_manager.call("after_val_epoch", self, epoch, stats)
+        self.hook_manager.call("after_val", self, self.global_iter, stats)
         return stats
 
     def save_checkpoint(
         self,
-        epoch: int,
         train_stats: Dict[str, float],
         val_stats: Optional[Dict[str, float]] = None,
     ) -> Path:
         ckpt_path = self.checkpoint_manager.save(
-            epoch=epoch,
+            global_iter=self.global_iter,
             model=self.model,
             optimizer=self.optimizer,
             scaler=self.scaler,
@@ -557,28 +613,94 @@ class Trainer:
         return ckpt_path
 
     def train(self):
+        if self.train_dataloader is None:
+            raise RuntimeError("train_dataloader is None, cannot run train().")
+
         self.hook_manager.call("before_run", self)
         self.maybe_resume_latest()
+        self._prepare_text_cache_for_dataloader(self.train_dataloader, force=False)
+        self._build_train_iterator()
 
-        for epoch in range(self.start_epoch, self.cfg.max_epochs + 1):
-            train_stats = self.train_epoch(epoch)
+        self.model.train()
+        self._iter_time_history.clear()
+        self._data_time_history.clear()
+        self._train_stat_history.clear()
 
-            should_save = (epoch % self.cfg.save_interval == 0)
-            should_eval = (
-                    self.val_dataloader is not None
-                    and epoch % self.cfg.eval_interval == 0
+        train_stats_window: list[Dict[str, float]] = []
+
+        end = time.perf_counter()
+
+        while self.global_iter < self.cfg.max_iters:
+            data_time = time.perf_counter() - end
+
+            if self.device.type == "cuda":
+                torch.cuda.reset_peak_memory_stats(self.device)
+
+            batch = self._next_train_batch()
+            next_iter = self.global_iter + 1
+
+            self.hook_manager.call("before_train_iter", self, next_iter, batch)
+
+            stats, _ = self.train_step(batch)
+            train_stats_window.append(stats)
+
+            self.global_iter = next_iter
+
+            iter_time = time.perf_counter() - end
+
+            self._update_train_log_state(
+                stats=stats,
+                data_time=data_time,
+                iter_time=iter_time,
             )
 
-            if should_save:
-                path = self.save_checkpoint(epoch, train_stats, {})
-                print(f"saved checkpoint before validation: {path}")
+            self.hook_manager.call("after_train_iter", self, self.global_iter, batch, stats)
 
-            val_stats = {}
+            should_eval = (
+                self.val_dataloader is not None
+                and self.cfg.eval_interval > 0
+                and self.global_iter % self.cfg.eval_interval == 0
+            )
+            should_save = (
+                self.cfg.save_interval > 0
+                and self.global_iter % self.cfg.save_interval == 0
+            )
+
+            averaged_train_stats = self._average_stats(train_stats_window)
+
             if should_eval:
-                val_stats = self.val_epoch(epoch)
+                val_stats = self.val()
+                self.model.train()
+            else:
+                val_stats = {}
 
-                if should_save:
-                    path = self.save_checkpoint(epoch, train_stats, val_stats)
-                    print(f"updated checkpoint after validation: {path}")
+            if should_save:
+                path = self.save_checkpoint(averaged_train_stats, val_stats)
+                print(f"saved checkpoint at iter={self.global_iter}: {path}")
+
+            end = time.perf_counter()
+
+        final_train_stats = self._average_stats(train_stats_window)
+
+        need_final_eval = (
+            self.val_dataloader is not None
+            and (
+                self.cfg.eval_interval <= 0
+                or self.global_iter % self.cfg.eval_interval != 0
+            )
+        )
+        if need_final_eval:
+            final_val_stats = self.val()
+            self.model.train()
+        else:
+            final_val_stats = {}
+
+        need_final_save = (
+            self.cfg.save_interval <= 0
+            or self.global_iter % self.cfg.save_interval != 0
+        )
+        if need_final_save:
+            path = self.save_checkpoint(final_train_stats, final_val_stats)
+            print(f"saved final checkpoint at iter={self.global_iter}: {path}")
 
         self.hook_manager.call("after_run", self)

@@ -159,6 +159,10 @@ class Sam3Image(torch.nn.Module):
         self.multimask_output = multimask_output
         self.prompt_chunk_size = None
 
+        self._text_cache: Optional[Dict[str, torch.Tensor]] = None
+        self._text_cache_key: Optional[Tuple[str, ...]] = None
+        self._text_cache_device: Optional[str] = None
+
     @property
     def device(self):
         self._device = getattr(self, "_device", None) or next(self.parameters()).device
@@ -166,7 +170,97 @@ class Sam3Image(torch.nn.Module):
 
     def to(self, *args, **kwargs):
         self._device = None
+        self.clear_text_cache()
         return super().to(*args, **kwargs)
+
+    @staticmethod
+    def _normalize_text_cache_key(class_texts: List[str]) -> Tuple[str, ...]:
+        return tuple(str(x) for x in class_texts)
+
+    def clear_text_cache(self) -> None:
+        self._text_cache = None
+        self._text_cache_key = None
+        self._text_cache_device = None
+
+    def prepare_text_cache(
+        self,
+        class_texts: List[str],
+        device: Optional[torch.device] = None,
+        force: bool = False,
+    ) -> None:
+        if len(class_texts) == 0:
+            raise ValueError("class_texts is empty, cannot build text cache.")
+
+        device = torch.device(device) if device is not None else self.device
+        cache_key = self._normalize_text_cache_key(class_texts)
+        cache_device = str(device)
+
+        if (
+            not force
+            and self._text_cache is not None
+            and self._text_cache_key == cache_key
+            and self._text_cache_device == cache_device
+        ):
+            return
+
+        with torch.no_grad():
+            text_backbone_out = self.backbone.forward_text(
+                class_texts,
+                device=device,
+            )
+
+        text_backbone_out = self._detach_tree(text_backbone_out)
+
+        cache: Dict[str, torch.Tensor] = {
+            "language_features": text_backbone_out["language_features"].contiguous(),
+            "language_mask": text_backbone_out["language_mask"].contiguous(),
+        }
+
+        if "language_embeds" in text_backbone_out and text_backbone_out["language_embeds"] is not None:
+            cache["language_embeds"] = text_backbone_out["language_embeds"].contiguous()
+
+        if self.clip_text_encoder is not None and len(self.clip_extra_token_templates) > 0:
+            with torch.no_grad():
+                clip_text_tokens_native = self.clip_text_encoder.encode_prompt_templates(
+                    class_names=class_texts,
+                    templates=self.clip_extra_token_templates,
+                    device=device,
+                    normalize_label=self.normalize_label_for_clip,
+                )  # [C, K, C_text]
+
+            cache["clip_text_tokens_native"] = clip_text_tokens_native.detach().contiguous()
+
+        self._text_cache = cache
+        self._text_cache_key = cache_key
+        self._text_cache_device = cache_device
+
+    def ensure_text_cache(
+        self,
+        class_texts: List[str],
+        device: Optional[torch.device] = None,
+    ) -> None:
+        self.prepare_text_cache(class_texts=class_texts, device=device, force=False)
+
+    def _slice_text_cache(
+        self,
+        start: int,
+        end: int,
+    ) -> Dict[str, torch.Tensor]:
+        if self._text_cache is None:
+            raise RuntimeError("Text cache is not prepared.")
+
+        out: Dict[str, torch.Tensor] = {
+            "language_features": self._text_cache["language_features"][:, start:end].contiguous(),
+            "language_mask": self._text_cache["language_mask"][start:end].contiguous(),
+        }
+
+        if "language_embeds" in self._text_cache:
+            out["language_embeds"] = self._text_cache["language_embeds"][:, start:end].contiguous()
+
+        if "clip_text_tokens_native" in self._text_cache:
+            out["clip_text_tokens_native"] = self._text_cache["clip_text_tokens_native"][start:end].contiguous()
+
+        return out
 
     def _get_prompt_chunk_size(self, num_classes: int) -> int:
         chunk_size = getattr(self, "prompt_chunk_size", None)
@@ -631,6 +725,8 @@ class Sam3Image(torch.nn.Module):
                 "find_text_batch is empty. It should contain the shared class vocabulary."
             )
 
+        self.ensure_text_cache(class_texts=class_texts, device=device)
+
         batch_size = int(input.img_batch.shape[0])
         num_classes = len(class_texts)
         chunk_size = self._get_prompt_chunk_size(num_classes)
@@ -650,32 +746,22 @@ class Sam3Image(torch.nn.Module):
             num_chunk_classes = len(chunk_texts)
             chunk_class_ids = list(range(start, end))
 
-            with torch.no_grad():
-                text_backbone_out = self.backbone.forward_text(
-                    chunk_texts,
-                    device=device,
-                )
-            text_backbone_out = self._detach_tree(text_backbone_out)
+            chunk_text_cache = self._slice_text_cache(start=start, end=end)
 
             chunk_backbone_out = dict(image_backbone_out)
-            chunk_backbone_out.update(text_backbone_out)
+            chunk_backbone_out["language_features"] = chunk_text_cache["language_features"]
+            chunk_backbone_out["language_mask"] = chunk_text_cache["language_mask"]
+            if "language_embeds" in chunk_text_cache:
+                chunk_backbone_out["language_embeds"] = chunk_text_cache["language_embeds"]
 
-            if self.clip_text_encoder is not None and len(self.clip_extra_token_templates) > 0:
-                with torch.no_grad():
-                    clip_text_tokens_native = self.clip_text_encoder.encode_prompt_templates(
-                        class_names=chunk_texts,
-                        templates=self.clip_extra_token_templates,
-                        device=device,
-                        normalize_label=self.normalize_label_for_clip,
-                    )  # [C, K, C_text]
-
+            if "clip_text_tokens_native" in chunk_text_cache:
                 if self.clip_text_proj is None:
                     raise RuntimeError(
                         "clip_text_encoder is enabled, but clip_text_proj is not initialized."
                     )
 
                 clip_text_tokens = self.clip_text_proj(
-                    clip_text_tokens_native
+                    chunk_text_cache["clip_text_tokens_native"]
                 )  # [C, K, 256]
                 clip_text_tokens = self.clip_text_token_norm(clip_text_tokens)
 
@@ -705,8 +791,8 @@ class Sam3Image(torch.nn.Module):
                     )
 
                 sam3_pair_feats, sam3_pair_mask = self._expand_sam3_text_to_pairs(
-                    sam3_text_feats=text_backbone_out["language_features"],
-                    sam3_text_mask=text_backbone_out["language_mask"],
+                    sam3_text_feats=chunk_backbone_out["language_features"],
+                    sam3_text_mask=chunk_backbone_out["language_mask"],
                     batch_size=batch_size,
                 )
 
