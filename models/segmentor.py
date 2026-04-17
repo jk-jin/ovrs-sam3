@@ -5,20 +5,22 @@ from typing import Any, Dict, Iterator, List, Optional
 import torch
 import torch.nn as nn
 
-from .adapters.semantic_adapter import QueryMaskSemanticAdapter
 from .data_misc import BatchedDatapoint
 from .sam3_image import Sam3Image
+from .task_modes import normalize_task_mode
 
 
 class SAM3Segmentor(nn.Module):
     def __init__(
         self,
         core: Sam3Image,
-        semantic_adapter: nn.Module | None = None,
+        adapter: nn.Module,
+        task_mode: str,
     ):
         super().__init__()
         self.core = core
-        self.semantic_adapter = semantic_adapter or QueryMaskSemanticAdapter()
+        self.adapter = adapter
+        self.task_mode = normalize_task_mode(task_mode)
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -47,7 +49,7 @@ class SAM3Segmentor(nn.Module):
             raw_outputs = chunk["raw_outputs"]
             chunk_class_ids = chunk["chunk_class_ids"]
 
-            train_outputs = self.semantic_adapter(
+            train_outputs = self.adapter(
                 raw_outputs=raw_outputs,
                 batch=batch,
                 expected_num_classes=len(chunk_class_ids),
@@ -65,10 +67,10 @@ class SAM3Segmentor(nn.Module):
 
     def forward(self, batch: BatchedDatapoint) -> dict[str, torch.Tensor]:
         raw_outputs = self.core(batch)
-        inference_outputs = self.semantic_adapter(
+        final_outputs = self.adapter(
             raw_outputs=raw_outputs,
             batch=batch,
             expected_num_classes=None,
             output_mode="infer",
         )
-        return inference_outputs
+        return final_outputs

@@ -10,6 +10,8 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
+from ..models.task_modes import OUTPUT_KEYS
+
 
 @dataclass
 class VisualizerConfig:
@@ -57,13 +59,13 @@ class BaseSemanticOverlayTask(VisualizationTask):
         semantic_targets = ctx.semantic_targets
         batch = ctx.batch
 
-        if "fused_score_map" not in semantic_outputs:
-            raise ValueError("outputs must contain 'fused_score_map'.")
+        if OUTPUT_KEYS.final_score_map not in semantic_outputs:
+            raise ValueError(f"outputs must contain '{OUTPUT_KEYS.final_score_map}'.")
 
-        fused_score_map = semantic_outputs["fused_score_map"]
-        fused_pred = manager._extract_pred_from_logits(fused_score_map)
+        final_score_map = semantic_outputs[OUTPUT_KEYS.final_score_map]
+        final_pred = manager._extract_pred_from_logits(final_score_map)
 
-        semantic_score_map = semantic_outputs.get("semantic_score_map", None)
+        semantic_score_map = semantic_outputs.get(OUTPUT_KEYS.semantic_score_map, None)
         semantic_pred = (
             manager._extract_pred_from_logits(semantic_score_map)
             if semantic_score_map is not None else None
@@ -75,7 +77,7 @@ class BaseSemanticOverlayTask(VisualizationTask):
                 raise ValueError(f"Expected gt as [B,1,H,W] or [B,H,W], got {tuple(gt.shape)}")
             gt = gt[:, 0]
 
-        pred_num_classes = int(fused_score_map.shape[1])
+        pred_num_classes = int(final_score_map.shape[1])
 
         try:
             class_names: List[str] = batch.find_metadatas[0].class_names
@@ -104,7 +106,7 @@ class BaseSemanticOverlayTask(VisualizationTask):
             original_image = manager._extract_original_reference_image(batch, b)
             out_hw = overlay_image.size[::-1]
 
-            fused_pred_label = manager._prepare_label_map(fused_pred[b], out_hw)
+            final_pred_label = manager._prepare_label_map(final_pred[b], out_hw)
             gt_label = manager._prepare_label_map(gt[b], out_hw)
 
             if manager.cfg.save_original:
@@ -113,7 +115,7 @@ class BaseSemanticOverlayTask(VisualizationTask):
             if manager.cfg.save_prediction:
                 manager._overlay_label_map(
                     overlay_image,
-                    fused_pred_label,
+                    final_pred_label,
                     pred_num_classes,
                 ).save(sample_dir / "pred_overlay.png")
 

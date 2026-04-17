@@ -32,20 +32,16 @@ if __package__ in (None, ""):
     LoggerHook = _hooks_mod.LoggerHook
     _vis_mod = import_module(f"{package_name}.engine.visualization")
     VisualizationManager = _vis_mod.VisualizationManager
-    _sem_mod = import_module(f"{package_name}.losses.semantic_criterion")
-    SemanticCriterion = _sem_mod.SemanticCriterion
-    SemanticLossWeights = _sem_mod.SemanticLossWeights
     _builder_mod = import_module(f"{package_name}.model_builder")
     FreezeConfig = _builder_mod.FreezeConfig
-    build_segmentor_model = _builder_mod.build_segmentor_model
+    build_training_components = _builder_mod.build_training_components
 else:
     from ..data.build import build_dataloader
     from ..engine.config import Config
     from ..engine.optimizer_builder import build_optimizer, build_scheduler
     from ..engine.trainer import Trainer, TrainerConfig
     from ..engine.visualization import VisualizationManager
-    from ..losses.semantic_criterion import SemanticCriterion, SemanticLossWeights
-    from ..model_builder import FreezeConfig, build_segmentor_model
+    from ..model_builder import FreezeConfig, build_training_components
 
 
 def set_seed(seed: int = 42):
@@ -67,13 +63,6 @@ def _to_dotdict(obj: Any):
     if isinstance(obj, list):
         return [_to_dotdict(x) for x in obj]
     return obj
-
-
-def build_criterion(cfg: Dict[str, Any]):
-    criterion_cfg = dict(cfg.get("criterion", {}))
-    ignore_index = int(criterion_cfg.pop("ignore_index", 255))
-    weights = SemanticLossWeights(**criterion_cfg)
-    return SemanticCriterion(weights=weights, ignore_index=ignore_index)
 
 
 def build_hooks(cfg) -> List[object]:
@@ -163,7 +152,7 @@ def load_model_weights_only(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Train/Eval SAM3 semantic-only segmentor with iter-based training."
+        description="Train/Eval SAM3 semantic segmentor with iter-based training."
     )
     parser.add_argument("config", type=str, help="path to config file")
     parser.add_argument("--work-dir", type=str, default=None)
@@ -191,7 +180,11 @@ def main():
 
     model_cfg = dict(cfg.model)
     freeze_cfg = FreezeConfig(**model_cfg.pop("freeze_cfg", {}))
-    model = build_segmentor_model(**model_cfg, freeze_cfg=freeze_cfg)
+
+    model, criterion = build_training_components(
+        **model_cfg,
+        freeze_cfg=freeze_cfg,
+    )
 
     if args.load_model_from is not None:
         load_model_weights_only(model=model, path=args.load_model_from, strict=False)
@@ -200,7 +193,6 @@ def main():
     Path(work_dir).mkdir(parents=True, exist_ok=True)
 
     visualizer = VisualizationManager.from_cfg(cfg.get("visualization"), work_dir=work_dir)
-    criterion = build_criterion(cfg)
 
     trainer_cfg = TrainerConfig(
         max_iters=int(cfg.train_cfg.max_iters),

@@ -13,14 +13,19 @@ import torch.nn as nn
 from huggingface_hub import hf_hub_download
 from iopath.common.file_io import g_pathmgr
 
-from .models.adapters.semantic_adapter import QueryMaskSemanticAdapter
-from .models.decoder import TransformerDecoder, TransformerDecoderLayer
+from .losses.semantic_criterion import (
+    HybridCriterion,
+    SemanticCriterion,
+    SemanticCriterionConfig,
+)
+from .models.adapters.semantic_adapter import (
+    HybridSegAdapter,
+    SemanticSegAdapter,
+)
 from .models.encoder import TransformerEncoderFusion, TransformerEncoderLayer
 from .models.geometry_encoders import SequenceGeometryEncoder
 from .models.maskformer_segmentation import PixelDecoder, UniversalSegmentationHead
 from .models.model_misc import (
-    DotProductScoring,
-    MLP,
     MultiheadAttentionWrapper as MultiheadAttention,
     TransformerWrapper,
 )
@@ -30,6 +35,11 @@ from .models.openclip_text_encoder import OpenCLIPTextEncoder
 from .models.position_encoding import PositionEmbeddingSine
 from .models.sam3_image import Sam3Image
 from .models.segmentor import SAM3Segmentor
+from .models.task_modes import (
+    TASK_MODE_HYBRID,
+    TASK_MODE_SEMANTIC,
+    normalize_task_mode,
+)
 from .models.text_encoder_ve import VETextEncoder
 from .models.tokenizer_ve import SimpleTokenizer
 from .models.vitdet import ViT
@@ -99,7 +109,17 @@ class OpenCLIPConfig:
 
 
 @dataclass
+class CriterionConfig:
+    ignore_index: int = 255
+    semantic_bce_weight: float = 1.0
+    semantic_dice_weight: float = 1.0
+    eps: float = 1e-6
+
+
+@dataclass
 class SegmentorBuildConfig:
+    task_mode: str = TASK_MODE_SEMANTIC
+
     bpe_path: Optional[str] = None
     checkpoint_path: Optional[str] = None
     load_from_hf: bool = True
@@ -107,17 +127,11 @@ class SegmentorBuildConfig:
     eval_mode: bool = True
     compile: bool = False
 
-    semantic_use_instance_branch: bool = True
-    semantic_use_semantic_branch: bool = True
-    semantic_fusion_mode: str = "max"
-
-    semantic_use_presence_score: bool = True
-    confidence_threshold: Optional[float] = None
-
     prompt_chunk_size: Optional[int] = None
 
     freeze_cfg: FreezeConfig = field(default_factory=FreezeConfig)
     openclip_cfg: OpenCLIPConfig = field(default_factory=OpenCLIPConfig)
+    criterion_cfg: CriterionConfig = field(default_factory=CriterionConfig)
 
 
 class FrozenModuleMixin:
@@ -215,13 +229,13 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         )
 
     @classmethod
-    def _create_vit_neck(cls, position_encoding, vit_backbone, enable_inst_interactivity=False):
+    def _create_vit_neck(cls, position_encoding, vit_backbone):
         return Sam3DualViTDetNeck(
             position_encoding=position_encoding,
             d_model=256,
             scale_factors=[4.0, 2.0, 1.0, 0.5],
             trunk=vit_backbone,
-            add_sam2_neck=enable_inst_interactivity,
+            add_sam2_neck=False,
         )
 
     @staticmethod
@@ -275,57 +289,13 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         )
 
     @staticmethod
-    def _create_transformer_decoder() -> TransformerDecoder:
-        decoder_layer = TransformerDecoderLayer(
-            activation="relu",
-            d_model=256,
-            dim_feedforward=2048,
-            dropout=0.1,
-            cross_attention=MultiheadAttention(
-                num_heads=8,
-                dropout=0.1,
-                embed_dim=256,
-            ),
-            n_heads=8,
-            use_text_cross_attention=True,
-        )
-        return TransformerDecoder(
-            layer=decoder_layer,
-            num_layers=6,
-            num_queries=200,
-            return_intermediate=True,
-            box_refine=True,
-            num_o2m_queries=0,
-            dac=True,
-            boxRPB="log",
-            d_model=256,
-            frozen=False,
-            interaction_layer=None,
-            dac_use_selfatt_ln=True,
-            resolution=1008,
-            stride=14,
-            use_act_checkpoint=True,
-            presence_token=True,
-        )
-
-    @staticmethod
-    def _create_sam3_transformer() -> TransformerWrapper:
+    def _create_encoder_only_transformer() -> TransformerWrapper:
         encoder = SAM3ModelBuilder._create_transformer_encoder()
-        decoder = SAM3ModelBuilder._create_transformer_decoder()
-        return TransformerWrapper(encoder=encoder, decoder=decoder, d_model=256)
-
-    @staticmethod
-    def _create_dot_product_scoring():
-        prompt_mlp = MLP(
-            input_dim=256,
-            hidden_dim=2048,
-            output_dim=256,
-            num_layers=2,
-            dropout=0.1,
-            residual=True,
-            out_norm=nn.LayerNorm(256),
+        return TransformerWrapper(
+            encoder=encoder,
+            decoder=None,
+            d_model=256,
         )
-        return DotProductScoring(d_model=256, d_proj=256, prompt_mlp=prompt_mlp)
 
     @staticmethod
     def _create_segmentation_head(compile_mode=None):
@@ -344,6 +314,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             hidden_dim=256,
             upsampling_stages=3,
             aux_masks=False,
+            no_dec=True,
             presence_head=False,
             dot_product_scorer=None,
             act_ckpt=True,
@@ -394,33 +365,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         )
 
     @staticmethod
-    def _create_sam3_model(
-        backbone,
-        transformer,
-        input_geometry_encoder,
-        segmentation_head,
-        dot_prod_scoring,
-        clip_image_encoder=None,
-        clip_text_encoder=None,
-        openclip_cfg=None,
-    ):
-        return Sam3Image(
-            backbone=backbone,
-            transformer=transformer,
-            input_geometry_encoder=input_geometry_encoder,
-            segmentation_head=segmentation_head,
-            num_feature_levels=1,
-            o2m_mask_predict=True,
-            dot_prod_scoring=dot_prod_scoring,
-            use_instance_query=False,
-            multimask_output=True,
-            matcher=None,
-            clip_image_encoder=clip_image_encoder,
-            clip_text_encoder=clip_text_encoder,
-            openclip_cfg=openclip_cfg,
-        )
-
-    @staticmethod
     def _coerce_openclip_cfg(obj) -> OpenCLIPConfig:
         if isinstance(obj, OpenCLIPConfig):
             return obj
@@ -430,15 +374,25 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             return OpenCLIPConfig(**dict(obj))
         raise TypeError(f"Unsupported openclip_cfg type: {type(obj)}")
 
+    @staticmethod
+    def _coerce_criterion_cfg(obj) -> CriterionConfig:
+        if isinstance(obj, CriterionConfig):
+            return obj
+        if obj is None:
+            return CriterionConfig()
+        if isinstance(obj, dict):
+            return CriterionConfig(**dict(obj))
+        raise TypeError(f"Unsupported criterion_cfg type: {type(obj)}")
+
     @classmethod
     def _normalize_build_cfg(cls, cfg: SegmentorBuildConfig) -> SegmentorBuildConfig:
+        cfg.task_mode = normalize_task_mode(cfg.task_mode)
         cfg.openclip_cfg = cls._coerce_openclip_cfg(cfg.openclip_cfg)
+        cfg.criterion_cfg = cls._coerce_criterion_cfg(cfg.criterion_cfg)
         return cfg
 
     @staticmethod
-    def _resolve_openclip_pretrained(
-            pretrained: Optional[str],
-    ) -> Optional[str]:
+    def _resolve_openclip_pretrained(pretrained: Optional[str]) -> Optional[str]:
         if pretrained is None:
             return None
 
@@ -461,8 +415,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
     @classmethod
     def _create_openclip_encoders(
-            cls,
-            openclip_cfg: OpenCLIPConfig,
+        cls,
+        openclip_cfg: OpenCLIPConfig,
     ) -> tuple[OpenCLIPTextEncoder, OpenCLIPImageEncoder]:
         import open_clip
 
@@ -514,13 +468,14 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         if "model" in ckpt and isinstance(ckpt["model"], dict):
             ckpt = ckpt["model"]
 
-        sam3_image_ckpt = {
-            k.replace("detector.", ""): v
-            for k, v in ckpt.items()
-            if "detector" in k
-        }
+        if any(k.startswith("detector.") for k in ckpt.keys()):
+            ckpt = {
+                k.replace("detector.", ""): v
+                for k, v in ckpt.items()
+                if k.startswith("detector.")
+            }
 
-        missing_keys, unexpected_keys = model.load_state_dict(sam3_image_ckpt, strict=False)
+        missing_keys, unexpected_keys = model.load_state_dict(ckpt, strict=False)
         if len(missing_keys) > 0 or len(unexpected_keys) > 0:
             print(
                 f"Loaded {checkpoint_path} with missing keys={missing_keys} "
@@ -532,26 +487,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         model_id = "facebook/sam3"
         _ = hf_hub_download(repo_id=model_id, filename="config.json")
         return hf_hub_download(repo_id=model_id, filename="sam3.pt")
-
-    @classmethod
-    def _normalize_build_cfg(cls, cfg: SegmentorBuildConfig) -> SegmentorBuildConfig:
-        cfg.openclip_cfg = cls._coerce_openclip_cfg(cfg.openclip_cfg)
-        return cfg
-
-    @classmethod
-    def validate_semantic_cfg(cls, cfg: SegmentorBuildConfig) -> None:
-        if not cfg.semantic_use_instance_branch and not cfg.semantic_use_semantic_branch:
-            raise ValueError(
-                "At least one semantic branch must be enabled: "
-                "semantic_use_instance_branch or semantic_use_semantic_branch."
-            )
-
-        valid_fusion_modes = {"instance_only", "semantic_only", "max", "sum"}
-        if cfg.semantic_fusion_mode not in valid_fusion_modes:
-            raise ValueError(
-                f"Unknown semantic_fusion_mode: {cfg.semantic_fusion_mode}. "
-                f"Valid options are: {sorted(valid_fusion_modes)}"
-            )
 
     @classmethod
     def apply_freeze_cfg(cls, model: nn.Module, freeze_cfg: FreezeConfig) -> None:
@@ -573,7 +508,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             )
 
     @classmethod
-    def build_sam3_image_model(cls, cfg: SegmentorBuildConfig) -> nn.Module:
+    def build_semantic_core_model(cls, cfg: SegmentorBuildConfig) -> nn.Module:
         cfg = cls._normalize_build_cfg(cfg)
 
         bpe_path = cfg.bpe_path
@@ -584,11 +519,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         position_encoding = cls._create_position_encoding(precompute_resolution=1008)
         vit_backbone = cls._create_vit_backbone(compile_mode=compile_mode)
-        vit_neck = cls._create_vit_neck(
-            position_encoding,
-            vit_backbone,
-            enable_inst_interactivity=False,
-        )
+        vit_neck = cls._create_vit_neck(position_encoding, vit_backbone)
         text_encoder = cls._create_text_encoder(bpe_path)
         backbone = cls._create_vl_backbone(vit_neck, text_encoder)
 
@@ -602,20 +533,25 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             )
             openclip_cfg_for_model = cfg.openclip_cfg
 
-        transformer = cls._create_sam3_transformer()
-        dot_prod_scoring = cls._create_dot_product_scoring()
+        transformer = cls._create_encoder_only_transformer()
         segmentation_head = cls._create_segmentation_head(compile_mode=compile_mode)
         input_geometry_encoder = cls._create_geometry_encoder()
 
-        model = cls._create_sam3_model(
+        model = Sam3Image(
             backbone=backbone,
             transformer=transformer,
             input_geometry_encoder=input_geometry_encoder,
             segmentation_head=segmentation_head,
-            dot_prod_scoring=dot_prod_scoring,
+            num_feature_levels=1,
+            o2m_mask_predict=True,
+            dot_prod_scoring=None,
+            use_instance_query=True,
+            multimask_output=True,
+            matcher=None,
             clip_image_encoder=clip_image_encoder,
             clip_text_encoder=clip_text_encoder,
             openclip_cfg=openclip_cfg_for_model,
+            task_mode=TASK_MODE_SEMANTIC,
         )
 
         checkpoint_path = cfg.checkpoint_path
@@ -628,25 +564,47 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         return model
 
     @classmethod
-    def build_segmentor(cls, cfg: SegmentorBuildConfig) -> nn.Module:
+    def build_adapter(cls, cfg: SegmentorBuildConfig) -> nn.Module:
+        cfg = cls._normalize_build_cfg(cfg)
+
+        if cfg.task_mode == TASK_MODE_SEMANTIC:
+            return SemanticSegAdapter()
+
+        if cfg.task_mode == TASK_MODE_HYBRID:
+            return HybridSegAdapter()
+
+        raise ValueError(f"Unsupported task_mode: {cfg.task_mode}")
+
+    @classmethod
+    def build_criterion(cls, cfg: SegmentorBuildConfig) -> nn.Module:
+        cfg = cls._normalize_build_cfg(cfg)
+
+        if cfg.task_mode == TASK_MODE_SEMANTIC:
+            criterion_cfg = SemanticCriterionConfig(
+                ignore_index=int(cfg.criterion_cfg.ignore_index),
+                bce_weight=float(cfg.criterion_cfg.semantic_bce_weight),
+                dice_weight=float(cfg.criterion_cfg.semantic_dice_weight),
+                eps=float(cfg.criterion_cfg.eps),
+            )
+            return SemanticCriterion(cfg=criterion_cfg)
+
+        if cfg.task_mode == TASK_MODE_HYBRID:
+            return HybridCriterion()
+
+        raise ValueError(f"Unsupported task_mode: {cfg.task_mode}")
+
+    @classmethod
+    def build_semantic_segmentor(cls, cfg: SegmentorBuildConfig) -> nn.Module:
         cfg = cls._normalize_build_cfg(cfg)
         cfg.openclip_cfg = cls.validate_openclip_cfg(cfg.openclip_cfg)
-        cls.validate_semantic_cfg(cfg)
 
-        sam3_image_model = cls.build_sam3_image_model(cfg)
-        sam3_image_model.matcher = None
+        core_model = cls.build_semantic_core_model(cfg)
+        adapter = cls.build_adapter(cfg)
 
         model = SAM3Segmentor(
-            core=sam3_image_model,
-            semantic_adapter=QueryMaskSemanticAdapter(
-                use_instance_branch=cfg.semantic_use_instance_branch,
-                use_semantic_branch=cfg.semantic_use_semantic_branch,
-                fusion_mode=cfg.semantic_fusion_mode,
-                use_presence_score=cfg.semantic_use_presence_score,
-                query_confidence_threshold=cfg.confidence_threshold,
-                instance_train_aggregation="logsumexp",
-                instance_infer_aggregation="max",
-            ),
+            core=core_model,
+            adapter=adapter,
+            task_mode=TASK_MODE_SEMANTIC,
         )
 
         model = model.to(cfg.device)
@@ -664,7 +622,38 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         return model
 
+    @classmethod
+    def build_hybrid_segmentor(cls, cfg: SegmentorBuildConfig) -> nn.Module:
+        cfg = cls._normalize_build_cfg(cfg)
+        raise NotImplementedError(
+            "Hybrid task mode is not implemented yet. "
+            "The current codebase only supports semantic mode."
+        )
+
+    @classmethod
+    def build_segmentor(cls, cfg: SegmentorBuildConfig) -> nn.Module:
+        cfg = cls._normalize_build_cfg(cfg)
+
+        if cfg.task_mode == TASK_MODE_SEMANTIC:
+            return cls.build_semantic_segmentor(cfg)
+
+        if cfg.task_mode == TASK_MODE_HYBRID:
+            return cls.build_hybrid_segmentor(cfg)
+
+        raise ValueError(f"Unsupported task_mode: {cfg.task_mode}")
+
+    @classmethod
+    def build_training_components(cls, cfg: SegmentorBuildConfig) -> tuple[nn.Module, nn.Module]:
+        model = cls.build_segmentor(cfg)
+        criterion = cls.build_criterion(cfg)
+        return model, criterion
+
 
 def build_segmentor_model(**kwargs) -> nn.Module:
     cfg = SegmentorBuildConfig(**kwargs)
     return SAM3ModelBuilder.build_segmentor(cfg)
+
+
+def build_training_components(**kwargs) -> tuple[nn.Module, nn.Module]:
+    cfg = SegmentorBuildConfig(**kwargs)
+    return SAM3ModelBuilder.build_training_components(cfg)

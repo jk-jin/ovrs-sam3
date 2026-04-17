@@ -3,23 +3,17 @@ _base_ = [
     "./_base_/optimizer.py",
     "./_base_/schedule.py",
     "./_base_/visualization.py",
-    "./datasets/isaid.py",
+    "./datasets/potsdam.py",
 ]
 
 model = dict(
+    task_mode="semantic",
     bpe_path="assets/bpe_simple_vocab_16e6.txt.gz",
     checkpoint_path="weights/sam3.pt",
     load_from_hf=False,
     device="cuda",
     eval_mode=False,
     compile=False,
-
-    semantic_use_instance_branch=True,
-    semantic_use_semantic_branch=True,
-    semantic_fusion_mode="max",
-
-    semantic_use_presence_score=True,
-    confidence_threshold=0.5,
     prompt_chunk_size=8,
 
     openclip_cfg=dict(
@@ -31,8 +25,8 @@ model = dict(
             "a remote sensing image of {}.",
             "an aerial image of {}.",
         ],
-        num_extra_tokens=0,
-        text_token_gate_init=0.2,
+        num_extra_tokens=2,
+        text_token_gate_init=0.5,
         normalize_label_for_clip=True,
     ),
 
@@ -49,6 +43,13 @@ model = dict(
         ],
         frozen_modules=[],
     ),
+
+    criterion_cfg=dict(
+        ignore_index=255,
+        semantic_bce_weight=0.2,
+        semantic_dice_weight=1.0,
+        eps=1e-6,
+    ),
 )
 
 train_dataloader = dict(
@@ -57,13 +58,13 @@ train_dataloader = dict(
 )
 
 val_dataloader = dict(
-    batch_size=4,
+    batch_size=1,
     num_workers=8,
 )
 
 eval_cfg = dict(
     ignore_index=255,
-    prob_thd=0,
+    prob_thd=0.5,
     bg_idx=0,
     use_score_map=True,
 )
@@ -111,13 +112,4 @@ tta_cfg = dict(
     scales=[0.75, 1.0, 1.25],
     flip_modes=["none", "h", "v"],
     size_divisor=14,
-)
-
-criterion = dict(
-    semantic_bce=0.2,
-    semantic_dice=1.0,
-    instance_bce=0.2,
-    instance_dice=1.0,
-    presence_bce=1.0,
-    ignore_index=255,
 )

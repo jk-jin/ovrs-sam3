@@ -1,5 +1,7 @@
-from .semantic_adapter import QueryMaskSemanticAdapter
+from .semantic_adapter import SemanticSegAdapter
+from .semantic_adapter import HybridSegAdapter
 
 __all__ = [
-    'QueryMaskSemanticAdapter',
+    'SemanticSegAdapter',
+    'HybridSegAdapter',
 ]

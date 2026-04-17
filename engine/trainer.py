@@ -157,15 +157,29 @@ class Trainer:
         return obj
 
     @staticmethod
-    def _empty_loss_sums() -> Dict[str, float]:
-        return {
-            "loss_semantic_bce": 0.0,
-            "loss_semantic_dice": 0.0,
-            "loss_instance_bce": 0.0,
-            "loss_instance_dice": 0.0,
-            "loss_presence_bce": 0.0,
-            "total_loss": 0.0,
-        }
+    def _make_empty_loss_sums_from_loss_dict(
+        loss_dict: Dict[str, torch.Tensor],
+    ) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        for key in loss_dict.keys():
+            if key == "num_valid":
+                continue
+            out[str(key)] = 0.0
+        return out
+
+    @staticmethod
+    def _accumulate_loss_sums(
+        loss_sums: Dict[str, float],
+        loss_dict: Dict[str, torch.Tensor],
+    ) -> None:
+        for key, value in loss_dict.items():
+            if key == "num_valid":
+                continue
+            if not torch.is_tensor(value):
+                raise TypeError(f"Expected tensor loss for key={key}, got {type(value)}")
+            if key not in loss_sums:
+                loss_sums[key] = 0.0
+            loss_sums[key] += float(value.detach().item())
 
     @staticmethod
     def _normalize_loss_sums(
@@ -173,14 +187,7 @@ class Trainer:
         total_valid_pixels: int,
     ) -> Dict[str, float]:
         if total_valid_pixels <= 0:
-            return {
-                "loss_semantic_bce": 0.0,
-                "loss_semantic_dice": 0.0,
-                "loss_instance_bce": 0.0,
-                "loss_instance_dice": 0.0,
-                "loss_presence_bce": 0.0,
-                "total_loss": 0.0,
-            }
+            return {key: 0.0 for key in loss_sums.keys()}
 
         return {
             key: float(value) / float(total_valid_pixels)
@@ -201,7 +208,7 @@ class Trainer:
         label_map = batch.find_targets[0].semantic_label_map
         use_amp = self.cfg.use_amp and self.device.type == "cuda"
 
-        loss_sums = self._empty_loss_sums()
+        loss_sums: Optional[Dict[str, float]] = None
         total_valid_pixels = 0
         did_backward = False
 
@@ -217,19 +224,21 @@ class Trainer:
                         chunk_class_ids=chunk["chunk_class_ids"],
                         reduction="sum",
                     )
+
+                    if "total_loss" not in loss_dict:
+                        raise ValueError("Criterion must return 'total_loss'.")
+                    if "num_valid" not in loss_dict:
+                        raise ValueError("Criterion must return 'num_valid'.")
+
+                    if loss_sums is None:
+                        loss_sums = self._make_empty_loss_sums_from_loss_dict(loss_dict)
+
                     chunk_total_loss = loss_dict["total_loss"]
             except StopIteration:
                 break
 
             chunk_num_valid = int(loss_dict["num_valid"].detach().item())
-
-            loss_sums["loss_semantic_bce"] += float(loss_dict["loss_semantic_bce"].detach().item())
-            loss_sums["loss_semantic_dice"] += float(loss_dict["loss_semantic_dice"].detach().item())
-            loss_sums["loss_instance_bce"] += float(loss_dict["loss_instance_bce"].detach().item())
-            loss_sums["loss_instance_dice"] += float(loss_dict["loss_instance_dice"].detach().item())
-            loss_sums["loss_presence_bce"] += float(loss_dict["loss_presence_bce"].detach().item())
-            loss_sums["total_loss"] += float(loss_dict["total_loss"].detach().item())
-
+            self._accumulate_loss_sums(loss_sums, loss_dict)
             total_valid_pixels += chunk_num_valid
 
             if do_backward and chunk_num_valid > 0:
@@ -239,6 +248,9 @@ class Trainer:
             del chunk
             del loss_dict
             del chunk_total_loss
+
+        if loss_sums is None:
+            loss_sums = {"total_loss": 0.0}
 
         return loss_sums, total_valid_pixels, did_backward
 

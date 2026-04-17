@@ -1,4 +1,5 @@
-from copy import deepcopy
+from __future__ import annotations
+
 from typing import Dict, Optional, Iterator, Any, List, Tuple
 
 import torch
@@ -7,21 +8,8 @@ import torch.nn.functional as F
 
 from .vl_combiner import SAM3VLBackbone
 from .data_misc import BatchedDatapoint, FindStage
-
-from .act_ckpt_utils import activation_ckpt_wrapper
-from .box_ops import box_cxcywh_to_xyxy
 from .geometry_encoders import Prompt
-from .model_misc import inverse_sigmoid
-
-
-def _update_out(out, out_name, out_value, auxiliary=True, update_aux=True):
-    out[out_name] = out_value[-1] if auxiliary else out_value
-    if auxiliary and update_aux:
-        if "aux_outputs" not in out:
-            out["aux_outputs"] = [{} for _ in range(len(out_value) - 1)]
-        assert len(out["aux_outputs"]) == len(out_value) - 1
-        for aux_output, aux_value in zip(out["aux_outputs"], out_value[:-1]):
-            aux_output[out_name] = aux_value
+from .task_modes import TASK_MODE_SEMANTIC, normalize_task_mode
 
 
 class Sam3Image(torch.nn.Module):
@@ -47,6 +35,7 @@ class Sam3Image(torch.nn.Module):
         clip_image_encoder=None,
         clip_text_encoder=None,
         openclip_cfg=None,
+        task_mode: str = TASK_MODE_SEMANTIC,
         **kwargs,
     ):
         super().__init__()
@@ -58,7 +47,6 @@ class Sam3Image(torch.nn.Module):
         self.segmentation_head = segmentation_head
 
         self.o2m_mask_predict = o2m_mask_predict
-
         self.dot_prod_scoring = dot_prod_scoring
         self.use_act_checkpoint_seg_head = use_act_checkpoint_seg_head
         self.interactivity_in_encoder = interactivity_in_encoder
@@ -68,6 +56,12 @@ class Sam3Image(torch.nn.Module):
         self.use_dot_prod_scoring = use_dot_prod_scoring
         self.clip_image_encoder = clip_image_encoder
         self.clip_text_encoder = clip_text_encoder
+
+        self.task_mode = normalize_task_mode(task_mode)
+        if self.task_mode != TASK_MODE_SEMANTIC:
+            raise NotImplementedError(
+                "Sam3Image currently only supports semantic task mode."
+            )
 
         self.clip_extra_token_templates = []
         self.num_clip_extra_tokens = 0
@@ -135,28 +129,6 @@ class Sam3Image(torch.nn.Module):
             )
             self.clip_to_sam3_text_norm = nn.LayerNorm(self.hidden_dim)
 
-        if self.use_dot_prod_scoring:
-            assert dot_prod_scoring is not None
-            self.dot_prod_scoring = dot_prod_scoring
-            self.instance_dot_prod_scoring = None
-            if separate_scorer_for_instance:
-                self.instance_dot_prod_scoring = deepcopy(dot_prod_scoring)
-        else:
-            self.class_embed = nn.Linear(self.hidden_dim, 1)
-            self.instance_class_embed = None
-            if separate_scorer_for_instance:
-                self.instance_class_embed = deepcopy(self.class_embed)
-
-        self.supervise_joint_box_scores = supervise_joint_box_scores
-        self.detach_presence_in_joint_score = detach_presence_in_joint_score
-
-        num_o2o_static = self.transformer.decoder.num_queries
-        num_o2m_static = self.transformer.decoder.num_o2m_queries
-        assert num_o2m_static == (num_o2o_static if self.transformer.decoder.dac else 0)
-        self.dac = self.transformer.decoder.dac
-
-        self.use_instance_query = use_instance_query
-        self.multimask_output = multimask_output
         self.prompt_chunk_size = None
 
         self._text_cache: Optional[Dict[str, torch.Tensor]] = None
@@ -467,11 +439,6 @@ class Sam3Image(torch.nn.Module):
         clip_feat_map_native = clip_feat_map_native.detach().contiguous()
         clip_tokens_native = clip_feat_map_native.flatten(2).transpose(1, 2).contiguous()
 
-        if self.clip_image_proj is None:
-            raise RuntimeError(
-                "clip_image_encoder is enabled, but clip_image_proj is not initialized."
-            )
-
         grid_h = int(clip_feat_map_native.shape[-2])
         grid_w = int(clip_feat_map_native.shape[-1])
         clip_token_mask = self._build_clip_image_token_mask(
@@ -562,15 +529,6 @@ class Sam3Image(torch.nn.Module):
         clip_image_tokens: torch.Tensor,
         clip_image_token_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Args:
-            clip_text_tokens:      [C, K, D]
-            clip_image_tokens:     [B, N, D]
-            clip_image_token_mask: [B, N], True means ignore
-        Returns:
-            pair_tokens: [K, B*C, D]
-            pair_mask:   [B*C, K]
-        """
         if self.clip_text_to_image_attn is None:
             raise RuntimeError("clip_text_to_image_attn is not initialized.")
         if self.clip_text_to_image_norm is None:
@@ -637,16 +595,6 @@ class Sam3Image(torch.nn.Module):
         sam3_pair_text_feats: torch.Tensor,
         sam3_pair_text_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Args:
-            clip_pair_tokens:     [K, B*C, D]
-            clip_pair_mask:       [B*C, K]
-            sam3_pair_text_feats: [B*C, L, D]
-            sam3_pair_text_mask:  [B*C, L]
-        Returns:
-            aligned_pair_tokens: [K, B*C, D]
-            pair_mask:           [B*C, K]
-        """
         if self.clip_to_sam3_text_attn is None:
             raise RuntimeError("clip_to_sam3_text_attn is not initialized.")
         if self.clip_to_sam3_text_norm is None:
@@ -707,8 +655,8 @@ class Sam3Image(torch.nn.Module):
         return aligned, clip_pair_mask
 
     def iter_chunk_raw_outputs(
-            self,
-            input: BatchedDatapoint,
+        self,
+        input: BatchedDatapoint,
     ) -> Iterator[Dict[str, Any]]:
         device = self.device
 
@@ -906,11 +854,7 @@ class Sam3Image(torch.nn.Module):
         num_chunk_classes: int,
     ) -> Dict[str, torch.Tensor]:
         keep_keys = [
-            "pred_masks",
-            "pred_logits",
-            "semantic_seg",
-            "presence_logit",
-            "presence_logit_dec",
+            "semantic_logits",
         ]
 
         out = {}
@@ -960,7 +904,6 @@ class Sam3Image(torch.nn.Module):
         visual_prompt_embed=None,
         visual_prompt_mask=None,
         encode_text=True,
-        prev_mask_pred=None,
     ):
         txt_feats = backbone_out["language_features"][:, find_input.text_ids]
         txt_masks = backbone_out["language_mask"][find_input.text_ids]
@@ -973,9 +916,6 @@ class Sam3Image(torch.nn.Module):
 
         feat_tuple = self._get_img_feats(backbone_out, find_input.img_ids)
         backbone_out, img_feats, img_pos_embeds, vis_feat_sizes = feat_tuple
-
-        if prev_mask_pred is not None:
-            img_feats = [img_feats[-1] + prev_mask_pred]
 
         geo_feats, geo_masks = self.geometry_encoder(
             geo_prompt=geometric_prompt,
@@ -1050,186 +990,34 @@ class Sam3Image(torch.nn.Module):
         }
         return backbone_out, encoder_out, feat_tuple
 
-    def _run_decoder(
+    def _run_semantic_segmentation_head(
         self,
-        pos_embed,
-        memory,
-        src_mask,
-        out,
-        prompt,
-        prompt_mask,
-        encoder_out,
-    ):
-        bs = memory.shape[1]
-        query_embed = self.transformer.decoder.query_embed.weight
-        tgt = query_embed.unsqueeze(1).repeat(1, bs, 1)
-
-        apply_dac = self.transformer.decoder.dac and self.transformer.decoder.training
-        hs, reference_boxes, dec_presence_out, dec_presence_feats = self.transformer.decoder(
-            tgt=tgt,
-            memory=memory,
-            memory_key_padding_mask=src_mask,
-            pos=pos_embed,
-            reference_boxes=None,
-            level_start_index=encoder_out["level_start_index"],
-            spatial_shapes=encoder_out["spatial_shapes"],
-            valid_ratios=encoder_out["valid_ratios"],
-            tgt_mask=None,
-            memory_text=prompt,
-            text_attention_mask=prompt_mask,
-            apply_dac=apply_dac,
-        )
-
-        hs = hs.transpose(1, 2)
-        reference_boxes = reference_boxes.transpose(1, 2)
-        if dec_presence_out is not None:
-            dec_presence_out = dec_presence_out.transpose(1, 2)
-
-        out["presence_feats"] = dec_presence_feats
-        self._update_scores_and_boxes(
-            out,
-            hs,
-            reference_boxes,
-            prompt,
-            prompt_mask,
-            dec_presence_out=dec_presence_out,
-        )
-        return out, hs
-
-    def _update_scores_and_boxes(
-        self,
-        out,
-        hs,
-        reference_boxes,
-        prompt,
-        prompt_mask,
-        dec_presence_out=None,
-        is_instance_prompt=False,
-    ):
-        apply_dac = self.transformer.decoder.dac and self.transformer.decoder.training
-        num_o2o = (hs.size(2) // 2) if apply_dac else hs.size(2)
-        num_o2m = hs.size(2) - num_o2o
-        assert num_o2m == (num_o2o if apply_dac else 0)
-
-        out["queries"] = hs[-1][:, :num_o2o]
-
-        if self.use_dot_prod_scoring:
-            dot_prod_scoring_head = self.dot_prod_scoring
-            if is_instance_prompt and self.instance_dot_prod_scoring is not None:
-                dot_prod_scoring_head = self.instance_dot_prod_scoring
-            outputs_class = dot_prod_scoring_head(hs, prompt, prompt_mask)
-        else:
-            class_embed_head = self.class_embed
-            if is_instance_prompt and self.instance_class_embed is not None:
-                class_embed_head = self.instance_class_embed
-            outputs_class = class_embed_head(hs)
-
-        box_head = self.transformer.decoder.bbox_embed
-        if is_instance_prompt and self.transformer.decoder.instance_bbox_embed is not None:
-            box_head = self.transformer.decoder.instance_bbox_embed
-
-        anchor_box_offsets = box_head(hs)
-        reference_boxes_inv_sig = inverse_sigmoid(reference_boxes)
-        outputs_coord = (reference_boxes_inv_sig + anchor_box_offsets).sigmoid()
-        outputs_boxes_xyxy = box_cxcywh_to_xyxy(outputs_coord)
-
-        if dec_presence_out is not None:
-            _update_out(
-                out,
-                "presence_logit_dec",
-                dec_presence_out,
-                update_aux=self.transformer.decoder.training,
-            )
-
-        if self.supervise_joint_box_scores:
-            assert dec_presence_out is not None
-            prob_dec_presence_out = dec_presence_out.clone().sigmoid()
-            if self.detach_presence_in_joint_score:
-                prob_dec_presence_out = prob_dec_presence_out.detach()
-
-            outputs_class = inverse_sigmoid(
-                outputs_class.sigmoid() * prob_dec_presence_out.unsqueeze(2)
-            ).clamp(min=-10.0, max=10.0)
-
-        _update_out(
-            out,
-            "pred_logits",
-            outputs_class[:, :, :num_o2o],
-            update_aux=self.transformer.decoder.training,
-        )
-        _update_out(
-            out,
-            "pred_boxes",
-            outputs_coord[:, :, :num_o2o],
-            update_aux=self.transformer.decoder.training,
-        )
-        _update_out(
-            out,
-            "pred_boxes_xyxy",
-            outputs_boxes_xyxy[:, :, :num_o2o],
-            update_aux=self.transformer.decoder.training,
-        )
-
-        if num_o2m > 0 and self.transformer.decoder.training:
-            _update_out(
-                out,
-                "pred_logits_o2m",
-                outputs_class[:, :, num_o2o:],
-                update_aux=self.transformer.decoder.training,
-            )
-            _update_out(
-                out,
-                "pred_boxes_o2m",
-                outputs_coord[:, :, num_o2o:],
-                update_aux=self.transformer.decoder.training,
-            )
-            _update_out(
-                out,
-                "pred_boxes_xyxy_o2m",
-                outputs_boxes_xyxy[:, :, num_o2o:],
-                update_aux=self.transformer.decoder.training,
-            )
-
-    def _run_segmentation_heads(
-        self,
-        out,
         backbone_out,
-        img_ids,
-        vis_feat_sizes,
-        encoder_hidden_states,
+        find_input,
+        encoder_out,
         prompt,
         prompt_mask,
-        hs,
-    ):
-        apply_dac = self.transformer.decoder.dac and self.transformer.decoder.training
-        if self.segmentation_head is not None:
-            num_o2o = (hs.size(2) // 2) if apply_dac else hs.size(2)
-            num_o2m = hs.size(2) - num_o2o
-            obj_queries = hs if self.o2m_mask_predict else hs[:, :, :num_o2o]
-            seg_head_outputs = activation_ckpt_wrapper(self.segmentation_head)(
-                backbone_feats=backbone_out["backbone_fpn"],
-                obj_queries=obj_queries,
-                image_ids=img_ids,
-                encoder_hidden_states=encoder_hidden_states,
-                act_ckpt_enable=self.segmentation_head.training and self.use_act_checkpoint_seg_head,
-                prompt=prompt,
-                prompt_mask=prompt_mask,
+    ) -> Dict[str, torch.Tensor]:
+        if self.segmentation_head is None:
+            raise ValueError("segmentation_head is None in semantic mode.")
+
+        seg_outputs = self.segmentation_head(
+            backbone_feats=backbone_out["backbone_fpn"],
+            obj_queries=torch.empty(0, device=prompt.device),
+            image_ids=find_input.img_ids,
+            encoder_hidden_states=encoder_out["encoder_hidden_states"],
+            prompt=prompt,
+            prompt_mask=prompt_mask,
+        )
+
+        if "semantic_seg" not in seg_outputs or seg_outputs["semantic_seg"] is None:
+            raise ValueError(
+                "segmentation_head did not return 'semantic_seg' in semantic mode."
             )
-            aux_masks = False
-            for k, v in seg_head_outputs.items():
-                if k in self.segmentation_head.instance_keys:
-                    _update_out(out, k, v[:, :num_o2o], auxiliary=aux_masks)
-                    if self.o2m_mask_predict and num_o2m > 0:
-                        _update_out(
-                            out,
-                            f"{k}_o2m",
-                            v[:, num_o2o:],
-                            auxiliary=aux_masks,
-                        )
-                else:
-                    out[k] = v
-        else:
-            backbone_out.pop("backbone_fpn", None)
+
+        return {
+            "semantic_logits": seg_outputs["semantic_seg"],
+        }
 
     def forward_grounding_raw(
         self,
@@ -1247,37 +1035,13 @@ class Sam3Image(torch.nn.Module):
                 backbone_out, find_input, prompt, prompt_mask
             )
 
-        out = {
-            "encoder_hidden_states": encoder_out["encoder_hidden_states"],
-            "prev_encoder_out": {
-                "encoder_out": encoder_out,
-                "backbone_out": backbone_out,
-            },
-            "prompt": prompt,
-            "prompt_mask": prompt_mask,
-        }
-
-        with torch.profiler.record_function("Sam3Image._run_decoder"):
-            out, hs = self._run_decoder(
-                memory=out["encoder_hidden_states"],
-                pos_embed=encoder_out["pos_embed"],
-                src_mask=encoder_out["padding_mask"],
-                out=out,
-                prompt=prompt,
-                prompt_mask=prompt_mask,
-                encoder_out=encoder_out,
-            )
-
-        with torch.profiler.record_function("Sam3Image._run_segmentation_heads"):
-            self._run_segmentation_heads(
-                out=out,
+        with torch.profiler.record_function("Sam3Image._run_semantic_segmentation_head"):
+            out = self._run_semantic_segmentation_head(
                 backbone_out=backbone_out,
-                img_ids=find_input.img_ids,
-                vis_feat_sizes=encoder_out["vis_feat_sizes"],
-                encoder_hidden_states=out["encoder_hidden_states"],
+                find_input=find_input,
+                encoder_out=encoder_out,
                 prompt=prompt,
                 prompt_mask=prompt_mask,
-                hs=hs,
             )
 
         return out
