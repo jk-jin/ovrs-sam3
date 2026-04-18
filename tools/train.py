@@ -82,9 +82,6 @@ def build_log_getters(cfg) -> List[object]:
         out = {}
 
         model = trainer.model
-        if hasattr(model, "module"):
-            model = model.module
-
         core = getattr(model, "core", None)
         if core is None:
             return out
@@ -94,16 +91,6 @@ def build_log_getters(cfg) -> List[object]:
             if gate.numel() == 1:
                 out["clip_gate_raw"] = float(gate.item())
                 out["clip_gate_tanh"] = float(torch.tanh(gate).item())
-
-        if hasattr(core, "clip_presence_sim_temperature"):
-            out["presence_sim_temperature"] = float(core.clip_presence_sim_temperature.detach())
-
-        if hasattr(core, "clip_presence_score_temperature"):
-            out["presence_score_temperature"] = float(core.clip_presence_score_temperature.detach())
-
-        presence_sample = getattr(trainer, "_last_presence_log", None)
-        if presence_sample is not None:
-            out["presence_sample"] = str(presence_sample)
 
         return out
 

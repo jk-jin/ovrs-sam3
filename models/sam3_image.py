@@ -74,7 +74,7 @@ class Sam3Image(torch.nn.Module):
             self.num_clip_extra_tokens = int(
                 getattr(openclip_cfg, "num_extra_tokens", len(self.clip_extra_token_templates))
             )
-            self.clip_extra_token_templates = self.clip_extra_token_templates[: self.num_clip_extra_tokens]
+            self.clip_extra_token_templates = self.clip_extra_token_templates[:self.num_clip_extra_tokens]
             self.normalize_label_for_clip = bool(
                 getattr(openclip_cfg, "normalize_label_for_clip", True)
             )
@@ -134,20 +134,6 @@ class Sam3Image(torch.nn.Module):
         self._text_cache: Optional[Dict[str, torch.Tensor]] = None
         self._text_cache_key: Optional[Tuple[str, ...]] = None
         self._text_cache_device: Optional[str] = None
-
-        # ------------------------------------------------------------------
-        # CLIP presence score config
-        # ------------------------------------------------------------------
-        self.use_clip_presence = (
-            self.clip_image_encoder is not None and self.clip_text_encoder is not None
-        )
-        self.clip_presence_topk = int(getattr(openclip_cfg, "presence_topk", 8)) if openclip_cfg is not None else 8
-        self.clip_presence_sim_temperature = nn.Parameter(
-            torch.tensor(float(getattr(openclip_cfg, "presence_sim_temperature", 30.0)))
-        )
-        self.clip_presence_score_temperature = nn.Parameter(
-            torch.tensor(float(getattr(openclip_cfg, "presence_score_temperature", 20.0)))
-        )
 
     @property
     def device(self):
@@ -212,7 +198,7 @@ class Sam3Image(torch.nn.Module):
                     templates=self.clip_extra_token_templates,
                     device=device,
                     normalize_label=self.normalize_label_for_clip,
-                )  # [C, K, D_clip]
+                )  # [C, K, C_text]
 
             cache["clip_text_tokens_native"] = clip_text_tokens_native.detach().contiguous()
 
@@ -284,12 +270,25 @@ class Sam3Image(torch.nn.Module):
         if self.clip_image_encoder is None:
             raise ValueError("clip_image_encoder is None.")
 
-        output_dim = getattr(self.clip_image_encoder, "output_dim", None)
-        if isinstance(output_dim, int) and output_dim > 0:
-            return output_dim
+        channel_list = getattr(self.clip_image_encoder, "channel_list", None)
+        if isinstance(channel_list, list) and len(channel_list) > 0:
+            value = channel_list[-1]
+            if isinstance(value, int) and value > 0:
+                return value
+
+        visual = getattr(self.clip_image_encoder, "visual", None)
+        candidates = [
+            getattr(visual, "width", None),
+            getattr(getattr(visual, "transformer", None), "width", None),
+            getattr(visual, "num_features", None),
+            getattr(visual, "embed_dim", None),
+        ]
+        for value in candidates:
+            if isinstance(value, int) and value > 0:
+                return value
 
         raise AttributeError(
-            "Cannot infer clip image feature dimension from clip_image_encoder.output_dim."
+            "Cannot infer clip image feature dimension from clip_image_encoder."
         )
 
     def _get_openclip_patch_size(self) -> Tuple[int, int]:
@@ -406,42 +405,6 @@ class Sam3Image(torch.nn.Module):
 
         return torch.stack(mask_list, dim=0)  # [B, N]
 
-    @staticmethod
-    def _l2_normalize_last_dim(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-        return F.normalize(x, p=2, dim=-1, eps=eps)
-
-    def _fuse_clip_patch_tokens_for_presence(
-        self,
-        patch_tokens_lm3: torch.Tensor,
-        patch_tokens_lm2: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Fuse the last-3rd and last-2nd patch tokens without adding any learnable
-        transform. This keeps the CLIP feature space as intact as possible.
-
-        Input:
-            patch_tokens_lm3: [B, N, D]
-            patch_tokens_lm2: [B, N, D]
-
-        Output:
-            fused_patch_tokens: [B, N, D]
-        """
-        if patch_tokens_lm3.ndim != 3 or patch_tokens_lm2.ndim != 3:
-            raise ValueError(
-                "Expected patch_tokens_lm3 and patch_tokens_lm2 as [B, N, D]."
-            )
-        if patch_tokens_lm3.shape != patch_tokens_lm2.shape:
-            raise ValueError(
-                f"Shape mismatch: lm3={tuple(patch_tokens_lm3.shape)} vs "
-                f"lm2={tuple(patch_tokens_lm2.shape)}"
-            )
-
-        x3 = self._l2_normalize_last_dim(patch_tokens_lm3)
-        x2 = self._l2_normalize_last_dim(patch_tokens_lm2)
-        fused = 0.5 * (x3 + x2)
-        fused = self._l2_normalize_last_dim(fused)
-        return fused.contiguous()
-
     def _build_clip_image_cache(
         self,
         input: BatchedDatapoint,
@@ -461,52 +424,23 @@ class Sam3Image(torch.nn.Module):
         )
 
         with torch.no_grad():
-            clip_out = self.clip_image_encoder(clip_img_batch)
+            clip_feat_map_native = self.clip_image_encoder(clip_img_batch)
 
-        if not isinstance(clip_out, dict):
+        if not isinstance(clip_feat_map_native, torch.Tensor):
             raise TypeError(
-                "clip_image_encoder must return a dict with image_feat / patch_tokens_lm3 / patch_tokens_lm2."
+                "clip_image_encoder must return a torch.Tensor in this stage."
             )
-
-        required_keys = ["image_feat", "patch_tokens_lm3", "patch_tokens_lm2"]
-        for key in required_keys:
-            if key not in clip_out:
-                raise KeyError(f"clip_image_encoder output is missing key: {key}")
-
-        image_feat = clip_out["image_feat"]
-        patch_tokens_lm3 = clip_out["patch_tokens_lm3"]
-        patch_tokens_lm2 = clip_out["patch_tokens_lm2"]
-
-        if image_feat.ndim != 2:
+        if clip_feat_map_native.ndim != 4:
             raise ValueError(
-                f"Expected image_feat as [B, D], got {tuple(image_feat.shape)}"
-            )
-        if patch_tokens_lm3.ndim != 3 or patch_tokens_lm2.ndim != 3:
-            raise ValueError(
-                "Expected patch_tokens_lm3 and patch_tokens_lm2 as [B, N, D]."
+                "Expected clip image feature map as [B, C, H, W], "
+                f"got {tuple(clip_feat_map_native.shape)}"
             )
 
-        patch_tokens_lm3 = patch_tokens_lm3.detach().contiguous()
-        patch_tokens_lm2 = patch_tokens_lm2.detach().contiguous()
-        image_feat = image_feat.detach().contiguous()
+        clip_feat_map_native = clip_feat_map_native.detach().contiguous()
+        clip_tokens_native = clip_feat_map_native.flatten(2).transpose(1, 2).contiguous()
 
-        fused_patch_tokens = self._fuse_clip_patch_tokens_for_presence(
-            patch_tokens_lm3=patch_tokens_lm3,
-            patch_tokens_lm2=patch_tokens_lm2,
-        )  # [B, N, D_clip]
-
-        patch_h, patch_w = self._get_openclip_patch_size()
-        padded_h = int(clip_img_batch.shape[-2])
-        padded_w = int(clip_img_batch.shape[-1])
-        grid_h = padded_h // patch_h
-        grid_w = padded_w // patch_w
-        num_tokens = int(fused_patch_tokens.shape[1])
-        if grid_h * grid_w != num_tokens:
-            raise ValueError(
-                f"Grid size mismatch: grid_h={grid_h}, grid_w={grid_w}, "
-                f"grid_h*grid_w={grid_h * grid_w}, but num_tokens={num_tokens}"
-            )
-
+        grid_h = int(clip_feat_map_native.shape[-2])
+        grid_w = int(clip_feat_map_native.shape[-1])
         clip_token_mask = self._build_clip_image_token_mask(
             raw_images=input.raw_images,
             grid_hw=(grid_h, grid_w),
@@ -514,10 +448,9 @@ class Sam3Image(torch.nn.Module):
         )
 
         return {
-            "clip_image_feat_native": image_feat,                      # [B, D_clip]
-            "clip_image_tokens_native": fused_patch_tokens,            # [B, N, D_clip]
-            "clip_presence_patch_tokens_native": fused_patch_tokens,   # [B, N, D_clip]
-            "clip_image_token_mask": clip_token_mask,                  # [B, N]
+            "clip_image_feat_map_native": clip_feat_map_native,
+            "clip_image_tokens_native": clip_tokens_native,
+            "clip_image_token_mask": clip_token_mask,
             "clip_image_grid_hw": (grid_h, grid_w),
         }
 
@@ -721,134 +654,6 @@ class Sam3Image(torch.nn.Module):
 
         return aligned, clip_pair_mask
 
-    def _pool_clip_text_for_presence(
-        self,
-        clip_text_tokens_native: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Pool template-level CLIP text features into one feature per class.
-
-        Input:
-            clip_text_tokens_native: [C, K, D_clip]
-
-        Output:
-            clip_text_pooled: [C, D_clip]
-        """
-        if clip_text_tokens_native.ndim != 3:
-            raise ValueError(
-                f"Expected clip_text_tokens_native as [C, K, D], got {tuple(clip_text_tokens_native.shape)}"
-            )
-
-        x = self._l2_normalize_last_dim(clip_text_tokens_native)
-        x = x.mean(dim=1)  # [C, D]
-        x = self._l2_normalize_last_dim(x)
-        return x.contiguous()
-
-    def _compute_clip_presence_score_for_chunk(
-            self,
-            clip_presence_patch_tokens_native: torch.Tensor,
-            clip_text_tokens_native: torch.Tensor,
-            clip_image_token_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        if clip_presence_patch_tokens_native.ndim != 3:
-            raise ValueError(
-                f"Expected clip_presence_patch_tokens_native as [B, N, D], got {tuple(clip_presence_patch_tokens_native.shape)}"
-            )
-        if clip_text_tokens_native.ndim != 3:
-            raise ValueError(
-                f"Expected clip_text_tokens_native as [C, K, D], got {tuple(clip_text_tokens_native.shape)}"
-            )
-        if clip_image_token_mask.ndim != 2:
-            raise ValueError(
-                f"Expected clip_image_token_mask as [B, N], got {tuple(clip_image_token_mask.shape)}"
-            )
-
-        batch_size, num_tokens, feat_dim = clip_presence_patch_tokens_native.shape
-        num_classes, _, text_dim = clip_text_tokens_native.shape
-        if text_dim != feat_dim:
-            raise ValueError(
-                f"Feature dim mismatch: image={feat_dim}, text={text_dim}"
-            )
-        if clip_image_token_mask.shape != (batch_size, num_tokens):
-            raise ValueError(
-                f"clip_image_token_mask shape mismatch: expected {(batch_size, num_tokens)}, "
-                f"got {tuple(clip_image_token_mask.shape)}"
-            )
-
-        if num_classes <= 0:
-            raise ValueError("num_classes must be > 0")
-        if num_tokens <= 0:
-            raise ValueError("num_tokens must be > 0")
-
-        # [C, D]
-        clip_text_pooled = self._pool_clip_text_for_presence(clip_text_tokens_native)
-
-        # [B, N, D]
-        clip_patch_tokens = self._l2_normalize_last_dim(clip_presence_patch_tokens_native)
-
-        # similarity: [B, C, N]
-        sim = torch.einsum("bnd,cd->bcn", clip_patch_tokens, clip_text_pooled)
-
-        # invalidate padded tokens before token-level class softmax
-        valid_token_mask = ~clip_image_token_mask  # [B, N]
-        sim = sim.masked_fill(~valid_token_mask[:, None, :], float("-inf"))
-
-        # token-level class competition within current chunk
-        sim = self.clip_presence_sim_temperature * sim
-        probs = torch.softmax(sim, dim=1)  # [B, C, N]
-
-        # padded tokens -> zero
-        probs = torch.where(
-            valid_token_mask[:, None, :],
-            probs,
-            torch.zeros_like(probs),
-        )
-
-        # winner class at each token
-        winner_class = probs.argmax(dim=1)  # [B, N]
-
-        # top1/top2 over classes, for margin
-        top2_vals = torch.topk(probs, k=min(2, num_classes), dim=1).values
-        if num_classes == 1:
-            top1 = top2_vals[:, 0, :]
-            top2 = torch.zeros_like(top1)
-        else:
-            top1 = top2_vals[:, 0, :]
-            top2 = top2_vals[:, 1, :]
-
-        top_margin = top1 - top2  # [B, N], always >= 0
-
-        topk = max(1, int(self.clip_presence_topk))
-        topk = min(topk, num_tokens)
-
-        margin_mean_list = []
-        for class_id in range(num_classes):
-            is_winner = (winner_class == class_id) & valid_token_mask  # [B, N]
-
-            # only keep margins on winner tokens
-            class_margin = torch.where(
-                is_winner,
-                top_margin,
-                torch.zeros_like(top_margin),
-            )  # [B, N]
-
-            # take top-k winner margins; if insufficient winner tokens, zeros naturally fill the rest
-            topk_vals = torch.topk(class_margin, k=topk, dim=1).values  # [B, K]
-
-            # use mean instead of sum to avoid easy saturation
-            margin_mean = topk_vals.mean(dim=1)  # [B]
-            margin_mean_list.append(margin_mean)
-
-        # [B, C]
-        margin_mean_all = torch.stack(margin_mean_list, dim=1)
-
-        # final presence score
-        presence_score = torch.sigmoid(
-            self.clip_presence_score_temperature * margin_mean_all
-        )
-
-        return presence_score.contiguous()
-
     def iter_chunk_raw_outputs(
         self,
         input: BatchedDatapoint,
@@ -973,21 +778,6 @@ class Sam3Image(torch.nn.Module):
                 batch_size=batch_size,
                 num_chunk_classes=num_chunk_classes,
             )
-
-            # --------------------------------------------------------------
-            # CLIP presence score for this chunk
-            # --------------------------------------------------------------
-            if (
-                self.use_clip_presence
-                and clip_image_cache is not None
-                and "clip_text_tokens_native" in chunk_text_cache
-            ):
-                presence_score = self._compute_clip_presence_score_for_chunk(
-                    clip_presence_patch_tokens_native=clip_image_cache["clip_presence_patch_tokens_native"],
-                    clip_text_tokens_native=chunk_text_cache["clip_text_tokens_native"],
-                    clip_image_token_mask=clip_image_cache["clip_image_token_mask"],
-                )  # [B, C_chunk]
-                chunk_out["presence_score"] = presence_score
 
             yield {
                 "chunk_start": start,

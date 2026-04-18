@@ -3,7 +3,7 @@ _base_ = [
     "./_base_/optimizer.py",
     "./_base_/schedule.py",
     "./_base_/visualization.py",
-    "./datasets/isaid.py",
+    "./datasets/potsdam.py",
 ]
 
 model = dict(
@@ -20,7 +20,7 @@ model = dict(
         enabled=True,
         model_name="ViT-L-14",
         pretrained="weights/RemoteCLIP-ViT-L-14.pt",
-
+        default_output="feat_map",
         extra_token_templates=[
             "a remote sensing image of {}.",
             "an aerial image of {}.",
@@ -28,13 +28,6 @@ model = dict(
         num_extra_tokens=2,
         text_token_gate_init=0.5,
         normalize_label_for_clip=True,
-
-        # --------------------------------------------------------------
-        # CLIP presence-score config
-        # --------------------------------------------------------------
-        presence_topk=8,
-        presence_sim_temperature=25.0,
-        presence_score_temperature=10.0,
     ),
 
     freeze_cfg=dict(
@@ -47,8 +40,6 @@ model = dict(
             "core.clip_text_to_image_norm",
             "core.clip_to_sam3_text_attn",
             "core.clip_to_sam3_text_norm",
-            "core.clip_presence_sim_temperature",
-            "core.clip_presence_score_temperature",
         ],
         frozen_modules=[],
     ),
@@ -73,7 +64,7 @@ val_dataloader = dict(
 
 eval_cfg = dict(
     ignore_index=255,
-    prob_thd=0,
+    prob_thd=0.5,
     bg_idx=0,
     use_score_map=True,
 )

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 import torch
 import torch.nn as nn
@@ -21,29 +21,19 @@ class SemanticCriterion(nn.Module):
         super().__init__()
         self.cfg = cfg or SemanticCriterionConfig()
 
-    def _extract_supervised_logits(
+    def _extract_logits(
         self,
         outputs: Dict[str, torch.Tensor],
     ) -> torch.Tensor:
-        """
-        We now supervise the presence-gated logits produced by the adapter.
+        if "semantic_logits" not in outputs:
+            raise ValueError("SemanticCriterion expects outputs['semantic_logits'].")
 
-        Expected key:
-            outputs["final_score_map"]  -> [B, C, H, W]
-        """
-        if "final_score_map" not in outputs:
-            raise ValueError(
-                "SemanticCriterion expects outputs['final_score_map'] "
-                "(presence-gated logits to be supervised)."
-            )
-
-        logits = outputs["final_score_map"]
+        logits = outputs["semantic_logits"]
         if logits.dim() != 4:
             raise ValueError(
-                f"Expected final_score_map as [B, C, H, W], got {tuple(logits.shape)}"
+                f"Expected semantic_logits as [B, C, H, W], got {tuple(logits.shape)}"
             )
-
-        return logits.contiguous()
+        return logits
 
     def _extract_label_map(
         self,
@@ -124,7 +114,6 @@ class SemanticCriterion(nn.Module):
         target: torch.Tensor,
         valid_mask: torch.Tensor,
     ) -> torch.Tensor:
-        # Dice internally uses probabilities, but the supervised tensor is still logits.
         prob = logits.sigmoid()
         prob = prob * valid_mask.to(prob.dtype)
         target = target * valid_mask.to(target.dtype)
@@ -151,12 +140,9 @@ class SemanticCriterion(nn.Module):
                 f"SemanticCriterion only supports reduction='sum', got {reduction!r}"
             )
 
-        logits = self._extract_supervised_logits(outputs)
+        logits = self._extract_logits(outputs)
         label_map = self._extract_label_map(targets)
-        label_map = self._resize_label_map_to_logits(
-            label_map,
-            target_hw=tuple(logits.shape[-2:]),
-        )
+        label_map = self._resize_label_map_to_logits(label_map, target_hw=tuple(logits.shape[-2:]))
 
         num_channels = int(logits.shape[1])
         if chunk_class_ids is None:

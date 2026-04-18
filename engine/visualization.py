@@ -25,9 +25,6 @@ class VisualizerConfig:
     save_ground_truth: bool = True
     save_semantic_prediction: bool = True
 
-    # New: save CLIP direct inner-product segmentation overlays
-    save_clip_direct_prediction: bool = True
-
     vis_prob: float = 0.05
     max_samples_per_epoch: Optional[int] = 50
     vis_seed: int = 42
@@ -143,78 +140,6 @@ class BaseSemanticOverlayTask(VisualizationTask):
                         f.write(f"{i}\t{name}\n")
 
 
-class ClipDirectInnerProductOverlayTask(VisualizationTask):
-    name = "clip_direct_inner_product_overlay"
-
-    def run(self, manager: "VisualizationManager", ctx: VisualizationContext) -> None:
-        if not manager.cfg.save_clip_direct_prediction:
-            return
-
-        if ctx.stage != "val":
-            return
-
-        model_core = manager._unwrap_model_core(ctx.model)
-        if model_core is None:
-            return
-
-        if getattr(model_core, "clip_image_encoder", None) is None:
-            return
-        if getattr(model_core, "clip_text_encoder", None) is None:
-            return
-        if getattr(ctx.batch, "raw_images", None) is None:
-            return
-
-        clip_maps = manager._compute_clip_direct_prediction_maps(
-            model_core=model_core,
-            batch=ctx.batch,
-        )
-        if clip_maps is None:
-            return
-
-        lm3_score_map = clip_maps["clip_lm3_score_map"]      # [B, C, H, W]
-        lm2_score_map = clip_maps["clip_lm2_score_map"]      # [B, C, H, W]
-        fused_score_map = clip_maps["clip_fused_score_map"]  # [B, C, H, W]
-
-        lm3_pred = manager._extract_pred_from_logits(lm3_score_map)
-        lm2_pred = manager._extract_pred_from_logits(lm2_score_map)
-        fused_pred = manager._extract_pred_from_logits(fused_score_map)
-
-        num_classes = int(fused_score_map.shape[1])
-
-        for b in ctx.selected_indices:
-            image_id = manager._extract_image_id(ctx.batch, b)
-            sample_dir = manager._resolve_sample_dir(
-                image_id=image_id,
-                epoch=ctx.epoch,
-                stage=ctx.stage,
-            )
-
-            overlay_image = manager._extract_overlay_image(ctx.batch, b)
-            out_hw = overlay_image.size[::-1]
-
-            lm3_pred_label = manager._prepare_label_map(lm3_pred[b], out_hw)
-            lm2_pred_label = manager._prepare_label_map(lm2_pred[b], out_hw)
-            fused_pred_label = manager._prepare_label_map(fused_pred[b], out_hw)
-
-            manager._overlay_label_map(
-                overlay_image,
-                lm3_pred_label,
-                num_classes,
-            ).save(sample_dir / "pred_clip_lm3_overlay.png")
-
-            manager._overlay_label_map(
-                overlay_image,
-                lm2_pred_label,
-                num_classes,
-            ).save(sample_dir / "pred_clip_lm2_overlay.png")
-
-            manager._overlay_label_map(
-                overlay_image,
-                fused_pred_label,
-                num_classes,
-            ).save(sample_dir / "pred_clip_fused_overlay.png")
-
-
 class VisualizationManager:
     def __init__(self, cfg: VisualizerConfig):
         self.cfg = cfg
@@ -226,7 +151,6 @@ class VisualizationManager:
     def _build_tasks(self):
         return [
             BaseSemanticOverlayTask(),
-            ClipDirectInnerProductOverlayTask(),
         ]
 
     @classmethod
@@ -455,147 +379,6 @@ class VisualizationManager:
         value = int(digest[:8], 16) / float(16 ** 8 - 1)
 
         return value < float(self.cfg.vis_prob)
-
-    @staticmethod
-    def _unwrap_model_core(model: torch.nn.Module) -> Optional[torch.nn.Module]:
-        m = model
-        if hasattr(m, "module"):
-            m = m.module
-        if hasattr(m, "core"):
-            return m.core
-        return None
-
-    @staticmethod
-    def _l2_normalize_last_dim(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-        return F.normalize(x, p=2, dim=-1, eps=eps)
-
-    @staticmethod
-    def _reshape_token_score_map(
-        score_map_flat: torch.Tensor,
-        grid_hw: Tuple[int, int],
-        out_hw: Tuple[int, int],
-    ) -> torch.Tensor:
-        """
-        Input:
-            score_map_flat: [B, C, N]
-        Output:
-            score_map_2d: [B, C, H_out, W_out]
-        """
-        bsz, num_classes, num_tokens = score_map_flat.shape
-        grid_h, grid_w = int(grid_hw[0]), int(grid_hw[1])
-
-        if grid_h * grid_w != num_tokens:
-            raise ValueError(
-                f"Grid/token mismatch: grid_h={grid_h}, grid_w={grid_w}, "
-                f"grid_h*grid_w={grid_h * grid_w}, num_tokens={num_tokens}"
-            )
-
-        x = score_map_flat.view(bsz, num_classes, grid_h, grid_w)
-        if tuple(x.shape[-2:]) != tuple(out_hw):
-            x = F.interpolate(
-                x,
-                size=out_hw,
-                mode="bilinear",
-                align_corners=False,
-            )
-        return x
-
-    def _compute_clip_direct_prediction_maps(
-        self,
-        model_core: torch.nn.Module,
-        batch: Any,
-    ) -> Optional[Dict[str, torch.Tensor]]:
-        """
-        Compute three CLIP direct inner-product segmentation score maps only
-        during visualization / validation:
-            - last-3rd block patch tokens
-            - last-2nd block patch tokens
-            - fused(last-3rd, last-2nd) patch tokens
-
-        Returned tensors are [B, C, H, W] on CPU.
-        """
-        clip_image_encoder = getattr(model_core, "clip_image_encoder", None)
-        clip_text_encoder = getattr(model_core, "clip_text_encoder", None)
-        if clip_image_encoder is None or clip_text_encoder is None:
-            return None
-
-        device = next(model_core.parameters()).device
-
-        class_texts = list(batch.find_text_batch)
-        if len(class_texts) == 0:
-            return None
-
-        if len(getattr(model_core, "clip_extra_token_templates", [])) == 0:
-            return None
-
-        with torch.no_grad():
-            clip_img_batch = model_core._prepare_openclip_image_batch(
-                raw_images=batch.raw_images,
-                device=device,
-            )
-            clip_out = clip_image_encoder(clip_img_batch)
-
-            patch_tokens_lm3 = clip_out["patch_tokens_lm3"]   # [B, N, D]
-            patch_tokens_lm2 = clip_out["patch_tokens_lm2"]   # [B, N, D]
-
-            fused_patch_tokens = model_core._fuse_clip_patch_tokens_for_presence(
-                patch_tokens_lm3=patch_tokens_lm3,
-                patch_tokens_lm2=patch_tokens_lm2,
-            )  # [B, N, D]
-
-            clip_text_tokens_native = clip_text_encoder.encode_prompt_templates(
-                class_names=class_texts,
-                templates=model_core.clip_extra_token_templates,
-                device=device,
-                normalize_label=bool(getattr(model_core, "normalize_label_for_clip", True)),
-            )  # [C, K, D]
-            clip_text_pooled = model_core._pool_clip_text_for_presence(
-                clip_text_tokens_native
-            )  # [C, D]
-
-            patch_h, patch_w = model_core._get_openclip_patch_size()
-            padded_h = int(clip_img_batch.shape[-2])
-            padded_w = int(clip_img_batch.shape[-1])
-            grid_h = padded_h // patch_h
-            grid_w = padded_w // patch_w
-
-            clip_image_token_mask = model_core._build_clip_image_token_mask(
-                raw_images=batch.raw_images,
-                grid_hw=(grid_h, grid_w),
-                device=device,
-            )  # [B, N], True means invalid / padded
-
-            valid_token_mask = ~clip_image_token_mask  # [B, N]
-
-            def compute_flat_score_map(
-                patch_tokens: torch.Tensor,
-            ) -> torch.Tensor:
-                x = self._l2_normalize_last_dim(patch_tokens)
-                score = torch.einsum("bnd,cd->bcn", x, clip_text_pooled)  # [B, C, N]
-                score = score.masked_fill(~valid_token_mask[:, None, :], 0.0)
-                return score
-
-            lm3_score_flat = compute_flat_score_map(patch_tokens_lm3)
-            lm2_score_flat = compute_flat_score_map(patch_tokens_lm2)
-            fused_score_flat = compute_flat_score_map(fused_patch_tokens)
-
-            out_hw = batch.img_batch.shape[-2:]
-
-            lm3_score_map = self._reshape_token_score_map(
-                lm3_score_flat, (grid_h, grid_w), out_hw
-            )
-            lm2_score_map = self._reshape_token_score_map(
-                lm2_score_flat, (grid_h, grid_w), out_hw
-            )
-            fused_score_map = self._reshape_token_score_map(
-                fused_score_flat, (grid_h, grid_w), out_hw
-            )
-
-        return {
-            "clip_lm3_score_map": lm3_score_map.detach().cpu(),
-            "clip_lm2_score_map": lm2_score_map.detach().cpu(),
-            "clip_fused_score_map": fused_score_map.detach().cpu(),
-        }
 
     def run(
         self,

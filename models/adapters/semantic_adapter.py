@@ -4,6 +4,7 @@ from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from ..data_misc import BatchedDatapoint
 from ..task_modes import OUTPUT_KEYS
@@ -34,22 +35,25 @@ class SemanticSegAdapter(nn.Module):
                 f"Expected semantic_logits as [B, C, H, W] or [B, C, 1, H, W], got {tuple(semantic_logits.shape)}"
             )
 
-        return semantic_logits.contiguous()
+        return semantic_logits
 
     @staticmethod
-    def _extract_presence_score(
-        raw_outputs: Dict[str, torch.Tensor],
+    def _resize_to_match(
+        x: Optional[torch.Tensor],
+        target_hw: tuple[int, int],
     ) -> Optional[torch.Tensor]:
-        presence_score = raw_outputs.get("presence_score", None)
-        if presence_score is None:
+        if x is None:
             return None
 
-        if presence_score.dim() != 2:
-            raise ValueError(
-                f"Expected presence_score as [B, C], got {tuple(presence_score.shape)}"
-            )
+        if tuple(x.shape[-2:]) == tuple(target_hw):
+            return x
 
-        return presence_score.contiguous()
+        return F.interpolate(
+            x,
+            size=target_hw,
+            mode="bilinear",
+            align_corners=False,
+        )
 
     @staticmethod
     def _infer_expected_num_classes(
@@ -81,33 +85,6 @@ class SemanticSegAdapter(nn.Module):
                 f"but got {actual_num_classes} channels."
             )
 
-    @staticmethod
-    def _validate_presence_shape(
-        semantic_logits: torch.Tensor,
-        presence_score: Optional[torch.Tensor],
-    ) -> None:
-        if presence_score is None:
-            return
-
-        bsz, num_classes = semantic_logits.shape[:2]
-        if tuple(presence_score.shape) != (bsz, num_classes):
-            raise ValueError(
-                f"presence_score shape mismatch: expected {(bsz, num_classes)}, "
-                f"got {tuple(presence_score.shape)}"
-            )
-
-    @staticmethod
-    def _apply_presence_to_logits(
-        semantic_logits: torch.Tensor,
-        presence_score: Optional[torch.Tensor],
-    ) -> torch.Tensor:
-        if presence_score is None:
-            return semantic_logits
-
-        presence_score_4d = presence_score[:, :, None, None]
-        final_logits = semantic_logits * presence_score_4d
-        return final_logits.contiguous()
-
     def _build_train_outputs(
         self,
         raw_outputs: Dict[str, torch.Tensor],
@@ -115,7 +92,6 @@ class SemanticSegAdapter(nn.Module):
         expected_num_classes: Optional[int],
     ) -> Dict[str, torch.Tensor]:
         semantic_logits = self._extract_semantic_logits(raw_outputs)
-        presence_score = self._extract_presence_score(raw_outputs)
 
         actual_num_classes = int(semantic_logits.shape[1])
         expected_num_classes = self._infer_expected_num_classes(
@@ -126,24 +102,10 @@ class SemanticSegAdapter(nn.Module):
             actual_num_classes=actual_num_classes,
             expected_num_classes=expected_num_classes,
         )
-        self._validate_presence_shape(
-            semantic_logits=semantic_logits,
-            presence_score=presence_score,
-        )
 
-        final_logits = self._apply_presence_to_logits(
-            semantic_logits=semantic_logits,
-            presence_score=presence_score,
-        )
-
-        outputs = {
+        return {
             OUTPUT_KEYS.semantic_logits: semantic_logits,
-            OUTPUT_KEYS.final_score_map: final_logits,
         }
-        if presence_score is not None:
-            outputs["presence_score"] = presence_score
-
-        return outputs
 
     def _build_inference_outputs(
         self,
@@ -152,7 +114,6 @@ class SemanticSegAdapter(nn.Module):
         expected_num_classes: Optional[int],
     ) -> Dict[str, torch.Tensor]:
         semantic_logits = self._extract_semantic_logits(raw_outputs)
-        presence_score = self._extract_presence_score(raw_outputs)
 
         actual_num_classes = int(semantic_logits.shape[1])
         expected_num_classes = self._infer_expected_num_classes(
@@ -163,27 +124,17 @@ class SemanticSegAdapter(nn.Module):
             actual_num_classes=actual_num_classes,
             expected_num_classes=expected_num_classes,
         )
-        self._validate_presence_shape(
-            semantic_logits=semantic_logits,
-            presence_score=presence_score,
-        )
 
-        final_logits = self._apply_presence_to_logits(
-            semantic_logits=semantic_logits,
-            presence_score=presence_score,
-        )
-        final_pred = final_logits.argmax(dim=1)
+        semantic_score_map = semantic_logits.sigmoid()
+        final_score_map = semantic_score_map
+        final_pred = final_score_map.argmax(dim=1)
 
-        outputs = {
+        return {
             OUTPUT_KEYS.semantic_logits: semantic_logits,
-            OUTPUT_KEYS.semantic_score_map: semantic_logits,
-            OUTPUT_KEYS.final_score_map: final_logits,
+            OUTPUT_KEYS.semantic_score_map: semantic_score_map,
+            OUTPUT_KEYS.final_score_map: final_score_map,
             OUTPUT_KEYS.final_pred: final_pred,
         }
-        if presence_score is not None:
-            outputs["presence_score"] = presence_score
-
-        return outputs
 
     def forward(
         self,

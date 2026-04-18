@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import random
 import time
 from collections import deque
 from dataclasses import dataclass, fields, is_dataclass
@@ -108,9 +107,6 @@ class Trainer:
         self._train_iterator = None
         self._data_cycle = 0
 
-        # Presence-score logging
-        self._last_presence_log: Optional[str] = None
-
     def maybe_resume_latest(self):
         if not self.cfg.auto_resume:
             return None
@@ -198,68 +194,6 @@ class Trainer:
             for key, value in loss_sums.items()
         }
 
-    @staticmethod
-    def _format_presence_log(
-        presence_score: torch.Tensor,
-        class_names: Optional[Sequence[str]] = None,
-    ) -> Optional[str]:
-        """
-        Build a compact human-readable presence string for one random sample.
-
-        Input:
-            presence_score: [B, C]
-        """
-        if not torch.is_tensor(presence_score):
-            return None
-        if presence_score.dim() != 2:
-            return None
-
-        bsz, num_classes = presence_score.shape
-        if bsz <= 0 or num_classes <= 0:
-            return None
-
-        sample_idx = random.randrange(bsz)
-        row = presence_score[sample_idx].detach().cpu().float()
-
-        if class_names is not None and len(class_names) == num_classes:
-            parts = [f"{str(name)}={float(score):.4f}" for name, score in zip(class_names, row)]
-        else:
-            parts = [f"c{i}={float(score):.4f}" for i, score in enumerate(row)]
-
-        return f"sample={sample_idx}; " + ", ".join(parts)
-
-    def _update_presence_log_from_train_chunk(
-        self,
-        chunk: Dict[str, object],
-    ) -> None:
-        train_outputs = chunk.get("train_outputs", None)
-        if not isinstance(train_outputs, dict):
-            return
-
-        presence_score = train_outputs.get("presence_score", None)
-        if presence_score is None:
-            return
-
-        class_names = chunk.get("chunk_class_names", None)
-        self._last_presence_log = self._format_presence_log(
-            presence_score=presence_score,
-            class_names=class_names if isinstance(class_names, Sequence) else None,
-        )
-
-    def _update_presence_log_from_val_outputs(
-        self,
-        outputs: Dict[str, torch.Tensor],
-        class_names: Optional[Sequence[str]],
-    ) -> None:
-        presence_score = outputs.get("presence_score", None)
-        if presence_score is None:
-            return
-
-        self._last_presence_log = self._format_presence_log(
-            presence_score=presence_score,
-            class_names=class_names,
-        )
-
     def _compute_chunk_loss_sums(
         self,
         batch,
@@ -284,10 +218,6 @@ class Trainer:
             try:
                 with autocast(device_type=self.device.type, enabled=use_amp):
                     chunk = next(chunk_iter)
-
-                    # Update the random presence-score log string if available
-                    self._update_presence_log_from_train_chunk(chunk)
-
                     loss_dict = self.criterion(
                         chunk["train_outputs"],
                         {"label_map": label_map},
@@ -469,7 +399,6 @@ class Trainer:
                 vv = self._to_loggable_scalar(v)
                 if vv is not None:
                     out[str(k)] = vv
-
         return out
 
     def _estimate_data_cycle(self) -> Optional[int]:
@@ -657,12 +586,6 @@ class Trainer:
 
             if class_names is None:
                 class_names = extract_class_names_from_batch(batch)
-
-            # Update one random presence-score sample string for logging
-            self._update_presence_log_from_val_outputs(
-                outputs=outputs,
-                class_names=class_names,
-            )
 
             if self.visualizer is not None:
                 self.visualizer.run(
