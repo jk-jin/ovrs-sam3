@@ -3,7 +3,7 @@ _base_ = [
     "./_base_/optimizer.py",
     "./_base_/schedule.py",
     "./_base_/visualization.py",
-    "./datasets/potsdam.py",
+    "./datasets/vaihingen.py",
 ]
 
 model = dict(
@@ -26,7 +26,7 @@ model = dict(
             "an aerial image of {}.",
         ],
         num_extra_tokens=2,
-        text_token_gate_init=0.5,
+        text_token_gate_init=1,
         normalize_label_for_clip=True,
     ),
 
@@ -45,15 +45,17 @@ model = dict(
     ),
 
     criterion_cfg=dict(
-        ignore_index=255,
-        semantic_bce_weight=0.2,
-        semantic_dice_weight=1.0,
-        eps=1e-6,
-    ),
+	    ignore_index=255,
+	    semantic_bce_weight=0.4,
+	    semantic_dice_weight=1.0,
+	    bce_class_balance_clamp_min=0.2,
+	    bce_class_balance_clamp_max=5.0,
+	    eps=1e-6,
+	),
 )
 
 train_dataloader = dict(
-    batch_size=2,
+    batch_size=4,
     num_workers=8,
 )
 
@@ -64,7 +66,7 @@ val_dataloader = dict(
 
 eval_cfg = dict(
     ignore_index=255,
-    prob_thd=0.5,
+    prob_thd=0,
     bg_idx=0,
     use_score_map=True,
 )
@@ -72,7 +74,7 @@ eval_cfg = dict(
 optim_wrapper = dict(
     optimizer=dict(
         type="AdamW",
-        lr=5e-4,
+        lr=3e-4,
         weight_decay=0.01,
         betas=(0.9, 0.999),
         paramwise_cfg=dict(
@@ -89,14 +91,14 @@ optim_wrapper = dict(
 
 param_scheduler = dict(
     type="CosineAnnealingLR",
-    T_max=40000,
+    T_max=8000,
     eta_min=1e-6,
 )
 
 train_cfg = dict(
-    max_iters=40000,
-    save_interval=2000,
-    eval_interval=2000,
+    max_iters=4000,
+    save_interval=1000,
+    eval_interval=1000,
     log_window_size=20,
     use_amp=True,
     grad_clip_norm=0.1,

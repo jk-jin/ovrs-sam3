@@ -168,9 +168,10 @@ class Trainer:
         return out
 
     @staticmethod
-    def _accumulate_loss_sums(
-        loss_sums: Dict[str, float],
-        loss_dict: Dict[str, torch.Tensor],
+    def _accumulate_weighted_loss_sums(
+            loss_sums: Dict[str, float],
+            loss_dict: Dict[str, torch.Tensor],
+            weight: float,
     ) -> None:
         for key, value in loss_dict.items():
             if key == "num_valid":
@@ -179,18 +180,18 @@ class Trainer:
                 raise TypeError(f"Expected tensor loss for key={key}, got {type(value)}")
             if key not in loss_sums:
                 loss_sums[key] = 0.0
-            loss_sums[key] += float(value.detach().item())
+            loss_sums[key] += float(value.detach().item()) * float(weight)
 
     @staticmethod
-    def _normalize_loss_sums(
-        loss_sums: Dict[str, float],
-        total_valid_pixels: int,
+    def _finalize_weighted_loss_means(
+            loss_sums: Dict[str, float],
+            total_weight: float,
     ) -> Dict[str, float]:
-        if total_valid_pixels <= 0:
+        if total_weight <= 0:
             return {key: 0.0 for key in loss_sums.keys()}
 
         return {
-            key: float(value) / float(total_valid_pixels)
+            key: float(value) / float(total_weight)
             for key, value in loss_sums.items()
         }
 
@@ -222,7 +223,7 @@ class Trainer:
                         chunk["train_outputs"],
                         {"label_map": label_map},
                         chunk_class_ids=chunk["chunk_class_ids"],
-                        reduction="sum",
+                        reduction="mean",
                     )
 
                     if "total_loss" not in loss_dict:
@@ -238,7 +239,11 @@ class Trainer:
                 break
 
             chunk_num_valid = int(loss_dict["num_valid"].detach().item())
-            self._accumulate_loss_sums(loss_sums, loss_dict)
+            self._accumulate_weighted_loss_sums(
+                loss_sums=loss_sums,
+                loss_dict=loss_dict,
+                weight=chunk_num_valid,
+            )
             total_valid_pixels += chunk_num_valid
 
             if do_backward and chunk_num_valid > 0:
@@ -270,11 +275,6 @@ class Trainer:
         if did_backward and total_valid_pixels > 0:
             self.scaler.unscale_(self.optimizer)
 
-            grad_scale = 1.0 / float(total_valid_pixels)
-            for param in self.model.parameters():
-                if param.grad is not None:
-                    param.grad.mul_(grad_scale)
-
             if self.cfg.grad_clip_norm is not None:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.grad_clip_norm)
 
@@ -285,9 +285,9 @@ class Trainer:
             if self.lr_scheduler is not None:
                 self.lr_scheduler.step()
 
-        stats = self._normalize_loss_sums(
+        stats = self._finalize_weighted_loss_means(
             loss_sums=loss_sums,
-            total_valid_pixels=total_valid_pixels,
+            total_weight=total_valid_pixels,
         )
         return stats, did_step
 

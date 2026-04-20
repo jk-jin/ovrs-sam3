@@ -113,6 +113,8 @@ class CriterionConfig:
     ignore_index: int = 255
     semantic_bce_weight: float = 1.0
     semantic_dice_weight: float = 1.0
+    bce_class_balance_clamp_min: float = 0.2
+    bce_class_balance_clamp_max: float = 5.0
     eps: float = 1e-6
 
 
@@ -581,11 +583,13 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         if cfg.task_mode == TASK_MODE_SEMANTIC:
             criterion_cfg = SemanticCriterionConfig(
-                ignore_index=int(cfg.criterion_cfg.ignore_index),
-                bce_weight=float(cfg.criterion_cfg.semantic_bce_weight),
-                dice_weight=float(cfg.criterion_cfg.semantic_dice_weight),
-                eps=float(cfg.criterion_cfg.eps),
-            )
+			    ignore_index=int(cfg.criterion_cfg.ignore_index),
+			    bce_weight=float(cfg.criterion_cfg.semantic_bce_weight),
+			    dice_weight=float(cfg.criterion_cfg.semantic_dice_weight),
+			    bce_class_balance_clamp_min=float(cfg.criterion_cfg.bce_class_balance_clamp_min),
+			    bce_class_balance_clamp_max=float(cfg.criterion_cfg.bce_class_balance_clamp_max),
+			    eps=float(cfg.criterion_cfg.eps),
+			)
             return SemanticCriterion(cfg=criterion_cfg)
 
         if cfg.task_mode == TASK_MODE_HYBRID:
