@@ -3,7 +3,7 @@ _base_ = [
     "./_base_/optimizer.py",
     "./_base_/schedule.py",
     "./_base_/visualization.py",
-    "./datasets/isaid.py",
+    "./datasets/loveda.py",
 ]
 
 model = dict(
@@ -24,35 +24,58 @@ model = dict(
         extra_token_templates=[
             "a remote sensing image of {}.",
             "an aerial image of {}.",
+            "a satellite image of {}.",
+            "an overhead view of {}.",
         ],
-        num_extra_tokens=2,
-        text_token_gate_init=1,
+        num_extra_tokens=4,
         normalize_label_for_clip=True,
+        clip_token_global_scale=0.4,
     ),
 
     freeze_cfg=dict(
         train_adapters_only=True,
         trainable_modules=[
+            # openclip projection / alignment
             "core.clip_text_proj",
             "core.clip_image_proj",
-            "core.clip_dynamic_gate",
-            "core.clip_token_global_scale",
             "core.clip_text_to_image_attn",
             "core.clip_text_to_image_norm",
             "core.clip_to_sam3_text_attn",
             "core.clip_to_sam3_text_norm",
+
+            # dynamic gate
+            "core.clip_dynamic_gate",
+
+            # presence branch
+            "core.presence_query_proj",
+            "core.presence_cross_attn",
+            "core.presence_cross_attn_norm",
+            "core.presence_head",
         ],
         frozen_modules=[],
     ),
 
     criterion_cfg=dict(
-	    ignore_index=255,
-	    semantic_bce_weight=0.4,
-	    semantic_dice_weight=1.0,
-	    bce_class_balance_clamp_min=0.2,
-	    bce_class_balance_clamp_max=5.0,
-	    eps=1e-6,
-	),
+        ignore_index=255,
+
+        # original semantic mask supervision
+        bce_weight=0.2,
+        dice_weight=0.5,
+
+        # presence supervision
+        presence_bce_weight=1.0,
+        presence_pos_weight=1.0,
+
+        # final score map supervision
+        final_bce_weight=0.4,
+		final_dice_weight=0.5,
+        final_ce_weight=0.5,
+
+        # other loss hyper-parameters
+        bce_class_balance_clamp_min=0.2,
+        bce_class_balance_clamp_max=5.0,
+        eps=1e-6,
+    ),
 )
 
 train_dataloader = dict(
@@ -67,7 +90,7 @@ val_dataloader = dict(
 
 eval_cfg = dict(
     ignore_index=255,
-    prob_thd=0,
+    prob_thd=0.5,
     bg_idx=0,
     use_score_map=True,
 )
@@ -85,6 +108,9 @@ optim_wrapper = dict(
                 "core.clip_image_proj": dict(lr_mult=1.0, decay_mult=1.0),
                 "core.clip_text_to_image_attn": dict(lr_mult=1.0, decay_mult=1.0),
                 "core.clip_to_sam3_text_attn": dict(lr_mult=1.0, decay_mult=1.0),
+                "core.presence_query_proj": dict(lr_mult=1.0, decay_mult=1.0),
+                "core.presence_cross_attn": dict(lr_mult=1.0, decay_mult=1.0),
+                "core.presence_head": dict(lr_mult=1.0, decay_mult=1.0),
             },
         ),
     )

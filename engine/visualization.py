@@ -25,6 +25,10 @@ class VisualizerConfig:
     save_ground_truth: bool = True
     save_semantic_prediction: bool = True
 
+    save_presence_summary: bool = True
+    save_score_heatmaps: bool = True
+    score_heatmap_topk_classes: int = 5
+
     vis_prob: float = 0.05
     max_samples_per_epoch: Optional[int] = 50
     vis_seed: int = 42
@@ -140,6 +144,93 @@ class BaseSemanticOverlayTask(VisualizationTask):
                         f.write(f"{i}\t{name}\n")
 
 
+class PresenceAnalysisTask(VisualizationTask):
+    name = "presence_analysis"
+
+    def run(self, manager: "VisualizationManager", ctx: VisualizationContext) -> None:
+        outputs = ctx.semantic_outputs
+        batch = ctx.batch
+
+        semantic_score_map = outputs.get(OUTPUT_KEYS.semantic_score_map, None)
+        final_score_map = outputs.get(OUTPUT_KEYS.final_score_map, None)
+        presence_score = outputs.get(OUTPUT_KEYS.presence_score, None)
+
+        if semantic_score_map is None:
+            raise ValueError(f"outputs must contain '{OUTPUT_KEYS.semantic_score_map}'.")
+        if final_score_map is None:
+            raise ValueError(f"outputs must contain '{OUTPUT_KEYS.final_score_map}'.")
+        if presence_score is None:
+            raise ValueError(f"outputs must contain '{OUTPUT_KEYS.presence_score}'.")
+
+        if semantic_score_map.dim() != 4:
+            raise ValueError(
+                f"Expected semantic_score_map as [B, C, H, W], got {tuple(semantic_score_map.shape)}"
+            )
+        if final_score_map.dim() != 4:
+            raise ValueError(
+                f"Expected final_score_map as [B, C, H, W], got {tuple(final_score_map.shape)}"
+            )
+        if presence_score.dim() != 2:
+            raise ValueError(
+                f"Expected presence_score as [B, C], got {tuple(presence_score.shape)}"
+            )
+
+        if semantic_score_map.shape != final_score_map.shape:
+            raise ValueError(
+                f"semantic_score_map and final_score_map shape mismatch: "
+                f"{tuple(semantic_score_map.shape)} vs {tuple(final_score_map.shape)}"
+            )
+        if semantic_score_map.shape[:2] != presence_score.shape:
+            raise ValueError(
+                f"semantic_score_map and presence_score shape mismatch: "
+                f"{tuple(semantic_score_map.shape[:2])} vs {tuple(presence_score.shape)}"
+            )
+
+        class_names = None
+        try:
+            class_names = [str(x) for x in batch.find_metadatas[0].class_names]
+        except Exception:
+            class_names = None
+
+        for b in ctx.selected_indices:
+            image_id = manager._extract_image_id(batch, b)
+            sample_dir = manager._resolve_sample_dir(
+                image_id=image_id,
+                epoch=ctx.epoch,
+                stage=ctx.stage,
+            )
+
+            overlay_image = manager._extract_overlay_image(batch, b)
+            out_hw = overlay_image.size[::-1]
+
+            semantic_scores_b = semantic_score_map[b]  # [C, H, W]
+            final_scores_b = final_score_map[b]        # [C, H, W]
+            presence_scores_b = presence_score[b]      # [C]
+
+            semantic_max = semantic_scores_b.flatten(1).max(dim=1).values  # [C]
+            final_max = final_scores_b.flatten(1).max(dim=1).values        # [C]
+
+            if manager.cfg.save_presence_summary:
+                manager._save_presence_summary(
+                    sample_dir=sample_dir,
+                    presence_score=presence_scores_b,
+                    semantic_max=semantic_max,
+                    final_max=final_max,
+                    class_names=class_names,
+                )
+
+            if manager.cfg.save_score_heatmaps:
+                manager._save_topk_score_heatmaps(
+                    sample_dir=sample_dir,
+                    semantic_scores=semantic_scores_b,
+                    final_scores=final_scores_b,
+                    presence_scores=presence_scores_b,
+                    out_hw=out_hw,
+                    topk=int(manager.cfg.score_heatmap_topk_classes),
+                    class_names=class_names,
+                )
+
+
 class VisualizationManager:
     def __init__(self, cfg: VisualizerConfig):
         self.cfg = cfg
@@ -151,6 +242,7 @@ class VisualizationManager:
     def _build_tasks(self):
         return [
             BaseSemanticOverlayTask(),
+            PresenceAnalysisTask(),
         ]
 
     @classmethod
@@ -341,6 +433,120 @@ class VisualizationManager:
         if logits.dim() != 4:
             raise ValueError(f"Expected logits [B,C,H,W], got {tuple(logits.shape)}")
         return logits.argmax(dim=1)
+
+    @staticmethod
+    def _to_heatmap_image(score_map: torch.Tensor, out_hw: Tuple[int, int]) -> Image.Image:
+        x = score_map.detach().cpu().float()
+        if x.dim() == 3:
+            if x.shape[0] != 1:
+                raise ValueError(f"Expected [1,H,W] or [H,W], got {tuple(x.shape)}")
+            x = x[0]
+        if x.dim() != 2:
+            raise ValueError(f"Expected [H,W], got {tuple(x.shape)}")
+
+        if tuple(x.shape[-2:]) != tuple(out_hw):
+            x = F.interpolate(x[None, None], size=out_hw, mode="bilinear", align_corners=False)[0, 0]
+
+        x = x.clamp(0.0, 1.0)
+        arr = (x.numpy() * 255.0).astype(np.uint8)
+        heat = np.stack([arr, arr, arr], axis=-1)
+        return Image.fromarray(heat, mode="RGB")
+
+    @staticmethod
+    def _sanitize_filename(text: str) -> str:
+        safe = []
+        for ch in str(text):
+            if ch.isalnum() or ch in ("-", "_"):
+                safe.append(ch)
+            elif ch in (" ", "/", "\\", "."):
+                safe.append("_")
+        value = "".join(safe).strip("_")
+        return value or "class"
+
+    def _save_presence_summary(
+        self,
+        sample_dir: Path,
+        presence_score: torch.Tensor,
+        semantic_max: torch.Tensor,
+        final_max: torch.Tensor,
+        class_names: Optional[List[str]],
+    ) -> None:
+        if presence_score.dim() != 1:
+            raise ValueError(f"Expected presence_score as [C], got {tuple(presence_score.shape)}")
+        if semantic_max.dim() != 1:
+            raise ValueError(f"Expected semantic_max as [C], got {tuple(semantic_max.shape)}")
+        if final_max.dim() != 1:
+            raise ValueError(f"Expected final_max as [C], got {tuple(final_max.shape)}")
+
+        num_classes = int(presence_score.shape[0])
+        if semantic_max.shape[0] != num_classes or final_max.shape[0] != num_classes:
+            raise ValueError(
+                f"Class count mismatch in presence summary: "
+                f"{num_classes}, {semantic_max.shape[0]}, {final_max.shape[0]}"
+            )
+
+        order = torch.argsort(presence_score, descending=True)
+
+        with open(sample_dir / "presence_summary.txt", "w", encoding="utf-8") as f:
+            f.write("rank\tclass_id\tclass_name\tpresence_score\tsemantic_max\tfinal_max\n")
+            for rank, cls_idx in enumerate(order.tolist()):
+                class_name = class_names[cls_idx] if class_names is not None and cls_idx < len(class_names) else f"class_{cls_idx}"
+                f.write(
+                    f"{rank}\t{cls_idx}\t{class_name}\t"
+                    f"{float(presence_score[cls_idx].item()):.6f}\t"
+                    f"{float(semantic_max[cls_idx].item()):.6f}\t"
+                    f"{float(final_max[cls_idx].item()):.6f}\n"
+                )
+
+    def _save_topk_score_heatmaps(
+        self,
+        sample_dir: Path,
+        semantic_scores: torch.Tensor,
+        final_scores: torch.Tensor,
+        presence_scores: torch.Tensor,
+        out_hw: Tuple[int, int],
+        topk: int,
+        class_names: Optional[List[str]],
+    ) -> None:
+        if semantic_scores.dim() != 3:
+            raise ValueError(f"Expected semantic_scores as [C,H,W], got {tuple(semantic_scores.shape)}")
+        if final_scores.dim() != 3:
+            raise ValueError(f"Expected final_scores as [C,H,W], got {tuple(final_scores.shape)}")
+        if presence_scores.dim() != 1:
+            raise ValueError(f"Expected presence_scores as [C], got {tuple(presence_scores.shape)}")
+
+        num_classes = int(semantic_scores.shape[0])
+        if final_scores.shape[0] != num_classes or presence_scores.shape[0] != num_classes:
+            raise ValueError(
+                f"Class count mismatch in score heatmaps: "
+                f"{num_classes}, {final_scores.shape[0]}, {presence_scores.shape[0]}"
+            )
+
+        k = max(1, min(int(topk), num_classes))
+        semantic_max = semantic_scores.flatten(1).max(dim=1).values
+        order = torch.argsort(semantic_max, descending=True)[:k]
+
+        heatmap_dir = sample_dir / "score_heatmaps"
+        heatmap_dir.mkdir(parents=True, exist_ok=True)
+
+        with open(heatmap_dir / "topk_classes.txt", "w", encoding="utf-8") as f:
+            f.write("rank\tclass_id\tclass_name\tpresence_score\tsemantic_max\tfinal_max\n")
+            for rank, cls_idx in enumerate(order.tolist()):
+                class_name = class_names[cls_idx] if class_names is not None and cls_idx < len(class_names) else f"class_{cls_idx}"
+                semantic_max_value = float(semantic_scores[cls_idx].max().item())
+                final_max_value = float(final_scores[cls_idx].max().item())
+                f.write(
+                    f"{rank}\t{cls_idx}\t{class_name}\t"
+                    f"{float(presence_scores[cls_idx].item()):.6f}\t"
+                    f"{semantic_max_value:.6f}\t{final_max_value:.6f}\n"
+                )
+
+                safe_name = self._sanitize_filename(class_name)
+                semantic_img = self._to_heatmap_image(semantic_scores[cls_idx], out_hw)
+                final_img = self._to_heatmap_image(final_scores[cls_idx], out_hw)
+
+                semantic_img.save(heatmap_dir / f"class_{cls_idx:03d}_{safe_name}_semantic.png")
+                final_img.save(heatmap_dir / f"class_{cls_idx:03d}_{safe_name}_final.png")
 
     def _get_epoch_key(self, stage: str, epoch: Optional[int]) -> Tuple[str, int]:
         return stage, (-1 if epoch is None else int(epoch))

@@ -66,6 +66,7 @@ class Sam3Image(torch.nn.Module):
         self.clip_extra_token_templates = []
         self.num_clip_extra_tokens = 0
         self.normalize_label_for_clip = True
+        self.clip_token_global_scale = 0
 
         if openclip_cfg is not None:
             self.clip_extra_token_templates = list(
@@ -78,6 +79,9 @@ class Sam3Image(torch.nn.Module):
             self.normalize_label_for_clip = bool(
                 getattr(openclip_cfg, "normalize_label_for_clip", True)
             )
+            self.clip_token_global_scale = float(
+                getattr(openclip_cfg, "clip_token_global_scale", 0)
+            )
 
         self.clip_text_token_norm = nn.LayerNorm(self.hidden_dim)
         self.clip_image_token_norm = nn.LayerNorm(self.hidden_dim)
@@ -86,7 +90,24 @@ class Sam3Image(torch.nn.Module):
         nn.init.zeros_(self.clip_dynamic_gate.weight)
         nn.init.zeros_(self.clip_dynamic_gate.bias)
 
-        self.clip_token_global_scale = nn.Parameter(torch.tensor(0.3, dtype=torch.float32))
+        self.presence_query_proj = nn.Linear(self.hidden_dim * 2, self.hidden_dim)
+        nn.init.xavier_uniform_(self.presence_query_proj.weight)
+        nn.init.zeros_(self.presence_query_proj.bias)
+
+        self.presence_cross_attn = nn.MultiheadAttention(
+            embed_dim=self.hidden_dim,
+            num_heads=8,
+            dropout=0.0,
+            batch_first=True,
+        )
+        self.presence_cross_attn_norm = nn.LayerNorm(self.hidden_dim)
+
+        self.presence_head = nn.Sequential(
+            nn.LayerNorm(self.hidden_dim),
+            nn.Linear(self.hidden_dim, self.hidden_dim),
+            nn.GELU(),
+            nn.Linear(self.hidden_dim, 1),
+        )
 
         self.register_buffer(
             "openclip_image_mean",
@@ -685,12 +706,213 @@ class Sam3Image(torch.nn.Module):
         pooled = (x * valid).sum(dim=1) / denom
         return pooled
 
-    def _apply_clip_dynamic_gate(
+    def _build_pair_summaries(
         self,
         clip_pair_tokens: torch.Tensor,
         clip_pair_mask: torch.Tensor,
         sam3_pair_text_feats: torch.Tensor,
         sam3_pair_text_mask: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            clip_pair_tokens: [K, B*C, D]
+            clip_pair_mask: [B*C, K]
+            sam3_pair_text_feats: [B*C, L, D]
+            sam3_pair_text_mask: [B*C, L]
+        Returns:
+            clip_summary: [B*C, D]
+            sam3_summary: [B*C, D]
+        """
+        if clip_pair_tokens.ndim != 3:
+            raise ValueError(
+                f"Expected clip_pair_tokens as [K, B*C, D], got {tuple(clip_pair_tokens.shape)}"
+            )
+        if clip_pair_mask.ndim != 2:
+            raise ValueError(
+                f"Expected clip_pair_mask as [B*C, K], got {tuple(clip_pair_mask.shape)}"
+            )
+        if sam3_pair_text_feats.ndim != 3:
+            raise ValueError(
+                f"Expected sam3_pair_text_feats as [B*C, L, D], got {tuple(sam3_pair_text_feats.shape)}"
+            )
+        if sam3_pair_text_mask.ndim != 2:
+            raise ValueError(
+                f"Expected sam3_pair_text_mask as [B*C, L], got {tuple(sam3_pair_text_mask.shape)}"
+            )
+
+        num_clip_tokens, num_pairs, dim = clip_pair_tokens.shape
+        if clip_pair_mask.shape != (num_pairs, num_clip_tokens):
+            raise ValueError(
+                f"clip_pair_mask shape mismatch: expected {(num_pairs, num_clip_tokens)}, "
+                f"got {tuple(clip_pair_mask.shape)}"
+            )
+        if sam3_pair_text_feats.shape[0] != num_pairs:
+            raise ValueError(
+                f"sam3_pair_text_feats first dim mismatch: expected {num_pairs}, "
+                f"got {sam3_pair_text_feats.shape[0]}"
+            )
+        if sam3_pair_text_feats.shape[2] != dim:
+            raise ValueError(
+                f"Feature dim mismatch: clip_pair_tokens dim={dim}, "
+                f"sam3_pair_text_feats dim={sam3_pair_text_feats.shape[2]}"
+            )
+        if sam3_pair_text_mask.shape[0] != num_pairs:
+            raise ValueError(
+                f"sam3_pair_text_mask first dim mismatch: expected {num_pairs}, "
+                f"got {sam3_pair_text_mask.shape[0]}"
+            )
+
+        clip_feats = clip_pair_tokens.transpose(0, 1).contiguous()  # [B*C, K, D]
+        clip_summary = self._masked_mean_pool(clip_feats, clip_pair_mask)  # [B*C, D]
+        sam3_summary = self._masked_mean_pool(sam3_pair_text_feats, sam3_pair_text_mask)  # [B*C, D]
+
+        return clip_summary, sam3_summary
+
+    def _build_presence_query(
+            self,
+            clip_summary: torch.Tensor,
+            sam3_summary: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Args:
+            clip_summary: [B*C, D]
+            sam3_summary: [B*C, D]
+        Returns:
+            presence_query: [B*C, D]
+        """
+        if clip_summary.ndim != 2:
+            raise ValueError(
+                f"Expected clip_summary as [B*C, D], got {tuple(clip_summary.shape)}"
+            )
+        if sam3_summary.ndim != 2:
+            raise ValueError(
+                f"Expected sam3_summary as [B*C, D], got {tuple(sam3_summary.shape)}"
+            )
+        if clip_summary.shape != sam3_summary.shape:
+            raise ValueError(
+                f"Shape mismatch between clip_summary and sam3_summary: "
+                f"{tuple(clip_summary.shape)} vs {tuple(sam3_summary.shape)}"
+            )
+
+        clip_summary_detached = clip_summary.detach()
+        sam3_summary_detached = sam3_summary.detach()
+
+        pair_summary = torch.cat(
+            [clip_summary_detached, sam3_summary_detached],
+            dim=-1,
+        )  # [B*C, 2D]
+        presence_query = self.presence_query_proj(pair_summary)  # [B*C, D]
+        return presence_query
+
+    def _prepare_encoder_tokens_for_presence(
+        self,
+        encoder_hidden_states: torch.Tensor,
+        padding_mask: Optional[torch.Tensor],
+        num_pairs: int,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """
+        Args:
+            encoder_hidden_states:
+                either [N, B*C, D] or [B*C, N, D]
+            padding_mask:
+                either None or [B*C, N]
+            num_pairs:
+                B*C
+        Returns:
+            encoder_tokens: [B*C, N, D]
+            encoder_padding_mask: None or [B*C, N]
+        """
+        if encoder_hidden_states.ndim != 3:
+            raise ValueError(
+                "Expected encoder_hidden_states to have 3 dims, "
+                f"got {tuple(encoder_hidden_states.shape)}"
+            )
+
+        if encoder_hidden_states.shape[0] == num_pairs:
+            encoder_tokens = encoder_hidden_states.contiguous()
+        elif encoder_hidden_states.shape[1] == num_pairs:
+            encoder_tokens = encoder_hidden_states.transpose(0, 1).contiguous()
+        else:
+            raise ValueError(
+                "Cannot infer encoder token layout for presence branch: "
+                f"encoder_hidden_states.shape={tuple(encoder_hidden_states.shape)}, "
+                f"num_pairs={num_pairs}"
+            )
+
+        encoder_padding_mask = None
+        if padding_mask is not None:
+            if padding_mask.ndim != 2:
+                raise ValueError(
+                    f"Expected padding_mask as [B*C, N], got {tuple(padding_mask.shape)}"
+                )
+            if padding_mask.shape[0] != num_pairs:
+                raise ValueError(
+                    f"padding_mask first dim mismatch: expected {num_pairs}, "
+                    f"got {padding_mask.shape[0]}"
+                )
+            if padding_mask.shape[1] != encoder_tokens.shape[1]:
+                raise ValueError(
+                    f"padding_mask second dim mismatch: expected {encoder_tokens.shape[1]}, "
+                    f"got {padding_mask.shape[1]}"
+                )
+            encoder_padding_mask = padding_mask.contiguous()
+
+        return encoder_tokens, encoder_padding_mask
+
+    def _run_presence_head(
+        self,
+        presence_query: torch.Tensor,
+        encoder_out: Dict[str, torch.Tensor],
+    ) -> torch.Tensor:
+        """
+        Args:
+            presence_query: [B*C, D]
+            encoder_out:
+                must contain encoder_hidden_states, may contain padding_mask
+        Returns:
+            presence_logits: [B*C]
+        """
+        if presence_query.ndim != 2:
+            raise ValueError(
+                f"Expected presence_query as [B*C, D], got {tuple(presence_query.shape)}"
+            )
+
+        num_pairs, dim = presence_query.shape
+        if dim != self.hidden_dim:
+            raise ValueError(
+                f"presence_query dim mismatch: expected {self.hidden_dim}, got {dim}"
+            )
+
+        encoder_hidden_states = encoder_out["encoder_hidden_states"]
+        padding_mask = encoder_out.get("padding_mask", None)
+
+        encoder_tokens, encoder_padding_mask = self._prepare_encoder_tokens_for_presence(
+            encoder_hidden_states=encoder_hidden_states,
+            padding_mask=padding_mask,
+            num_pairs=num_pairs,
+        )  # [B*C, N, D]
+
+        query = presence_query.unsqueeze(1)  # [B*C, 1, D]
+
+        attn_out, _ = self.presence_cross_attn(
+            query=query,
+            key=encoder_tokens,
+            value=encoder_tokens,
+            key_padding_mask=encoder_padding_mask,
+            need_weights=False,
+        )
+
+        presence_context = self.presence_cross_attn_norm(query + attn_out).squeeze(1)  # [B*C, D]
+        presence_logits = self.presence_head(presence_context).squeeze(-1)  # [B*C]
+
+        return presence_logits
+
+    def _apply_clip_dynamic_gate(
+            self,
+            clip_pair_tokens: torch.Tensor,
+            clip_pair_mask: torch.Tensor,
+            sam3_pair_text_feats: torch.Tensor,
+            sam3_pair_text_mask: torch.Tensor,
     ) -> torch.Tensor:
         """
         Args:
@@ -740,17 +962,21 @@ class Sam3Image(torch.nn.Module):
                 f"got {sam3_pair_text_mask.shape[0]}"
             )
 
-        clip_feats = clip_pair_tokens.transpose(0, 1).contiguous()  # [B*C, K, D]
-        clip_summary = self._masked_mean_pool(clip_feats, clip_pair_mask)  # [B*C, D]
-        sam3_summary = self._masked_mean_pool(sam3_pair_text_feats, sam3_pair_text_mask)  # [B*C, D]
+        clip_summary, sam3_summary = self._build_pair_summaries(
+            clip_pair_tokens=clip_pair_tokens,
+            clip_pair_mask=clip_pair_mask,
+            sam3_pair_text_feats=sam3_pair_text_feats,
+            sam3_pair_text_mask=sam3_pair_text_mask,
+        )
 
         gate_input = torch.cat([clip_summary, sam3_summary], dim=-1)  # [B*C, 2D]
         dynamic_gate = torch.sigmoid(self.clip_dynamic_gate(gate_input))  # [B*C, 1]
 
+        clip_feats = clip_pair_tokens.transpose(0, 1).contiguous()  # [B*C, K, D]
         scale = self.clip_token_global_scale * dynamic_gate  # [B*C, 1]
-        clip_feats = clip_feats * scale.unsqueeze(-1)        # [B*C, K, D]
+        clip_feats = clip_feats * scale.unsqueeze(-1)  # [B*C, K, D]
 
-        return clip_feats.transpose(0, 1).contiguous()       # [K, B*C, D]
+        return clip_feats.transpose(0, 1).contiguous()  # [K, B*C, D]
 
     def iter_chunk_raw_outputs(
         self,
@@ -848,6 +1074,18 @@ class Sam3Image(torch.nn.Module):
                     sam3_pair_text_mask=sam3_pair_mask,
                 )
 
+                clip_summary, sam3_summary = self._build_pair_summaries(
+                    clip_pair_tokens=pair_tokens,
+                    clip_pair_mask=pair_mask,
+                    sam3_pair_text_feats=sam3_pair_feats,
+                    sam3_pair_text_mask=sam3_pair_mask,
+                )
+
+                presence_query = self._build_presence_query(
+                    clip_summary=clip_summary,
+                    sam3_summary=sam3_summary,
+                )
+
                 pair_tokens = self._apply_clip_dynamic_gate(
                     clip_pair_tokens=pair_tokens,
                     clip_pair_mask=pair_mask,
@@ -857,6 +1095,7 @@ class Sam3Image(torch.nn.Module):
 
                 chunk_backbone_out["clip_language_features_pair"] = pair_tokens
                 chunk_backbone_out["clip_language_mask_pair"] = pair_mask
+                chunk_backbone_out["presence_query_pair"] = presence_query
 
             chunk_find_input = self._build_prompt_expanded_find_stage(
                 batch_size=batch_size,
@@ -959,6 +1198,7 @@ class Sam3Image(torch.nn.Module):
     ) -> Dict[str, torch.Tensor]:
         keep_keys = [
             "semantic_logits",
+            "presence_logits",
         ]
 
         out = {}
@@ -1124,10 +1364,10 @@ class Sam3Image(torch.nn.Module):
         }
 
     def forward_grounding_raw(
-        self,
-        backbone_out: Dict[str, torch.Tensor],
-        find_input,
-        geometric_prompt: Prompt,
+            self,
+            backbone_out: Dict[str, torch.Tensor],
+            find_input,
+            geometric_prompt: Prompt,
     ) -> Dict[str, torch.Tensor]:
         with torch.profiler.record_function("Sam3Image._encode_prompt"):
             prompt, prompt_mask, backbone_out = self._encode_prompt(
@@ -1148,6 +1388,19 @@ class Sam3Image(torch.nn.Module):
                 prompt_mask=prompt_mask,
             )
 
+        if "presence_query_pair" not in backbone_out:
+            raise ValueError(
+                "presence_query_pair is missing in backbone_out. "
+                "Current presence design requires CLIP-enhanced pair features."
+            )
+
+        with torch.profiler.record_function("Sam3Image._run_presence_head"):
+            presence_logits = self._run_presence_head(
+                presence_query=backbone_out["presence_query_pair"],
+                encoder_out=encoder_out,
+            )
+
+        out["presence_logits"] = presence_logits
         return out
 
     def forward(self, input: BatchedDatapoint) -> Dict[str, torch.Tensor]:

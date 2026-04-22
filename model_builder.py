@@ -104,18 +104,26 @@ class OpenCLIPConfig:
         "an aerial image of {}.",
     ])
     num_extra_tokens: int = 2
-    text_token_gate_init: float = 0.0
     normalize_label_for_clip: bool = True
+    clip_token_global_scale: float = 0.3
 
 
 @dataclass
 class CriterionConfig:
     ignore_index: int = 255
-    semantic_bce_weight: float = 1.0
-    semantic_dice_weight: float = 1.0
+
+    bce_weight: float = 1.0
+    dice_weight: float = 1.0
+    presence_bce_weight: float = 1.0
+    final_bce_weight: float = 0.4
+    final_dice_weight: float = 0.5
+    final_ce_weight: float = 1.0
+	
     bce_class_balance_clamp_min: float = 0.2
     bce_class_balance_clamp_max: float = 5.0
     eps: float = 1e-6
+	
+    presence_pos_weight: float = 1.0
 
 
 @dataclass
@@ -583,13 +591,18 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         if cfg.task_mode == TASK_MODE_SEMANTIC:
             criterion_cfg = SemanticCriterionConfig(
-			    ignore_index=int(cfg.criterion_cfg.ignore_index),
-			    bce_weight=float(cfg.criterion_cfg.semantic_bce_weight),
-			    dice_weight=float(cfg.criterion_cfg.semantic_dice_weight),
-			    bce_class_balance_clamp_min=float(cfg.criterion_cfg.bce_class_balance_clamp_min),
-			    bce_class_balance_clamp_max=float(cfg.criterion_cfg.bce_class_balance_clamp_max),
-			    eps=float(cfg.criterion_cfg.eps),
-			)
+                ignore_index=int(cfg.criterion_cfg.ignore_index),
+                bce_weight=float(cfg.criterion_cfg.bce_weight),
+                dice_weight=float(cfg.criterion_cfg.dice_weight),
+                presence_bce_weight=float(cfg.criterion_cfg.presence_bce_weight),
+                final_bce_weight=float(cfg.criterion_cfg.final_bce_weight),
+                final_dice_weight=float(cfg.criterion_cfg.final_dice_weight),
+                final_ce_weight=float(cfg.criterion_cfg.final_ce_weight),
+                bce_class_balance_clamp_min=float(cfg.criterion_cfg.bce_class_balance_clamp_min),
+                bce_class_balance_clamp_max=float(cfg.criterion_cfg.bce_class_balance_clamp_max),
+                eps=float(cfg.criterion_cfg.eps),
+                presence_pos_weight=float(cfg.criterion_cfg.presence_pos_weight),
+            )
             return SemanticCriterion(cfg=criterion_cfg)
 
         if cfg.task_mode == TASK_MODE_HYBRID:

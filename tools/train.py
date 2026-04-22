@@ -86,10 +86,20 @@ def build_log_getters(cfg) -> List[object]:
         if core is None:
             return out
 
-        if hasattr(core, "clip_token_global_scale"):
-            gate = core.clip_token_global_scale.detach()
-            if gate.numel() == 1:
-                out["clip_token_global_scale"] = float(gate.item())
+        if hasattr(core, "presence_query_proj"):
+            weight = core.presence_query_proj.weight.detach()
+            out["presence_query_proj_weight_abs_mean"] = float(weight.abs().mean().item())
+
+        if hasattr(core, "presence_head") and isinstance(core.presence_head, torch.nn.Sequential):
+            last_linear = None
+            for module in reversed(core.presence_head):
+                if isinstance(module, torch.nn.Linear):
+                    last_linear = module
+                    break
+            if last_linear is not None:
+                out["presence_head_last_weight_abs_mean"] = float(
+                    last_linear.weight.detach().abs().mean().item()
+                )
 
         return out
 

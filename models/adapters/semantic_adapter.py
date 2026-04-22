@@ -38,6 +38,29 @@ class SemanticSegAdapter(nn.Module):
         return semantic_logits
 
     @staticmethod
+    def _extract_presence_logits(
+        raw_outputs: Dict[str, torch.Tensor],
+    ) -> torch.Tensor:
+        presence_logits = raw_outputs.get(OUTPUT_KEYS.presence_logits, None)
+        if presence_logits is None:
+            raise ValueError(
+                f"Raw outputs must contain '{OUTPUT_KEYS.presence_logits}'."
+            )
+
+        if presence_logits.dim() == 3:
+            if presence_logits.shape[-1] != 1:
+                raise ValueError(
+                    f"Expected presence_logits as [B, C, 1], got {tuple(presence_logits.shape)}"
+                )
+            presence_logits = presence_logits[..., 0]
+        elif presence_logits.dim() != 2:
+            raise ValueError(
+                f"Expected presence_logits as [B, C] or [B, C, 1], got {tuple(presence_logits.shape)}"
+            )
+
+        return presence_logits
+
+    @staticmethod
     def _resize_to_match(
         x: Optional[torch.Tensor],
         target_hw: tuple[int, int],
@@ -85,6 +108,18 @@ class SemanticSegAdapter(nn.Module):
                 f"but got {actual_num_classes} channels."
             )
 
+    @staticmethod
+    def _validate_presence_class_count(
+        semantic_logits: torch.Tensor,
+        presence_logits: torch.Tensor,
+    ) -> None:
+        if semantic_logits.shape[:2] != presence_logits.shape:
+            raise ValueError(
+                "Shape mismatch between semantic_logits and presence_logits: "
+                f"semantic_logits.shape[:2]={tuple(semantic_logits.shape[:2])}, "
+                f"presence_logits.shape={tuple(presence_logits.shape)}"
+            )
+    
     def _build_train_outputs(
         self,
         raw_outputs: Dict[str, torch.Tensor],
@@ -92,6 +127,7 @@ class SemanticSegAdapter(nn.Module):
         expected_num_classes: Optional[int],
     ) -> Dict[str, torch.Tensor]:
         semantic_logits = self._extract_semantic_logits(raw_outputs)
+        presence_logits = self._extract_presence_logits(raw_outputs)
 
         actual_num_classes = int(semantic_logits.shape[1])
         expected_num_classes = self._infer_expected_num_classes(
@@ -102,9 +138,14 @@ class SemanticSegAdapter(nn.Module):
             actual_num_classes=actual_num_classes,
             expected_num_classes=expected_num_classes,
         )
+        self._validate_presence_class_count(
+            semantic_logits=semantic_logits,
+            presence_logits=presence_logits,
+        )
 
         return {
             OUTPUT_KEYS.semantic_logits: semantic_logits,
+            OUTPUT_KEYS.presence_logits: presence_logits,
         }
 
     def _build_inference_outputs(
@@ -114,6 +155,7 @@ class SemanticSegAdapter(nn.Module):
         expected_num_classes: Optional[int],
     ) -> Dict[str, torch.Tensor]:
         semantic_logits = self._extract_semantic_logits(raw_outputs)
+        presence_logits = self._extract_presence_logits(raw_outputs)
 
         actual_num_classes = int(semantic_logits.shape[1])
         expected_num_classes = self._infer_expected_num_classes(
@@ -124,14 +166,24 @@ class SemanticSegAdapter(nn.Module):
             actual_num_classes=actual_num_classes,
             expected_num_classes=expected_num_classes,
         )
+        self._validate_presence_class_count(
+            semantic_logits=semantic_logits,
+            presence_logits=presence_logits,
+        )
 
         semantic_score_map = semantic_logits.sigmoid()
-        final_score_map = semantic_score_map
+        presence_score = presence_logits.sigmoid()
+        
+        presence_score_map = presence_score.unsqueeze(-1).unsqueeze(-1)  # [B, C, 1, 1]
+        final_logits = semantic_logits * presence_score_map
+        final_score_map = final_logits.sigmoid()
         final_pred = final_score_map.argmax(dim=1)
 
         return {
             OUTPUT_KEYS.semantic_logits: semantic_logits,
             OUTPUT_KEYS.semantic_score_map: semantic_score_map,
+            OUTPUT_KEYS.presence_logits: presence_logits,
+            OUTPUT_KEYS.presence_score: presence_score,
             OUTPUT_KEYS.final_score_map: final_score_map,
             OUTPUT_KEYS.final_pred: final_pred,
         }
