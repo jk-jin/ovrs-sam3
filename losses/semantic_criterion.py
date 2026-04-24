@@ -50,6 +50,22 @@ class SemanticCriterion(nn.Module):
 			)
 		return logits
 
+	def _extract_final_logits(
+			self,
+			outputs: Dict[str, torch.Tensor],
+	) -> torch.Tensor:
+		if OUTPUT_KEYS.final_logits not in outputs:
+			raise ValueError(
+				f"SemanticCriterion expects outputs['{OUTPUT_KEYS.final_logits}']."
+			)
+
+		logits = outputs[OUTPUT_KEYS.final_logits]
+		if logits.dim() != 4:
+			raise ValueError(
+				f"Expected final_logits as [B, C, H, W], got {tuple(logits.shape)}"
+			)
+		return logits
+
 	def _extract_presence_logits(
 		self,
 		outputs: Dict[str, torch.Tensor],
@@ -412,37 +428,6 @@ class SemanticCriterion(nn.Module):
 			reduction="mean",
 		)
 		return loss_final_ce, num_ce_valid
-
-	def _build_final_logits(
-		self,
-		semantic_logits: torch.Tensor,
-		presence_logits: torch.Tensor,
-	) -> torch.Tensor:
-		"""
-		Args:
-			semantic_logits: [B, C, H, W]
-			presence_logits: [B, C]
-		Returns:
-			final_logits: [B, C, H, W]
-		"""
-		if semantic_logits.dim() != 4:
-			raise ValueError(
-				f"Expected semantic_logits as [B, C, H, W], got {tuple(semantic_logits.shape)}"
-			)
-		if presence_logits.dim() != 2:
-			raise ValueError(
-				f"Expected presence_logits as [B, C], got {tuple(presence_logits.shape)}"
-			)
-		if semantic_logits.shape[:2] != presence_logits.shape:
-			raise ValueError(
-				f"Shape mismatch between semantic_logits and presence_logits: "
-				f"{tuple(semantic_logits.shape[:2])} vs {tuple(presence_logits.shape)}"
-			)
-	
-		presence_score = presence_logits.sigmoid()                      # [B, C]
-		presence_score_map = presence_score.unsqueeze(-1).unsqueeze(-1) # [B, C, 1, 1]
-		final_logits = semantic_logits * presence_score_map            # [B, C, H, W]
-		return final_logits
 	
 	def forward(
 		self,
@@ -458,12 +443,20 @@ class SemanticCriterion(nn.Module):
 
 		semantic_logits = self._extract_semantic_logits(outputs)
 		presence_logits = self._extract_presence_logits(outputs)
+		final_logits = self._extract_final_logits(outputs)
 
 		if semantic_logits.shape[:2] != presence_logits.shape:
 			raise ValueError(
 				"Shape mismatch between semantic_logits and presence_logits: "
 				f"semantic_logits.shape[:2]={tuple(semantic_logits.shape[:2])}, "
 				f"presence_logits.shape={tuple(presence_logits.shape)}"
+			)
+
+		if final_logits.shape != semantic_logits.shape:
+			raise ValueError(
+				"Shape mismatch between final_logits and semantic_logits: "
+				f"final_logits.shape={tuple(final_logits.shape)}, "
+				f"semantic_logits.shape={tuple(semantic_logits.shape)}"
 			)
 
 		label_map = self._extract_label_map(targets)
@@ -520,11 +513,6 @@ class SemanticCriterion(nn.Module):
 		num_present_pairs = int(present_pair_mask.sum().item())
 		if num_present_pairs <= 0:
 			zero = semantic_logits.sum() * 0.0
-
-			final_logits = self._build_final_logits(
-				semantic_logits=semantic_logits,
-				presence_logits=presence_logits,
-			)
 			loss_final_ce, num_ce_valid = self._final_cross_entropy_loss(
 				final_logits=final_logits,
 				ce_label_map=ce_label_map,
@@ -571,11 +559,6 @@ class SemanticCriterion(nn.Module):
 			target=target,
 			valid_mask=valid_mask,
 			present_pair_mask=present_pair_mask,
-		)
-
-		final_logits = self._build_final_logits(
-			semantic_logits=semantic_logits,
-			presence_logits=presence_logits,
 		)
 
 		loss_final_bce = self._binary_cross_entropy_present_balanced_mean(

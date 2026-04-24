@@ -18,6 +18,7 @@ class ModelOutputKeys:
     semantic_score_map: str = "semantic_score_map"
     presence_logits: str = "presence_logits"
     presence_score: str = "presence_score"
+    final_logits: str = "final_logits"
     final_score_map: str = "final_score_map"
     final_pred: str = "final_pred"
 

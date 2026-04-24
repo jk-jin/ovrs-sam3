@@ -27,7 +27,6 @@ class VisualizerConfig:
 
     save_presence_summary: bool = True
     save_score_heatmaps: bool = True
-    score_heatmap_topk_classes: int = 5
 
     vis_prob: float = 0.05
     max_samples_per_epoch: Optional[int] = 50
@@ -220,13 +219,12 @@ class PresenceAnalysisTask(VisualizationTask):
                 )
 
             if manager.cfg.save_score_heatmaps:
-                manager._save_topk_score_heatmaps(
+                manager._save_all_score_heatmaps(
                     sample_dir=sample_dir,
                     semantic_scores=semantic_scores_b,
                     final_scores=final_scores_b,
                     presence_scores=presence_scores_b,
                     out_hw=out_hw,
-                    topk=int(manager.cfg.score_heatmap_topk_classes),
                     class_names=class_names,
                 )
 
@@ -498,15 +496,14 @@ class VisualizationManager:
                     f"{float(final_max[cls_idx].item()):.6f}\n"
                 )
 
-    def _save_topk_score_heatmaps(
-        self,
-        sample_dir: Path,
-        semantic_scores: torch.Tensor,
-        final_scores: torch.Tensor,
-        presence_scores: torch.Tensor,
-        out_hw: Tuple[int, int],
-        topk: int,
-        class_names: Optional[List[str]],
+    def _save_all_score_heatmaps(
+            self,
+            sample_dir: Path,
+            semantic_scores: torch.Tensor,
+            final_scores: torch.Tensor,
+            presence_scores: torch.Tensor,
+            out_hw: Tuple[int, int],
+            class_names: Optional[List[str]],
     ) -> None:
         if semantic_scores.dim() != 3:
             raise ValueError(f"Expected semantic_scores as [C,H,W], got {tuple(semantic_scores.shape)}")
@@ -522,31 +519,44 @@ class VisualizationManager:
                 f"{num_classes}, {final_scores.shape[0]}, {presence_scores.shape[0]}"
             )
 
-        k = max(1, min(int(topk), num_classes))
-        semantic_max = semantic_scores.flatten(1).max(dim=1).values
-        order = torch.argsort(semantic_max, descending=True)[:k]
+        semantic_max = semantic_scores.flatten(1).max(dim=1).values  # [C]
+        final_max = final_scores.flatten(1).max(dim=1).values  # [C]
+
+        order = torch.argsort(presence_scores, descending=True)
 
         heatmap_dir = sample_dir / "score_heatmaps"
         heatmap_dir.mkdir(parents=True, exist_ok=True)
 
-        with open(heatmap_dir / "topk_classes.txt", "w", encoding="utf-8") as f:
+        with open(heatmap_dir / "all_classes.txt", "w", encoding="utf-8") as f:
             f.write("rank\tclass_id\tclass_name\tpresence_score\tsemantic_max\tfinal_max\n")
             for rank, cls_idx in enumerate(order.tolist()):
-                class_name = class_names[cls_idx] if class_names is not None and cls_idx < len(class_names) else f"class_{cls_idx}"
-                semantic_max_value = float(semantic_scores[cls_idx].max().item())
-                final_max_value = float(final_scores[cls_idx].max().item())
+                class_name = (
+                    class_names[cls_idx]
+                    if class_names is not None and cls_idx < len(class_names)
+                    else f"class_{cls_idx}"
+                )
+
+                semantic_max_value = float(semantic_max[cls_idx].item())
+                final_max_value = float(final_max[cls_idx].item())
+                presence_value = float(presence_scores[cls_idx].item())
+
                 f.write(
                     f"{rank}\t{cls_idx}\t{class_name}\t"
-                    f"{float(presence_scores[cls_idx].item()):.6f}\t"
-                    f"{semantic_max_value:.6f}\t{final_max_value:.6f}\n"
+                    f"{presence_value:.6f}\t"
+                    f"{semantic_max_value:.6f}\t"
+                    f"{final_max_value:.6f}\n"
                 )
 
                 safe_name = self._sanitize_filename(class_name)
                 semantic_img = self._to_heatmap_image(semantic_scores[cls_idx], out_hw)
                 final_img = self._to_heatmap_image(final_scores[cls_idx], out_hw)
 
-                semantic_img.save(heatmap_dir / f"class_{cls_idx:03d}_{safe_name}_semantic.png")
-                final_img.save(heatmap_dir / f"class_{cls_idx:03d}_{safe_name}_final.png")
+                semantic_img.save(
+                    heatmap_dir / f"rank_{rank:03d}_class_{cls_idx:03d}_{safe_name}_semantic.png"
+                )
+                final_img.save(
+                    heatmap_dir / f"rank_{rank:03d}_class_{cls_idx:03d}_{safe_name}_final.png"
+                )
 
     def _get_epoch_key(self, stage: str, epoch: Optional[int]) -> Tuple[str, int]:
         return stage, (-1 if epoch is None else int(epoch))

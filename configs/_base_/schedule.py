@@ -13,7 +13,7 @@ train_cfg = dict(
     eval_interval=2000,
     monitor='semantic.miou',
     monitor_mode='max',
-    max_keep_ckpts=5,
+    max_keep_ckpts=10,
     auto_resume=False,
     device='cuda',
 )

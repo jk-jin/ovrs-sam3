@@ -29,7 +29,7 @@ model = dict(
         ],
         num_extra_tokens=4,
         normalize_label_for_clip=True,
-        clip_token_global_scale=0.4,
+        clip_token_global_scale=0.5,
     ),
 
     freeze_cfg=dict(
@@ -42,6 +42,8 @@ model = dict(
             "core.clip_text_to_image_norm",
             "core.clip_to_sam3_text_attn",
             "core.clip_to_sam3_text_norm",
+            "core.clip_to_sam3_image_attn",
+            "core.clip_to_sam3_image_norm",
 
             # dynamic gate
             "core.clip_dynamic_gate",
@@ -51,25 +53,32 @@ model = dict(
             "core.presence_cross_attn",
             "core.presence_cross_attn_norm",
             "core.presence_head",
+
+            "adapter.presence_modulation_alpha",
         ],
         frozen_modules=[],
+    ),
+
+    adapter_cfg=dict(
+        presence_base=0.1,
+        init_presence_modulation_alpha=1.0,
     ),
 
     criterion_cfg=dict(
         ignore_index=255,
 
         # original semantic mask supervision
-        bce_weight=0.2,
-        dice_weight=0.5,
+        bce_weight=0.4,
+        dice_weight=0.1,
 
         # presence supervision
         presence_bce_weight=1.0,
         presence_pos_weight=1.0,
 
         # final score map supervision
-        final_bce_weight=0.4,
-		final_dice_weight=0.5,
-        final_ce_weight=0.5,
+        final_bce_weight=0.1,
+		final_dice_weight=0.1,
+        final_ce_weight=0.1,
 
         # other loss hyper-parameters
         bce_class_balance_clamp_min=0.2,
@@ -90,7 +99,7 @@ val_dataloader = dict(
 
 eval_cfg = dict(
     ignore_index=255,
-    prob_thd=0.5,
+    prob_thd=0.0,
     bg_idx=0,
     use_score_map=True,
 )
@@ -98,34 +107,57 @@ eval_cfg = dict(
 optim_wrapper = dict(
     optimizer=dict(
         type="AdamW",
-        lr=3e-4,
+        lr=3e-5,
         weight_decay=0.01,
         betas=(0.9, 0.999),
         paramwise_cfg=dict(
             norm_decay_mult=0.0,
             custom_keys={
+                # -------- 第一层：融合投影 / 早期跨模态对齐，最稳 --------
                 "core.clip_text_proj": dict(lr_mult=1.0, decay_mult=1.0),
                 "core.clip_image_proj": dict(lr_mult=1.0, decay_mult=1.0),
-                "core.clip_text_to_image_attn": dict(lr_mult=1.0, decay_mult=1.0),
-                "core.clip_to_sam3_text_attn": dict(lr_mult=1.0, decay_mult=1.0),
-                "core.presence_query_proj": dict(lr_mult=1.0, decay_mult=1.0),
-                "core.presence_cross_attn": dict(lr_mult=1.0, decay_mult=1.0),
-                "core.presence_head": dict(lr_mult=1.0, decay_mult=1.0),
+
+                "core.clip_text_to_image_attn": dict(lr_mult=1.5, decay_mult=1.0),
+                "core.clip_text_to_image_norm": dict(lr_mult=1.5, decay_mult=0.0),
+
+                "core.clip_to_sam3_text_attn": dict(lr_mult=2.0, decay_mult=1.0),
+                "core.clip_to_sam3_text_norm": dict(lr_mult=2.0, decay_mult=0.0),
+
+                "core.clip_to_sam3_image_attn": dict(lr_mult=2.5, decay_mult=1.0),
+                "core.clip_to_sam3_image_norm": dict(lr_mult=2.5, decay_mult=0.0),
+
+                # -------- 第二层：直接控制融合强度 / 最终调制，中速偏快 --------
+                "core.clip_dynamic_gate": dict(lr_mult=6.0, decay_mult=0.0),
+                "adapter.presence_modulation_alpha": dict(lr_mult=4.0, decay_mult=0.0),
+
+                # -------- 第三层：presence 分支，最快 --------
+                "core.presence_query_proj": dict(lr_mult=8.0, decay_mult=1.0),
+                "core.presence_cross_attn": dict(lr_mult=8.0, decay_mult=1.0),
+                "core.presence_cross_attn_norm": dict(lr_mult=8.0, decay_mult=0.0),
+                "core.presence_head": dict(lr_mult=8.0, decay_mult=1.0),
             },
         ),
     )
 )
 
-param_scheduler = dict(
-    type="CosineAnnealingLR",
-    T_max=8000,
-    eta_min=1e-6,
-)
+param_scheduler = [
+    dict(
+        type="LinearLR",
+        start_factor=0.1,
+        total_iters=300,
+        end=300,
+    ),
+    dict(
+        type="CosineAnnealingLR",
+        T_max=3700,
+        eta_min=1e-6,
+    )
+]
 
 train_cfg = dict(
     max_iters=4000,
-    save_interval=1000,
-    eval_interval=1000,
+    save_interval=500,
+    eval_interval=4000,
     log_window_size=20,
     use_amp=True,
     grad_clip_norm=0.1,

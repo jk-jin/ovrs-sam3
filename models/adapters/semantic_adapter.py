@@ -11,8 +11,16 @@ from ..task_modes import OUTPUT_KEYS
 
 
 class SemanticSegAdapter(nn.Module):
-    def __init__(self):
+    def __init__(
+        self,
+        presence_base: float = 0.5,
+        init_presence_modulation_alpha: float = 1.0,
+    ):
         super().__init__()
+        self.presence_base = float(presence_base)
+        self.presence_modulation_alpha = nn.Parameter(
+            torch.tensor(float(init_presence_modulation_alpha))
+        )
 
     @staticmethod
     def _extract_semantic_logits(
@@ -119,7 +127,48 @@ class SemanticSegAdapter(nn.Module):
                 f"semantic_logits.shape[:2]={tuple(semantic_logits.shape[:2])}, "
                 f"presence_logits.shape={tuple(presence_logits.shape)}"
             )
-    
+
+    def _build_final_logits(
+            self,
+            semantic_logits: torch.Tensor,
+            presence_logits: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            semantic_logits: [B, C, H, W]
+            presence_logits: [B, C]
+
+        Returns:
+            final_logits: [B, C, H, W]
+            presence_score: [B, C]
+        """
+        if semantic_logits.dim() != 4:
+            raise ValueError(
+                f"Expected semantic_logits as [B, C, H, W], got {tuple(semantic_logits.shape)}"
+            )
+        if presence_logits.dim() != 2:
+            raise ValueError(
+                f"Expected presence_logits as [B, C], got {tuple(presence_logits.shape)}"
+            )
+        if semantic_logits.shape[:2] != presence_logits.shape:
+            raise ValueError(
+                "Shape mismatch between semantic_logits and presence_logits: "
+                f"{tuple(semantic_logits.shape[:2])} vs {tuple(presence_logits.shape)}"
+            )
+
+        presence_score = presence_logits.sigmoid()  # [B, C]
+
+        presence_modulation_map = torch.sigmoid(
+            semantic_logits * self.presence_modulation_alpha
+        )  # [B, C, H, W]
+
+        spatial_presence = self.presence_base + (
+                presence_score[:, :, None, None] * presence_modulation_map
+        )  # [B, C, H, W]
+
+        final_logits = semantic_logits * spatial_presence  # [B, C, H, W]
+        return final_logits, presence_score
+
     def _build_train_outputs(
         self,
         raw_outputs: Dict[str, torch.Tensor],
@@ -143,9 +192,16 @@ class SemanticSegAdapter(nn.Module):
             presence_logits=presence_logits,
         )
 
+        final_logits, presence_score = self._build_final_logits(
+            semantic_logits=semantic_logits,
+            presence_logits=presence_logits,
+        )
+
         return {
             OUTPUT_KEYS.semantic_logits: semantic_logits,
             OUTPUT_KEYS.presence_logits: presence_logits,
+            OUTPUT_KEYS.presence_score: presence_score,
+            OUTPUT_KEYS.final_logits: final_logits,
         }
 
     def _build_inference_outputs(
@@ -172,10 +228,12 @@ class SemanticSegAdapter(nn.Module):
         )
 
         semantic_score_map = semantic_logits.sigmoid()
-        presence_score = presence_logits.sigmoid()
-        
-        presence_score_map = presence_score.unsqueeze(-1).unsqueeze(-1)  # [B, C, 1, 1]
-        final_logits = semantic_logits * presence_score_map
+
+        final_logits, presence_score = self._build_final_logits(
+            semantic_logits=semantic_logits,
+            presence_logits=presence_logits,
+        )
+
         final_score_map = final_logits.sigmoid()
         final_pred = final_score_map.argmax(dim=1)
 
@@ -184,6 +242,7 @@ class SemanticSegAdapter(nn.Module):
             OUTPUT_KEYS.semantic_score_map: semantic_score_map,
             OUTPUT_KEYS.presence_logits: presence_logits,
             OUTPUT_KEYS.presence_score: presence_score,
+            OUTPUT_KEYS.final_logits: final_logits,
             OUTPUT_KEYS.final_score_map: final_score_map,
             OUTPUT_KEYS.final_pred: final_pred,
         }

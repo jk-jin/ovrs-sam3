@@ -97,7 +97,7 @@ class Sam3Image(torch.nn.Module):
         self.presence_cross_attn = nn.MultiheadAttention(
             embed_dim=self.hidden_dim,
             num_heads=8,
-            dropout=0.0,
+            dropout=0.1,
             batch_first=True,
         )
         self.presence_cross_attn_norm = nn.LayerNorm(self.hidden_dim)
@@ -106,6 +106,7 @@ class Sam3Image(torch.nn.Module):
             nn.LayerNorm(self.hidden_dim),
             nn.Linear(self.hidden_dim, self.hidden_dim),
             nn.GELU(),
+            nn.Dropout(0.1),
             nn.Linear(self.hidden_dim, 1),
         )
 
@@ -134,25 +135,34 @@ class Sam3Image(torch.nn.Module):
 
         self.clip_text_to_image_attn = None
         self.clip_text_to_image_norm = None
+        self.clip_to_sam3_text_attn = None
+        self.clip_to_sam3_text_norm = None
+        self.clip_to_sam3_image_attn = None
+        self.clip_to_sam3_image_norm = None
         if self.clip_text_encoder is not None and self.clip_image_encoder is not None:
             self.clip_text_to_image_attn = nn.MultiheadAttention(
                 embed_dim=self.hidden_dim,
                 num_heads=8,
-                dropout=0.0,
+                dropout=0.1,
                 batch_first=True,
             )
             self.clip_text_to_image_norm = nn.LayerNorm(self.hidden_dim)
 
-        self.clip_to_sam3_text_attn = None
-        self.clip_to_sam3_text_norm = None
-        if self.clip_text_encoder is not None:
             self.clip_to_sam3_text_attn = nn.MultiheadAttention(
                 embed_dim=self.hidden_dim,
                 num_heads=8,
-                dropout=0.0,
+                dropout=0.1,
                 batch_first=True,
             )
             self.clip_to_sam3_text_norm = nn.LayerNorm(self.hidden_dim)
+
+            self.clip_to_sam3_image_attn = nn.MultiheadAttention(
+                embed_dim=self.hidden_dim,
+                num_heads=8,
+                dropout=0.1,
+                batch_first=True,
+            )
+            self.clip_to_sam3_image_norm = nn.LayerNorm(self.hidden_dim)
 
         self.prompt_chunk_size = None
 
@@ -548,6 +558,48 @@ class Sam3Image(torch.nn.Module):
 
         return feats, mask
 
+    def _expand_sam3_image_to_pairs(
+            self,
+            backbone_out: Dict[str, torch.Tensor],
+            img_ids: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            backbone_out:
+                must contain backbone_fpn
+            img_ids:
+                [B*C], each pair maps to one image id
+
+        Returns:
+            sam3_image_feats: [B*C, N, D]
+            sam3_image_mask:  [B*C, N]
+        """
+        if "backbone_fpn" not in backbone_out:
+            raise KeyError("backbone_out must contain 'backbone_fpn'.")
+
+        vis_feats = backbone_out["backbone_fpn"][-self.num_feature_levels:]
+        if len(vis_feats) != 1:
+            raise ValueError(
+                f"Current implementation expects exactly one feature level, got {len(vis_feats)}"
+            )
+
+        feat = vis_feats[0]  # [B, D, H, W]
+        if feat.ndim != 4:
+            raise ValueError(
+                f"Expected SAM3 image feat as [B, D, H, W], got {tuple(feat.shape)}"
+            )
+
+        pair_feat = feat[img_ids]  # [B*C, D, H, W]
+        pair_feat = pair_feat.flatten(2).transpose(1, 2).contiguous()  # [B*C, N, D]
+
+        pair_mask = torch.zeros(
+            (pair_feat.shape[0], pair_feat.shape[1]),
+            dtype=torch.bool,
+            device=pair_feat.device,
+        )
+
+        return pair_feat, pair_mask
+
     def _fuse_clip_text_tokens_with_image(
         self,
         clip_text_tokens: torch.Tensor,
@@ -675,6 +727,77 @@ class Sam3Image(torch.nn.Module):
         )
 
         aligned = self.clip_to_sam3_text_norm(query + attn_out)  # [B*C, K, D]
+        aligned = aligned.transpose(0, 1).contiguous()  # [K, B*C, D]
+
+        return aligned, clip_pair_mask
+
+    def _align_clip_pair_tokens_with_sam3_image(
+            self,
+            clip_pair_tokens: torch.Tensor,
+            clip_pair_mask: torch.Tensor,
+            sam3_image_feats: torch.Tensor,
+            sam3_image_mask: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self.clip_to_sam3_image_attn is None:
+            raise RuntimeError("clip_to_sam3_image_attn is not initialized.")
+        if self.clip_to_sam3_image_norm is None:
+            raise RuntimeError("clip_to_sam3_image_norm is not initialized.")
+
+        if clip_pair_tokens.ndim != 3:
+            raise ValueError(
+                f"Expected clip_pair_tokens as [K, B*C, D], got {tuple(clip_pair_tokens.shape)}"
+            )
+        if clip_pair_mask.ndim != 2:
+            raise ValueError(
+                f"Expected clip_pair_mask as [B*C, K], got {tuple(clip_pair_mask.shape)}"
+            )
+        if sam3_image_feats.ndim != 3:
+            raise ValueError(
+                f"Expected sam3_image_feats as [B*C, N, D], got {tuple(sam3_image_feats.shape)}"
+            )
+        if sam3_image_mask.ndim != 2:
+            raise ValueError(
+                f"Expected sam3_image_mask as [B*C, N], got {tuple(sam3_image_mask.shape)}"
+            )
+
+        num_tokens, num_pairs, dim = clip_pair_tokens.shape
+        if clip_pair_mask.shape != (num_pairs, num_tokens):
+            raise ValueError(
+                f"clip_pair_mask shape mismatch: expected {(num_pairs, num_tokens)}, "
+                f"got {tuple(clip_pair_mask.shape)}"
+            )
+        if sam3_image_feats.shape[0] != num_pairs:
+            raise ValueError(
+                f"sam3_image_feats first dim mismatch: expected {num_pairs}, "
+                f"got {sam3_image_feats.shape[0]}"
+            )
+        if sam3_image_feats.shape[2] != dim:
+            raise ValueError(
+                f"Feature dim mismatch: clip_pair_tokens dim={dim}, "
+                f"sam3_image_feats dim={sam3_image_feats.shape[2]}"
+            )
+        if sam3_image_mask.shape[0] != num_pairs:
+            raise ValueError(
+                f"sam3_image_mask first dim mismatch: expected {num_pairs}, "
+                f"got {sam3_image_mask.shape[0]}"
+            )
+        if sam3_image_mask.shape[1] != sam3_image_feats.shape[1]:
+            raise ValueError(
+                f"sam3_image_mask second dim mismatch: expected {sam3_image_feats.shape[1]}, "
+                f"got {sam3_image_mask.shape[1]}"
+            )
+
+        query = clip_pair_tokens.transpose(0, 1).contiguous()  # [B*C, K, D]
+
+        attn_out, _ = self.clip_to_sam3_image_attn(
+            query=query,
+            key=sam3_image_feats,
+            value=sam3_image_feats,
+            key_padding_mask=sam3_image_mask,
+            need_weights=False,
+        )
+
+        aligned = self.clip_to_sam3_image_norm(query + attn_out)  # [B*C, K, D]
         aligned = aligned.transpose(0, 1).contiguous()  # [K, B*C, D]
 
         return aligned, clip_pair_mask
@@ -1026,6 +1149,13 @@ class Sam3Image(torch.nn.Module):
             if "language_embeds" in chunk_text_cache:
                 chunk_backbone_out["language_embeds"] = chunk_text_cache["language_embeds"]
 
+            chunk_find_input = self._build_prompt_expanded_find_stage(
+                batch_size=batch_size,
+                num_chunk_classes=num_chunk_classes,
+                device=device,
+                base_find_input=base_find_input,
+            )
+
             if "clip_text_tokens_native" in chunk_text_cache:
                 if self.clip_text_proj is None:
                     raise RuntimeError(
@@ -1074,6 +1204,18 @@ class Sam3Image(torch.nn.Module):
                     sam3_pair_text_mask=sam3_pair_mask,
                 )
 
+                sam3_image_pair_feats, sam3_image_pair_mask = self._expand_sam3_image_to_pairs(
+                    backbone_out=chunk_backbone_out,
+                    img_ids=chunk_find_input.img_ids,
+                )
+
+                pair_tokens, pair_mask = self._align_clip_pair_tokens_with_sam3_image(
+                    clip_pair_tokens=pair_tokens,
+                    clip_pair_mask=pair_mask,
+                    sam3_image_feats=sam3_image_pair_feats,
+                    sam3_image_mask=sam3_image_pair_mask,
+                )
+
                 clip_summary, sam3_summary = self._build_pair_summaries(
                     clip_pair_tokens=pair_tokens,
                     clip_pair_mask=pair_mask,
@@ -1096,13 +1238,6 @@ class Sam3Image(torch.nn.Module):
                 chunk_backbone_out["clip_language_features_pair"] = pair_tokens
                 chunk_backbone_out["clip_language_mask_pair"] = pair_mask
                 chunk_backbone_out["presence_query_pair"] = presence_query
-
-            chunk_find_input = self._build_prompt_expanded_find_stage(
-                batch_size=batch_size,
-                num_chunk_classes=num_chunk_classes,
-                device=device,
-                base_find_input=base_find_input,
-            )
 
             geometric_prompt = Prompt(
                 box_embeddings=chunk_find_input.input_boxes,

@@ -125,6 +125,10 @@ class CriterionConfig:
 	
     presence_pos_weight: float = 1.0
 
+@dataclass
+class AdapterConfig:
+    presence_base: float = 0.5
+    init_presence_modulation_alpha: float = 1.0
 
 @dataclass
 class SegmentorBuildConfig:
@@ -142,7 +146,7 @@ class SegmentorBuildConfig:
     freeze_cfg: FreezeConfig = field(default_factory=FreezeConfig)
     openclip_cfg: OpenCLIPConfig = field(default_factory=OpenCLIPConfig)
     criterion_cfg: CriterionConfig = field(default_factory=CriterionConfig)
-
+    adapter_cfg: AdapterConfig = field(default_factory=AdapterConfig)
 
 class FrozenModuleMixin:
     @staticmethod
@@ -394,11 +398,22 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             return CriterionConfig(**dict(obj))
         raise TypeError(f"Unsupported criterion_cfg type: {type(obj)}")
 
+    @staticmethod
+    def _coerce_adapter_cfg(obj) -> AdapterConfig:
+        if isinstance(obj, AdapterConfig):
+            return obj
+        if obj is None:
+            return AdapterConfig()
+        if isinstance(obj, dict):
+            return AdapterConfig(**dict(obj))
+        raise TypeError(f"Unsupported adapter_cfg type: {type(obj)}")
+
     @classmethod
     def _normalize_build_cfg(cls, cfg: SegmentorBuildConfig) -> SegmentorBuildConfig:
         cfg.task_mode = normalize_task_mode(cfg.task_mode)
         cfg.openclip_cfg = cls._coerce_openclip_cfg(cfg.openclip_cfg)
         cfg.criterion_cfg = cls._coerce_criterion_cfg(cfg.criterion_cfg)
+        cfg.adapter_cfg = cls._coerce_adapter_cfg(cfg.adapter_cfg)
         return cfg
 
     @staticmethod
@@ -578,7 +593,12 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         cfg = cls._normalize_build_cfg(cfg)
 
         if cfg.task_mode == TASK_MODE_SEMANTIC:
-            return SemanticSegAdapter()
+            return SemanticSegAdapter(
+                presence_base=float(cfg.adapter_cfg.presence_base),
+                init_presence_modulation_alpha=float(
+                    cfg.adapter_cfg.init_presence_modulation_alpha
+                ),
+            )
 
         if cfg.task_mode == TASK_MODE_HYBRID:
             return HybridSegAdapter()

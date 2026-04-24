@@ -82,24 +82,13 @@ def build_log_getters(cfg) -> List[object]:
         out = {}
 
         model = trainer.model
-        core = getattr(model, "core", None)
-        if core is None:
-            return out
+        model = getattr(model, "module", model)
 
-        if hasattr(core, "presence_query_proj"):
-            weight = core.presence_query_proj.weight.detach()
-            out["presence_query_proj_weight_abs_mean"] = float(weight.abs().mean().item())
+        adapter = getattr(model, "adapter", None)
 
-        if hasattr(core, "presence_head") and isinstance(core.presence_head, torch.nn.Sequential):
-            last_linear = None
-            for module in reversed(core.presence_head):
-                if isinstance(module, torch.nn.Linear):
-                    last_linear = module
-                    break
-            if last_linear is not None:
-                out["presence_head_last_weight_abs_mean"] = float(
-                    last_linear.weight.detach().abs().mean().item()
-                )
+        if adapter is not None and hasattr(adapter, "presence_modulation_alpha"):
+            alpha = adapter.presence_modulation_alpha.detach()
+            out["presence_modulation_alpha"] = float(alpha.item())
 
         return out
 
