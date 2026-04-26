@@ -269,6 +269,67 @@ class UniversalSegmentationHead(SegmentationHead):
             self.pixel_decoder.out_dim, self.d_model, kernel_size=1
         )
 
+    def _apply_prompt_cross_attention(
+        self,
+        encoder_hidden_states: torch.Tensor,
+        prompt: Optional[torch.Tensor],
+        prompt_mask: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        if encoder_hidden_states is None:
+            raise ValueError("encoder_hidden_states must not be None.")
+
+        if encoder_hidden_states.dim() != 3:
+            raise ValueError(
+                "Expected encoder_hidden_states as [S, B, D], "
+                f"got {tuple(encoder_hidden_states.shape)}"
+            )
+
+        if self.cross_attend_prompt is None:
+            return encoder_hidden_states
+
+        if prompt is None:
+            raise ValueError(
+                "prompt must not be None when cross_attend_prompt is enabled."
+            )
+
+        if prompt_mask is None:
+            raise ValueError(
+                "prompt_mask must not be None when cross_attend_prompt is enabled."
+            )
+
+        encoder_delta = self.cross_attn_norm(encoder_hidden_states)
+        encoder_delta = self.cross_attend_prompt(
+            query=encoder_delta,
+            key=prompt,
+            value=prompt,
+            key_padding_mask=prompt_mask,
+        )[0]
+
+        return encoder_hidden_states + encoder_delta
+
+    def forward_semantic_from_encoder(
+        self,
+        backbone_feats: List[torch.Tensor],
+        image_ids: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
+        prompt: Optional[torch.Tensor] = None,
+        prompt_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        encoder_hidden_states = self._apply_prompt_cross_attention(
+            encoder_hidden_states=encoder_hidden_states,
+            prompt=prompt,
+            prompt_mask=prompt_mask,
+        )
+
+        pixel_embed = self._embed_pixels(
+            backbone_feats=backbone_feats,
+            image_ids=image_ids,
+            encoder_hidden_states=encoder_hidden_states,
+        )
+
+        semantic_logits = self.semantic_seg_head(pixel_embed)
+        return semantic_logits
+
     def forward(
         self,
         backbone_feats: List[torch.Tensor],
@@ -282,15 +343,11 @@ class UniversalSegmentationHead(SegmentationHead):
         assert encoder_hidden_states is not None
         bs = encoder_hidden_states.shape[1]
 
-        if self.cross_attend_prompt is not None:
-            tgt2 = self.cross_attn_norm(encoder_hidden_states)
-            tgt2 = self.cross_attend_prompt(
-                query=tgt2,
-                key=prompt,
-                value=prompt,
-                key_padding_mask=prompt_mask,
-            )[0]
-            encoder_hidden_states = tgt2 + encoder_hidden_states
+        encoder_hidden_states = self._apply_prompt_cross_attention(
+            encoder_hidden_states=encoder_hidden_states,
+            prompt=prompt,
+            prompt_mask=prompt_mask,
+        )
 
         presence_logit = None
         if self.presence_head is not None:

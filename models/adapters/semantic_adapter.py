@@ -69,6 +69,79 @@ class SemanticSegAdapter(nn.Module):
         return presence_logits
 
     @staticmethod
+    def _extract_encoder_aux_outputs(
+        raw_outputs: Dict[str, torch.Tensor],
+        semantic_logits: torch.Tensor,
+    ) -> list[Dict[str, torch.Tensor]]:
+        aux_outputs = raw_outputs.get("encoder_aux_outputs", None)
+        if aux_outputs is None:
+            return []
+
+        if not isinstance(aux_outputs, list):
+            raise TypeError(
+                "raw_outputs['encoder_aux_outputs'] must be a list, "
+                f"got {type(aux_outputs)}."
+            )
+
+        checked_outputs: list[Dict[str, torch.Tensor]] = []
+
+        expected_batch = int(semantic_logits.shape[0])
+        expected_classes = int(semantic_logits.shape[1])
+
+        for index, item in enumerate(aux_outputs):
+            if not isinstance(item, dict):
+                raise TypeError(
+                    "Each encoder aux output must be a dict, "
+                    f"got index={index}, type={type(item)}."
+                )
+
+            if "layer_id" not in item:
+                raise KeyError(
+                    f"encoder_aux_outputs[{index}] is missing key 'layer_id'."
+                )
+
+            if "semantic_logits" not in item:
+                raise KeyError(
+                    f"encoder_aux_outputs[{index}] is missing key 'semantic_logits'."
+                )
+
+            layer_id = int(item["layer_id"])
+            aux_logits = item["semantic_logits"]
+
+            if not torch.is_tensor(aux_logits):
+                raise TypeError(
+                    f"encoder_aux_outputs[{index}]['semantic_logits'] must be a tensor, "
+                    f"got {type(aux_logits)}."
+                )
+
+            if aux_logits.dim() != 4:
+                raise ValueError(
+                    f"Expected encoder aux semantic_logits at layer {layer_id} "
+                    f"as [B, C, H, W], got {tuple(aux_logits.shape)}."
+                )
+
+            if int(aux_logits.shape[0]) != expected_batch:
+                raise ValueError(
+                    f"Batch size mismatch for encoder aux layer {layer_id}: "
+                    f"expected {expected_batch}, got {int(aux_logits.shape[0])}."
+                )
+
+            if int(aux_logits.shape[1]) != expected_classes:
+                raise ValueError(
+                    f"Class count mismatch for encoder aux layer {layer_id}: "
+                    f"expected {expected_classes}, got {int(aux_logits.shape[1])}."
+                )
+
+            checked_outputs.append(
+                {
+                    "layer_id": layer_id,
+                    "semantic_logits": aux_logits,
+                }
+            )
+
+        return checked_outputs
+
+    @staticmethod
     def _resize_to_match(
         x: Optional[torch.Tensor],
         target_hw: tuple[int, int],
@@ -170,10 +243,10 @@ class SemanticSegAdapter(nn.Module):
         return final_logits, presence_score
 
     def _build_train_outputs(
-        self,
-        raw_outputs: Dict[str, torch.Tensor],
-        batch: BatchedDatapoint,
-        expected_num_classes: Optional[int],
+            self,
+            raw_outputs: Dict[str, torch.Tensor],
+            batch: BatchedDatapoint,
+            expected_num_classes: Optional[int],
     ) -> Dict[str, torch.Tensor]:
         semantic_logits = self._extract_semantic_logits(raw_outputs)
         presence_logits = self._extract_presence_logits(raw_outputs)
@@ -197,12 +270,21 @@ class SemanticSegAdapter(nn.Module):
             presence_logits=presence_logits,
         )
 
-        return {
+        train_outputs = {
             OUTPUT_KEYS.semantic_logits: semantic_logits,
             OUTPUT_KEYS.presence_logits: presence_logits,
             OUTPUT_KEYS.presence_score: presence_score,
             OUTPUT_KEYS.final_logits: final_logits,
         }
+
+        encoder_aux_outputs = self._extract_encoder_aux_outputs(
+            raw_outputs=raw_outputs,
+            semantic_logits=semantic_logits,
+        )
+        if len(encoder_aux_outputs) > 0:
+            train_outputs["encoder_aux_outputs"] = encoder_aux_outputs
+
+        return train_outputs
 
     def _build_inference_outputs(
         self,

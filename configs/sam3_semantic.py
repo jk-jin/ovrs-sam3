@@ -3,7 +3,7 @@ _base_ = [
     "./_base_/optimizer.py",
     "./_base_/schedule.py",
     "./_base_/visualization.py",
-    "./datasets/potsdam.py",
+    "./datasets/isaid.py",
 ]
 
 model = dict(
@@ -30,6 +30,12 @@ model = dict(
         num_extra_tokens=4,
         normalize_label_for_clip=True,
         clip_token_global_scale=2,
+    ),
+
+    encoder_aux_cfg=dict(
+        enabled=True,
+        layers=[2, 4],
+        train_only=True,
     ),
 
     freeze_cfg=dict(
@@ -71,7 +77,7 @@ model = dict(
     criterion_cfg=dict(
         ignore_index=255,
 
-        # original semantic mask supervision
+        # final encoder layer semantic supervision
         bce_weight=0.4,
         dice_weight=0.1,
 
@@ -81,8 +87,17 @@ model = dict(
 
         # final score map supervision
         final_bce_weight=0.1,
-		final_dice_weight=0.1,
+        final_dice_weight=0.1,
         final_ce_weight=0.1,
+
+        # encoder intermediate layer supervision
+        encoder_aux_loss_weight=0.3,
+        encoder_aux_bce_weight=0.4,
+        encoder_aux_dice_weight=0.1,
+        encoder_aux_layer_weights={
+            2: 0.5,
+            4: 1.0,
+        },
 
         # other loss hyper-parameters
         bce_class_balance_clamp_min=0.2,
@@ -92,7 +107,7 @@ model = dict(
 )
 
 train_dataloader = dict(
-    batch_size=4,
+    batch_size=2,
     num_workers=8,
 )
 

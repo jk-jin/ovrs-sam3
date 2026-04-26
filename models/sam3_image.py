@@ -260,6 +260,7 @@ class Sam3Image(torch.nn.Module):
         clip_image_encoder=None,
         clip_text_encoder=None,
         openclip_cfg=None,
+        encoder_aux_cfg=None,
         task_mode: str = TASK_MODE_SEMANTIC,
         **kwargs,
     ):
@@ -305,6 +306,40 @@ class Sam3Image(torch.nn.Module):
             raise NotImplementedError(
                 "Sam3Image currently only supports semantic task mode."
             )
+
+        if encoder_aux_cfg is None:
+            self.encoder_aux_enabled = False
+            self.encoder_aux_layer_ids = []
+            self.encoder_aux_train_only = True
+        else:
+            if isinstance(encoder_aux_cfg, dict):
+                aux_enabled = encoder_aux_cfg.get("enabled", False)
+                aux_layers = encoder_aux_cfg.get("layers", [])
+                aux_train_only = encoder_aux_cfg.get("train_only", True)
+            else:
+                aux_enabled = getattr(encoder_aux_cfg, "enabled", False)
+                aux_layers = getattr(encoder_aux_cfg, "layers", [])
+                aux_train_only = getattr(encoder_aux_cfg, "train_only", True)
+
+            self.encoder_aux_enabled = bool(aux_enabled)
+            self.encoder_aux_layer_ids = sorted({int(x) for x in aux_layers})
+            self.encoder_aux_train_only = bool(aux_train_only)
+
+        if self.encoder_aux_enabled:
+            if len(self.encoder_aux_layer_ids) == 0:
+                raise ValueError(
+                    "encoder_aux_cfg.enabled=True, but encoder_aux_cfg.layers is empty."
+                )
+            invalid_layers = [
+                layer_id
+                for layer_id in self.encoder_aux_layer_ids
+                if layer_id < 1
+            ]
+            if len(invalid_layers) > 0:
+                raise ValueError(
+                    f"encoder_aux_cfg.layers contains invalid layer ids: {invalid_layers}. "
+                    "Layer ids must be 1-based positive integers."
+                )
 
         self.clip_extra_token_templates = []
         self.num_clip_extra_tokens = 0
@@ -520,6 +555,164 @@ class Sam3Image(torch.nn.Module):
         if chunk_size <= 0:
             return num_classes
         return min(chunk_size, num_classes)
+
+    def _should_return_encoder_intermediate(self) -> bool:
+        if not self.encoder_aux_enabled:
+            return False
+
+        if len(self.encoder_aux_layer_ids) == 0:
+            return False
+
+        if self.encoder_aux_train_only and not self.training:
+            return False
+
+        return True
+
+    @staticmethod
+    def _infer_pair_layout_from_find_input(
+        find_input: FindStage,
+    ) -> Tuple[int, int]:
+        img_ids = find_input.img_ids
+        text_ids = find_input.text_ids
+
+        if img_ids is None or text_ids is None:
+            raise ValueError("find_input.img_ids and find_input.text_ids must not be None.")
+
+        if img_ids.dim() != 1:
+            raise ValueError(f"Expected find_input.img_ids as 1D tensor, got {tuple(img_ids.shape)}")
+
+        if text_ids.dim() != 1:
+            raise ValueError(f"Expected find_input.text_ids as 1D tensor, got {tuple(text_ids.shape)}")
+
+        if img_ids.numel() != text_ids.numel():
+            raise ValueError(
+                "find_input.img_ids and find_input.text_ids must have the same length, "
+                f"got {img_ids.numel()} and {text_ids.numel()}."
+            )
+
+        num_pairs = int(img_ids.numel())
+        if num_pairs <= 0:
+            raise ValueError("find_input contains no image-class pairs.")
+
+        batch_size = int(img_ids.max().item()) + 1
+        num_chunk_classes = int(text_ids.max().item()) + 1
+
+        expected_pairs = batch_size * num_chunk_classes
+        if expected_pairs != num_pairs:
+            raise ValueError(
+                "Cannot infer semantic pair layout: "
+                f"batch_size={batch_size}, num_chunk_classes={num_chunk_classes}, "
+                f"expected_pairs={expected_pairs}, actual_pairs={num_pairs}."
+            )
+
+        return batch_size, num_chunk_classes
+
+    @staticmethod
+    def _reshape_encoder_aux_pair_logits(
+        pair_logits: torch.Tensor,
+        batch_size: int,
+        num_chunk_classes: int,
+        layer_id: int,
+    ) -> torch.Tensor:
+        if pair_logits.dim() != 4:
+            raise ValueError(
+                f"Expected encoder aux logits at layer {layer_id} as "
+                f"[B*C_chunk, 1, H, W], got {tuple(pair_logits.shape)}"
+            )
+
+        expected_pairs = int(batch_size) * int(num_chunk_classes)
+        if pair_logits.shape[0] != expected_pairs:
+            raise ValueError(
+                f"Encoder aux logits pair count mismatch at layer {layer_id}: "
+                f"expected {expected_pairs}, got {pair_logits.shape[0]}."
+            )
+
+        if pair_logits.shape[1] != 1:
+            raise ValueError(
+                f"Expected encoder aux logits channel dim = 1 at layer {layer_id}, "
+                f"got shape {tuple(pair_logits.shape)}."
+            )
+
+        _, _, out_h, out_w = pair_logits.shape
+
+        chunk_logits = pair_logits.reshape(
+            int(batch_size),
+            int(num_chunk_classes),
+            1,
+            int(out_h),
+            int(out_w),
+        )[:, :, 0]
+
+        return chunk_logits.contiguous()
+
+    def _build_encoder_aux_outputs(
+        self,
+        backbone_out: Dict[str, torch.Tensor],
+        find_input: FindStage,
+        encoder_out: Dict[str, torch.Tensor],
+        prompt: torch.Tensor,
+        prompt_mask: torch.Tensor,
+    ) -> List[Dict[str, torch.Tensor]]:
+        if not self._should_return_encoder_intermediate():
+            return []
+
+        intermediate_memory = encoder_out.get("intermediate_memory", [])
+        if len(intermediate_memory) == 0:
+            return []
+
+        if self.segmentation_head is None:
+            raise RuntimeError(
+                "encoder aux supervision requires self.segmentation_head, but it is None."
+            )
+
+        if not hasattr(self.segmentation_head, "forward_semantic_from_encoder"):
+            raise AttributeError(
+                "segmentation_head must provide forward_semantic_from_encoder() "
+                "before encoder aux outputs can be built."
+            )
+
+        if "backbone_fpn" not in backbone_out:
+            raise KeyError("backbone_out must contain 'backbone_fpn'.")
+
+        batch_size, num_chunk_classes = self._infer_pair_layout_from_find_input(
+            find_input=find_input,
+        )
+
+        aux_outputs: List[Dict[str, torch.Tensor]] = []
+
+        for item in intermediate_memory:
+            if "layer_id" not in item or "memory" not in item:
+                raise KeyError(
+                    "Each item in encoder_out['intermediate_memory'] must contain "
+                    "'layer_id' and 'memory'."
+                )
+
+            layer_id = int(item["layer_id"])
+            layer_memory = item["memory"]
+
+            pair_logits = self.segmentation_head.forward_semantic_from_encoder(
+                backbone_feats=backbone_out["backbone_fpn"],
+                image_ids=find_input.img_ids,
+                encoder_hidden_states=layer_memory,
+                prompt=prompt,
+                prompt_mask=prompt_mask,
+            )
+
+            chunk_logits = self._reshape_encoder_aux_pair_logits(
+                pair_logits=pair_logits,
+                batch_size=batch_size,
+                num_chunk_classes=num_chunk_classes,
+                layer_id=layer_id,
+            )
+
+            aux_outputs.append(
+                {
+                    "layer_id": layer_id,
+                    "semantic_logits": chunk_logits,
+                }
+            )
+
+        return aux_outputs
 
     def _detach_tree(self, obj: Any):
         if isinstance(obj, torch.Tensor):
@@ -1792,17 +1985,25 @@ class Sam3Image(torch.nn.Module):
         return prompt, prompt_mask, backbone_out
 
     def _run_encoder(
-        self,
-        backbone_out,
-        find_input,
-        prompt,
-        prompt_mask,
-        encoder_extra_kwargs: Optional[Dict] = None,
+            self,
+            backbone_out,
+            find_input,
+            prompt,
+            prompt_mask,
+            encoder_extra_kwargs: Optional[Dict] = None,
     ):
         feat_tuple = self._get_img_feats(backbone_out, find_input.img_ids)
         backbone_out, img_feats, img_pos_embeds, vis_feat_sizes = feat_tuple
 
         prompt_pos_embed = torch.zeros_like(prompt)
+
+        return_intermediate = self._should_return_encoder_intermediate()
+        intermediate_layer_ids = (
+            self.encoder_aux_layer_ids
+            if return_intermediate
+            else []
+        )
+
         memory = self.transformer.encoder(
             src=img_feats.copy(),
             src_key_padding_mask=None,
@@ -1812,7 +2013,12 @@ class Sam3Image(torch.nn.Module):
             prompt_key_padding_mask=prompt_mask,
             feat_sizes=vis_feat_sizes,
             encoder_extra_kwargs=encoder_extra_kwargs,
+            return_intermediate=return_intermediate,
+            intermediate_layer_ids=intermediate_layer_ids,
         )
+
+        if "intermediate_memory" not in memory:
+            memory["intermediate_memory"] = []
 
         encoder_out = {
             "encoder_hidden_states": memory["memory"],
@@ -1825,7 +2031,9 @@ class Sam3Image(torch.nn.Module):
             "prompt_before_enc": prompt,
             "prompt_after_enc": memory.get("memory_text", prompt),
             "prompt_mask": prompt_mask,
+            "intermediate_memory": memory["intermediate_memory"],
         }
+
         return backbone_out, encoder_out, feat_tuple
 
     def _run_semantic_segmentation_head(
@@ -1887,6 +2095,17 @@ class Sam3Image(torch.nn.Module):
                 "presence_query_pair is missing in backbone_out. "
                 "Current presence design requires CLIP-enhanced pair features."
             )
+
+        encoder_aux_outputs = self._build_encoder_aux_outputs(
+            backbone_out=backbone_out,
+            find_input=find_input,
+            encoder_out=encoder_out,
+            prompt=prompt,
+            prompt_mask=prompt_mask,
+        )
+
+        if len(encoder_aux_outputs) > 0:
+            out["encoder_aux_outputs"] = encoder_aux_outputs
 
         with torch.profiler.record_function("Sam3Image._run_presence_head"):
             presence_logits = self._run_presence_head(

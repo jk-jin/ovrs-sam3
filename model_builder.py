@@ -118,17 +118,30 @@ class CriterionConfig:
     final_bce_weight: float = 0.4
     final_dice_weight: float = 0.5
     final_ce_weight: float = 1.0
-	
+
+    encoder_aux_loss_weight: float = 0.3
+    encoder_aux_bce_weight: float = 0.4
+    encoder_aux_dice_weight: float = 0.1
+    encoder_aux_layer_weights: dict[int, float] = field(
+        default_factory=lambda: {2: 0.5, 4: 1.0}
+    )
+
     bce_class_balance_clamp_min: float = 0.2
     bce_class_balance_clamp_max: float = 5.0
     eps: float = 1e-6
-	
+
     presence_pos_weight: float = 1.0
 
 @dataclass
 class AdapterConfig:
     presence_base: float = 0.5
     init_presence_modulation_alpha: float = 1.0
+
+@dataclass
+class EncoderAuxConfig:
+    enabled: bool = False
+    layers: list[int] = field(default_factory=lambda: [2, 4])
+    train_only: bool = True
 
 @dataclass
 class SegmentorBuildConfig:
@@ -147,6 +160,7 @@ class SegmentorBuildConfig:
     openclip_cfg: OpenCLIPConfig = field(default_factory=OpenCLIPConfig)
     criterion_cfg: CriterionConfig = field(default_factory=CriterionConfig)
     adapter_cfg: AdapterConfig = field(default_factory=AdapterConfig)
+    encoder_aux_cfg: EncoderAuxConfig = field(default_factory=EncoderAuxConfig)
 
 class FrozenModuleMixin:
     @staticmethod
@@ -395,7 +409,13 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         if obj is None:
             return CriterionConfig()
         if isinstance(obj, dict):
-            return CriterionConfig(**dict(obj))
+            data = dict(obj)
+            if "encoder_aux_layer_weights" in data:
+                data["encoder_aux_layer_weights"] = {
+                    int(k): float(v)
+                    for k, v in dict(data["encoder_aux_layer_weights"]).items()
+                }
+            return CriterionConfig(**data)
         raise TypeError(f"Unsupported criterion_cfg type: {type(obj)}")
 
     @staticmethod
@@ -414,7 +434,21 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         cfg.openclip_cfg = cls._coerce_openclip_cfg(cfg.openclip_cfg)
         cfg.criterion_cfg = cls._coerce_criterion_cfg(cfg.criterion_cfg)
         cfg.adapter_cfg = cls._coerce_adapter_cfg(cfg.adapter_cfg)
+        cfg.encoder_aux_cfg = cls._coerce_encoder_aux_cfg(cfg.encoder_aux_cfg)
         return cfg
+
+    @staticmethod
+    def _coerce_encoder_aux_cfg(obj) -> EncoderAuxConfig:
+        if isinstance(obj, EncoderAuxConfig):
+            return obj
+        if obj is None:
+            return EncoderAuxConfig()
+        if isinstance(obj, dict):
+            data = dict(obj)
+            if "layers" in data:
+                data["layers"] = [int(x) for x in data["layers"]]
+            return EncoderAuxConfig(**data)
+        raise TypeError(f"Unsupported encoder_aux_cfg type: {type(obj)}")
 
     @staticmethod
     def _resolve_openclip_pretrained(pretrained: Optional[str]) -> Optional[str]:
@@ -577,6 +611,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             clip_image_encoder=clip_image_encoder,
             clip_text_encoder=clip_text_encoder,
             openclip_cfg=openclip_cfg_for_model,
+            encoder_aux_cfg=cfg.encoder_aux_cfg,
             task_mode=TASK_MODE_SEMANTIC,
         )
 
@@ -619,6 +654,13 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 final_bce_weight=float(cfg.criterion_cfg.final_bce_weight),
                 final_dice_weight=float(cfg.criterion_cfg.final_dice_weight),
                 final_ce_weight=float(cfg.criterion_cfg.final_ce_weight),
+                encoder_aux_loss_weight=float(cfg.criterion_cfg.encoder_aux_loss_weight),
+                encoder_aux_bce_weight=float(cfg.criterion_cfg.encoder_aux_bce_weight),
+                encoder_aux_dice_weight=float(cfg.criterion_cfg.encoder_aux_dice_weight),
+                encoder_aux_layer_weights={
+                    int(k): float(v)
+                    for k, v in dict(cfg.criterion_cfg.encoder_aux_layer_weights).items()
+                },
                 bce_class_balance_clamp_min=float(cfg.criterion_cfg.bce_class_balance_clamp_min),
                 bce_class_balance_clamp_max=float(cfg.criterion_cfg.bce_class_balance_clamp_max),
                 eps=float(cfg.criterion_cfg.eps),

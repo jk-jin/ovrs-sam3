@@ -378,33 +378,60 @@ class TransformerEncoder(nn.Module):
         )
 
     def forward(
-        self,
-        src: List[Tensor],
-        src_key_padding_masks: Optional[List[Tensor]] = None,
-        pos: Optional[List[Tensor]] = None,
-        prompt: Optional[Tensor] = None,
-        prompt_key_padding_mask: Optional[Tensor] = None,
-        encoder_extra_kwargs: Optional[Dict] = None,
-    ) -> Tuple[Tensor, Optional[Tensor], Tensor, Tensor, Tensor, Tensor]:
+            self,
+            src: List[Tensor],
+            src_key_padding_masks: Optional[List[Tensor]] = None,
+            pos: Optional[List[Tensor]] = None,
+            prompt: Optional[Tensor] = None,
+            prompt_key_padding_mask: Optional[Tensor] = None,
+            encoder_extra_kwargs: Optional[Dict] = None,
+            return_intermediate: bool = False,
+            intermediate_layer_ids: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
         """
-        Process multi-level features through the transformer encoder.
+        Process multi-level image features through transformer encoder layers.
 
         Args:
-            src: List of multi-level features, each with shape (batch_size, channels, height, width)
-            src_key_padding_masks: List of padding masks for each feature level, each with shape (batch_size, height, width)
-            pos: List of positional embeddings for each feature level, each with shape (batch_size, channels, height, width)
-            prompt: Optional text/prompt features to attend to, with shape (seq_len, batch_size, d_model)
-            prompt_key_padding_mask: Optional padding mask for prompt, with shape (batch_size, seq_len)
-            encoder_extra_kwargs: Optional additional arguments to pass to each encoder layer
+            src:
+                List of image feature maps. Each tensor shape is [B, D, H, W].
+            src_key_padding_masks:
+                Optional list of image padding masks.
+            pos:
+                Optional list of image positional embeddings. Each tensor shape is [B, D, H, W].
+            prompt:
+                Prompt tokens used as memory in image-to-prompt cross attention.
+                Shape is [B, L, D] because encoder layers use batch_first attention.
+            prompt_key_padding_mask:
+                Prompt padding mask. Shape is [B, L].
+            encoder_extra_kwargs:
+                Extra arguments passed to every encoder layer.
+            return_intermediate:
+                Whether to save selected intermediate encoder layer outputs.
+            intermediate_layer_ids:
+                1-based encoder layer ids to save. For a 6-layer encoder,
+                valid ids are 1, 2, 3, 4, 5, 6.
 
         Returns:
-            A tuple containing:
-            - output: Processed features with shape (seq_len, batch_size, d_model)
-            - key_padding_masks_flatten: Flattened padding masks
-            - lvl_pos_embed_flatten: Flattened positional embeddings
-            - level_start_index: Starting indices for each feature level
-            - spatial_shapes: Spatial dimensions of each feature level
-            - valid_ratios: Valid ratios for each feature level
+            A dict containing:
+                memory:
+                    Final encoder output, shape [S, B, D].
+                padding_mask:
+                    Flattened image padding mask, shape [S, B] or None.
+                pos_embed:
+                    Flattened image positional embedding, shape [S, B, D].
+                level_start_index:
+                    Start index of each feature level.
+                spatial_shapes:
+                    Spatial shape of each feature level.
+                valid_ratios:
+                    Valid ratios of each feature level.
+                intermediate_memory:
+                    Selected intermediate outputs.
+                    Each item is:
+                        {
+                            "layer_id": int,
+                            "memory": Tensor with shape [S, B, D],
+                        }
         """
         assert len(src) == self.num_feature_levels, (
             "must be equal to num_feature_levels"
@@ -413,7 +440,7 @@ class TransformerEncoder(nn.Module):
             assert len(src_key_padding_masks) == self.num_feature_levels
         if pos is not None:
             assert len(pos) == self.num_feature_levels
-        # Flatten multilevel feats and add level pos embeds
+
         (
             src_flatten,
             key_padding_masks_flatten,
@@ -423,63 +450,81 @@ class TransformerEncoder(nn.Module):
             spatial_shapes,
         ) = self._prepare_multilevel_features(src, src_key_padding_masks, pos)
 
-        reference_points = self.get_reference_points(
-            spatial_shapes, valid_ratios, device=src_flatten.device
+        _ = self.get_reference_points(
+            spatial_shapes,
+            valid_ratios,
+            device=src_flatten.device,
         )
 
+        if intermediate_layer_ids is None:
+            intermediate_layer_ids = []
+
+        intermediate_layer_ids = sorted({int(x) for x in intermediate_layer_ids})
+        if return_intermediate:
+            invalid_ids = [
+                layer_id
+                for layer_id in intermediate_layer_ids
+                if layer_id < 1 or layer_id > self.num_layers
+            ]
+            if len(invalid_ids) > 0:
+                raise ValueError(
+                    f"Invalid intermediate_layer_ids={invalid_ids}. "
+                    f"Valid range is [1, {self.num_layers}]."
+                )
+
+        intermediate_outputs: List[Dict[str, Tensor]] = []
+
         output = src_flatten
-        for layer in self.layers:
-            layer_kwargs = {}
+        for zero_based_layer_id, layer in enumerate(self.layers):
+            one_based_layer_id = zero_based_layer_id + 1
 
             assert isinstance(layer, TransformerEncoderLayer)
-            layer_kwargs["memory"] = prompt
-            layer_kwargs["memory_key_padding_mask"] = prompt_key_padding_mask
-            layer_kwargs["query_pos"] = lvl_pos_embed_flatten
-            layer_kwargs["tgt"] = output
-            layer_kwargs["tgt_key_padding_mask"] = key_padding_masks_flatten
+
+            layer_kwargs = {
+                "memory": prompt,
+                "memory_key_padding_mask": prompt_key_padding_mask,
+                "query_pos": lvl_pos_embed_flatten,
+                "tgt": output,
+                "tgt_key_padding_mask": key_padding_masks_flatten,
+            }
 
             if self.training:
                 assert self.use_act_checkpoint, "activation ckpt not enabled in encoder"
+
             if encoder_extra_kwargs is not None:
                 layer_kwargs.update(encoder_extra_kwargs)
+
             output = activation_ckpt_wrapper(layer)(
                 **layer_kwargs,
                 act_ckpt_enable=self.training and self.use_act_checkpoint,
             )
-        # return as seq first
-        return (
-            output.transpose(0, 1),
-            (
-                key_padding_masks_flatten.transpose(0, 1)
-                if key_padding_masks_flatten is not None
-                else None
-            ),
-            lvl_pos_embed_flatten.transpose(0, 1),
-            level_start_index,
-            spatial_shapes,
-            valid_ratios,
+
+            if return_intermediate and one_based_layer_id in intermediate_layer_ids:
+                intermediate_outputs.append(
+                    {
+                        "layer_id": one_based_layer_id,
+                        "memory": output.transpose(0, 1).contiguous(),
+                    }
+                )
+
+        padding_mask = (
+            key_padding_masks_flatten.transpose(0, 1)
+            if key_padding_masks_flatten is not None
+            else None
         )
+
+        return {
+            "memory": output.transpose(0, 1).contiguous(),
+            "padding_mask": padding_mask,
+            "pos_embed": lvl_pos_embed_flatten.transpose(0, 1).contiguous(),
+            "level_start_index": level_start_index,
+            "spatial_shapes": spatial_shapes,
+            "valid_ratios": valid_ratios,
+            "intermediate_memory": intermediate_outputs,
+        }
 
 
 class TransformerEncoderFusion(TransformerEncoder):
-    """
-    Transformer encoder that fuses text and image features.
-
-    This encoder extends TransformerEncoder to handle both text and image features,
-    with the ability to add pooled text features to image features for better
-    cross-modal fusion. It supports torch.compile for performance optimization.
-
-    Args:
-        layer: The encoder layer to be stacked multiple times
-        num_layers: Number of encoder layers to stack
-        d_model: Model dimension/hidden size
-        num_feature_levels: Number of feature levels to process
-        add_pooled_text_to_img_feat: Whether to add pooled text features to image features
-        pool_text_with_mask: Whether to use the mask when pooling text features
-        compile_mode: Mode for torch.compile, or None to disable compilation
-        **kwargs: Additional arguments to pass to the parent class
-    """
-
     def __init__(
         self,
         layer: nn.Module,
@@ -513,22 +558,25 @@ class TransformerEncoderFusion(TransformerEncoder):
         return None
 
     def forward(
-        self,
-        src: List[Tensor],
-        prompt: Tensor,
-        src_key_padding_mask: Optional[List[Tensor]] = None,
-        src_pos: Optional[List[Tensor]] = None,
-        prompt_key_padding_mask: Optional[Tensor] = None,
-        prompt_pos: Optional[Tensor] = None,
-        feat_sizes: Optional[List[int]] = None,
-        encoder_extra_kwargs: Optional[Dict] = None,
-    ):
-        # Restore spatial shapes of vision
-        bs = src[0].shape[1]  # seq first
+            self,
+            src: List[Tensor],
+            prompt: Tensor,
+            src_key_padding_mask: Optional[List[Tensor]] = None,
+            src_pos: Optional[List[Tensor]] = None,
+            prompt_key_padding_mask: Optional[Tensor] = None,
+            prompt_pos: Optional[Tensor] = None,
+            feat_sizes: Optional[List[int]] = None,
+            encoder_extra_kwargs: Optional[Dict] = None,
+            return_intermediate: bool = False,
+            intermediate_layer_ids: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
+        bs = src[0].shape[1]
+
         if feat_sizes is not None:
             assert len(feat_sizes) == len(src)
             if src_key_padding_mask is None:
                 src_key_padding_mask = [None] * len(src)
+
             for i, (h, w) in enumerate(feat_sizes):
                 src[i] = src[i].reshape(h, w, bs, -1).permute(2, 3, 0, 1)
                 src_pos[i] = src_pos[i].reshape(h, w, bs, -1).permute(2, 3, 0, 1)
@@ -538,44 +586,39 @@ class TransformerEncoderFusion(TransformerEncoder):
                     else None
                 )
         else:
-            assert all(x.dim == 4 for x in src), (
-                "expected list of (bs, c, h, w) tensors"
+            assert all(x.dim() == 4 for x in src), (
+                "expected list of [B, D, H, W] tensors"
             )
 
         if self.add_pooled_text_to_img_feat:
-            # Fusion: Add mean pooled text to image features
             pooled_text = pool_text_feat(
-                prompt, prompt_key_padding_mask, self.pool_text_with_mask
+                prompt,
+                prompt_key_padding_mask,
+                self.pool_text_with_mask,
             )
-            pooled_text = self.text_pooling_proj(pooled_text)[
-                ..., None, None
-            ]  # prompt is seq first
+            pooled_text = self.text_pooling_proj(pooled_text)[..., None, None]
             src = [x.add_(pooled_text) for x in src]
 
-        (
-            out,
-            key_padding_masks_flatten,
-            lvl_pos_embed_flatten,
-            level_start_index,
-            spatial_shapes,
-            valid_ratios,
-        ) = super().forward(
-            src,
+        encoder_out = super().forward(
+            src=src,
             src_key_padding_masks=src_key_padding_mask,
             pos=src_pos,
             prompt=prompt.transpose(0, 1),
             prompt_key_padding_mask=prompt_key_padding_mask,
             encoder_extra_kwargs=encoder_extra_kwargs,
+            return_intermediate=return_intermediate,
+            intermediate_layer_ids=intermediate_layer_ids,
         )
 
         return {
-            "memory": out,
-            "padding_mask": key_padding_masks_flatten,
-            "pos_embed": lvl_pos_embed_flatten,
+            "memory": encoder_out["memory"],
+            "padding_mask": encoder_out["padding_mask"],
+            "pos_embed": encoder_out["pos_embed"],
             "memory_text": prompt,
-            "level_start_index": level_start_index,
-            "spatial_shapes": spatial_shapes,
-            "valid_ratios": valid_ratios,
+            "level_start_index": encoder_out["level_start_index"],
+            "spatial_shapes": encoder_out["spatial_shapes"],
+            "valid_ratios": encoder_out["valid_ratios"],
+            "intermediate_memory": encoder_out["intermediate_memory"],
         }
 
 
