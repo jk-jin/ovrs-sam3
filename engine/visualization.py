@@ -27,6 +27,7 @@ class VisualizerConfig:
 
     save_presence_summary: bool = True
     save_score_heatmaps: bool = True
+    save_clip_argmax_prediction: bool = True
 
     vis_prob: float = 0.05
     max_samples_per_epoch: Optional[int] = 50
@@ -228,6 +229,57 @@ class PresenceAnalysisTask(VisualizationTask):
                     class_names=class_names,
                 )
 
+class ClipDenseArgmaxTask(VisualizationTask):
+    name = "clip_dense_argmax"
+
+    def run(self, manager: "VisualizationManager", ctx: VisualizationContext) -> None:
+        if not manager.cfg.save_clip_argmax_prediction:
+            return
+
+        clip_score_map = manager._build_clip_score_map_for_visualization(
+            model=ctx.model,
+            batch=ctx.batch,
+        )
+        if clip_score_map is None:
+            return
+
+        if clip_score_map.dim() != 4:
+            raise ValueError(
+                f"Expected clip_score_map as [B, C, Hc, Wc], got {tuple(clip_score_map.shape)}"
+            )
+
+        num_classes = int(clip_score_map.shape[1])
+
+        for b in ctx.selected_indices:
+            image_id = manager._extract_image_id(ctx.batch, b)
+            sample_dir = manager._resolve_sample_dir(
+                image_id=image_id,
+                epoch=ctx.epoch,
+                stage=ctx.stage,
+            )
+
+            overlay_image = manager._extract_overlay_image(ctx.batch, b)
+            out_hw = overlay_image.size[::-1]
+
+            clip_score_up = F.interpolate(
+                clip_score_map[b:b + 1],
+                size=out_hw,
+                mode="bilinear",
+                align_corners=False,
+            )[0]
+
+            clip_pred = clip_score_up.argmax(dim=0).long()
+
+            manager._colorize_label_map(
+                clip_pred.detach().cpu(),
+                num_classes=num_classes,
+            ).save(sample_dir / "clip_argmax_pred.png")
+
+            manager._overlay_label_map(
+                overlay_image,
+                clip_pred.detach().cpu(),
+                num_classes=num_classes,
+            ).save(sample_dir / "clip_argmax_overlay.png")
 
 class VisualizationManager:
     def __init__(self, cfg: VisualizerConfig):
@@ -241,7 +293,84 @@ class VisualizationManager:
         return [
             BaseSemanticOverlayTask(),
             PresenceAnalysisTask(),
+            ClipDenseArgmaxTask(),
         ]
+
+    @staticmethod
+    def _unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
+        return getattr(model, "module", model)
+
+    @classmethod
+    def _extract_core_model(cls, model: torch.nn.Module) -> Optional[torch.nn.Module]:
+        model = cls._unwrap_model(model)
+        return getattr(model, "core", None)
+
+    def _build_clip_score_map_for_visualization(
+            self,
+            model: torch.nn.Module,
+            batch: Any,
+    ) -> Optional[torch.Tensor]:
+        """
+        Build CLIP dense score map only for visualization.
+
+        Returns:
+            clip_score_map: [B, C, Hc, Wc]
+
+        符号说明：
+            B 表示 batch size。
+            C 表示类别数。
+            Hc, Wc 表示 CLIP patch score map 的高和宽。
+        """
+        core = self._extract_core_model(model)
+        if core is None:
+            return None
+
+        required_attrs = [
+            "clip_image_encoder",
+            "clip_text_encoder",
+            "ensure_text_cache",
+            "_build_clip_image_cache",
+            "_build_clip_dense_score_map",
+        ]
+        for name in required_attrs:
+            if not hasattr(core, name):
+                return None
+
+        if core.clip_image_encoder is None or core.clip_text_encoder is None:
+            return None
+
+        class_texts = list(getattr(batch, "find_text_batch", []))
+        if len(class_texts) == 0:
+            return None
+
+        device = core.device
+
+        with torch.no_grad():
+            core.ensure_text_cache(
+                class_texts=class_texts,
+                device=device,
+            )
+
+            clip_image_cache = core._build_clip_image_cache(
+                input=batch,
+                device=device,
+            )
+            if clip_image_cache is None:
+                return None
+
+            text_cache = getattr(core, "_text_cache", None)
+            if text_cache is None or "clip_text_tokens_native" not in text_cache:
+                return None
+
+            clip_score_map = core._build_clip_dense_score_map(
+                clip_image_cache=clip_image_cache,
+                clip_text_tokens=text_cache["clip_text_tokens_native"],
+            )
+
+        if clip_score_map is None:
+            return None
+
+        return clip_score_map.detach()
 
     @classmethod
     def from_cfg(

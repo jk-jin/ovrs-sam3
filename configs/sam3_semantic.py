@@ -3,7 +3,7 @@ _base_ = [
     "./_base_/optimizer.py",
     "./_base_/schedule.py",
     "./_base_/visualization.py",
-    "./datasets/loveda.py",
+    "./datasets/potsdam.py",
 ]
 
 model = dict(
@@ -29,21 +29,25 @@ model = dict(
         ],
         num_extra_tokens=4,
         normalize_label_for_clip=True,
-        clip_token_global_scale=0.5,
+        clip_token_global_scale=2,
     ),
 
     freeze_cfg=dict(
         train_adapters_only=True,
         trainable_modules=[
-            # openclip projection / alignment
+            # CLIP text projection
             "core.clip_text_proj",
-            "core.clip_image_proj",
-            "core.clip_text_to_image_attn",
-            "core.clip_text_to_image_norm",
+
+            # image fusion
+            "core.clip_sam_image_fusion",
+
+            # CLIP text -> fused image attention
+            "core.clip_text_to_fused_image_attn",
+            "core.clip_text_to_fused_image_norm",
+
+            # CLIP token -> SAM3 text attention
             "core.clip_to_sam3_text_attn",
             "core.clip_to_sam3_text_norm",
-            "core.clip_to_sam3_image_attn",
-            "core.clip_to_sam3_image_norm",
 
             # dynamic gate
             "core.clip_dynamic_gate",
@@ -113,29 +117,30 @@ optim_wrapper = dict(
         paramwise_cfg=dict(
             norm_decay_mult=0.0,
             custom_keys={
-                # -------- 第一层：融合投影 / 早期跨模态对齐，最稳 --------
+                # -------- 第一层：CLIP text projection，最稳 --------
                 "core.clip_text_proj": dict(lr_mult=1.0, decay_mult=1.0),
-                "core.clip_image_proj": dict(lr_mult=1.0, decay_mult=1.0),
 
-                "core.clip_text_to_image_attn": dict(lr_mult=1.5, decay_mult=1.0),
-                "core.clip_text_to_image_norm": dict(lr_mult=1.5, decay_mult=0.0),
+                # -------- 第二层：CLIP / SAM3 图像融合，新模块，中速偏快 --------
+                "core.clip_sam_image_fusion": dict(lr_mult=4.0, decay_mult=1.0),
+                "core.clip_sam_image_fusion.fusion_scale": dict(lr_mult=6.0, decay_mult=0.0),
+
+                # -------- 第三层：文本到融合图像、文本到 SAM3 文本注意力 --------
+                "core.clip_text_to_fused_image_attn": dict(lr_mult=2.0, decay_mult=1.0),
+                "core.clip_text_to_fused_image_norm": dict(lr_mult=2.0, decay_mult=0.0),
 
                 "core.clip_to_sam3_text_attn": dict(lr_mult=2.0, decay_mult=1.0),
                 "core.clip_to_sam3_text_norm": dict(lr_mult=2.0, decay_mult=0.0),
 
-                "core.clip_to_sam3_image_attn": dict(lr_mult=2.5, decay_mult=1.0),
-                "core.clip_to_sam3_image_norm": dict(lr_mult=2.5, decay_mult=0.0),
-
-                # -------- 第二层：直接控制融合强度 / 最终调制，中速偏快 --------
+                # -------- 第四层：直接控制融合强度 / 最终调制，偏快 --------
                 "core.clip_dynamic_gate": dict(lr_mult=6.0, decay_mult=0.0),
                 "adapter.presence_modulation_alpha": dict(lr_mult=4.0, decay_mult=0.0),
 
-                # -------- 第三层：presence 分支，最快 --------
+                # -------- 第五层：presence 分支，最快 --------
                 "core.presence_query_proj": dict(lr_mult=8.0, decay_mult=1.0),
                 "core.presence_cross_attn": dict(lr_mult=8.0, decay_mult=1.0),
                 "core.presence_cross_attn_norm": dict(lr_mult=8.0, decay_mult=0.0),
                 "core.presence_head": dict(lr_mult=8.0, decay_mult=1.0),
-            },
+            }
         ),
     )
 )
@@ -144,26 +149,26 @@ param_scheduler = [
     dict(
         type="LinearLR",
         start_factor=0.1,
-        total_iters=300,
-        end=300,
+        total_iters=500,
+        end=0,
     ),
     dict(
         type="CosineAnnealingLR",
-        T_max=3700,
+        T_max=9500,
         eta_min=1e-6,
     )
 ]
 
 train_cfg = dict(
-    max_iters=4000,
-    save_interval=500,
-    eval_interval=4000,
+    max_iters=10000,
+    save_interval=1000,
+    eval_interval=10000,
     log_window_size=20,
     use_amp=True,
     grad_clip_norm=0.1,
     monitor="semantic.miou",
     monitor_mode="max",
-    max_keep_ckpts=5,
+    max_keep_ckpts=10,
     auto_resume=False,
     device="cuda",
 )

@@ -473,6 +473,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             positional_embedding=clip_model.positional_embedding,
             transformer=clip_model.transformer,
             ln_final=clip_model.ln_final,
+            text_projection=clip_model.text_projection,
             attn_mask=getattr(clip_model, "attn_mask", None),
             context_length=getattr(clip_model, "context_length", 77),
             width=text_width,

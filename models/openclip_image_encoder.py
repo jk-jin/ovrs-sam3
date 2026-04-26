@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -10,81 +10,128 @@ import torch.nn.functional as F
 
 class OpenCLIPImageEncoder(nn.Module):
     """
-    Pure OpenCLIP vision wrapper with positional-embedding interpolation support
-    for larger input resolutions (for example, 1008x1008).
+    MaskCLIP-style OpenCLIP ViT dense image encoder.
 
-    Responsibilities:
-    1. Hold a loaded OpenCLIP visual tower.
-    2. Expose a trunk-like interface for downstream use.
-    3. Default to returning the last low-resolution feature map in NCHW format.
-    4. For OpenCLIP ViT towers, bypass the original `_embeds()` path and
-       interpolate learnable positional embeddings when input resolution changes.
+    输出:
+        feat_map: [B, D_align, Hc, Wc]
 
-    Non-responsibilities:
-    - No channel projection
-    - No external task-specific adaptation
-    - No FPN / neck logic
+    符号说明:
+        B 表示 batch size。
+        D_align 表示 CLIP 图文对齐空间维度。
+        Hc, Wc 表示 CLIP patch 网格高和宽。
+
+    实现逻辑对齐官方 MaskCLIP ViT:
+        1. 正常执行到最后一个 transformer block 之前；
+        2. 在最后一个 block 中只走 V 分支；
+        3. 对 V 做 attn.out_proj；
+        4. 做 attention residual；
+        5. 做最后 block 的 FFN；
+        6. 做 visual.ln_post；
+        7. 做 visual.proj；
+        8. reshape 成 dense feature map。
     """
 
     def __init__(
         self,
         visual: nn.Module,
         default_output: str = "feat_map",
+        maskclip_skip_last_layers: int = 1,
     ) -> None:
         super().__init__()
-        self.visual = visual
-        self.default_output = default_output
 
-        feature_dim = self._infer_feature_dim(visual)
-        self.channel_list = [feature_dim]
+        self.visual = visual
+        self.default_output = str(default_output)
+        self.maskclip_skip_last_layers = int(maskclip_skip_last_layers)
+
+        if self.maskclip_skip_last_layers <= 0:
+            raise ValueError(
+                f"maskclip_skip_last_layers must be positive, got {self.maskclip_skip_last_layers}"
+            )
+
+        self.native_dim = self._infer_native_feature_dim(visual)
+        self.output_dim = self._infer_projected_feature_dim(visual)
+        self.channel_list = [self.output_dim]
+
+        self.visual.eval()
+        for param in self.visual.parameters():
+            param.requires_grad_(False)
 
     @staticmethod
-    def _infer_feature_dim(visual: nn.Module) -> int:
+    def _infer_native_feature_dim(visual: nn.Module) -> int:
         candidates = [
             getattr(visual, "width", None),
             getattr(getattr(visual, "transformer", None), "width", None),
             getattr(visual, "num_features", None),
             getattr(visual, "embed_dim", None),
         ]
+
         for value in candidates:
             if isinstance(value, int) and value > 0:
                 return value
+
         raise AttributeError(
-            "Cannot infer OpenCLIP visual feature dimension. "
-            "Please inspect the visual tower and add a new rule here."
+            "Cannot infer OpenCLIP visual native feature dimension."
         )
+
+    @staticmethod
+    def _infer_projected_feature_dim(visual: nn.Module) -> int:
+        output_dim = getattr(visual, "output_dim", None)
+        if isinstance(output_dim, int) and output_dim > 0:
+            return output_dim
+
+        proj = getattr(visual, "proj", None)
+        if proj is None:
+            raise AttributeError(
+                "OpenCLIP visual.proj is missing, cannot infer projected feature dimension."
+            )
+
+        if isinstance(proj, nn.Linear):
+            return int(proj.out_features)
+
+        if isinstance(proj, (torch.Tensor, nn.Parameter)):
+            if proj.ndim != 2:
+                raise ValueError(
+                    f"Expected visual.proj as 2D matrix, got {tuple(proj.shape)}"
+                )
+            return int(proj.shape[1])
+
+        raise TypeError(f"Unsupported visual.proj type: {type(proj)}")
 
     @staticmethod
     def _to_2tuple(x: Union[int, Sequence[int]]) -> Tuple[int, int]:
         if isinstance(x, int):
-            return (x, x)
+            return x, x
         if isinstance(x, (tuple, list)) and len(x) == 2:
-            return (int(x[0]), int(x[1]))
+            return int(x[0]), int(x[1])
         raise TypeError(f"Cannot convert to 2-tuple: {x!r}")
 
     def _is_openclip_vit_like(self) -> bool:
-        """
-        Heuristically detect whether `self.visual` looks like OpenCLIP's
-        VisionTransformer implementation.
-        """
         required_attrs = [
             "conv1",
             "class_embedding",
             "positional_embedding",
             "patch_dropout",
             "ln_pre",
+            "ln_post",
+            "proj",
             "transformer",
         ]
         return all(hasattr(self.visual, name) for name in required_attrs)
 
-    def _get_base_grid_size(self) -> Tuple[int, int]:
-        """
-        Infer the original patch grid size used by the learnable positional embedding.
+    def _get_resblocks(self) -> list[nn.Module]:
+        transformer = getattr(self.visual, "transformer", None)
+        if transformer is None or not hasattr(transformer, "resblocks"):
+            raise AttributeError(
+                "OpenCLIP visual.transformer.resblocks is required for MaskCLIP-style output."
+            )
 
-        Priority:
-        1. visual.grid_size if available and valid
-        2. infer from positional_embedding length assuming 1 cls token
-        """
+        blocks = list(transformer.resblocks)
+        if len(blocks) == 0:
+            raise ValueError("visual.transformer.resblocks is empty.")
+
+        return blocks
+
+    def _get_base_grid_size(self) -> Tuple[int, int]:
         pos_embed = getattr(self.visual, "positional_embedding", None)
         if pos_embed is None:
             raise AttributeError("visual.positional_embedding is missing.")
@@ -108,13 +155,11 @@ class OpenCLIPImageEncoder(nn.Module):
                 "Cannot infer a square base patch grid from positional embedding. "
                 f"num_patch_tokens={num_patch_tokens}"
             )
+
         return side, side
 
     @staticmethod
     def _expand_class_token(token: torch.Tensor, batch_size: int) -> torch.Tensor:
-        """
-        Expand a [C] class token parameter into [B, 1, C].
-        """
         return token.view(1, 1, -1).expand(batch_size, -1, -1)
 
     def _interpolate_positional_embedding(
@@ -124,11 +169,11 @@ class OpenCLIPImageEncoder(nn.Module):
         device: torch.device,
     ) -> torch.Tensor:
         """
-        Resize OpenCLIP learnable positional embedding from its original patch grid
-        to `target_grid_hw`.
+        Args:
+            target_grid_hw: (Hc, Wc)
 
         Returns:
-            pos_embed_resized: [1 + target_h * target_w, C]
+            pos_embed_resized: [1 + Hc * Wc, native_dim]
         """
         pos_embed = self.visual.positional_embedding
         if pos_embed.ndim != 2:
@@ -144,15 +189,15 @@ class OpenCLIPImageEncoder(nn.Module):
         base_h, base_w = self._get_base_grid_size()
         num_prefix_tokens = 1
 
-        cls_pos = pos_embed[:num_prefix_tokens]           # [1, C]
-        patch_pos = pos_embed[num_prefix_tokens:]         # [base_h * base_w, C]
+        cls_pos = pos_embed[:num_prefix_tokens]
+        patch_pos = pos_embed[num_prefix_tokens:]
         embed_dim = int(patch_pos.shape[-1])
 
         if base_h == target_h and base_w == target_w:
             return pos_embed.to(device=device, dtype=dtype)
 
-        patch_pos = patch_pos.reshape(base_h, base_w, embed_dim)   # [H0, W0, C]
-        patch_pos = patch_pos.permute(2, 0, 1).unsqueeze(0)        # [1, C, H0, W0]
+        patch_pos = patch_pos.reshape(base_h, base_w, embed_dim)
+        patch_pos = patch_pos.permute(2, 0, 1).unsqueeze(0)
 
         patch_pos = F.interpolate(
             patch_pos,
@@ -162,213 +207,249 @@ class OpenCLIPImageEncoder(nn.Module):
         )
 
         patch_pos = patch_pos.squeeze(0).permute(1, 2, 0).reshape(
-            target_h * target_w, embed_dim
-        )  # [H1 * W1, C]
+            target_h * target_w,
+            embed_dim,
+        )
 
         pos_embed_resized = torch.cat([cls_pos, patch_pos], dim=0)
         return pos_embed_resized.to(device=device, dtype=dtype)
 
-    def _forward_intermediates_vit(
+    @staticmethod
+    def _call_resblock(block: nn.Module, x: torch.Tensor) -> torch.Tensor:
+        out = block(x)
+        if isinstance(out, tuple):
+            out = out[0]
+        if not torch.is_tensor(out):
+            raise TypeError(
+                f"Expected transformer block to return Tensor or tuple(Tensor, ...), got {type(out)}"
+            )
+        return out
+
+    @staticmethod
+    def _extract_qkv(
+        attn: nn.Module,
+        x: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            attn: OpenCLIP attention module
+            x: [B, N, C]
+
+        Returns:
+            q, k, v: each [B, N, C]
+        """
+        if hasattr(attn, "in_proj_weight") and attn.in_proj_weight is not None:
+            qkv = F.linear(x, attn.in_proj_weight, attn.in_proj_bias)
+            return qkv.chunk(3, dim=-1)
+
+        if hasattr(attn, "qkv"):
+            qkv = attn.qkv(x)
+            return qkv.chunk(3, dim=-1)
+
+        raise RuntimeError(
+            "Unsupported OpenCLIP attention qkv structure. "
+            "Expected attn.in_proj_weight or attn.qkv."
+        )
+
+    @staticmethod
+    def _apply_attention_out_proj(
+        attn: nn.Module,
+        x: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Args:
+            x: [B, N, C]
+
+        Returns:
+            out_proj(x): [B, N, C]
+        """
+        if not hasattr(attn, "out_proj"):
+            raise AttributeError("attention module must contain out_proj.")
+
+        x = attn.out_proj(x)
+
+        if hasattr(attn, "out_drop"):
+            x = attn.out_drop(x)
+
+        return x
+
+    @staticmethod
+    def _apply_first_residual(
+        block: nn.Module,
+        x_in: torch.Tensor,
+        attn_branch: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Official MaskCLIP ViT idea:
+            replace the attention output by V branch,
+            then keep residual structure.
+
+        Args:
+            x_in: [B, N, C]
+            attn_branch: [B, N, C]
+
+        Returns:
+            x: [B, N, C]
+        """
+        if hasattr(block, "ls_1"):
+            attn_branch = block.ls_1(attn_branch)
+
+        return x_in + attn_branch
+
+    @staticmethod
+    def _apply_second_residual(
+        block: nn.Module,
+        x: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Apply the block FFN/MLP after V-branch residual.
+
+        Args:
+            x: [B, N, C]
+
+        Returns:
+            x: [B, N, C]
+        """
+        if not hasattr(block, "ln_2") or not hasattr(block, "mlp"):
+            raise AttributeError(
+                "MaskCLIP-style V branch requires transformer block with ln_2 and mlp."
+            )
+
+        mlp_out = block.mlp(block.ln_2(x))
+
+        if hasattr(block, "ls_2"):
+            mlp_out = block.ls_2(mlp_out)
+
+        return x + mlp_out
+
+    def _apply_visual_ln_post_and_projection(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: [B, N, native_dim]
+
+        Returns:
+            projected: [B, N, output_dim]
+        """
+        x = self.visual.ln_post(x)
+
+        proj = self.visual.proj
+        if isinstance(proj, nn.Linear):
+            return proj(x)
+
+        proj = proj.to(device=x.device, dtype=x.dtype)
+        return x @ proj
+
+    def _forward_maskclip_dense_tokens(
         self,
         images: torch.Tensor,
-        indices: Optional[Union[int, List[int]]] = None,
-        stop_early: bool = False,
-        normalize_intermediates: bool = False,
-        intermediates_only: bool = True,
-        output_fmt: str = "NCHW",
-        output_extra_tokens: bool = False,
-    ) -> Dict[str, Union[torch.Tensor, List[torch.Tensor]]]:
+    ) -> tuple[torch.Tensor, tuple[int, int]]:
         """
-        Custom forward_intermediates for OpenCLIP VisionTransformer that supports
-        positional-embedding interpolation.
+        Args:
+            images: [B, 3, H, W]
 
-        This path mirrors OpenCLIP VisionTransformer.forward_intermediates():
-        - patch embed
-        - add class token
-        - add resized positional embedding
-        - patch dropout
-        - ln_pre
-        - transformer.forward_intermediates
-        - split cls token and spatial tokens
-        - optionally reshape to NCHW
+        Returns:
+            dense_tokens: [B, Hc * Wc, output_dim]
+            grid_hw: (Hc, Wc)
         """
-        if output_fmt not in ("NCHW", "NLC"):
-            raise ValueError("output_fmt must be one of {'NCHW', 'NLC'}.")
+        if not self._is_openclip_vit_like():
+            raise NotImplementedError(
+                "MaskCLIP-style dense output expects an OpenCLIP ViT-like visual tower."
+            )
 
-        x = self.visual.conv1(images)  # [B, C, Gh, Gw]
+        blocks = self._get_resblocks()
+        block_index = len(blocks) - self.maskclip_skip_last_layers
+
+        if block_index < 0:
+            raise ValueError(
+                "maskclip_skip_last_layers is larger than the number of transformer blocks: "
+                f"skip={self.maskclip_skip_last_layers}, num_blocks={len(blocks)}"
+            )
+
+        x = self.visual.conv1(images)
         if x.ndim != 4:
             raise ValueError(
-                f"Expected conv1 output as [B, C, H, W], got shape={tuple(x.shape)}"
+                f"Expected conv1 output as [B, C, Hc, Wc], got {tuple(x.shape)}"
             )
 
         batch_size, width, grid_h, grid_w = x.shape
 
         x = x.reshape(batch_size, width, grid_h * grid_w).permute(0, 2, 1)
-        # [B, Gh * Gw, C]
 
         cls_token = self._expand_class_token(
             self.visual.class_embedding.to(dtype=x.dtype, device=x.device),
             batch_size=batch_size,
         )
-        x = torch.cat([cls_token, x], dim=1)  # [B, 1 + Gh * Gw, C]
+        x = torch.cat([cls_token, x], dim=1)
 
         pos_embed = self._interpolate_positional_embedding(
             target_grid_hw=(grid_h, grid_w),
             dtype=x.dtype,
             device=x.device,
         )
-        x = x + pos_embed.unsqueeze(0)  # [B, 1 + Gh * Gw, C]
+        x = x + pos_embed.unsqueeze(0)
 
         x = self.visual.patch_dropout(x)
         x = self.visual.ln_pre(x)
 
-        if not hasattr(self.visual.transformer, "forward_intermediates"):
-            raise RuntimeError(
-                "The loaded OpenCLIP transformer does not provide "
-                "transformer.forward_intermediates()."
+        for block in blocks[:block_index]:
+            x = self._call_resblock(block, x)
+
+        maskclip_block = blocks[block_index]
+
+        if not hasattr(maskclip_block, "ln_1") or not hasattr(maskclip_block, "attn"):
+            raise AttributeError(
+                "MaskCLIP-style output requires transformer block with ln_1 and attn."
             )
 
-        x, intermediates = self.visual.transformer.forward_intermediates(
-            x,
-            indices=indices,
-            stop_early=stop_early,
+        x_norm = maskclip_block.ln_1(x)
+
+        _, _, v = self._extract_qkv(
+            attn=maskclip_block.attn,
+            x=x_norm,
         )
 
-        if normalize_intermediates:
-            if not hasattr(self.visual, "ln_post"):
-                raise AttributeError(
-                    "visual.ln_post is missing, but normalize_intermediates=True."
-                )
-            intermediates = [self.visual.ln_post(t) for t in intermediates]
+        v = self._apply_attention_out_proj(
+            attn=maskclip_block.attn,
+            x=v,
+        )
 
-        num_prefix_tokens = 1
-        if num_prefix_tokens > 0:
-            prefix_tokens = [t[:, :num_prefix_tokens] for t in intermediates]
-            intermediates = [t[:, num_prefix_tokens:] for t in intermediates]
-        else:
-            prefix_tokens = None
+        v = self._apply_first_residual(
+            block=maskclip_block,
+            x_in=x,
+            attn_branch=v,
+        )
 
-        if output_fmt == "NCHW":
-            intermediates = [
-                t.reshape(batch_size, grid_h, grid_w, -1).permute(0, 3, 1, 2).contiguous()
-                for t in intermediates
-            ]
+        v = self._apply_second_residual(
+            block=maskclip_block,
+            x=v,
+        )
 
-        output: Dict[str, Union[torch.Tensor, List[torch.Tensor]]] = {
-            "image_intermediates": intermediates
-        }
+        patch_tokens = v[:, 1:].contiguous()
 
-        if prefix_tokens is not None and output_extra_tokens:
-            output["image_intermediates_prefix"] = prefix_tokens
-
-        if intermediates_only:
-            return output
-
-        # Optional pooled image feature path; kept here for completeness.
-        if not hasattr(self.visual, "_pool"):
-            raise AttributeError(
-                "visual._pool is missing, cannot produce pooled image_features."
-            )
-
-        pooled, _ = self.visual._pool(x)
-        if getattr(self.visual, "proj", None) is not None:
-            pooled = pooled @ self.visual.proj
-
-        output["image_features"] = pooled
-        return output
-
-    def _extract_last_tensor(self, obj: Any) -> torch.Tensor:
-        if isinstance(obj, torch.Tensor):
-            return obj
-
-        if isinstance(obj, (list, tuple)):
-            if len(obj) == 0:
-                raise ValueError("Received empty list/tuple while parsing image intermediates.")
-            return self._extract_last_tensor(obj[-1])
-
-        if isinstance(obj, dict):
-            preferred_keys = (
-                "image_intermediates",
-                "intermediates",
-                "features",
-                "feature_maps",
-                "x",
-            )
-            for key in preferred_keys:
-                if key in obj:
-                    return self._extract_last_tensor(obj[key])
-            raise KeyError(
-                f"Cannot find a known feature key in forward_intermediates output: {list(obj.keys())}"
-            )
-
-        raise TypeError(f"Unsupported intermediate output type: {type(obj)}")
-
-    def _forward_intermediates(self, images: torch.Tensor) -> torch.Tensor:
-        """
-        Return the last low-resolution feature map in NCHW format.
-        """
-        if self._is_openclip_vit_like():
-            out = self._forward_intermediates_vit(
-                images=images,
-                indices=[-1],
-                stop_early=False,
-                normalize_intermediates=False,
-                intermediates_only=True,
-                output_fmt="NCHW",
-                output_extra_tokens=False,
-            )
-            feat_map = self._extract_last_tensor(out)
-        else:
-            if not hasattr(self.visual, "forward_intermediates"):
-                raise RuntimeError(
-                    "The loaded OpenCLIP visual tower does not provide forward_intermediates()."
-                )
-
-            try:
-                out = self.visual.forward_intermediates(
-                    images,
-                    indices=[-1],
-                    output_fmt="NCHW",
-                    intermediates_only=True,
-                )
-            except TypeError:
-                out = self.visual.forward_intermediates(images)
-
-            feat_map = self._extract_last_tensor(out)
-
-        if feat_map.ndim != 4:
+        expected_num_tokens = int(grid_h) * int(grid_w)
+        if patch_tokens.shape[1] != expected_num_tokens:
             raise ValueError(
-                f"Expected a 4D NCHW feature map, but got shape={tuple(feat_map.shape)}"
+                "Patch token count mismatch: "
+                f"expected {expected_num_tokens}, got {patch_tokens.shape[1]}"
             )
+
+        dense_tokens = self._apply_visual_ln_post_and_projection(patch_tokens)
+        return dense_tokens, (int(grid_h), int(grid_w))
+
+    def encode_image(self, images: torch.Tensor) -> torch.Tensor:
+        self.visual.eval()
+
+        with torch.no_grad():
+            dense_tokens, (grid_h, grid_w) = self._forward_maskclip_dense_tokens(images)
+
+        feat_map = dense_tokens.reshape(
+            images.shape[0],
+            grid_h,
+            grid_w,
+            self.output_dim,
+        ).permute(0, 3, 1, 2).contiguous()
 
         return feat_map
 
-    def encode_image(
-        self,
-        images: torch.Tensor,
-        output_mode: Optional[str] = None,
-    ) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
-        mode = output_mode or self.default_output
-
-        feat_map = self._forward_intermediates(images)
-
-        if mode == "feat_map":
-            return feat_map
-
-        if mode == "tokens":
-            # [B, C, H, W] -> [B, H * W, C]
-            return feat_map.flatten(2).transpose(1, 2)
-
-        if mode == "all":
-            return {
-                "feat_map": feat_map,
-                "tokens": feat_map.flatten(2).transpose(1, 2),
-            }
-
-        raise ValueError(
-            f"Unknown output_mode={mode}. "
-            "Supported modes are: feat_map, tokens, all."
-        )
-
-    def forward(self, images: torch.Tensor):
-        return self.encode_image(images, output_mode=self.default_output)
+    def forward(self, images: torch.Tensor) -> torch.Tensor:
+        return self.encode_image(images)
