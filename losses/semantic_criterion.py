@@ -20,6 +20,7 @@ class SemanticCriterionConfig:
     final_bce_weight: float = 0.4
     final_dice_weight: float = 0.5
     final_ce_weight: float = 1.0
+    final_ignore_bce_weight: float = 0.15
 
     presence_loss_weight: float = 0.1
 
@@ -116,6 +117,7 @@ class SemanticCriterion(nn.Module):
                     "loss_final_bce": zero,
                     "loss_final_dice": zero,
                     "loss_final_ce": zero,
+                    "loss_final_ignore_bce": zero,
                     "loss_presence_bce": zero,
                 }
             )
@@ -232,6 +234,44 @@ class SemanticCriterion(nn.Module):
         per_elem = per_elem * presence_valid_mask.to(dtype=per_elem.dtype)
 
         denom = presence_valid_mask.to(dtype=per_elem.dtype).sum().clamp_min(1.0)
+        return per_elem.sum() / denom
+
+    def _final_ignore_bce_loss(
+            self,
+            final_logits: torch.Tensor,
+            semantic_logits: torch.Tensor,
+            valid_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        if final_logits.shape != semantic_logits.shape:
+            raise ValueError(
+                "final_logits and semantic_logits must have the same shape for "
+                "ignore-region consistency loss, "
+                f"got {tuple(final_logits.shape)} and {tuple(semantic_logits.shape)}."
+            )
+
+        if valid_mask.shape != final_logits.shape:
+            raise ValueError(
+                "valid_mask must have the same shape as final_logits, "
+                f"got {tuple(valid_mask.shape)} and {tuple(final_logits.shape)}."
+            )
+
+        ignore_mask = ~valid_mask
+
+        if not ignore_mask.any():
+            return final_logits.sum() * 0.0
+
+        teacher_prob = semantic_logits.detach().sigmoid()
+
+        per_elem = F.binary_cross_entropy_with_logits(
+            final_logits,
+            teacher_prob,
+            reduction="none",
+        )
+
+        ignore_mask = ignore_mask.to(dtype=per_elem.dtype)
+        per_elem = per_elem * ignore_mask
+
+        denom = ignore_mask.sum().clamp_min(1.0)
         return per_elem.sum() / denom
 
     def _build_dynamic_class_weights(
@@ -436,6 +476,7 @@ class SemanticCriterion(nn.Module):
             "loss_final_bce": zero_losses["loss_final_bce"],
             "loss_final_dice": zero_losses["loss_final_dice"],
             "loss_final_ce": zero_losses["loss_final_ce"],
+            "loss_final_ignore_bce": zero_losses["loss_final_ignore_bce"],
             "loss_presence_bce": zero_losses["loss_presence_bce"],
             "total_loss": total_loss,
             "num_valid": torch.tensor(
@@ -501,10 +542,25 @@ class SemanticCriterion(nn.Module):
         num_valid_pixels = int((label_map != int(self.cfg.ignore_index)).sum().item())
         zero_losses = self._make_zero_losses(final_logits)
 
+        loss_final_ignore_bce = self._final_ignore_bce_loss(
+            final_logits=final_logits,
+            semantic_logits=semantic_logits,
+            valid_mask=valid_mask,
+        )
+
         if num_valid_pixels <= 0:
-            total_loss = final_logits.sum() * 0.0
+            total_loss = (
+                    float(self.cfg.final_ignore_bce_weight) * loss_final_ignore_bce
+            )
+
             return {
-                **zero_losses,
+                "loss_semantic_bce": zero_losses["loss_semantic_bce"],
+                "loss_semantic_dice": zero_losses["loss_semantic_dice"],
+                "loss_final_bce": zero_losses["loss_final_bce"],
+                "loss_final_dice": zero_losses["loss_final_dice"],
+                "loss_final_ce": zero_losses["loss_final_ce"],
+                "loss_final_ignore_bce": loss_final_ignore_bce,
+                "loss_presence_bce": zero_losses["loss_presence_bce"],
                 "total_loss": total_loss,
                 "num_valid": torch.tensor(
                     0,
@@ -555,6 +611,7 @@ class SemanticCriterion(nn.Module):
             float(self.cfg.final_bce_weight) * loss_final_bce
             + float(self.cfg.final_dice_weight) * loss_final_dice
             + float(self.cfg.final_ce_weight) * loss_final_ce
+            + float(self.cfg.final_ignore_bce_weight) * loss_final_ignore_bce
             + float(self.cfg.presence_loss_weight) * loss_presence_bce
         )
 
@@ -564,6 +621,7 @@ class SemanticCriterion(nn.Module):
             "loss_final_bce": loss_final_bce,
             "loss_final_dice": loss_final_dice,
             "loss_final_ce": loss_final_ce,
+            "loss_final_ignore_bce": loss_final_ignore_bce,
             "loss_presence_bce": loss_presence_bce,
             "total_loss": total_loss,
             "num_valid": torch.tensor(

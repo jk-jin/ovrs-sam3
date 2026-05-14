@@ -580,7 +580,6 @@ class ClassTokenSemanticFinalMixer(nn.Module):
         num_heads: int = 8,
         fusion_layers: int = 2,
         dropout: float = 0.1,
-        use_final_residual: bool = True,
         class_token_self_attn_mode: Literal["axial"] = "axial",
         presence_enabled: bool = True,
     ) -> None:
@@ -592,7 +591,6 @@ class ClassTokenSemanticFinalMixer(nn.Module):
         self.attn_dim = int(attn_dim)
         self.num_heads = int(num_heads)
         self.fusion_layers = int(fusion_layers)
-        self.use_final_residual = bool(use_final_residual)
         self.class_token_self_attn_mode = str(class_token_self_attn_mode)
         self.presence_enabled = bool(presence_enabled)
 
@@ -781,16 +779,12 @@ class ClassTokenSemanticFinalMixer(nn.Module):
             presence_logits = semantic_logits.new_zeros(batch_size, num_classes)
             presence_score = semantic_logits.new_ones(batch_size, num_classes)
 
-        modulated_delta_logits = presence_score[:, :, None, None] * delta_logits
-
-        if self.use_final_residual:
-            final_logits = semantic_logits + modulated_delta_logits
-        else:
-            final_logits = modulated_delta_logits
+        modulated_semantic_logits = presence_score[:, :, None, None] * semantic_logits
+        final_logits = modulated_semantic_logits * delta_logits
 
         return {
             "delta_logits": delta_logits.contiguous(),
-            "modulated_delta_logits": modulated_delta_logits.contiguous(),
+            "modulated_semantic_logits": modulated_semantic_logits.contiguous(),
             "final_logits": final_logits.contiguous(),
             "presence_logits": presence_logits.contiguous(),
             "presence_score": presence_score.contiguous(),

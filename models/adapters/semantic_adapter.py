@@ -220,7 +220,7 @@ class SemanticSegAdapter(nn.Module):
 
         for key in (
             OUTPUT_KEYS.delta_logits,
-            OUTPUT_KEYS.modulated_delta_logits,
+            OUTPUT_KEYS.modulated_semantic_logits,
         ):
             value = self._extract_optional_tensor(raw_outputs, key)
             if value is None:

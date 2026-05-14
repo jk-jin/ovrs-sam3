@@ -8,11 +8,11 @@ visualization = dict(
     save_prediction=True,
     save_ground_truth=True,
     save_semantic_prediction=True,
+    save_modulated_semantic_prediction=True,
 
     save_score_summary=True,
     save_score_heatmaps=True,
     save_delta_heatmaps=True,
-    save_modulated_delta_heatmaps=True,
     heatmap_colormap="turbo",
 
     save_clip_argmax_prediction=True,

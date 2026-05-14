@@ -20,7 +20,7 @@ class ModelOutputKeys:
     class_tokens: str = "class_tokens"
 
     delta_logits: str = "delta_logits"
-    modulated_delta_logits: str = "modulated_delta_logits"
+    modulated_semantic_logits: str = "modulated_semantic_logits"
 
     final_logits: str = "final_logits"
     final_score_map: str = "final_score_map"

@@ -3,7 +3,7 @@ _base_ = [
     "./_base_/optimizer.py",
     "./_base_/schedule.py",
     "./_base_/visualization.py",
-    "./datasets/loveda.py",
+    "./datasets/isaid.py",
 ]
 
 model = dict(
@@ -22,7 +22,7 @@ model = dict(
         pretrained="weights/RemoteCLIP-ViT-L-14.pt",
         default_output="feat_map",
 
-        image_encoder_mode="full_vit_dense",
+        image_encoder_mode="maskclip",
         maskclip_skip_last_layers=1,
 
         extra_token_templates=[
@@ -44,7 +44,6 @@ model = dict(
         fusion_layers=1,
         dropout=0.1,
         clip_feature_dim=256,
-        use_final_residual=False,
         clip_residual_init=1.0,
 
         num_class_tokens=32,
@@ -84,6 +83,8 @@ model = dict(
         final_bce_weight=0.2,
         final_dice_weight=0.6,
         final_ce_weight=0.8,
+        final_ignore_bce_weight=1.0,
+
         presence_loss_weight=0.1,
 
         bce_class_balance_clamp_min=0.2,

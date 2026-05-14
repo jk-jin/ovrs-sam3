@@ -24,11 +24,12 @@ class VisualizerConfig:
     save_prediction: bool = True
     save_ground_truth: bool = True
     save_semantic_prediction: bool = True
+    save_modulated_semantic_prediction: bool = True
 
     save_score_summary: bool = True
     save_score_heatmaps: bool = True
     save_delta_heatmaps: bool = True
-    save_modulated_delta_heatmaps: bool = True
+    save_modulated_semantic_heatmaps: bool = True
     heatmap_colormap: str = "turbo"
 
     save_clip_argmax_prediction: bool = True
@@ -85,6 +86,48 @@ class BaseSemanticOverlayTask(VisualizationTask):
             else None
         )
 
+        semantic_logits = semantic_outputs.get(OUTPUT_KEYS.semantic_logits, None)
+        modulated_semantic_logits = semantic_outputs.get(
+            OUTPUT_KEYS.modulated_semantic_logits,
+            None,
+        )
+
+        presence_score = semantic_outputs.get(OUTPUT_KEYS.presence_score, None)
+        presence_logits = semantic_outputs.get(OUTPUT_KEYS.presence_logits, None)
+        if presence_score is None and presence_logits is not None:
+            if presence_logits.dim() != 2:
+                raise ValueError(
+                    f"Expected presence_logits as [B, C], got {tuple(presence_logits.shape)}."
+                )
+            presence_score = presence_logits.sigmoid()
+
+        if (
+            modulated_semantic_logits is None
+            and semantic_logits is not None
+            and presence_score is not None
+        ):
+            if semantic_logits.dim() != 4:
+                raise ValueError(
+                    f"Expected semantic_logits as [B, C, H, W], "
+                    f"got {tuple(semantic_logits.shape)}."
+                )
+            if presence_score.dim() != 2:
+                raise ValueError(
+                    f"Expected presence_score as [B, C], got {tuple(presence_score.shape)}."
+                )
+            if tuple(presence_score.shape) != tuple(semantic_logits.shape[:2]):
+                raise ValueError(
+                    "presence_score and semantic_logits class shape mismatch: "
+                    f"{tuple(presence_score.shape)} vs {tuple(semantic_logits.shape[:2])}."
+                )
+            modulated_semantic_logits = presence_score[:, :, None, None] * semantic_logits
+
+        modulated_semantic_pred = (
+            manager._extract_pred_from_logits(modulated_semantic_logits)
+            if modulated_semantic_logits is not None
+            else None
+        )
+
         gt = semantic_targets["label_map"]
         if gt.dim() == 4:
             if gt.shape[1] != 1:
@@ -109,6 +152,10 @@ class BaseSemanticOverlayTask(VisualizationTask):
         semantic_num_classes = pred_num_classes
         if semantic_score_map is not None:
             semantic_num_classes = int(semantic_score_map.shape[1])
+
+        modulated_semantic_num_classes = pred_num_classes
+        if modulated_semantic_logits is not None:
+            modulated_semantic_num_classes = int(modulated_semantic_logits.shape[1])
 
         for b in ctx.selected_indices:
             image_id = manager._extract_image_id(batch, b)
@@ -150,6 +197,20 @@ class BaseSemanticOverlayTask(VisualizationTask):
                     semantic_num_classes,
                 ).save(sample_dir / "pred_semantic_overlay.png")
 
+            if (
+                modulated_semantic_pred is not None
+                and manager.cfg.save_modulated_semantic_prediction
+            ):
+                modulated_semantic_pred_label = manager._prepare_label_map(
+                    modulated_semantic_pred[b],
+                    out_hw,
+                )
+                manager._overlay_label_map(
+                    overlay_image,
+                    modulated_semantic_pred_label,
+                    modulated_semantic_num_classes,
+                ).save(sample_dir / "pred_modulated_semantic_overlay.png")
+
             if class_names is not None:
                 with open(sample_dir / "classes.txt", "w", encoding="utf-8") as f:
                     for i, name in enumerate(class_names):
@@ -166,8 +227,8 @@ class BranchScoreAnalysisTask(VisualizationTask):
         semantic_logits = outputs.get(OUTPUT_KEYS.semantic_logits, None)
         final_logits = outputs.get(OUTPUT_KEYS.final_logits, None)
         delta_logits = outputs.get(OUTPUT_KEYS.delta_logits, None)
-        modulated_delta_logits = outputs.get(
-            OUTPUT_KEYS.modulated_delta_logits,
+        modulated_semantic_logits = outputs.get(
+            OUTPUT_KEYS.modulated_semantic_logits,
             None,
         )
 
@@ -180,12 +241,27 @@ class BranchScoreAnalysisTask(VisualizationTask):
         if final_score_map is None and final_logits is not None:
             final_score_map = final_logits.sigmoid()
 
+        presence_score = outputs.get(OUTPUT_KEYS.presence_score, None)
+        presence_logits = outputs.get(OUTPUT_KEYS.presence_logits, None)
+
+        if presence_score is None and presence_logits is not None:
+            presence_score = presence_logits.sigmoid()
+
         if (
-            modulated_delta_logits is None
+            modulated_semantic_logits is None
             and semantic_logits is not None
-            and final_logits is not None
+            and presence_score is not None
         ):
-            modulated_delta_logits = final_logits - semantic_logits
+            if presence_score.dim() != 2:
+                raise ValueError(
+                    f"Expected presence_score as [B, C], got {tuple(presence_score.shape)}."
+                )
+            if presence_score.shape != semantic_logits.shape[:2]:
+                raise ValueError(
+                    "presence_score and semantic_logits class shape mismatch: "
+                    f"{tuple(presence_score.shape)} vs {tuple(semantic_logits.shape[:2])}."
+                )
+            modulated_semantic_logits = presence_score[:, :, None, None] * semantic_logits
 
         if semantic_score_map is None:
             raise ValueError(
@@ -216,7 +292,7 @@ class BranchScoreAnalysisTask(VisualizationTask):
 
         for key, value in (
             (OUTPUT_KEYS.delta_logits, delta_logits),
-            (OUTPUT_KEYS.modulated_delta_logits, modulated_delta_logits),
+            (OUTPUT_KEYS.modulated_semantic_logits, modulated_semantic_logits),
         ):
             if value is None:
                 continue
@@ -254,9 +330,9 @@ class BranchScoreAnalysisTask(VisualizationTask):
                 if delta_logits is not None
                 else None
             )
-            modulated_delta_logits_b = (
-                modulated_delta_logits[b]
-                if modulated_delta_logits is not None
+            modulated_semantic_logits_b = (
+                modulated_semantic_logits[b]
+                if modulated_semantic_logits is not None
                 else None
             )
 
@@ -266,7 +342,7 @@ class BranchScoreAnalysisTask(VisualizationTask):
                     semantic_scores=semantic_scores_b,
                     final_scores=final_scores_b,
                     delta_logits=delta_logits_b,
-                    modulated_delta_logits=modulated_delta_logits_b,
+                    modulated_semantic_logits=modulated_semantic_logits_b,
                     class_names=class_names,
                 )
 
@@ -276,7 +352,7 @@ class BranchScoreAnalysisTask(VisualizationTask):
                     semantic_scores=semantic_scores_b,
                     final_scores=final_scores_b,
                     delta_logits=delta_logits_b,
-                    modulated_delta_logits=modulated_delta_logits_b,
+                    modulated_semantic_logits=modulated_semantic_logits_b,
                     out_hw=out_hw,
                     class_names=class_names,
                 )
@@ -1015,7 +1091,7 @@ class VisualizationManager:
         semantic_scores: torch.Tensor,
         final_scores: torch.Tensor,
         delta_logits: Optional[torch.Tensor],
-        modulated_delta_logits: Optional[torch.Tensor],
+        modulated_semantic_logits: Optional[torch.Tensor],
         class_names: Optional[List[str]],
     ) -> None:
         if semantic_scores.dim() != 3:
@@ -1036,7 +1112,7 @@ class VisualizationManager:
         semantic_max, semantic_mean = self._per_class_max_mean(semantic_scores)
         final_max, final_mean = self._per_class_max_mean(final_scores)
         delta_max, delta_mean = self._per_class_max_mean(delta_logits)
-        mod_delta_max, mod_delta_mean = self._per_class_max_mean(modulated_delta_logits)
+        mod_semantic_max, mod_semantic_mean = self._per_class_max_mean(modulated_semantic_logits)
 
         order = torch.argsort(final_max, descending=True)
 
@@ -1046,7 +1122,7 @@ class VisualizationManager:
                 "semantic_max\tsemantic_mean\t"
                 "final_max\tfinal_mean\t"
                 "delta_logit_max\tdelta_logit_mean\t"
-                "modulated_delta_logit_max\tmodulated_delta_logit_mean\n"
+                "modulated_semantic_logit_max\tmodulated_semantic_logit_mean\n"
             )
 
             for rank, cls_idx in enumerate(order.tolist()):
@@ -1066,14 +1142,14 @@ class VisualizationManager:
                     if delta_mean is not None
                     else None
                 )
-                mod_delta_max_value = (
-                    float(mod_delta_max[cls_idx].item())
-                    if mod_delta_max is not None
+                mod_semantic_max_value = (
+                    float(mod_semantic_max[cls_idx].item())
+                    if mod_semantic_max is not None
                     else None
                 )
-                mod_delta_mean_value = (
-                    float(mod_delta_mean[cls_idx].item())
-                    if mod_delta_mean is not None
+                mod_semantic_mean_value = (
+                    float(mod_semantic_mean[cls_idx].item())
+                    if mod_semantic_mean is not None
                     else None
                 )
 
@@ -1085,8 +1161,8 @@ class VisualizationManager:
                     f"{float(final_mean[cls_idx].item()):.6f}\t"
                     f"{self._format_optional_float(delta_max_value)}\t"
                     f"{self._format_optional_float(delta_mean_value)}\t"
-                    f"{self._format_optional_float(mod_delta_max_value)}\t"
-                    f"{self._format_optional_float(mod_delta_mean_value)}\n"
+                    f"{self._format_optional_float(mod_semantic_max_value)}\t"
+                    f"{self._format_optional_float(mod_semantic_mean_value)}\n"
                 )
 
     def _save_all_score_heatmaps(
@@ -1095,7 +1171,7 @@ class VisualizationManager:
         semantic_scores: torch.Tensor,
         final_scores: torch.Tensor,
         delta_logits: Optional[torch.Tensor],
-        modulated_delta_logits: Optional[torch.Tensor],
+        modulated_semantic_logits: Optional[torch.Tensor],
         out_hw: Tuple[int, int],
         class_names: Optional[List[str]],
     ) -> None:
@@ -1117,7 +1193,7 @@ class VisualizationManager:
 
         for name, value in (
             ("delta_logits", delta_logits),
-            ("modulated_delta_logits", modulated_delta_logits),
+            ("modulated_semantic_logits", modulated_semantic_logits),
         ):
             if value is None:
                 continue
@@ -1135,7 +1211,7 @@ class VisualizationManager:
         semantic_dir = heatmap_root / "semantic"
         final_dir = heatmap_root / "final"
         delta_dir = heatmap_root / "delta"
-        mod_delta_dir = heatmap_root / "modulated_delta"
+        mod_semantic_dir = heatmap_root / "modulated_semantic"
 
         semantic_dir.mkdir(parents=True, exist_ok=True)
         final_dir.mkdir(parents=True, exist_ok=True)
@@ -1143,8 +1219,8 @@ class VisualizationManager:
         if self.cfg.save_delta_heatmaps and delta_logits is not None:
             delta_dir.mkdir(parents=True, exist_ok=True)
 
-        if self.cfg.save_modulated_delta_heatmaps and modulated_delta_logits is not None:
-            mod_delta_dir.mkdir(parents=True, exist_ok=True)
+        if self.cfg.save_modulated_semantic_heatmaps and modulated_semantic_logits is not None:
+            mod_semantic_dir.mkdir(parents=True, exist_ok=True)
 
         for cls_idx in range(num_classes):
             class_name = (
@@ -1174,14 +1250,14 @@ class VisualizationManager:
                 ).save(delta_dir / filename)
 
             if (
-                self.cfg.save_modulated_delta_heatmaps
-                and modulated_delta_logits is not None
+                self.cfg.save_modulated_semantic_heatmaps
+                and modulated_semantic_logits is not None
             ):
                 self._to_heatmap_image(
-                    modulated_delta_logits[cls_idx],
+                    modulated_semantic_logits[cls_idx],
                     out_hw=out_hw,
                     normalize="minmax",
-                ).save(mod_delta_dir / filename)
+                ).save(mod_semantic_dir / filename)
 
     def _save_presence_scores(
         self,
@@ -1316,6 +1392,7 @@ class VisualizationManager:
             OUTPUT_KEYS.final_logits,
             OUTPUT_KEYS.semantic_score_map,
             OUTPUT_KEYS.semantic_logits,
+            OUTPUT_KEYS.modulated_semantic_logits,
         ):
             value = semantic_outputs.get(key, None)
             if isinstance(value, torch.Tensor) and value.dim() >= 1:

@@ -119,7 +119,6 @@ class FinalMixerConfig:
     fusion_layers: int = 2
     dropout: float = 0.1
     clip_feature_dim: int = 256
-    use_final_residual: bool = True
     clip_residual_init: float = 0.1
 
     num_class_tokens: int = 32
@@ -136,6 +135,7 @@ class CriterionConfig:
     final_bce_weight: float = 0.4
     final_dice_weight: float = 0.5
     final_ce_weight: float = 1.0
+    final_ignore_bce_weight: float = 0.15
 
     presence_loss_weight: float = 0.1
 
@@ -647,6 +647,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 final_bce_weight=float(cfg.criterion_cfg.final_bce_weight),
                 final_dice_weight=float(cfg.criterion_cfg.final_dice_weight),
                 final_ce_weight=float(cfg.criterion_cfg.final_ce_weight),
+                final_ignore_bce_weight=float(cfg.criterion_cfg.final_ignore_bce_weight),
                 presence_loss_weight=float(cfg.criterion_cfg.presence_loss_weight),
 
                 bce_class_balance_clamp_min=float(

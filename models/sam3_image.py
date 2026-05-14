@@ -144,9 +144,6 @@ class Sam3Image(torch.nn.Module):
         self.final_mixer_clip_feature_dim = int(
             getattr(final_mixer_cfg, "clip_feature_dim", self.hidden_dim)
         )
-        self.final_mixer_use_final_residual = bool(
-            getattr(final_mixer_cfg, "use_final_residual", True)
-        )
         self.clip_residual_init = float(
             getattr(final_mixer_cfg, "clip_residual_init", 0.1)
         )
@@ -200,7 +197,6 @@ class Sam3Image(torch.nn.Module):
             num_heads=self.final_mixer_num_heads,
             fusion_layers=self.final_mixer_fusion_layers,
             dropout=self.final_mixer_dropout,
-            use_final_residual=self.final_mixer_use_final_residual,
             class_token_self_attn_mode=self.class_token_self_attn_mode,
             presence_enabled=self.presence_enabled,
         )
@@ -905,7 +901,7 @@ class Sam3Image(torch.nn.Module):
 
         required_keys = (
             "delta_logits",
-            "modulated_delta_logits",
+            "modulated_semantic_logits",
             "final_logits",
             "presence_logits",
             "presence_score",
@@ -918,7 +914,7 @@ class Sam3Image(torch.nn.Module):
             OUTPUT_KEYS.semantic_logits: semantic_logits,
             OUTPUT_KEYS.class_tokens: class_tokens,
             OUTPUT_KEYS.delta_logits: mixer_outputs["delta_logits"],
-            OUTPUT_KEYS.modulated_delta_logits: mixer_outputs["modulated_delta_logits"],
+            OUTPUT_KEYS.modulated_semantic_logits: mixer_outputs["modulated_semantic_logits"],
             OUTPUT_KEYS.final_logits: mixer_outputs["final_logits"],
             OUTPUT_KEYS.presence_logits: mixer_outputs["presence_logits"],
             OUTPUT_KEYS.presence_score: mixer_outputs["presence_score"],
