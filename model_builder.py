@@ -102,35 +102,45 @@ class OpenCLIPConfig:
     image_encoder_mode: str = "maskclip"
     maskclip_skip_last_layers: int = 1
 
-    extra_token_templates: list[str] = field(default_factory=lambda: [
+    prompt_templates: list[str] = field(default_factory=lambda: [
         "a remote sensing image of {}.",
         "an aerial image of {}.",
     ])
-    num_extra_tokens: int = 2
+    num_prompt_templates: int = 2
+    num_clip_text_latents: int = 32
+
     normalize_label_for_clip: bool = True
 
 @dataclass
 class FinalMixerConfig:
     enabled: bool = True
-    score_dim: int = 32
-    class_dim: int = 128
-    attn_dim: int = 160
-    num_heads: int = 8
-    fusion_layers: int = 2
-    dropout: float = 0.1
-    clip_feature_dim: int = 256
-    clip_residual_init: float = 0.1
 
     num_class_tokens: int = 32
-    class_token_self_attn_mode: str = "axial"
+    fusion_layers: int = 4
+    num_heads: int = 8
+    dropout: float = 0.1
     presence_enabled: bool = True
+
+    class_code_cfg: dict = field(default_factory=lambda: dict(
+        source="hash_random",
+        dim=256,
+        normalize=True,
+        token_scale=dict(init=8.0, min=2.0, max=16.0, temperature=0.5),
+        feature_low_scale=dict(init=8.0, min=2.0, max=16.0, temperature=0.5),
+        clip_feature_scale=dict(init=8.0, min=2.0, max=16.0, temperature=0.5),
+        feature_high_scale=dict(init=6.0, min=1.0, max=12.0, temperature=0.5),
+    ))
+
+    mask_head_cfg: dict = field(default_factory=lambda: dict(
+        type="dot_product",
+        train_token_pooling="logsumexp",
+        infer_token_pooling="max",
+        logsumexp_tau=0.2,
+    ))
 
 @dataclass
 class CriterionConfig:
     ignore_index: int = 255
-
-    bce_weight: float = 1.0
-    dice_weight: float = 1.0
 
     final_bce_weight: float = 0.4
     final_dice_weight: float = 0.5
@@ -138,6 +148,7 @@ class CriterionConfig:
     final_ignore_bce_weight: float = 0.15
 
     presence_loss_weight: float = 0.1
+    presence_layer_loss_weights: Optional[list[float]] = None
 
     bce_class_balance_clamp_min: float = 0.2
     bce_class_balance_clamp_max: float = 5.0
@@ -641,14 +652,19 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             criterion_cfg = SemanticCriterionConfig(
                 ignore_index=int(cfg.criterion_cfg.ignore_index),
 
-                bce_weight=float(cfg.criterion_cfg.bce_weight),
-                dice_weight=float(cfg.criterion_cfg.dice_weight),
-
                 final_bce_weight=float(cfg.criterion_cfg.final_bce_weight),
                 final_dice_weight=float(cfg.criterion_cfg.final_dice_weight),
                 final_ce_weight=float(cfg.criterion_cfg.final_ce_weight),
-                final_ignore_bce_weight=float(cfg.criterion_cfg.final_ignore_bce_weight),
+                final_ignore_bce_weight=float(
+                    cfg.criterion_cfg.final_ignore_bce_weight
+                ),
+
                 presence_loss_weight=float(cfg.criterion_cfg.presence_loss_weight),
+                presence_layer_loss_weights=(
+                    None
+                    if cfg.criterion_cfg.presence_layer_loss_weights is None
+                    else list(cfg.criterion_cfg.presence_layer_loss_weights)
+                ),
 
                 bce_class_balance_clamp_min=float(
                     cfg.criterion_cfg.bce_class_balance_clamp_min

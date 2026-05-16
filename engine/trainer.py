@@ -238,14 +238,20 @@ class Trainer:
         proxy_tensor.grad = None
 
     def _compute_chunk_loss_sums(
-            self,
-            batch,
-            do_backward: bool,
+        self,
+        batch,
+        do_backward: bool,
     ) -> tuple[Dict[str, float], int, bool]:
         if not hasattr(self.model, "build_shared_clip_feature"):
             raise AttributeError(
                 "Model does not provide build_shared_clip_feature(batch). "
                 "The shared CLIP feature training pipeline requires this interface."
+            )
+
+        if not hasattr(self.model, "build_sam3_pixel_feature"):
+            raise AttributeError(
+                "Model does not provide build_sam3_pixel_feature(batch). "
+                "The new final mixer requires SAM3 pixel features."
             )
 
         if not hasattr(self.model, "iter_chunk_outputs"):
@@ -257,95 +263,34 @@ class Trainer:
         if not hasattr(self.model, "run_final_mixer_from_chunks"):
             raise AttributeError(
                 "Model does not provide run_final_mixer_from_chunks("
-                "mixer_cache, batch, shared_clip_feature). "
+                "mixer_cache, batch, shared_clip_feature, sam3_feature_high). "
                 "The final mixer training pipeline requires this interface."
             )
 
         label_map = batch.find_targets[0].semantic_label_map
         use_amp = self.cfg.use_amp and self.device.type == "cuda"
 
-        loss_sums: Optional[Dict[str, float]] = None
-        total_valid_pixels = 0
-        did_backward = False
         mixer_cache = []
+        did_backward = False
 
         with autocast(device_type=self.device.type, enabled=use_amp):
             shared_clip_feature = self.model.build_shared_clip_feature(batch)
+            sam3_feature_high = self.model.build_sam3_pixel_feature(batch)
 
-        accumulated_clip_feature_grad = None
-        if do_backward:
-            accumulated_clip_feature_grad = torch.zeros_like(shared_clip_feature)
+            for chunk in self.model.iter_chunk_outputs(
+                    batch,
+                    shared_clip_feature=shared_clip_feature,
+            ):
+                mixer_cache.append(self._build_final_mixer_cache_item(chunk))
 
-        clip_proxy = shared_clip_feature.detach()
-        if do_backward:
-            clip_proxy.requires_grad_(True)
+            if len(mixer_cache) == 0:
+                return {"total_loss": 0.0}, 0, False
 
-        chunk_iter = self.model.iter_chunk_outputs(
-            batch,
-            shared_clip_feature=clip_proxy,
-        )
-
-        while True:
-            try:
-                with autocast(device_type=self.device.type, enabled=use_amp):
-                    chunk = next(chunk_iter)
-
-                    loss_dict = self.criterion(
-                        chunk["train_outputs"],
-                        {"label_map": label_map},
-                        chunk_class_ids=chunk["chunk_class_ids"],
-                        reduction="mean",
-                    )
-
-                    if "total_loss" not in loss_dict:
-                        raise ValueError("Criterion must return 'total_loss'.")
-                    if "num_valid" not in loss_dict:
-                        raise ValueError("Criterion must return 'num_valid'.")
-
-                    if loss_sums is None:
-                        loss_sums = self._make_empty_loss_sums_from_loss_dict(loss_dict)
-
-                    chunk_total_loss = loss_dict["total_loss"]
-                    mixer_cache.append(self._build_final_mixer_cache_item(chunk))
-            except StopIteration:
-                break
-
-            chunk_num_valid = int(loss_dict["num_valid"].detach().item())
-
-            self._accumulate_weighted_loss_sums(
-                loss_sums=loss_sums,
-                loss_dict=loss_dict,
-                weight=chunk_num_valid,
-            )
-            total_valid_pixels += chunk_num_valid
-
-            if do_backward and chunk_num_valid > 0:
-                self.scaler.scale(chunk_total_loss).backward()
-                self._accumulate_proxy_grad(
-                    accumulated_grad=accumulated_clip_feature_grad,
-                    proxy_tensor=clip_proxy,
-                )
-                did_backward = True
-
-            del chunk
-            del loss_dict
-            del chunk_total_loss
-
-        if loss_sums is None:
-            loss_sums = {"total_loss": 0.0}
-
-        if len(mixer_cache) == 0:
-            return loss_sums, total_valid_pixels, did_backward
-
-        final_clip_proxy = shared_clip_feature.detach()
-        if do_backward:
-            final_clip_proxy.requires_grad_(True)
-
-        with autocast(device_type=self.device.type, enabled=use_amp):
             final_raw_outputs = self.model.run_final_mixer_from_chunks(
                 mixer_cache=mixer_cache,
                 batch=batch,
-                shared_clip_feature=final_clip_proxy,
+                shared_clip_feature=shared_clip_feature,
+                sam3_feature_high=sam3_feature_high,
             )
 
             final_outputs = self.model.adapter(
@@ -371,38 +316,26 @@ class Trainer:
 
         final_num_valid = int(final_loss_dict["num_valid"].detach().item())
 
+        loss_sums = self._make_empty_loss_sums_from_loss_dict(final_loss_dict)
         self._accumulate_weighted_loss_sums(
             loss_sums=loss_sums,
             loss_dict=final_loss_dict,
             weight=final_num_valid,
         )
-        total_valid_pixels += final_num_valid
 
         if do_backward and final_num_valid > 0:
             self.scaler.scale(final_total_loss).backward()
-            self._accumulate_proxy_grad(
-                accumulated_grad=accumulated_clip_feature_grad,
-                proxy_tensor=final_clip_proxy,
-            )
             did_backward = True
 
-        if (
-                do_backward
-                and did_backward
-                and accumulated_clip_feature_grad is not None
-        ):
-            shared_clip_feature.backward(accumulated_clip_feature_grad)
-
         del mixer_cache
-        del clip_proxy
-        del final_clip_proxy
         del shared_clip_feature
+        del sam3_feature_high
         del final_raw_outputs
         del final_outputs
         del final_loss_dict
         del final_total_loss
 
-        return loss_sums, total_valid_pixels, did_backward
+        return loss_sums, final_num_valid, did_backward
 
     def train_step(self, batch) -> tuple[Dict[str, float], bool]:
         if self.optimizer is None:

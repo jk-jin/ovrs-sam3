@@ -19,15 +19,16 @@ class ModelOutputKeys:
 
     class_tokens: str = "class_tokens"
 
-    delta_logits: str = "delta_logits"
-    modulated_semantic_logits: str = "modulated_semantic_logits"
-
     final_logits: str = "final_logits"
     final_score_map: str = "final_score_map"
     final_pred: str = "final_pred"
 
     presence_logits: str = "presence_logits"
     presence_score: str = "presence_score"
+    presence_logits_layers: str = "presence_logits_layers"
+
+    sam3_pixel_feature: str = "sam3_pixel_feature"
+    class_code_scales: str = "class_code_scales"
 
 
 OUTPUT_KEYS = ModelOutputKeys()

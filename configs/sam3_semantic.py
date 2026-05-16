@@ -25,30 +25,42 @@ model = dict(
         image_encoder_mode="maskclip",
         maskclip_skip_last_layers=1,
 
-        extra_token_templates=[
+        prompt_templates=[
             "a remote sensing image of {}.",
             "an aerial image of {}.",
             "a satellite image of {}.",
             "an overhead view of {}.",
         ],
-        num_extra_tokens=4,
+        num_prompt_templates=4,
+        num_clip_text_latents=32,
         normalize_label_for_clip=True,
     ),
 
     final_mixer_cfg=dict(
         enabled=True,
-        score_dim=32,
-        class_dim=128,
-        attn_dim=160,
-        num_heads=8,
-        fusion_layers=1,
-        dropout=0.1,
-        clip_feature_dim=256,
-        clip_residual_init=1.0,
 
         num_class_tokens=32,
-        class_token_self_attn_mode="axial",
+        fusion_layers=4,
+        num_heads=8,
+        dropout=0.1,
         presence_enabled=True,
+
+        class_code_cfg=dict(
+            source="hash_random",
+            dim=256,
+            normalize=True,
+            token_scale=dict(init=8.0, min=2.0, max=32.0, temperature=0.5),
+            feature_low_scale=dict(init=8.0, min=2.0, max=32.0, temperature=0.5),
+            clip_feature_scale=dict(init=8.0, min=2.0, max=32.0, temperature=0.5),
+            feature_high_scale=dict(init=6.0, min=1.0, max=32.0, temperature=0.5),
+        ),
+
+        mask_head_cfg=dict(
+            type="dot_product",
+            train_token_pooling="logsumexp",
+            infer_token_pooling="max",
+            logsumexp_tau=0.2,
+        ),
     ),
 
     freeze_cfg=dict(
@@ -56,14 +68,9 @@ model = dict(
         trainable_modules=[
             "core.global_clip_sam_feature_builder",
 
-            "core.sam3_to_clip_feature_attn",
-            "core.sam3_to_clip_feature_norm",
-
-            "core.extra_type_embed",
-
             "core.class_token_query_embed",
-            "core.class_token_condition_proj",
-            "core.class_token_seed_proj",
+            "core.class_token_text_cross_attn",
+            "core.class_token_text_cross_attn_norm",
             "core.class_token_encoder_cross_attn",
             "core.class_token_encoder_cross_attn_norm",
 
@@ -77,15 +84,13 @@ model = dict(
     criterion_cfg=dict(
         ignore_index=255,
 
-        bce_weight=0.4,
-        dice_weight=1.0,
-
         final_bce_weight=0.2,
         final_dice_weight=0.6,
         final_ce_weight=0.8,
-        final_ignore_bce_weight=1.0,
+        final_ignore_bce_weight=0.2,
 
         presence_loss_weight=0.1,
+        presence_layer_loss_weights=[0.02, 0.05, 0.1, 0.2],
 
         bce_class_balance_clamp_min=0.2,
         bce_class_balance_clamp_max=5.0,
@@ -123,29 +128,17 @@ optim_wrapper = dict(
                     lr_mult=2.0,
                     decay_mult=1.0,
                 ),
-                "core.sam3_to_clip_feature_attn": dict(
-                    lr_mult=2.0,
-                    decay_mult=1.0,
-                ),
-                "core.sam3_to_clip_feature_norm": dict(
-                    lr_mult=2.0,
-                    decay_mult=0.0,
-                ),
-                "core.extra_type_embed": dict(
-                    lr_mult=2.0,
-                    decay_mult=0.0,
-                ),
                 "core.class_token_query_embed": dict(
                     lr_mult=3.0,
                     decay_mult=0.0,
                 ),
-                "core.class_token_condition_proj": dict(
+                "core.class_token_text_cross_attn": dict(
                     lr_mult=3.0,
                     decay_mult=1.0,
                 ),
-                "core.class_token_seed_proj": dict(
+                "core.class_token_text_cross_attn_norm": dict(
                     lr_mult=3.0,
-                    decay_mult=1.0,
+                    decay_mult=0.0,
                 ),
                 "core.class_token_encoder_cross_attn": dict(
                     lr_mult=3.0,
@@ -157,22 +150,6 @@ optim_wrapper = dict(
                 ),
                 "core.final_mixer": dict(
                     lr_mult=2.0,
-                    decay_mult=1.0,
-                ),
-                "core.final_mixer.presence_query": dict(
-                    lr_mult=3.0,
-                    decay_mult=0.0,
-                ),
-                "core.final_mixer.presence_attn": dict(
-                    lr_mult=2.0,
-                    decay_mult=1.0,
-                ),
-                "core.final_mixer.presence_norm": dict(
-                    lr_mult=2.0,
-                    decay_mult=0.0,
-                ),
-                "core.final_mixer.presence_head": dict(
-                    lr_mult=3.0,
                     decay_mult=1.0,
                 ),
             },

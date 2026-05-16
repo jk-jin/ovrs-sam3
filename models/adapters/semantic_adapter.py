@@ -218,23 +218,6 @@ class SemanticSegAdapter(nn.Module):
             OUTPUT_KEYS.final_pred: final_pred,
         }
 
-        for key in (
-            OUTPUT_KEYS.delta_logits,
-            OUTPUT_KEYS.modulated_semantic_logits,
-        ):
-            value = self._extract_optional_tensor(raw_outputs, key)
-            if value is None:
-                continue
-
-            value = self._ensure_4d_map(value, key)
-            self._validate_same_shape(
-                semantic_logits,
-                value,
-                OUTPUT_KEYS.semantic_logits,
-                key,
-            )
-            outputs[key] = value
-
         class_tokens = self._extract_optional_tensor(
             raw_outputs,
             OUTPUT_KEYS.class_tokens,
@@ -283,6 +266,28 @@ class SemanticSegAdapter(nn.Module):
             outputs[OUTPUT_KEYS.presence_score] = presence_score
         elif presence_logits is not None:
             outputs[OUTPUT_KEYS.presence_score] = presence_logits.sigmoid()
+
+        presence_logits_layers = self._extract_optional_tensor(
+            raw_outputs,
+            OUTPUT_KEYS.presence_logits_layers,
+        )
+        if presence_logits_layers is not None:
+            if presence_logits_layers.dim() != 3:
+                raise ValueError(
+                    "presence_logits_layers must be [L, B, C], "
+                    f"got {tuple(presence_logits_layers.shape)}."
+                )
+            if tuple(presence_logits_layers.shape[1:]) != tuple(semantic_logits.shape[:2]):
+                raise ValueError(
+                    "presence_logits_layers shape mismatch: expected [L, B, C] "
+                    f"with B,C={tuple(semantic_logits.shape[:2])}, got "
+                    f"{tuple(presence_logits_layers.shape)}."
+                )
+            outputs[OUTPUT_KEYS.presence_logits_layers] = presence_logits_layers
+
+        class_code_scales = raw_outputs.get(OUTPUT_KEYS.class_code_scales, None)
+        if class_code_scales is not None:
+            outputs[OUTPUT_KEYS.class_code_scales] = class_code_scales
 
         return outputs
 

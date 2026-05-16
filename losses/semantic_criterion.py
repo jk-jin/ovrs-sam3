@@ -14,15 +14,13 @@ from ..models.task_modes import OUTPUT_KEYS
 class SemanticCriterionConfig:
     ignore_index: int = 255
 
-    bce_weight: float = 1.0
-    dice_weight: float = 1.0
-
     final_bce_weight: float = 0.4
     final_dice_weight: float = 0.5
     final_ce_weight: float = 1.0
     final_ignore_bce_weight: float = 0.15
 
     presence_loss_weight: float = 0.1
+    presence_layer_loss_weights: Optional[Sequence[float]] = None
 
     bce_class_balance_clamp_min: float = 0.2
     bce_class_balance_clamp_max: float = 5.0
@@ -236,11 +234,72 @@ class SemanticCriterion(nn.Module):
         denom = presence_valid_mask.to(dtype=per_elem.dtype).sum().clamp_min(1.0)
         return per_elem.sum() / denom
 
+    def _presence_loss_from_outputs(
+        self,
+        outputs: Dict[str, torch.Tensor],
+        presence_logits: torch.Tensor,
+        presence_target: torch.Tensor,
+        presence_valid_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        layers_key = getattr(
+            OUTPUT_KEYS,
+            "presence_logits_layers",
+            "presence_logits_layers",
+        )
+        presence_logits_layers = outputs.get(layers_key, None)
+
+        if presence_logits_layers is None:
+            return self._presence_bce_loss(
+                presence_logits=presence_logits,
+                presence_target=presence_target,
+                presence_valid_mask=presence_valid_mask,
+            )
+
+        if presence_logits_layers.dim() != 3:
+            raise ValueError(
+                "presence_logits_layers must be [L, B, C], got "
+                f"{tuple(presence_logits_layers.shape)}."
+            )
+
+        if tuple(presence_logits_layers.shape[1:]) != tuple(presence_target.shape):
+            raise ValueError(
+                "presence_logits_layers shape mismatch: expected [L, B, C] "
+                f"with B,C={tuple(presence_target.shape)}, got "
+                f"{tuple(presence_logits_layers.shape)}."
+            )
+
+        num_layers = int(presence_logits_layers.shape[0])
+        weights = self.cfg.presence_layer_loss_weights
+
+        if weights is None:
+            weights_tensor = presence_logits_layers.new_full(
+                (num_layers,),
+                1.0 / max(num_layers, 1),
+            )
+        else:
+            if len(weights) != num_layers:
+                raise ValueError(
+                    "presence_layer_loss_weights length must match presence "
+                    f"layers: got {len(weights)} weights for {num_layers} layers."
+                )
+            weights_tensor = presence_logits_layers.new_tensor(list(weights))
+
+        loss = presence_logits_layers.sum() * 0.0
+        for layer_idx in range(num_layers):
+            layer_loss = self._presence_bce_loss(
+                presence_logits=presence_logits_layers[layer_idx],
+                presence_target=presence_target,
+                presence_valid_mask=presence_valid_mask,
+            )
+            loss = loss + weights_tensor[layer_idx] * layer_loss
+
+        return loss
+
     def _final_ignore_bce_loss(
-            self,
-            final_logits: torch.Tensor,
-            semantic_logits: torch.Tensor,
-            valid_mask: torch.Tensor,
+        self,
+        final_logits: torch.Tensor,
+        semantic_logits: torch.Tensor,
+        valid_mask: torch.Tensor,
     ) -> torch.Tensor:
         if final_logits.shape != semantic_logits.shape:
             raise ValueError(
@@ -403,84 +462,20 @@ class SemanticCriterion(nn.Module):
             OUTPUT_KEYS.semantic_logits,
         )
 
-        label_map = self._extract_label_map(targets)
-        label_map = self._resize_label_map_to_logits(
-            label_map=label_map,
-            target_hw=tuple(semantic_logits.shape[-2:]),
-        )
-
-        num_channels = int(semantic_logits.shape[1])
-        class_ids = self._build_class_ids(
-            num_channels=num_channels,
-            chunk_class_ids=chunk_class_ids,
-        )
-
-        target, valid_mask = self._build_targets(
-            label_map=label_map,
-            class_ids=class_ids,
-            num_channels=num_channels,
-        )
-
-        present_pair_mask = self._build_present_pair_mask(
-            target=target,
-            valid_mask=valid_mask,
-        )
-
-        num_valid_pixels = int((label_map != int(self.cfg.ignore_index)).sum().item())
         zero_losses = self._make_zero_losses(semantic_logits)
-
-        if num_valid_pixels <= 0:
-            total_loss = semantic_logits.sum() * 0.0
-            return {
-                **zero_losses,
-                "total_loss": total_loss,
-                "num_valid": torch.tensor(
-                    0,
-                    device=semantic_logits.device,
-                    dtype=torch.long,
-                ),
-            }
-
-        if present_pair_mask.any():
-            class_weights = self._build_dynamic_class_weights(
-                target=target,
-                valid_mask=valid_mask,
-                present_pair_mask=present_pair_mask,
-            )
-
-            loss_semantic_bce = self._binary_cross_entropy_present_balanced_mean(
-                logits=semantic_logits,
-                target=target,
-                valid_mask=valid_mask,
-                present_pair_mask=present_pair_mask,
-                class_weights=class_weights,
-            )
-            loss_semantic_dice = self._dice_loss_present_mean_from_logits(
-                logits=semantic_logits,
-                target=target,
-                valid_mask=valid_mask,
-                present_pair_mask=present_pair_mask,
-            )
-        else:
-            loss_semantic_bce = semantic_logits.sum() * 0.0
-            loss_semantic_dice = semantic_logits.sum() * 0.0
-
-        total_loss = (
-            float(self.cfg.bce_weight) * loss_semantic_bce
-            + float(self.cfg.dice_weight) * loss_semantic_dice
-        )
+        zero = semantic_logits.sum() * 0.0
 
         return {
-            "loss_semantic_bce": loss_semantic_bce,
-            "loss_semantic_dice": loss_semantic_dice,
+            "loss_semantic_bce": zero_losses["loss_semantic_bce"],
+            "loss_semantic_dice": zero_losses["loss_semantic_dice"],
             "loss_final_bce": zero_losses["loss_final_bce"],
             "loss_final_dice": zero_losses["loss_final_dice"],
             "loss_final_ce": zero_losses["loss_final_ce"],
             "loss_final_ignore_bce": zero_losses["loss_final_ignore_bce"],
             "loss_presence_bce": zero_losses["loss_presence_bce"],
-            "total_loss": total_loss,
+            "total_loss": zero,
             "num_valid": torch.tensor(
-                num_valid_pixels,
+                0,
                 device=semantic_logits.device,
                 dtype=torch.long,
             ),
@@ -548,9 +543,17 @@ class SemanticCriterion(nn.Module):
             valid_mask=valid_mask,
         )
 
+        loss_presence_bce = self._presence_loss_from_outputs(
+            outputs=outputs,
+            presence_logits=presence_logits,
+            presence_target=presence_target,
+            presence_valid_mask=presence_valid_mask,
+        )
+
         if num_valid_pixels <= 0:
             total_loss = (
-                    float(self.cfg.final_ignore_bce_weight) * loss_final_ignore_bce
+                float(self.cfg.final_ignore_bce_weight) * loss_final_ignore_bce
+                + float(self.cfg.presence_loss_weight) * loss_presence_bce
             )
 
             return {
@@ -560,7 +563,7 @@ class SemanticCriterion(nn.Module):
                 "loss_final_dice": zero_losses["loss_final_dice"],
                 "loss_final_ce": zero_losses["loss_final_ce"],
                 "loss_final_ignore_bce": loss_final_ignore_bce,
-                "loss_presence_bce": zero_losses["loss_presence_bce"],
+                "loss_presence_bce": loss_presence_bce,
                 "total_loss": total_loss,
                 "num_valid": torch.tensor(
                     0,
@@ -591,12 +594,6 @@ class SemanticCriterion(nn.Module):
         else:
             loss_final_bce = final_logits.sum() * 0.0
             loss_final_dice = final_logits.sum() * 0.0
-
-        loss_presence_bce = self._presence_bce_loss(
-            presence_logits=presence_logits,
-            presence_target=presence_target,
-            presence_valid_mask=presence_valid_mask,
-        )
 
         ce_label_map = self._build_ce_label_map(
             label_map=label_map,

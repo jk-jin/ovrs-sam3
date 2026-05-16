@@ -47,6 +47,12 @@ class SAM3Segmentor(nn.Module):
     ) -> torch.Tensor:
         return self.core.build_shared_clip_feature(batch)
 
+    def build_sam3_pixel_feature(
+        self,
+        batch: BatchedDatapoint,
+    ) -> torch.Tensor:
+        return self.core.build_sam3_pixel_feature(batch)
+
     @staticmethod
     def _build_mixer_cache_item(
         outputs: Dict[str, torch.Tensor],
@@ -109,15 +115,18 @@ class SAM3Segmentor(nn.Module):
         mixer_cache: List[Dict[str, torch.Tensor | list[int]]],
         batch: Optional[BatchedDatapoint] = None,
         shared_clip_feature: Optional[torch.Tensor] = None,
+        sam3_feature_high: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         return self.core.run_final_mixer_from_chunks(
             mixer_cache=mixer_cache,
             batch=batch,
             shared_clip_feature=shared_clip_feature,
+            sam3_feature_high=sam3_feature_high,
         )
 
     def forward(self, batch: BatchedDatapoint) -> dict[str, torch.Tensor]:
         shared_clip_feature = self.build_shared_clip_feature(batch)
+        sam3_feature_high = self.build_sam3_pixel_feature(batch)
 
         mixer_cache = []
 
@@ -138,7 +147,7 @@ class SAM3Segmentor(nn.Module):
                 self._build_mixer_cache_item(
                     outputs=chunk_outputs,
                     chunk_class_ids=chunk["chunk_class_ids"],
-                    detach_score_maps=False,
+                    detach_score_maps=True,
                 )
             )
 
@@ -146,6 +155,7 @@ class SAM3Segmentor(nn.Module):
             mixer_cache=mixer_cache,
             batch=batch,
             shared_clip_feature=shared_clip_feature,
+            sam3_feature_high=sam3_feature_high,
         )
 
         return self.adapter(
