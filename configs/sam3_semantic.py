@@ -45,21 +45,33 @@ model = dict(
         dropout=0.1,
         presence_enabled=True,
 
-        class_code_cfg=dict(
-            source="hash_random",
-            dim=256,
-            normalize=True,
-            token_scale=dict(init=8.0, min=2.0, max=32.0, temperature=0.5),
-            feature_low_scale=dict(init=8.0, min=2.0, max=32.0, temperature=0.5),
-            clip_feature_scale=dict(init=8.0, min=2.0, max=32.0, temperature=0.5),
-            feature_high_scale=dict(init=6.0, min=1.0, max=32.0, temperature=0.5),
+        clip_sam_upsample_cfg=dict(
+            enabled=True,
+            window_size=8,
+            dropout=0.1,
+            gamma_init=1.0,
+            gamma_max=2.0,
+        ),
+
+        dynamic_code_cfg=dict(
+            source="class_token_to_sam3_text",
+        ),
+
+        mask_prior_cfg=dict(
+            type="softmax",
+            tau=16.0,
+            multiply_presence=True,
+        ),
+
+        window_attention_cfg=dict(
+            window_size=8,
+            dropout=0.1,
         ),
 
         mask_head_cfg=dict(
-            type="dot_product",
-            train_token_pooling="logsumexp",
-            infer_token_pooling="max",
-            logsumexp_tau=0.2,
+            type="attn_feature_dot_dynamic_code",
+            direct_dot=True,
+            class_feature_pool_stride=4,
         ),
     ),
 
@@ -67,6 +79,7 @@ model = dict(
         train_adapters_only=True,
         trainable_modules=[
             "core.global_clip_sam_feature_builder",
+            "core.clip_sam_upsampler",
 
             "core.class_token_query_embed",
             "core.class_token_text_cross_attn",
@@ -84,13 +97,16 @@ model = dict(
     criterion_cfg=dict(
         ignore_index=255,
 
-        final_bce_weight=0.2,
-        final_dice_weight=0.6,
-        final_ce_weight=0.8,
+        final_bce_weight=0.1,
+        final_dice_weight=1.0,
+        final_ce_weight=0.1,
         final_ignore_bce_weight=0.2,
 
-        presence_loss_weight=0.1,
+        presence_loss_weight=1.0,
         presence_layer_loss_weights=[0.02, 0.05, 0.1, 0.2],
+
+        mask_layer_loss_weight=1.0,
+        mask_layer_weights=[0.1, 0.2, 0.4],
 
         bce_class_balance_clamp_min=0.2,
         bce_class_balance_clamp_max=5.0,
@@ -125,6 +141,10 @@ optim_wrapper = dict(
             norm_decay_mult=0.0,
             custom_keys={
                 "core.global_clip_sam_feature_builder": dict(
+                    lr_mult=2.0,
+                    decay_mult=1.0,
+                ),
+                "core.clip_sam_upsampler": dict(
                     lr_mult=2.0,
                     decay_mult=1.0,
                 ),

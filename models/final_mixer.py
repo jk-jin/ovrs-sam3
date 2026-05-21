@@ -1,137 +1,237 @@
 from __future__ import annotations
 
-import hashlib
-import math
-import re
-import unicodedata
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from .task_modes import OUTPUT_KEYS
 
 
-def _normalize_class_name(name: str) -> str:
-    text = unicodedata.normalize("NFKC", str(name))
-    text = text.strip().lower()
-    text = re.sub(r"\s+", " ", text)
-    return text
-
-
-class BoundedLearnableScale(nn.Module):
+class ValuePreservingWindowAttention2D(nn.Module):
     def __init__(
         self,
-        init: float,
-        min: float,
-        max: float,
-        temperature: float = 0.5,
+        hidden_dim: int,
+        num_heads: int = 8,
+        window_size: int = 8,
+        dropout: float = 0.1,
     ) -> None:
         super().__init__()
 
-        self.min_value = float(min)
-        self.max_value = float(max)
-        self.temperature = float(temperature)
+        self.hidden_dim = int(hidden_dim)
+        self.num_heads = int(num_heads)
+        self.window_size = int(window_size)
 
-        if self.max_value <= self.min_value:
+        if self.hidden_dim <= 0:
+            raise ValueError(f"hidden_dim must be positive, got {hidden_dim}.")
+        if self.num_heads <= 0:
+            raise ValueError(f"num_heads must be positive, got {num_heads}.")
+        if self.window_size <= 0:
+            raise ValueError(f"window_size must be positive, got {window_size}.")
+        if self.hidden_dim % self.num_heads != 0:
             raise ValueError(
-                f"Scale max must be greater than min, got min={min}, max={max}."
-            )
-        if self.temperature <= 0:
-            raise ValueError(
-                f"Scale temperature must be positive, got {temperature}."
-            )
-        if not (self.min_value < float(init) < self.max_value):
-            raise ValueError(
-                "Scale init must be inside (min, max), got "
-                f"init={init}, min={min}, max={max}."
+                "hidden_dim must be divisible by num_heads, "
+                f"got hidden_dim={self.hidden_dim}, num_heads={self.num_heads}."
             )
 
-        ratio = (float(init) - self.min_value) / (
-            self.max_value - self.min_value
-        )
+        self.head_dim = self.hidden_dim // self.num_heads
+        self.scale = self.head_dim ** -0.5
 
-        if ratio < 1e-6:
-            ratio = 1e-6
-        elif ratio > 1.0 - 1e-6:
-            ratio = 1.0 - 1e-6
+        self.q_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.k_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
 
-        raw_init = self.temperature * math.log(ratio / (1.0 - ratio))
+        self.attn_dropout = nn.Dropout(float(dropout))
+        self.out_dropout = nn.Dropout(float(dropout))
 
-        self.raw_scale = nn.Parameter(
-            torch.tensor(raw_init, dtype=torch.float32)
-        )
-
-    def forward(self) -> torch.Tensor:
-        ratio = torch.sigmoid(self.raw_scale / self.temperature)
-        return self.min_value + (self.max_value - self.min_value) * ratio
-
-
-class HashRandomClassCodeBuilder(nn.Module):
-    """
-    Build deterministic class codes from class names.
-
-    Rule:
-        class name -> normalized string -> SHA256 hash -> fixed random seed
-        -> random vector -> L2 normalize.
-
-    Output:
-        class_codes_unit: [C, D]
-    """
-
-    def __init__(
-        self,
-        dim: int = 256,
-        normalize: bool = True,
-    ) -> None:
-        super().__init__()
-        self.dim = int(dim)
-        self.normalize = bool(normalize)
-
-        if self.dim <= 0:
-            raise ValueError(f"dim must be positive, got {dim}.")
+        self.out_norm = nn.LayerNorm(self.hidden_dim, eps=1e-6)
 
     @staticmethod
-    def _seed_from_name(name: str) -> int:
-        normalized = _normalize_class_name(name)
-        digest = hashlib.sha256(normalized.encode("utf-8")).digest()
-        # Keep the seed in signed 63-bit range for torch.Generator.
-        return int.from_bytes(digest[:8], byteorder="little", signed=False) % (2**63 - 1)
+    def _pad_to_window_size(
+        x: torch.Tensor,
+        window_size: int,
+    ) -> tuple[torch.Tensor, int, int]:
+        height, width = int(x.shape[-2]), int(x.shape[-1])
+        pad_h = (window_size - height % window_size) % window_size
+        pad_w = (window_size - width % window_size) % window_size
 
-    def _code_for_name(self, name: str) -> torch.Tensor:
-        generator = torch.Generator(device="cpu")
-        generator.manual_seed(self._seed_from_name(name))
-        code = torch.randn(self.dim, generator=generator, dtype=torch.float32)
-        if self.normalize:
-            code = F.normalize(code[None], dim=1, eps=1e-12)[0]
-        return code
+        if pad_h == 0 and pad_w == 0:
+            return x, height, width
+
+        x = F.pad(x, (0, pad_w, 0, pad_h), value=0.0)
+        return x, height, width
+
+    def _map_to_windows(self, x: torch.Tensor) -> torch.Tensor:
+        batch_size, dim, height, width = x.shape
+        window = self.window_size
+
+        x = x.reshape(
+            batch_size,
+            dim,
+            height // window,
+            window,
+            width // window,
+            window,
+        )
+        x = x.permute(0, 2, 4, 3, 5, 1).contiguous()
+        x = x.reshape(-1, window * window, dim)
+        return x
+
+    def _windows_to_map(
+        self,
+        x: torch.Tensor,
+        batch_size: int,
+        padded_h: int,
+        padded_w: int,
+        original_h: int,
+        original_w: int,
+    ) -> torch.Tensor:
+        window = self.window_size
+        dim = self.hidden_dim
+
+        x = x.reshape(
+            batch_size,
+            padded_h // window,
+            padded_w // window,
+            window,
+            window,
+            dim,
+        )
+        x = x.permute(0, 5, 1, 3, 2, 4).contiguous()
+        x = x.reshape(batch_size, dim, padded_h, padded_w)
+        return x[:, :, :original_h, :original_w].contiguous()
 
     def forward(
         self,
-        class_names: Sequence[str],
-        device: torch.device,
-        dtype: torch.dtype,
+        query_map: torch.Tensor,
+        key_map: torch.Tensor,
+        value_map: torch.Tensor,
     ) -> torch.Tensor:
-        if len(class_names) == 0:
-            raise ValueError("class_names is empty.")
+        if query_map.dim() != 4:
+            raise ValueError(
+                f"query_map must be [B, D, H, W], got {tuple(query_map.shape)}."
+            )
+        if key_map.shape != query_map.shape:
+            raise ValueError(
+                "key_map must have the same shape as query_map, "
+                f"got {tuple(key_map.shape)} vs {tuple(query_map.shape)}."
+            )
+        if value_map.shape != query_map.shape:
+            raise ValueError(
+                "value_map must have the same shape as query_map, "
+                f"got {tuple(value_map.shape)} vs {tuple(query_map.shape)}."
+            )
 
-        codes = [self._code_for_name(name) for name in class_names]
-        class_codes = torch.stack(codes, dim=0)
-        return class_codes.to(device=device, dtype=dtype, non_blocking=True)
+        batch_size, dim, original_h, original_w = query_map.shape
+        if int(dim) != self.hidden_dim:
+            raise ValueError(
+                f"Feature dim mismatch: expected {self.hidden_dim}, got {dim}."
+            )
 
+        query_map, _, _ = self._pad_to_window_size(query_map, self.window_size)
+        key_map, _, _ = self._pad_to_window_size(key_map, self.window_size)
+        value_map, _, _ = self._pad_to_window_size(value_map, self.window_size)
 
-class ClassTokenFusionLayer(nn.Module):
+        padded_h, padded_w = int(query_map.shape[-2]), int(query_map.shape[-1])
+
+        query_windows = self._map_to_windows(query_map)  # [Nw, Ws*Ws, D]
+        key_windows = self._map_to_windows(key_map)      # [Nw, Ws*Ws, D]
+        value_windows = self._map_to_windows(value_map)  # [Nw, Ws*Ws, D]
+
+        num_windows, num_tokens, _ = query_windows.shape
+
+        q = self.q_proj(query_windows)
+        k = self.k_proj(key_windows)
+
+        q = q.reshape(
+            num_windows,
+            num_tokens,
+            self.num_heads,
+            self.head_dim,
+        ).permute(0, 2, 1, 3).contiguous()
+
+        k = k.reshape(
+            num_windows,
+            num_tokens,
+            self.num_heads,
+            self.head_dim,
+        ).permute(0, 2, 1, 3).contiguous()
+
+        v = value_windows.reshape(
+            num_windows,
+            num_tokens,
+            self.num_heads,
+            self.head_dim,
+        ).permute(0, 2, 1, 3).contiguous()
+
+        attn = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+        attn = torch.softmax(attn, dim=-1)
+        attn = self.attn_dropout(attn)
+
+        attn_out = torch.matmul(attn, v)
+        attn_out = attn_out.permute(0, 2, 1, 3).contiguous()
+        attn_out = attn_out.reshape(num_windows, num_tokens, self.hidden_dim)
+
+        out = value_windows + self.out_dropout(attn_out)
+
+        out = self.out_norm(out)
+
+        return self._windows_to_map(
+            x=out,
+            batch_size=batch_size,
+            padded_h=padded_h,
+            padded_w=padded_w,
+            original_h=original_h,
+            original_w=original_w,
+        )
+
+class DynamicTextAlignedMaskFusionLayer(nn.Module):
+    """
+    One layer of the new final mixer.
+
+    Input:
+        class_tokens:          [B, C, Q, D]
+        source_logits:         [B, C, H, W]
+        shared_clip_feature_high: [B, H*W, D]
+        sam3_text_tokens_full: [M, C, D]
+        sam3_text_mask_full:   [C, M]
+
+    Output:
+        class_tokens:          [B, C, Q, D]
+        presence_logits:       [B, C]
+        dynamic_class_code:    [B, C, D]
+        mask_logits:           [B, C, H, W]
+
+    Symbol meanings:
+        B means batch size.
+        C means class count.
+        Q means class token count per class.
+        D means hidden feature dimension.
+        M means SAM3 text token count.
+        H and W mean mask height and width.
+    """
+
     def __init__(
         self,
         hidden_dim: int = 256,
         num_heads: int = 8,
         dropout: float = 0.1,
         presence_enabled: bool = True,
+        window_size: int = 8,
+        multiply_presence: bool = True,
+        class_feature_pool_stride: int = 4,
     ) -> None:
         super().__init__()
 
         self.hidden_dim = int(hidden_dim)
         self.num_heads = int(num_heads)
         self.presence_enabled = bool(presence_enabled)
+        self.multiply_presence = bool(multiply_presence)
+        self.class_feature_pool_stride = int(class_feature_pool_stride)
+        if self.class_feature_pool_stride <= 0:
+            raise ValueError(
+                "class_feature_pool_stride must be positive, "
+                f"got {class_feature_pool_stride}."
+            )
 
         if self.hidden_dim <= 0:
             raise ValueError(f"hidden_dim must be positive, got {hidden_dim}.")
@@ -139,8 +239,8 @@ class ClassTokenFusionLayer(nn.Module):
             raise ValueError(f"num_heads must be positive, got {num_heads}.")
         if self.hidden_dim % self.num_heads != 0:
             raise ValueError(
-                "hidden_dim must be divisible by num_heads, got "
-                f"hidden_dim={self.hidden_dim}, num_heads={self.num_heads}."
+                "hidden_dim must be divisible by num_heads, "
+                f"got hidden_dim={self.hidden_dim}, num_heads={self.num_heads}."
             )
 
         self.slot_inter_class_attn = nn.MultiheadAttention(
@@ -159,23 +259,54 @@ class ClassTokenFusionLayer(nn.Module):
         )
         self.intra_class_norm = nn.LayerNorm(self.hidden_dim)
 
-        self.presence_head = nn.Linear(self.hidden_dim, 1)
+        self.presence_query = nn.Parameter(torch.zeros(1, 1, self.hidden_dim))
+        nn.init.normal_(self.presence_query, std=0.02)
 
-        self.sam3_low_attn = nn.MultiheadAttention(
+        self.presence_token_attn = nn.MultiheadAttention(
             embed_dim=self.hidden_dim,
             num_heads=self.num_heads,
             dropout=float(dropout),
             batch_first=True,
         )
-        self.sam3_low_norm = nn.LayerNorm(self.hidden_dim)
+        self.presence_token_norm = nn.LayerNorm(self.hidden_dim)
 
-        self.clip_sam_attn = nn.MultiheadAttention(
+        self.presence_summary_norm = nn.LayerNorm(self.hidden_dim * 3)
+        self.presence_head = nn.Sequential(
+            nn.Linear(self.hidden_dim * 3, self.hidden_dim * 2),
+            nn.GELU(),
+            nn.Dropout(float(dropout)),
+            nn.Linear(self.hidden_dim * 2, self.hidden_dim),
+            nn.GELU(),
+            nn.Dropout(float(dropout)),
+            nn.Linear(self.hidden_dim, 1),
+        )
+
+        self.code_class_attn = nn.MultiheadAttention(
             embed_dim=self.hidden_dim,
             num_heads=self.num_heads,
             dropout=float(dropout),
             batch_first=True,
         )
-        self.clip_sam_norm = nn.LayerNorm(self.hidden_dim)
+
+        self.code_residual_norm = nn.LayerNorm(self.hidden_dim)
+        self.code_output_norm = nn.LayerNorm(self.hidden_dim)
+
+        self.mask_embed_norm = nn.LayerNorm(self.hidden_dim)
+
+        self.mask_feature_attn = ValuePreservingWindowAttention2D(
+            hidden_dim=self.hidden_dim,
+            num_heads=self.num_heads,
+            window_size=int(window_size),
+            dropout=float(dropout),
+        )
+
+        self.class_to_feature_attn = nn.MultiheadAttention(
+            embed_dim=self.hidden_dim,
+            num_heads=self.num_heads,
+            dropout=float(dropout),
+            batch_first=True,
+        )
+        self.class_to_feature_norm = nn.LayerNorm(self.hidden_dim)
 
         self.dropout = nn.Dropout(float(dropout))
 
@@ -197,8 +328,7 @@ class ClassTokenFusionLayer(nn.Module):
         x = self.slot_inter_class_norm(x + self.dropout(delta))
 
         x = x.reshape(batch_size, num_tokens, num_classes, dim)
-        x = x.permute(0, 2, 1, 3).contiguous()
-        return x
+        return x.permute(0, 2, 1, 3).contiguous()
 
     def _intra_class_self_attn(
         self,
@@ -217,226 +347,419 @@ class ClassTokenFusionLayer(nn.Module):
 
         return x.reshape(batch_size, num_classes, num_tokens, dim).contiguous()
 
+    def _build_text_query(
+        self,
+        sam3_text_tokens_full: torch.Tensor,
+        sam3_text_mask_full: torch.Tensor,
+        batch_size: int,
+        dtype: torch.dtype,
+        device: torch.device,
+    ) -> torch.Tensor:
+        if sam3_text_tokens_full.dim() != 3:
+            raise ValueError(
+                "sam3_text_tokens_full must be [M, C, D], "
+                f"got {tuple(sam3_text_tokens_full.shape)}."
+            )
+        if sam3_text_mask_full.dim() != 2:
+            raise ValueError(
+                "sam3_text_mask_full must be [C, M], "
+                f"got {tuple(sam3_text_mask_full.shape)}."
+            )
+
+        text_len, num_classes, dim = sam3_text_tokens_full.shape
+        if int(dim) != self.hidden_dim:
+            raise ValueError(
+                f"SAM3 text dim mismatch: expected {self.hidden_dim}, got {dim}."
+            )
+        if tuple(sam3_text_mask_full.shape) != (num_classes, text_len):
+            raise ValueError(
+                "sam3_text_mask_full shape mismatch: expected "
+                f"{(num_classes, text_len)}, got {tuple(sam3_text_mask_full.shape)}."
+            )
+
+        text_tokens = sam3_text_tokens_full.to(device=device, dtype=dtype)
+        text_mask = sam3_text_mask_full.to(device=device).bool()
+
+        # [M, C, D] -> [C, M, D]
+        text_tokens = text_tokens.permute(1, 0, 2).contiguous()
+
+        valid = (~text_mask).to(dtype=dtype)
+
+        denom = valid.sum(dim=1, keepdim=True).clamp_min(1.0)
+        text_query = (text_tokens * valid[:, :, None]).sum(dim=1) / denom
+        # [C, D]
+
+        text_query = text_query[None].expand(
+            batch_size,
+            num_classes,
+            dim,
+        )
+        # [B, C, D]
+
+        return text_query.contiguous()
+
     def _build_presence_logits(
         self,
         class_tokens: torch.Tensor,
     ) -> torch.Tensor:
-        class_summary = class_tokens.mean(dim=2)
-        presence_logits = self.presence_head(class_summary).squeeze(-1)
-        return presence_logits.contiguous()
-
-    @staticmethod
-    def _flatten_feature_map(feature_map: torch.Tensor) -> torch.Tensor:
-        if feature_map.dim() != 4:
-            raise ValueError(
-                "feature_map must be [B, D, H, W], "
-                f"got {tuple(feature_map.shape)}."
-            )
-        return feature_map.flatten(2).transpose(1, 2).contiguous()
-
-    def _attend_feature_tokens(
-        self,
-        class_tokens: torch.Tensor,
-        class_codes_unit: torch.Tensor,
-        feature_tokens: torch.Tensor,
-        code_tokens: torch.Tensor,
-        token_scale: torch.Tensor,
-        feature_scale: torch.Tensor,
-        attn: nn.MultiheadAttention,
-        norm: nn.LayerNorm,
-    ) -> torch.Tensor:
-        batch_size, num_classes, num_tokens, dim = class_tokens.shape
-        feature_batch, num_feature_tokens, feature_dim = feature_tokens.shape
-
-        if int(feature_batch) != batch_size:
-            raise ValueError(
-                "feature_tokens batch mismatch: "
-                f"{feature_batch} vs {batch_size}."
-            )
-        if int(feature_dim) != dim:
-            raise ValueError(
-                f"feature_tokens dim mismatch: expected {dim}, got {feature_dim}."
-            )
-        if tuple(code_tokens.shape) != tuple(feature_tokens.shape):
-            raise ValueError(
-                "code_tokens must have same shape as feature_tokens, got "
-                f"{tuple(code_tokens.shape)} vs {tuple(feature_tokens.shape)}."
-            )
-
-        query = class_tokens + token_scale * class_codes_unit[None, :, None, :]
-        key = feature_tokens + feature_scale * code_tokens
-        value = feature_tokens
-
-        query = query.reshape(batch_size * num_classes, num_tokens, dim)
-
-        key = key[:, None].expand(
-            batch_size,
-            num_classes,
-            num_feature_tokens,
-            dim,
-        )
-        key = key.reshape(batch_size * num_classes, num_feature_tokens, dim)
-
-        value = value[:, None].expand(
-            batch_size,
-            num_classes,
-            num_feature_tokens,
-            dim,
-        )
-        value = value.reshape(batch_size * num_classes, num_feature_tokens, dim)
-
-        residual = class_tokens.reshape(batch_size * num_classes, num_tokens, dim)
-
-        attn_out, _ = attn(
-            query=query,
-            key=key,
-            value=value,
-            need_weights=False,
-        )
-        out = norm(residual + self.dropout(attn_out))
-
-        return out.reshape(batch_size, num_classes, num_tokens, dim).contiguous()
-
-    def forward(
-        self,
-        class_tokens: torch.Tensor,
-        semantic_logits: torch.Tensor,
-        class_codes_unit: torch.Tensor,
-        sam3_feature_low: torch.Tensor,
-        shared_clip_feature: torch.Tensor,
-        token_scale: torch.Tensor,
-        feature_low_scale: torch.Tensor,
-        clip_feature_scale: torch.Tensor,
-        clip_grid_hw: Tuple[int, int],
-    ) -> tuple[torch.Tensor, torch.Tensor]:
         if class_tokens.dim() != 4:
             raise ValueError(
                 "class_tokens must be [B, C, Q, D], "
                 f"got {tuple(class_tokens.shape)}."
             )
-        if semantic_logits.dim() != 4:
+
+        batch_size, num_classes, num_tokens, dim = class_tokens.shape
+        if int(dim) != self.hidden_dim:
             raise ValueError(
-                "semantic_logits must be [B, C, H, W], "
-                f"got {tuple(semantic_logits.shape)}."
-            )
-        if sam3_feature_low.dim() != 4:
-            raise ValueError(
-                "sam3_feature_low must be [B, D, Hc, Wc], "
-                f"got {tuple(sam3_feature_low.shape)}."
-            )
-        if shared_clip_feature.dim() != 3:
-            raise ValueError(
-                "shared_clip_feature must be [B, Hc*Wc, D], "
-                f"got {tuple(shared_clip_feature.shape)}."
+                f"class token dim mismatch: expected {self.hidden_dim}, got {dim}."
             )
 
-        batch_size, num_classes, _, dim = class_tokens.shape
-        clip_h, clip_w = int(clip_grid_hw[0]), int(clip_grid_hw[1])
-        num_clip_tokens = clip_h * clip_w
+        x = class_tokens.reshape(
+            batch_size * num_classes,
+            num_tokens,
+            dim,
+        )
 
-        if tuple(semantic_logits.shape[:2]) != (batch_size, num_classes):
+        query = self.presence_query.to(
+            device=class_tokens.device,
+            dtype=class_tokens.dtype,
+        )
+        query = query.expand(batch_size * num_classes, 1, dim)
+
+        attn_out, _ = self.presence_token_attn(
+            query=query,
+            key=x,
+            value=x,
+            need_weights=False,
+        )
+        attn_summary = self.presence_token_norm(
+            query + self.dropout(attn_out)
+        ).squeeze(1)
+
+        mean_summary = x.mean(dim=1)
+        max_summary = x.max(dim=1).values
+
+        summary = torch.cat(
+            [
+                attn_summary,
+                mean_summary,
+                max_summary,
+            ],
+            dim=-1,
+        )
+        summary = self.presence_summary_norm(summary)
+
+        presence_logits = self.presence_head(summary).squeeze(-1)
+        return presence_logits.reshape(batch_size, num_classes).contiguous()
+
+    def _build_dynamic_class_code(
+        self,
+        class_tokens: torch.Tensor,
+        sam3_text_tokens_full: torch.Tensor,
+        sam3_text_mask_full: torch.Tensor,
+    ) -> torch.Tensor:
+        if class_tokens.dim() != 4:
             raise ValueError(
-                "semantic_logits batch/class mismatch: "
-                f"{tuple(semantic_logits.shape[:2])} vs {(batch_size, num_classes)}."
+                "class_tokens must be [B, C, Q, D], "
+                f"got {tuple(class_tokens.shape)}."
             )
-        if tuple(class_codes_unit.shape) != (num_classes, dim):
+
+        batch_size, num_classes, num_tokens, dim = class_tokens.shape
+        if int(dim) != self.hidden_dim:
             raise ValueError(
-                "class_codes_unit must be [C, D], got "
-                f"{tuple(class_codes_unit.shape)}, expected {(num_classes, dim)}."
+                f"class token dim mismatch: expected {self.hidden_dim}, got {dim}."
             )
-        if tuple(sam3_feature_low.shape) != (batch_size, dim, clip_h, clip_w):
+
+        text_query = self._build_text_query(
+            sam3_text_tokens_full=sam3_text_tokens_full,
+            sam3_text_mask_full=sam3_text_mask_full,
+            batch_size=batch_size,
+            dtype=class_tokens.dtype,
+            device=class_tokens.device,
+        )
+
+        if int(text_query.shape[1]) != num_classes:
             raise ValueError(
-                "sam3_feature_low shape mismatch: expected "
-                f"{(batch_size, dim, clip_h, clip_w)}, "
-                f"got {tuple(sam3_feature_low.shape)}."
+                "SAM3 text class count mismatch: "
+                f"{text_query.shape[1]} vs {num_classes}."
             )
-        if tuple(shared_clip_feature.shape) != (batch_size, num_clip_tokens, dim):
+
+        query = text_query.reshape(batch_size * num_classes, 1, dim)
+
+        class_tokens_flat = class_tokens.reshape(
+            batch_size * num_classes,
+            num_tokens,
+            dim,
+        )
+
+        attn_out, _ = self.code_class_attn(
+            query=query,
+            key=class_tokens_flat,
+            value=class_tokens_flat,
+            need_weights=False,
+        )
+
+        code = self.code_residual_norm(query + self.dropout(attn_out))
+        code = code.squeeze(1).reshape(batch_size, num_classes, dim).contiguous()
+        code = self.code_output_norm(code)
+
+        return code.contiguous()
+
+    def _build_mask_embedding(
+        self,
+        source_logits: torch.Tensor,
+        presence_logits: torch.Tensor,
+        dynamic_class_code: torch.Tensor,
+    ) -> torch.Tensor:
+        mask_prob = torch.softmax(source_logits, dim=1)
+
+        if self.presence_enabled and self.multiply_presence:
+            presence_score = torch.sigmoid(presence_logits)
+        else:
+            presence_score = source_logits.new_ones(source_logits.shape[:2])
+
+        mask_weight = mask_prob * presence_score[:, :, None, None]
+
+        mask_embed = torch.einsum(
+            "bchw,bcd->bdhw",
+            mask_weight,
+            dynamic_class_code,
+        ).contiguous()
+
+        mask_embed_dtype = mask_embed.dtype
+        mask_embed = mask_embed.float().permute(0, 2, 3, 1).contiguous()
+        mask_embed = self.mask_embed_norm(mask_embed)
+        mask_embed = mask_embed.permute(0, 3, 1, 2).contiguous()
+        mask_embed = mask_embed.to(dtype=mask_embed_dtype)
+
+        return mask_embed
+
+    def _pool_feature_for_class_attention(
+        self,
+        attn_feature: torch.Tensor,
+    ) -> torch.Tensor:
+        if attn_feature.dim() != 4:
             raise ValueError(
-                "shared_clip_feature shape mismatch: expected "
-                f"{(batch_size, num_clip_tokens, dim)}, "
-                f"got {tuple(shared_clip_feature.shape)}."
+                "attn_feature must be [B, D, H, W], "
+                f"got {tuple(attn_feature.shape)}."
             )
+
+        stride = int(self.class_feature_pool_stride)
+        if stride <= 1:
+            return attn_feature
+
+        return F.avg_pool2d(
+            attn_feature,
+            kernel_size=stride,
+            stride=stride,
+            ceil_mode=True,
+            count_include_pad=False,
+        )
+
+    def _attend_feature_with_class_tokens(
+        self,
+        class_tokens: torch.Tensor,
+        attn_feature: torch.Tensor,
+    ) -> torch.Tensor:
+        batch_size, num_classes, num_tokens, dim = class_tokens.shape
+
+        pooled_feature = self._pool_feature_for_class_attention(attn_feature)
+
+        attn_tokens = pooled_feature.flatten(2).transpose(1, 2).contiguous()
+        num_pixels = int(attn_tokens.shape[1])
+
+        query = class_tokens.reshape(batch_size * num_classes, num_tokens, dim)
+
+        key = attn_tokens[:, None].expand(
+            batch_size,
+            num_classes,
+            num_pixels,
+            dim,
+        )
+        key = key.reshape(batch_size * num_classes, num_pixels, dim)
+
+        value = key
+
+        attn_out, _ = self.class_to_feature_attn(
+            query=query,
+            key=key,
+            value=value,
+            need_weights=False,
+        )
+        out = self.class_to_feature_norm(query + self.dropout(attn_out))
+
+        return out.reshape(batch_size, num_classes, num_tokens, dim).contiguous()
+
+    def _build_mask_logits(
+        self,
+        attn_feature: torch.Tensor,
+        dynamic_class_code: torch.Tensor,
+        logit_temperature: float,
+    ) -> torch.Tensor:
+        if logit_temperature <= 0:
+            raise ValueError(
+                f"logit_temperature must be positive, got {logit_temperature}."
+            )
+
+        batch_size, dim, height, width = attn_feature.shape
+
+        attn_tokens = attn_feature.flatten(2).transpose(1, 2).contiguous()
+
+        raw_mask_logits = torch.einsum(
+            "bnd,bcd->bcn",
+            attn_tokens,
+            dynamic_class_code,
+        )
+
+        mask_logits = raw_mask_logits / float(logit_temperature)
+
+        return mask_logits.reshape(
+            batch_size,
+            dynamic_class_code.shape[1],
+            height,
+            width,
+        ).contiguous()
+
+    def forward(
+        self,
+        class_tokens: torch.Tensor,
+        source_logits: torch.Tensor,
+        shared_clip_feature_high: torch.Tensor,
+        sam3_text_tokens_full: torch.Tensor,
+        sam3_text_mask_full: torch.Tensor,
+        tau_mask: float,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        if class_tokens.dim() != 4:
+            raise ValueError(
+                "class_tokens must be [B, C, Q, D], "
+                f"got {tuple(class_tokens.shape)}."
+            )
+        if source_logits.dim() != 4:
+            raise ValueError(
+                "source_logits must be [B, C, H, W], "
+                f"got {tuple(source_logits.shape)}."
+            )
+        if shared_clip_feature_high.dim() != 3:
+            raise ValueError(
+                "shared_clip_feature_high must be [B, H*W, D], "
+                f"got {tuple(shared_clip_feature_high.shape)}."
+            )
+
+        batch_size, num_classes, height, width = source_logits.shape
+        token_batch, token_classes, _, dim = class_tokens.shape
+
+        if (token_batch, token_classes) != (batch_size, num_classes):
+            raise ValueError(
+                "class_tokens and source_logits batch/class mismatch: "
+                f"{tuple(class_tokens.shape[:2])} vs {(batch_size, num_classes)}."
+            )
+        if int(shared_clip_feature_high.shape[0]) != batch_size:
+            raise ValueError(
+                "shared_clip_feature_high batch mismatch: "
+                f"{shared_clip_feature_high.shape[0]} vs {batch_size}."
+            )
+        if int(shared_clip_feature_high.shape[1]) != height * width:
+            raise ValueError(
+                "shared_clip_feature_high token count must equal H*W: "
+                f"{shared_clip_feature_high.shape[1]} vs {height * width}."
+            )
+        if int(shared_clip_feature_high.shape[2]) != dim:
+            raise ValueError(
+                "shared_clip_feature_high dim mismatch: "
+                f"{shared_clip_feature_high.shape[2]} vs {dim}."
+            )
+        if int(dim) != self.hidden_dim:
+            raise ValueError(
+                f"class token dim mismatch: expected {self.hidden_dim}, got {dim}."
+            )
+
+        source_logits = source_logits.to(
+            device=class_tokens.device,
+            dtype=class_tokens.dtype,
+        )
+        shared_clip_feature_high = shared_clip_feature_high.to(
+            device=class_tokens.device,
+            dtype=class_tokens.dtype,
+        )
 
         class_tokens = self._slot_wise_inter_class_self_attn(class_tokens)
         class_tokens = self._intra_class_self_attn(class_tokens)
 
         if self.presence_enabled:
             presence_logits = self._build_presence_logits(class_tokens)
-            presence_for_prior = presence_logits.sigmoid()
         else:
-            presence_logits = semantic_logits.new_zeros(batch_size, num_classes)
-            presence_for_prior = semantic_logits.new_ones(batch_size, num_classes)
+            presence_logits = source_logits.new_zeros(batch_size, num_classes)
 
-        semantic_prob = semantic_logits.detach().sigmoid()
-        mask_prior = presence_for_prior[:, :, None, None] * semantic_prob
-
-        mask_prior_low = F.interpolate(
-            mask_prior,
-            size=(clip_h, clip_w),
-            mode="bilinear",
-            align_corners=False,
-        )
-
-        code_map_low = torch.einsum(
-            "bchw,cd->bdhw",
-            mask_prior_low,
-            class_codes_unit,
-        ).contiguous()
-
-        sam3_low_tokens = self._flatten_feature_map(sam3_feature_low)
-        code_low_tokens = self._flatten_feature_map(code_map_low)
-
-        class_tokens = self._attend_feature_tokens(
+        dynamic_class_code = self._build_dynamic_class_code(
             class_tokens=class_tokens,
-            class_codes_unit=class_codes_unit,
-            feature_tokens=sam3_low_tokens,
-            code_tokens=code_low_tokens,
-            token_scale=token_scale,
-            feature_scale=feature_low_scale,
-            attn=self.sam3_low_attn,
-            norm=self.sam3_low_norm,
+            sam3_text_tokens_full=sam3_text_tokens_full,
+            sam3_text_mask_full=sam3_text_mask_full,
         )
 
-        class_tokens = self._attend_feature_tokens(
+        mask_embed = self._build_mask_embedding(
+            source_logits=source_logits,
+            presence_logits=presence_logits,
+            dynamic_class_code=dynamic_class_code,
+        )
+
+        clip_map = shared_clip_feature_high.transpose(1, 2).reshape(
+            batch_size,
+            dim,
+            height,
+            width,
+        )
+
+        attn_feature = self.mask_feature_attn(
+            query_map=clip_map,
+            key_map=mask_embed,
+            value_map=mask_embed,
+        )
+
+        class_tokens = self._attend_feature_with_class_tokens(
             class_tokens=class_tokens,
-            class_codes_unit=class_codes_unit,
-            feature_tokens=shared_clip_feature,
-            code_tokens=code_low_tokens,
-            token_scale=token_scale,
-            feature_scale=clip_feature_scale,
-            attn=self.clip_sam_attn,
-            norm=self.clip_sam_norm,
+            attn_feature=attn_feature,
         )
 
-        return class_tokens.contiguous(), presence_logits.contiguous()
+        mask_logits = self._build_mask_logits(
+            attn_feature=attn_feature,
+            dynamic_class_code=dynamic_class_code,
+            logit_temperature=float(tau_mask),
+        )
+
+        return (
+            class_tokens.contiguous(),
+            presence_logits.contiguous(),
+            dynamic_class_code.contiguous(),
+            mask_logits.contiguous(),
+        )
 
 
 class ClassTokenSemanticFinalMixer(nn.Module):
     """
-    New final mixer.
+    Dynamic text-aligned final mixer.
 
-    Inputs:
-        semantic_logits:       [B, C, H, W]
-        class_tokens:          [B, C, Q, D]
-        shared_clip_feature:   [B, Hc * Wc, D]
-        sam3_feature_high:     [B, D, H, W]
-        class_names:           list[str], length C
-        clip_grid_hw:          (Hc, Wc)
+    Input:
+        semantic_logits:           [B, C, H, W]
+        class_tokens:              [B, C, Q, D]
+        shared_clip_feature_high:  [B, H*W, D]
+        sam3_text_tokens_full:     [M, C, D]
+        sam3_text_mask_full:       [C, M]
 
-    Outputs:
-        final_logits:           [B, C, H, W]
-        presence_logits:        [B, C]
-        presence_score:         [B, C]
-        presence_logits_layers: [L, B, C]
+    Output:
+        final_logits:              [B, C, H, W]
+        mask_logits_layers:        [L, B, C, H, W]
+        presence_logits:           [B, C]
+        presence_score:            [B, C]
+        presence_logits_layers:    [L, B, C]
 
     Symbol meanings:
         B means batch size.
         C means class count.
         Q means class token count per class.
-        D means hidden feature dimension, currently 256.
-        H and W mean high-resolution mask feature size.
-        Hc and Wc mean CLIP feature grid height and width.
-        L means final mixer layer count.
+        D means hidden feature dimension.
+        M means SAM3 text token count.
+        H and W mean mask height and width.
+        L means fusion layer count.
     """
 
     def __init__(
@@ -446,8 +769,9 @@ class ClassTokenSemanticFinalMixer(nn.Module):
         fusion_layers: int = 4,
         dropout: float = 0.1,
         presence_enabled: bool = True,
-        class_code_cfg: Optional[Dict] = None,
-        presence_cfg: Optional[Dict] = None,
+        dynamic_code_cfg: Optional[Dict] = None,
+        mask_prior_cfg: Optional[Dict] = None,
+        window_attention_cfg: Optional[Dict] = None,
         mask_head_cfg: Optional[Dict] = None,
     ) -> None:
         super().__init__()
@@ -459,200 +783,73 @@ class ClassTokenSemanticFinalMixer(nn.Module):
 
         if self.sam_dim <= 0:
             raise ValueError(f"sam_dim must be positive, got {sam_dim}.")
-        if self.fusion_layers <= 0:
-            raise ValueError(
-                f"fusion_layers must be positive, got {fusion_layers}."
-            )
         if self.num_heads <= 0:
             raise ValueError(f"num_heads must be positive, got {num_heads}.")
+        if self.fusion_layers <= 0:
+            raise ValueError(f"fusion_layers must be positive, got {fusion_layers}.")
         if self.sam_dim % self.num_heads != 0:
             raise ValueError(
-                "sam_dim must be divisible by num_heads, got "
-                f"sam_dim={self.sam_dim}, num_heads={self.num_heads}."
+                "sam_dim must be divisible by num_heads, "
+                f"got sam_dim={self.sam_dim}, num_heads={self.num_heads}."
             )
 
-        class_code_cfg = dict(class_code_cfg or {})
-        presence_cfg = dict(presence_cfg or {})
+        dynamic_code_cfg = dict(dynamic_code_cfg or {})
+        mask_prior_cfg = dict(mask_prior_cfg or {})
+        window_attention_cfg = dict(window_attention_cfg or {})
         mask_head_cfg = dict(mask_head_cfg or {})
 
-        class_code_dim = int(class_code_cfg.get("dim", self.sam_dim))
-        if class_code_dim != self.sam_dim:
+        self.class_feature_pool_stride = int(
+            mask_head_cfg.get("class_feature_pool_stride", 4)
+        )
+        if self.class_feature_pool_stride <= 0:
             raise ValueError(
-                "class_code_cfg.dim must match sam_dim for direct addition, "
-                f"got {class_code_dim} and {self.sam_dim}."
+                "class_feature_pool_stride must be positive, "
+                f"got {self.class_feature_pool_stride}."
             )
 
-        self.class_code_builder = HashRandomClassCodeBuilder(
-            dim=class_code_dim,
-            normalize=bool(class_code_cfg.get("normalize", True)),
-        )
+        if str(dynamic_code_cfg.get("source", "class_token_to_sam3_text")) != "class_token_to_sam3_text":
+            raise ValueError(
+                "dynamic_code_cfg.source must be 'class_token_to_sam3_text'."
+            )
 
-        def _scale_cfg(name: str, default: Dict[str, float]) -> Dict[str, float]:
-            value = class_code_cfg.get(name, None)
-            return dict(default if value is None else value)
+        if str(mask_prior_cfg.get("type", "softmax")) != "softmax":
+            raise ValueError("mask_prior_cfg.type must be 'softmax'.")
 
-        self.token_scale = BoundedLearnableScale(
-            **_scale_cfg(
-                "token_scale",
-                dict(init=8.0, min=2.0, max=16.0, temperature=0.5),
+        if str(mask_head_cfg.get("type", "attn_feature_dot_dynamic_code")) != "attn_feature_dot_dynamic_code":
+            raise ValueError(
+                "mask_head_cfg.type must be 'attn_feature_dot_dynamic_code'."
             )
-        )
-        self.feature_low_scale = BoundedLearnableScale(
-            **_scale_cfg(
-                "feature_low_scale",
-                dict(init=8.0, min=2.0, max=16.0, temperature=0.5),
-            )
-        )
-        self.clip_feature_scale = BoundedLearnableScale(
-            **_scale_cfg(
-                "clip_feature_scale",
-                dict(init=8.0, min=2.0, max=16.0, temperature=0.5),
-            )
-        )
-        self.feature_high_scale = BoundedLearnableScale(
-            **_scale_cfg(
-                "feature_high_scale",
-                dict(init=6.0, min=1.0, max=12.0, temperature=0.5),
-            )
-        )
+
+        self.tau_mask = float(mask_prior_cfg.get("tau", 64.0))
+        self.multiply_presence = bool(mask_prior_cfg.get("multiply_presence", True))
+        self.window_size = int(window_attention_cfg.get("window_size", 8))
+        self.window_dropout = float(window_attention_cfg.get("dropout", dropout))
+
+        if self.tau_mask <= 0:
+            raise ValueError(f"tau_mask must be positive, got {self.tau_mask}.")
 
         self.layers = nn.ModuleList(
             [
-                ClassTokenFusionLayer(
+                DynamicTextAlignedMaskFusionLayer(
                     hidden_dim=self.sam_dim,
                     num_heads=self.num_heads,
                     dropout=float(dropout),
                     presence_enabled=self.presence_enabled,
+                    window_size=self.window_size,
+                    multiply_presence=self.multiply_presence,
+                    class_feature_pool_stride=self.class_feature_pool_stride,
                 )
                 for _ in range(self.fusion_layers)
             ]
         )
 
-        self.supervise_all_presence_layers = bool(
-            presence_cfg.get("supervise_all_layers", True)
-        )
-
-        self.train_token_pooling = str(
-            mask_head_cfg.get("train_token_pooling", "logsumexp")
-        )
-        self.infer_token_pooling = str(
-            mask_head_cfg.get("infer_token_pooling", "max")
-        )
-        self.logsumexp_tau = float(mask_head_cfg.get("logsumexp_tau", 0.2))
-        if self.logsumexp_tau <= 0:
-            raise ValueError(
-                f"logsumexp_tau must be positive, got {self.logsumexp_tau}."
-            )
-
-        if self.train_token_pooling not in {"logsumexp", "max"}:
-            raise ValueError(
-                "train_token_pooling must be 'logsumexp' or 'max', got "
-                f"{self.train_token_pooling!r}."
-            )
-        if self.infer_token_pooling not in {"logsumexp", "max"}:
-            raise ValueError(
-                "infer_token_pooling must be 'logsumexp' or 'max', got "
-                f"{self.infer_token_pooling!r}."
-            )
-
-    @staticmethod
-    def _check_clip_grid(
-        shared_clip_feature: torch.Tensor,
-        clip_grid_hw: Tuple[int, int],
-    ) -> None:
-        clip_h, clip_w = int(clip_grid_hw[0]), int(clip_grid_hw[1])
-        if clip_h <= 0 or clip_w <= 0:
-            raise ValueError(f"clip_grid_hw must be positive, got {clip_grid_hw}.")
-        if clip_h * clip_w != int(shared_clip_feature.shape[1]):
-            raise ValueError(
-                "clip_grid_hw does not match shared_clip_feature token count: "
-                f"clip_grid_hw={clip_grid_hw}, product={clip_h * clip_w}, "
-                f"N_clip={shared_clip_feature.shape[1]}."
-            )
-
-    @staticmethod
-    def _pool_token_logits(
-        token_logits: torch.Tensor,
-        mode: str,
-        tau: float,
-    ) -> torch.Tensor:
-        if mode == "max":
-            return token_logits.max(dim=2).values
-        if mode == "logsumexp":
-            return tau * torch.logsumexp(token_logits / tau, dim=2)
-        raise ValueError(f"Unknown token pooling mode: {mode!r}.")
-
-    def _build_high_res_code_map(
-        self,
-        semantic_logits: torch.Tensor,
-        presence_logits: torch.Tensor,
-        class_codes_unit: torch.Tensor,
-    ) -> torch.Tensor:
-        if self.presence_enabled:
-            presence = presence_logits.sigmoid()
-        else:
-            presence = semantic_logits.new_ones(semantic_logits.shape[:2])
-
-        semantic_prob = semantic_logits.detach().sigmoid()
-        mask_prior = presence[:, :, None, None] * semantic_prob
-
-        code_map_high = torch.einsum(
-            "bchw,cd->bdhw",
-            mask_prior,
-            class_codes_unit,
-        )
-        return code_map_high.contiguous()
-
-    def _build_mask_logits(
-        self,
-        class_tokens: torch.Tensor,
-        sam3_feature_high: torch.Tensor,
-        class_codes_unit: torch.Tensor,
-        code_map_high: torch.Tensor,
-    ) -> torch.Tensor:
-        token_scale = self.token_scale().to(
-            device=class_tokens.device,
-            dtype=class_tokens.dtype,
-        )
-        feature_high_scale = self.feature_high_scale().to(
-            device=sam3_feature_high.device,
-            dtype=sam3_feature_high.dtype,
-        )
-
-        class_tokens_for_mask = (
-            class_tokens + token_scale * class_codes_unit[None, :, None, :]
-        )
-        sam3_feature_for_mask = sam3_feature_high + feature_high_scale * code_map_high
-
-        token_logits = torch.einsum(
-            "bcqd,bdhw->bcqhw",
-            class_tokens_for_mask,
-            sam3_feature_for_mask,
-        )
-
-        pooling_mode = self.train_token_pooling if self.training else self.infer_token_pooling
-        return self._pool_token_logits(
-            token_logits=token_logits,
-            mode=pooling_mode,
-            tau=self.logsumexp_tau,
-        ).contiguous()
-
-    def _scale_debug_dict(self) -> Dict[str, torch.Tensor]:
-        return {
-            "token_scale": self.token_scale(),
-            "feature_low_scale": self.feature_low_scale(),
-            "clip_feature_scale": self.clip_feature_scale(),
-            "feature_high_scale": self.feature_high_scale(),
-        }
-
     def forward(
         self,
         semantic_logits: torch.Tensor,
         class_tokens: torch.Tensor,
-        shared_clip_feature: torch.Tensor,
-        sam3_feature_high: torch.Tensor,
-        class_names: Sequence[str],
-        clip_grid_hw: Tuple[int, int],
+        shared_clip_feature_high: torch.Tensor,
+        sam3_text_tokens_full: torch.Tensor,
+        sam3_text_mask_full: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
         if semantic_logits.dim() != 4:
             raise ValueError(
@@ -664,127 +861,92 @@ class ClassTokenSemanticFinalMixer(nn.Module):
                 "class_tokens must be [B, C, Q, D], "
                 f"got {tuple(class_tokens.shape)}."
             )
-        if shared_clip_feature.dim() != 3:
+        if shared_clip_feature_high.dim() != 3:
             raise ValueError(
-                "shared_clip_feature must be [B, Hc*Wc, D], "
-                f"got {tuple(shared_clip_feature.shape)}."
-            )
-        if sam3_feature_high.dim() != 4:
-            raise ValueError(
-                "sam3_feature_high must be [B, D, H, W], "
-                f"got {tuple(sam3_feature_high.shape)}."
+                "shared_clip_feature_high must be [B, H*W, D], "
+                f"got {tuple(shared_clip_feature_high.shape)}."
             )
 
         batch_size, num_classes, height, width = semantic_logits.shape
-        _, class_token_classes, _, token_dim = class_tokens.shape
+        _, token_classes, _, token_dim = class_tokens.shape
 
         if int(token_dim) != self.sam_dim:
             raise ValueError(
                 f"class_tokens dim mismatch: expected {self.sam_dim}, got {token_dim}."
+            )
+        if int(token_classes) != num_classes:
+            raise ValueError(
+                f"class count mismatch: class_tokens has {token_classes}, "
+                f"semantic_logits has {num_classes}."
             )
         if tuple(class_tokens.shape[:2]) != (batch_size, num_classes):
             raise ValueError(
                 "class_tokens batch/class mismatch: "
                 f"{tuple(class_tokens.shape[:2])} vs {(batch_size, num_classes)}."
             )
-        if tuple(shared_clip_feature.shape[:1]) != (batch_size,):
-            raise ValueError(
-                "shared_clip_feature batch mismatch: "
-                f"{shared_clip_feature.shape[0]} vs {batch_size}."
-            )
-        if int(shared_clip_feature.shape[-1]) != self.sam_dim:
-            raise ValueError(
-                "shared_clip_feature channel mismatch: expected "
-                f"{self.sam_dim}, got {shared_clip_feature.shape[-1]}."
-            )
-        if tuple(sam3_feature_high.shape) != (
+        if tuple(shared_clip_feature_high.shape) != (
             batch_size,
+            height * width,
             self.sam_dim,
-            height,
-            width,
         ):
             raise ValueError(
-                "sam3_feature_high shape mismatch: expected "
-                f"{(batch_size, self.sam_dim, height, width)}, "
-                f"got {tuple(sam3_feature_high.shape)}."
+                "shared_clip_feature_high shape mismatch: expected "
+                f"{(batch_size, height * width, self.sam_dim)}, "
+                f"got {tuple(shared_clip_feature_high.shape)}."
             )
-        if len(class_names) != num_classes:
-            raise ValueError(
-                f"class_names length must match C={num_classes}, got {len(class_names)}."
-            )
-
-        self._check_clip_grid(
-            shared_clip_feature=shared_clip_feature,
-            clip_grid_hw=clip_grid_hw,
-        )
 
         device = class_tokens.device
         dtype = class_tokens.dtype
 
-        semantic_logits = semantic_logits.to(device=device, dtype=dtype)
-        shared_clip_feature = shared_clip_feature.to(device=device, dtype=dtype)
-        sam3_feature_high = sam3_feature_high.to(device=device, dtype=dtype)
-
-        class_codes_unit = self.class_code_builder(
-            class_names=class_names,
+        source_logits = semantic_logits.detach().to(device=device, dtype=dtype)
+        source_logits = source_logits
+        shared_clip_feature_high = shared_clip_feature_high.to(
             device=device,
             dtype=dtype,
         )
-
-        clip_h, clip_w = int(clip_grid_hw[0]), int(clip_grid_hw[1])
-        sam3_feature_low = F.adaptive_avg_pool2d(
-            sam3_feature_high,
-            output_size=(clip_h, clip_w),
+        sam3_text_tokens_full = sam3_text_tokens_full.detach().to(
+            device=device,
+            dtype=dtype,
         )
+        sam3_text_mask_full = sam3_text_mask_full.detach().to(device=device)
 
+        mask_logits_layers = []
         presence_logits_layers = []
 
-        token_scale = self.token_scale().to(device=device, dtype=dtype)
-        feature_low_scale = self.feature_low_scale().to(device=device, dtype=dtype)
-        clip_feature_scale = self.clip_feature_scale().to(device=device, dtype=dtype)
-
         for layer in self.layers:
-            class_tokens, presence_logits_l = layer(
+            (
+                class_tokens,
+                presence_logits,
+                _dynamic_class_code,
+                mask_logits,
+            ) = layer(
                 class_tokens=class_tokens,
-                semantic_logits=semantic_logits,
-                class_codes_unit=class_codes_unit,
-                sam3_feature_low=sam3_feature_low,
-                shared_clip_feature=shared_clip_feature,
-                token_scale=token_scale,
-                feature_low_scale=feature_low_scale,
-                clip_feature_scale=clip_feature_scale,
-                clip_grid_hw=clip_grid_hw,
+                source_logits=source_logits,
+                shared_clip_feature_high=shared_clip_feature_high,
+                sam3_text_tokens_full=sam3_text_tokens_full,
+                sam3_text_mask_full=sam3_text_mask_full,
+                tau_mask=self.tau_mask,
             )
-            presence_logits_layers.append(presence_logits_l)
 
-        presence_logits_layers_tensor = torch.stack(
-            presence_logits_layers,
-            dim=0,
-        )
+            mask_logits_layers.append(mask_logits)
+            presence_logits_layers.append(presence_logits)
+            source_logits = mask_logits
 
+        mask_logits_layers_tensor = torch.stack(mask_logits_layers, dim=0)
+        presence_logits_layers_tensor = torch.stack(presence_logits_layers, dim=0)
+
+        final_logits = mask_logits_layers_tensor[-1]
         presence_logits_last = presence_logits_layers_tensor[-1]
+
         if self.presence_enabled:
-            presence_score = presence_logits_last.sigmoid()
+            presence_score = torch.sigmoid(presence_logits_last)
         else:
-            presence_score = semantic_logits.new_ones(batch_size, num_classes)
-
-        code_map_high = self._build_high_res_code_map(
-            semantic_logits=semantic_logits,
-            presence_logits=presence_logits_last,
-            class_codes_unit=class_codes_unit,
-        )
-
-        final_logits = self._build_mask_logits(
-            class_tokens=class_tokens,
-            sam3_feature_high=sam3_feature_high,
-            class_codes_unit=class_codes_unit,
-            code_map_high=code_map_high,
-        )
+            presence_score = final_logits.new_ones(batch_size, num_classes)
 
         return {
-            "final_logits": final_logits,
-            "presence_logits": presence_logits_last.contiguous(),
-            "presence_score": presence_score.contiguous(),
-            "presence_logits_layers": presence_logits_layers_tensor.contiguous(),
-            "class_code_scales": self._scale_debug_dict(),
+            OUTPUT_KEYS.final_logits: final_logits.contiguous(),
+            OUTPUT_KEYS.presence_logits: presence_logits_last.contiguous(),
+            OUTPUT_KEYS.presence_score: presence_score.contiguous(),
+            OUTPUT_KEYS.presence_logits_layers: presence_logits_layers_tensor.contiguous(),
+            OUTPUT_KEYS.mask_logits_layers: mask_logits_layers_tensor.contiguous(),
         }

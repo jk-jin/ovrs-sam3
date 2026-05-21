@@ -285,9 +285,23 @@ class SemanticSegAdapter(nn.Module):
                 )
             outputs[OUTPUT_KEYS.presence_logits_layers] = presence_logits_layers
 
-        class_code_scales = raw_outputs.get(OUTPUT_KEYS.class_code_scales, None)
-        if class_code_scales is not None:
-            outputs[OUTPUT_KEYS.class_code_scales] = class_code_scales
+        mask_logits_layers = self._extract_optional_tensor(
+            raw_outputs,
+            OUTPUT_KEYS.mask_logits_layers,
+        )
+        if mask_logits_layers is not None:
+            if mask_logits_layers.dim() != 5:
+                raise ValueError(
+                    "mask_logits_layers must be [L, B, C, H, W], "
+                    f"got {tuple(mask_logits_layers.shape)}."
+                )
+            if tuple(mask_logits_layers.shape[1:]) != tuple(final_logits.shape):
+                raise ValueError(
+                    "mask_logits_layers shape mismatch: expected [L, B, C, H, W] "
+                    f"with B,C,H,W={tuple(final_logits.shape)}, got "
+                    f"{tuple(mask_logits_layers.shape)}."
+                )
+            outputs[OUTPUT_KEYS.mask_logits_layers] = mask_logits_layers
 
         return outputs
 

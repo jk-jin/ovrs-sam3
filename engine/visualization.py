@@ -37,6 +37,12 @@ class VisualizerConfig:
     save_presence_scores: bool = True
     save_presence_layers: bool = True
 
+    save_final_mixer_mask_layers: bool = True
+    save_final_mixer_layer_heatmaps: bool = True
+    save_final_mixer_layer_predictions: bool = True
+    save_final_mixer_layer_overlays: bool = True
+    max_final_mixer_layer_heatmap_classes: Optional[int] = None
+
     vis_prob: float = 0.05
     max_samples_per_epoch: Optional[int] = 50
     vis_seed: int = 42
@@ -365,6 +371,76 @@ class PresenceScoreTask(VisualizationTask):
                 )
 
 
+
+class FinalMixerMaskLayerTask(VisualizationTask):
+    name = "final_mixer_mask_layers"
+
+    def run(self, manager: "VisualizationManager", ctx: VisualizationContext) -> None:
+        if not manager.cfg.save_final_mixer_mask_layers:
+            return
+
+        outputs = ctx.semantic_outputs
+        batch = ctx.batch
+
+        mask_layers_key = getattr(
+            OUTPUT_KEYS,
+            "mask_logits_layers",
+            "mask_logits_layers",
+        )
+        mask_logits_layers = outputs.get(mask_layers_key, None)
+
+        if mask_logits_layers is None:
+            return
+
+        if mask_logits_layers.dim() != 5:
+            raise ValueError(
+                "mask_logits_layers must be [L, B, C, H, W], "
+                f"got {tuple(mask_logits_layers.shape)}."
+            )
+
+        num_layers = int(mask_logits_layers.shape[0])
+        batch_size = int(mask_logits_layers.shape[1])
+        num_classes = int(mask_logits_layers.shape[2])
+
+        if num_layers <= 0:
+            return
+
+        try:
+            class_names: Optional[List[str]] = [
+                str(x) for x in batch.find_metadatas[0].class_names
+            ]
+        except Exception:
+            class_names = None
+
+        if class_names is not None and len(class_names) != num_classes:
+            class_names = None
+
+        for b in ctx.selected_indices:
+            if b < 0 or b >= batch_size:
+                raise ValueError(
+                    f"Selected batch index {b} is out of range for "
+                    f"mask_logits_layers batch size {batch_size}."
+                )
+
+            image_id = manager._extract_image_id(batch, b)
+            sample_dir = manager._resolve_sample_dir(
+                image_id=image_id,
+                epoch=ctx.epoch,
+                stage=ctx.stage,
+            )
+
+            overlay_image = manager._extract_overlay_image(batch, b)
+            out_hw = overlay_image.size[::-1]
+
+            manager._save_final_mixer_mask_layer_outputs(
+                sample_dir=sample_dir,
+                overlay_image=overlay_image,
+                mask_logits_layers=mask_logits_layers[:, b],
+                out_hw=out_hw,
+                class_names=class_names,
+            )
+
+
 class Sam3DirectSegmentationTask(VisualizationTask):
     name = "sam3_direct_segmentation"
 
@@ -494,6 +570,7 @@ class VisualizationManager:
             BaseSemanticOverlayTask(),
             ScoreAnalysisTask(),
             PresenceScoreTask(),
+            FinalMixerMaskLayerTask(),
             Sam3DirectSegmentationTask(),
             ClipImageTextScoreTask(),
         ]
@@ -1128,6 +1205,161 @@ class VisualizationManager:
         if value is None:
             return "nan"
         return f"{float(value):.6f}"
+
+    def _select_heatmap_class_indices(
+        self,
+        score_map: torch.Tensor,
+    ) -> List[int]:
+        if score_map.dim() != 3:
+            raise ValueError(
+                f"Expected score_map as [C, H, W], got {tuple(score_map.shape)}."
+            )
+
+        num_classes = int(score_map.shape[0])
+        max_classes = self.cfg.max_final_mixer_layer_heatmap_classes
+
+        if max_classes is None:
+            return list(range(num_classes))
+
+        max_classes = int(max_classes)
+        if max_classes <= 0:
+            return []
+
+        if max_classes >= num_classes:
+            return list(range(num_classes))
+
+        score_cpu = score_map.detach().float().sigmoid()
+        rank_score = score_cpu.flatten(1).max(dim=1).values
+        indices = torch.argsort(rank_score, descending=True)[:max_classes]
+        return [int(x) for x in indices.tolist()]
+
+    def _save_final_mixer_layer_summary(
+        self,
+        layer_dir: Path,
+        layer_logits: torch.Tensor,
+        class_names: Optional[List[str]],
+    ) -> None:
+        if layer_logits.dim() != 3:
+            raise ValueError(
+                "layer_logits must be [C, H, W], "
+                f"got {tuple(layer_logits.shape)}."
+            )
+
+        logits_cpu = layer_logits.detach().cpu().float()
+        scores_cpu = logits_cpu.sigmoid()
+        num_classes = int(logits_cpu.shape[0])
+
+        logit_max, logit_mean = self._per_class_max_mean(logits_cpu)
+        score_max, score_mean = self._per_class_max_mean(scores_cpu)
+
+        order = torch.argsort(score_max, descending=True)
+
+        with open(layer_dir / "score_summary.txt", "w", encoding="utf-8") as f:
+            f.write(
+                "rank\tclass_id\tclass_name\t"
+                "prob_max\tprob_mean\tlogit_max\tlogit_mean\n"
+            )
+
+            for rank, cls_idx in enumerate(order.tolist()):
+                class_name = (
+                    class_names[cls_idx]
+                    if class_names is not None and cls_idx < len(class_names)
+                    else f"class_{cls_idx}"
+                )
+
+                f.write(
+                    f"{rank}\t{cls_idx}\t{class_name}\t"
+                    f"{float(score_max[cls_idx].item()):.6f}\t"
+                    f"{float(score_mean[cls_idx].item()):.6f}\t"
+                    f"{float(logit_max[cls_idx].item()):.6f}\t"
+                    f"{float(logit_mean[cls_idx].item()):.6f}\n"
+                )
+
+    def _save_final_mixer_mask_layer_outputs(
+        self,
+        sample_dir: Path,
+        overlay_image: Image.Image,
+        mask_logits_layers: torch.Tensor,
+        out_hw: Tuple[int, int],
+        class_names: Optional[List[str]],
+    ) -> None:
+        if mask_logits_layers.dim() != 4:
+            raise ValueError(
+                "mask_logits_layers for one sample must be [L, C, H, W], "
+                f"got {tuple(mask_logits_layers.shape)}."
+            )
+
+        num_layers = int(mask_logits_layers.shape[0])
+        num_classes = int(mask_logits_layers.shape[1])
+
+        layer_root = sample_dir / "final_mixer_layers"
+        layer_root.mkdir(parents=True, exist_ok=True)
+
+        with open(layer_root / "README.txt", "w", encoding="utf-8") as f:
+            f.write(
+                "This folder contains per-layer final mixer mask outputs.\n"
+                "Each layer folder contains:\n"
+                "- pred.png: argmax segmentation map from this layer's mask logits\n"
+                "- overlay.png: pred.png overlaid on the original image\n"
+                "- mask_heatmaps/: per-class sigmoid(logit) heatmaps\n"
+                "- score_summary.txt: per-class score statistics for this layer\n"
+            )
+
+        for layer_idx in range(num_layers):
+            layer_logits = mask_logits_layers[layer_idx]
+            if layer_logits.dim() != 3:
+                raise ValueError(
+                    "Each final mixer layer logits must be [C, H, W], "
+                    f"got {tuple(layer_logits.shape)}."
+                )
+
+            layer_dir = layer_root / f"layer_{layer_idx:03d}"
+            layer_dir.mkdir(parents=True, exist_ok=True)
+
+            self._save_final_mixer_layer_summary(
+                layer_dir=layer_dir,
+                layer_logits=layer_logits,
+                class_names=class_names,
+            )
+
+            pred_mask = layer_logits.argmax(dim=0).long()
+            pred_mask_out = self._prepare_label_map(pred_mask, out_hw)
+
+            if self.cfg.save_final_mixer_layer_predictions:
+                self._colorize_label_map(
+                    pred_mask_out,
+                    num_classes=num_classes,
+                ).save(layer_dir / "pred.png")
+
+            if self.cfg.save_final_mixer_layer_overlays:
+                self._overlay_label_map(
+                    overlay_image,
+                    pred_mask_out,
+                    num_classes=num_classes,
+                ).save(layer_dir / "overlay.png")
+
+            if not self.cfg.save_final_mixer_layer_heatmaps:
+                continue
+
+            heatmap_dir = layer_dir / "mask_heatmaps"
+            heatmap_dir.mkdir(parents=True, exist_ok=True)
+
+            score_map = layer_logits.sigmoid()
+            class_indices = self._select_heatmap_class_indices(layer_logits)
+
+            for cls_idx in class_indices:
+                class_name = (
+                    class_names[cls_idx]
+                    if class_names is not None and cls_idx < len(class_names)
+                    else f"class_{cls_idx}"
+                )
+                filename = f"{cls_idx:03d}_{self._sanitize_filename(class_name)}.png"
+
+                self._to_heatmap_image(
+                    score_map[cls_idx],
+                    out_hw=out_hw,
+                    normalize="prob",
+                ).save(heatmap_dir / filename)
 
     def _save_presence_scores(
         self,

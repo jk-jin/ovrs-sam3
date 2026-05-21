@@ -27,8 +27,9 @@ class ModelOutputKeys:
     presence_score: str = "presence_score"
     presence_logits_layers: str = "presence_logits_layers"
 
+    mask_logits_layers: str = "mask_logits_layers"
+
     sam3_pixel_feature: str = "sam3_pixel_feature"
-    class_code_scales: str = "class_code_scales"
 
 
 OUTPUT_KEYS = ModelOutputKeys()

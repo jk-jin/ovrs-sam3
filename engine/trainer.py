@@ -157,134 +157,67 @@ class Trainer:
 
         return obj
 
-    @staticmethod
-    def _make_empty_loss_sums_from_loss_dict(
-        loss_dict: Dict[str, torch.Tensor],
-    ) -> Dict[str, float]:
-        out: Dict[str, float] = {}
-        for key in loss_dict.keys():
-            if key == "num_valid":
-                continue
-            out[str(key)] = 0.0
-        return out
-
-    @staticmethod
-    def _accumulate_weighted_loss_sums(
-            loss_sums: Dict[str, float],
-            loss_dict: Dict[str, torch.Tensor],
-            weight: float,
-    ) -> None:
-        for key, value in loss_dict.items():
-            if key == "num_valid":
-                continue
-            if not torch.is_tensor(value):
-                raise TypeError(f"Expected tensor loss for key={key}, got {type(value)}")
-            if key not in loss_sums:
-                loss_sums[key] = 0.0
-            loss_sums[key] += float(value.detach().item()) * float(weight)
-
-    @staticmethod
-    def _finalize_weighted_loss_means(
-            loss_sums: Dict[str, float],
-            total_weight: float,
-    ) -> Dict[str, float]:
-        if total_weight <= 0:
-            return {key: 0.0 for key in loss_sums.keys()}
-
-        return {
-            key: float(value) / float(total_weight)
-            for key, value in loss_sums.items()
-        }
-
     def _build_final_mixer_cache_item(
         self,
         chunk: Dict,
     ) -> Dict[str, torch.Tensor | list[int]]:
-        train_outputs = chunk["train_outputs"]
+        raw_outputs = chunk["raw_outputs"]
 
-        required_keys = (
-            OUTPUT_KEYS.semantic_logits,
-            OUTPUT_KEYS.class_tokens,
-        )
-        for key in required_keys:
-            if key not in train_outputs:
+        for key in (OUTPUT_KEYS.semantic_logits, OUTPUT_KEYS.class_tokens):
+            if key not in raw_outputs:
                 raise ValueError(
-                    f"Chunk train_outputs must contain '{key}' for final mixer."
+                    f"Chunk raw_outputs must contain '{key}' for final mixer."
                 )
 
         return {
-            OUTPUT_KEYS.semantic_logits: train_outputs[
-                OUTPUT_KEYS.semantic_logits
-            ].detach(),
-            OUTPUT_KEYS.class_tokens: train_outputs[
-                OUTPUT_KEYS.class_tokens
-            ],
+            OUTPUT_KEYS.semantic_logits: raw_outputs[OUTPUT_KEYS.semantic_logits].detach(),
+            OUTPUT_KEYS.class_tokens: raw_outputs[OUTPUT_KEYS.class_tokens],
             "chunk_class_ids": list(chunk["chunk_class_ids"]),
         }
 
-    @staticmethod
-    def _accumulate_proxy_grad(
-        accumulated_grad: Optional[torch.Tensor],
-        proxy_tensor: Optional[torch.Tensor],
-    ) -> None:
-        if accumulated_grad is None or proxy_tensor is None:
-            return
-
-        proxy_grad = getattr(proxy_tensor, "grad", None)
-        if proxy_grad is None:
-            return
-
-        accumulated_grad.add_(proxy_grad.detach())
-        proxy_tensor.grad = None
-
-    def _compute_chunk_loss_sums(
-        self,
-        batch,
-        do_backward: bool,
-    ) -> tuple[Dict[str, float], int, bool]:
+    def _compute_train_loss(self, batch) -> tuple[Dict[str, torch.Tensor], torch.Tensor]:
         if not hasattr(self.model, "build_shared_clip_feature"):
-            raise AttributeError(
-                "Model does not provide build_shared_clip_feature(batch). "
-                "The shared CLIP feature training pipeline requires this interface."
-            )
+            raise AttributeError("Model must provide build_shared_clip_feature(batch).")
 
         if not hasattr(self.model, "build_sam3_pixel_feature"):
-            raise AttributeError(
-                "Model does not provide build_sam3_pixel_feature(batch). "
-                "The new final mixer requires SAM3 pixel features."
-            )
+            raise AttributeError("Model must provide build_sam3_pixel_feature(batch).")
 
         if not hasattr(self.model, "iter_chunk_outputs"):
             raise AttributeError(
-                "Model does not provide iter_chunk_outputs(batch, shared_clip_feature). "
-                "The chunked training pipeline requires this interface."
+                "Model must provide iter_chunk_outputs(batch, shared_clip_feature)."
             )
 
         if not hasattr(self.model, "run_final_mixer_from_chunks"):
             raise AttributeError(
-                "Model does not provide run_final_mixer_from_chunks("
-                "mixer_cache, batch, shared_clip_feature, sam3_feature_high). "
-                "The final mixer training pipeline requires this interface."
+                "Model must provide run_final_mixer_from_chunks(...)."
             )
 
         label_map = batch.find_targets[0].semantic_label_map
         use_amp = self.cfg.use_amp and self.device.type == "cuda"
 
-        mixer_cache = []
-        did_backward = False
-
         with autocast(device_type=self.device.type, enabled=use_amp):
             shared_clip_feature = self.model.build_shared_clip_feature(batch)
             sam3_feature_high = self.model.build_sam3_pixel_feature(batch)
 
-            for chunk in self.model.iter_chunk_outputs(
+            mixer_cache = [
+                self._build_final_mixer_cache_item(chunk)
+                for chunk in self.model.iter_chunk_outputs(
                     batch,
                     shared_clip_feature=shared_clip_feature,
-            ):
-                mixer_cache.append(self._build_final_mixer_cache_item(chunk))
+                )
+            ]
 
             if len(mixer_cache) == 0:
-                return {"total_loss": 0.0}, 0, False
+                zero = shared_clip_feature.sum() * 0.0
+                loss_dict = {
+                    "total_loss": zero,
+                    "num_valid": torch.tensor(
+                        0,
+                        device=zero.device,
+                        dtype=torch.long,
+                    ),
+                }
+                return loss_dict, zero
 
             final_raw_outputs = self.model.run_final_mixer_from_chunks(
                 mixer_cache=mixer_cache,
@@ -300,42 +233,18 @@ class Trainer:
                 output_mode="final",
             )
 
-            final_loss_dict = self.criterion(
+            loss_dict = self.criterion(
                 final_outputs,
                 {"label_map": label_map},
-                chunk_class_ids=None,
                 reduction="mean",
             )
 
-            if "total_loss" not in final_loss_dict:
-                raise ValueError("Criterion must return 'total_loss' for final outputs.")
-            if "num_valid" not in final_loss_dict:
-                raise ValueError("Criterion must return 'num_valid' for final outputs.")
+        if "total_loss" not in loss_dict:
+            raise ValueError("Criterion must return 'total_loss'.")
+        if "num_valid" not in loss_dict:
+            raise ValueError("Criterion must return 'num_valid'.")
 
-            final_total_loss = final_loss_dict["total_loss"]
-
-        final_num_valid = int(final_loss_dict["num_valid"].detach().item())
-
-        loss_sums = self._make_empty_loss_sums_from_loss_dict(final_loss_dict)
-        self._accumulate_weighted_loss_sums(
-            loss_sums=loss_sums,
-            loss_dict=final_loss_dict,
-            weight=final_num_valid,
-        )
-
-        if do_backward and final_num_valid > 0:
-            self.scaler.scale(final_total_loss).backward()
-            did_backward = True
-
-        del mixer_cache
-        del shared_clip_feature
-        del sam3_feature_high
-        del final_raw_outputs
-        del final_outputs
-        del final_loss_dict
-        del final_total_loss
-
-        return loss_sums, final_num_valid, did_backward
+        return loss_dict, loss_dict["total_loss"]
 
     def train_step(self, batch) -> tuple[Dict[str, float], bool]:
         if self.optimizer is None:
@@ -344,17 +253,20 @@ class Trainer:
         batch = self._move_to_device(batch)
         self.optimizer.zero_grad(set_to_none=True)
 
-        loss_sums, total_valid_pixels, did_backward = self._compute_chunk_loss_sums(
-            batch=batch,
-            do_backward=True,
-        )
+        loss_dict, total_loss = self._compute_train_loss(batch)
 
+        num_valid = int(loss_dict["num_valid"].detach().item())
         did_step = False
-        if did_backward and total_valid_pixels > 0:
+
+        if num_valid > 0:
+            self.scaler.scale(total_loss).backward()
             self.scaler.unscale_(self.optimizer)
 
             if self.cfg.grad_clip_norm is not None:
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.grad_clip_norm)
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    self.cfg.grad_clip_norm,
+                )
 
             self.scaler.step(self.optimizer)
             self.scaler.update()
@@ -363,10 +275,15 @@ class Trainer:
             if self.lr_scheduler is not None:
                 self.lr_scheduler.step()
 
-        stats = self._finalize_weighted_loss_means(
-            loss_sums=loss_sums,
-            total_weight=total_valid_pixels,
-        )
+        stats = {}
+        for key, value in loss_dict.items():
+            if key == "num_valid":
+                continue
+            if torch.is_tensor(value):
+                stats[key] = float(value.detach().item())
+            else:
+                stats[key] = float(value)
+
         return stats, did_step
 
     def _forward_val_outputs(self, batch) -> Dict[str, torch.Tensor]:

@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .clip_sam_feature import GlobalClipSamFeatureBuilder
+from .clip_sam_feature import GlobalClipSamFeatureBuilder, SamGuidedClipSamUpsampler
 from .data_misc import BatchedDatapoint, FindStage
 from .final_mixer import ClassTokenSemanticFinalMixer
 from .geometry_encoders import Prompt
@@ -131,8 +131,6 @@ class Sam3Image(torch.nn.Module):
                 )
             self.clip_align_dim = self.clip_text_dim
 
-        self.global_clip_sam_feature_builder = None
-
         self.final_mixer_dropout = float(
             getattr(final_mixer_cfg, "dropout", 0.1)
         )
@@ -142,17 +140,31 @@ class Sam3Image(torch.nn.Module):
         self.final_mixer_fusion_layers = int(
             getattr(final_mixer_cfg, "fusion_layers", 2)
         )
-        self.num_class_tokens = int(
-            getattr(final_mixer_cfg, "num_class_tokens", 32)
+        clip_sam_upsample_cfg = getattr(
+            final_mixer_cfg,
+            "clip_sam_upsample_cfg",
+            None,
         )
-        if self.num_class_tokens <= 0:
-            raise ValueError(
-                f"num_class_tokens must be positive, got {self.num_class_tokens}."
-            )
-        self.presence_enabled = bool(
-            getattr(final_mixer_cfg, "presence_enabled", True)
+        if clip_sam_upsample_cfg is None:
+            clip_sam_upsample_cfg = {}
+
+        self.clip_sam_upsample_enabled = bool(
+            clip_sam_upsample_cfg.get("enabled", True)
+        )
+        self.clip_sam_upsample_window_size = int(
+            clip_sam_upsample_cfg.get("window_size", 8)
+        )
+        self.clip_sam_upsample_dropout = float(
+            clip_sam_upsample_cfg.get("dropout", self.final_mixer_dropout)
+        )
+        self.clip_sam_upsample_gamma_init = float(
+            clip_sam_upsample_cfg.get("gamma_init", 0.0)
+        )
+        self.clip_sam_upsample_gamma_max = float(
+            clip_sam_upsample_cfg.get("gamma_max", 0.5)
         )
 
+        self.global_clip_sam_feature_builder = None
         if self.clip_align_dim is not None:
             self.global_clip_sam_feature_builder = GlobalClipSamFeatureBuilder(
                 clip_dim=self.clip_align_dim,
@@ -163,6 +175,27 @@ class Sam3Image(torch.nn.Module):
                 dropout=self.final_mixer_dropout,
                 num_text_latents=self.num_clip_text_latents,
             )
+
+        self.clip_sam_upsampler = None
+        if self.clip_sam_upsample_enabled:
+            self.clip_sam_upsampler = SamGuidedClipSamUpsampler(
+                hidden_dim=self.hidden_dim,
+                num_heads=self.final_mixer_num_heads,
+                window_size=self.clip_sam_upsample_window_size,
+                dropout=self.clip_sam_upsample_dropout,
+                gamma_init=self.clip_sam_upsample_gamma_init,
+                gamma_max=self.clip_sam_upsample_gamma_max,
+            )
+        self.num_class_tokens = int(
+            getattr(final_mixer_cfg, "num_class_tokens", 32)
+        )
+        if self.num_class_tokens <= 0:
+            raise ValueError(
+                f"num_class_tokens must be positive, got {self.num_class_tokens}."
+            )
+        self.presence_enabled = bool(
+            getattr(final_mixer_cfg, "presence_enabled", True)
+        )
 
         self.class_token_query_embed = nn.Parameter(
             torch.zeros(1, self.num_class_tokens, self.hidden_dim)
@@ -191,7 +224,9 @@ class Sam3Image(torch.nn.Module):
             fusion_layers=self.final_mixer_fusion_layers,
             dropout=self.final_mixer_dropout,
             presence_enabled=self.presence_enabled,
-            class_code_cfg=getattr(final_mixer_cfg, "class_code_cfg", None),
+            dynamic_code_cfg=getattr(final_mixer_cfg, "dynamic_code_cfg", None),
+            mask_prior_cfg=getattr(final_mixer_cfg, "mask_prior_cfg", None),
+            window_attention_cfg=getattr(final_mixer_cfg, "window_attention_cfg", None),
             mask_head_cfg=getattr(final_mixer_cfg, "mask_head_cfg", None),
         )
 
@@ -476,6 +511,30 @@ class Sam3Image(torch.nn.Module):
             )
 
         return pixel_embed.detach().contiguous()
+
+    def build_high_res_clip_sam_feature(
+            self,
+            shared_clip_feature: torch.Tensor,
+            sam3_feature_high: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.clip_sam_upsampler is None:
+            raise RuntimeError(
+                "clip_sam_upsampler is not initialized. "
+                "Check final_mixer_cfg.clip_sam_upsample_cfg.enabled."
+            )
+
+        clip_grid_hw = getattr(self, "_last_clip_grid_hw", None)
+        if clip_grid_hw is None:
+            raise RuntimeError(
+                "clip_grid_hw is not cached. Call build_shared_clip_feature() "
+                "before build_high_res_clip_sam_feature()."
+            )
+
+        return self.clip_sam_upsampler(
+            shared_clip_feature_low=shared_clip_feature,
+            sam3_feature_high=sam3_feature_high.detach(),
+            clip_grid_hw=clip_grid_hw,
+        )
 
     def build_sam3_pixel_feature(
         self,
@@ -837,7 +896,6 @@ class Sam3Image(torch.nn.Module):
         class_tokens: torch.Tensor,
         shared_clip_feature: torch.Tensor,
         sam3_feature_high: torch.Tensor,
-        class_names: List[str],
     ) -> Dict[str, torch.Tensor]:
         semantic_logits = self._ensure_4d_logits(
             semantic_logits,
@@ -893,11 +951,6 @@ class Sam3Image(torch.nn.Module):
                 f"{(batch_size, self.hidden_dim, height, width)}, "
                 f"got {tuple(sam3_feature_high.shape)}."
             )
-        if len(class_names) != num_classes:
-            raise ValueError(
-                f"class_names length must match num_classes={num_classes}, "
-                f"got {len(class_names)}."
-            )
 
         clip_grid_hw = getattr(self, "_last_clip_grid_hw", None)
         if clip_grid_hw is None:
@@ -906,20 +959,31 @@ class Sam3Image(torch.nn.Module):
                 "before run_final_mixer()."
             )
 
+        if self._text_cache is None:
+            raise RuntimeError("Text cache is not prepared.")
+
+        shared_clip_feature_high = self.build_high_res_clip_sam_feature(
+            shared_clip_feature=shared_clip_feature,
+            sam3_feature_high=sam3_feature_high,
+        )
+
+        sam3_text_tokens_full = self._text_cache["language_features"].detach()
+        sam3_text_mask_full = self._text_cache["language_mask"].detach()
+
         mixer_outputs = self.final_mixer(
             semantic_logits=semantic_logits.detach(),
             class_tokens=class_tokens,
-            shared_clip_feature=shared_clip_feature,
-            sam3_feature_high=sam3_feature_high.detach(),
-            class_names=class_names,
-            clip_grid_hw=clip_grid_hw,
+            shared_clip_feature_high=shared_clip_feature_high,
+            sam3_text_tokens_full=sam3_text_tokens_full,
+            sam3_text_mask_full=sam3_text_mask_full,
         )
 
         required_keys = (
-            "final_logits",
-            "presence_logits",
-            "presence_score",
-            "presence_logits_layers",
+            OUTPUT_KEYS.final_logits,
+            OUTPUT_KEYS.presence_logits,
+            OUTPUT_KEYS.presence_score,
+            OUTPUT_KEYS.presence_logits_layers,
+            OUTPUT_KEYS.mask_logits_layers,
         )
         for key in required_keys:
             if key not in mixer_outputs:
@@ -928,14 +992,16 @@ class Sam3Image(torch.nn.Module):
         out = {
             OUTPUT_KEYS.semantic_logits: semantic_logits,
             OUTPUT_KEYS.class_tokens: class_tokens,
-            OUTPUT_KEYS.final_logits: mixer_outputs["final_logits"],
-            OUTPUT_KEYS.presence_logits: mixer_outputs["presence_logits"],
-            OUTPUT_KEYS.presence_score: mixer_outputs["presence_score"],
-            OUTPUT_KEYS.presence_logits_layers: mixer_outputs["presence_logits_layers"],
+            OUTPUT_KEYS.final_logits: mixer_outputs[OUTPUT_KEYS.final_logits],
+            OUTPUT_KEYS.presence_logits: mixer_outputs[OUTPUT_KEYS.presence_logits],
+            OUTPUT_KEYS.presence_score: mixer_outputs[OUTPUT_KEYS.presence_score],
+            OUTPUT_KEYS.presence_logits_layers: mixer_outputs[
+                OUTPUT_KEYS.presence_logits_layers
+            ],
+            OUTPUT_KEYS.mask_logits_layers: mixer_outputs[
+                OUTPUT_KEYS.mask_logits_layers
+            ],
         }
-
-        if "class_code_scales" in mixer_outputs:
-            out[OUTPUT_KEYS.class_code_scales] = mixer_outputs["class_code_scales"]
 
         return out
 
@@ -1000,7 +1066,6 @@ class Sam3Image(torch.nn.Module):
             class_tokens=class_tokens,
             shared_clip_feature=shared_clip_feature,
             sam3_feature_high=sam3_feature_high,
-            class_names=class_names,
         )
 
     def _get_img_feats(self, backbone_out, img_ids):

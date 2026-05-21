@@ -121,21 +121,32 @@ class FinalMixerConfig:
     dropout: float = 0.1
     presence_enabled: bool = True
 
-    class_code_cfg: dict = field(default_factory=lambda: dict(
-        source="hash_random",
-        dim=256,
-        normalize=True,
-        token_scale=dict(init=8.0, min=2.0, max=16.0, temperature=0.5),
-        feature_low_scale=dict(init=8.0, min=2.0, max=16.0, temperature=0.5),
-        clip_feature_scale=dict(init=8.0, min=2.0, max=16.0, temperature=0.5),
-        feature_high_scale=dict(init=6.0, min=1.0, max=12.0, temperature=0.5),
+    clip_sam_upsample_cfg: dict = field(default_factory=lambda: dict(
+        enabled=True,
+        window_size=8,
+        dropout=0.1,
+        gamma_init=0.0,
+        gamma_max=0.5,
+    ))
+
+    dynamic_code_cfg: dict = field(default_factory=lambda: dict(
+        source="class_token_to_sam3_text",
+    ))
+
+    mask_prior_cfg: dict = field(default_factory=lambda: dict(
+        type="softmax",
+        tau=64.0,
+        multiply_presence=True,
+    ))
+
+    window_attention_cfg: dict = field(default_factory=lambda: dict(
+        window_size=8,
+        dropout=0.1,
     ))
 
     mask_head_cfg: dict = field(default_factory=lambda: dict(
-        type="dot_product",
-        train_token_pooling="logsumexp",
-        infer_token_pooling="max",
-        logsumexp_tau=0.2,
+        type="attn_feature_dot_dynamic_code",
+        direct_dot=True,
     ))
 
 @dataclass
@@ -149,6 +160,9 @@ class CriterionConfig:
 
     presence_loss_weight: float = 0.1
     presence_layer_loss_weights: Optional[list[float]] = None
+
+    mask_layer_loss_weight: float = 1.0
+    mask_layer_weights: Optional[list[float]] = None
 
     bce_class_balance_clamp_min: float = 0.2
     bce_class_balance_clamp_max: float = 5.0
@@ -664,6 +678,13 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                     None
                     if cfg.criterion_cfg.presence_layer_loss_weights is None
                     else list(cfg.criterion_cfg.presence_layer_loss_weights)
+                ),
+
+                mask_layer_loss_weight=float(cfg.criterion_cfg.mask_layer_loss_weight),
+                mask_layer_weights=(
+                    None
+                    if cfg.criterion_cfg.mask_layer_weights is None
+                    else list(cfg.criterion_cfg.mask_layer_weights)
                 ),
 
                 bce_class_balance_clamp_min=float(
