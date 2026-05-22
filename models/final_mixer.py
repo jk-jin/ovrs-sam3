@@ -599,10 +599,12 @@ class ClassTokenSemanticFinalMixer(nn.Module):
         fusion_layers: int = 4,
         dropout: float = 0.1,
         presence_enabled: bool = True,
-        dynamic_code_cfg: Optional[Dict] = None,
-        mask_prior_cfg: Optional[Dict] = None,
-        window_attention_cfg: Optional[Dict] = None,
-        mask_head_cfg: Optional[Dict] = None,
+        tau_mask: float = 16.0,
+        multiply_presence: bool = True,
+        window_size: int = 8,
+        shift_size: int = 4,
+        window_dropout: float = 0.1,
+        class_feature_pool_stride: int = 4,
     ) -> None:
         super().__init__()
 
@@ -623,44 +625,24 @@ class ClassTokenSemanticFinalMixer(nn.Module):
                 f"got sam_dim={self.sam_dim}, num_heads={self.num_heads}."
             )
 
-        dynamic_code_cfg = dict(dynamic_code_cfg or {})
-        mask_prior_cfg = dict(mask_prior_cfg or {})
-        window_attention_cfg = dict(window_attention_cfg or {})
-        mask_head_cfg = dict(mask_head_cfg or {})
-
-        self.class_feature_pool_stride = int(
-            mask_head_cfg.get("class_feature_pool_stride", 4)
-        )
+        self.class_feature_pool_stride = int(class_feature_pool_stride)
         if self.class_feature_pool_stride <= 0:
             raise ValueError(
                 "class_feature_pool_stride must be positive, "
                 f"got {self.class_feature_pool_stride}."
             )
 
-        if str(dynamic_code_cfg.get("source", "class_token_to_sam3_text")) != "class_token_to_sam3_text":
-            raise ValueError(
-                "dynamic_code_cfg.source must be 'class_token_to_sam3_text'."
-            )
+        self.tau_mask = float(tau_mask)
+        self.multiply_presence = bool(multiply_presence)
+        self.window_size = int(window_size)
+        self.shift_size = int(shift_size)
+        self.window_dropout = float(window_dropout)
 
-        if str(mask_prior_cfg.get("type", "softmax")) != "softmax":
-            raise ValueError("mask_prior_cfg.type must be 'softmax'.")
-
-        if str(mask_head_cfg.get("type", "attn_feature_dot_dynamic_code")) != "attn_feature_dot_dynamic_code":
-            raise ValueError(
-                "mask_head_cfg.type must be 'attn_feature_dot_dynamic_code'."
-            )
-
-        self.tau_mask = float(mask_prior_cfg.get("tau", 64.0))
-        self.multiply_presence = bool(mask_prior_cfg.get("multiply_presence", True))
-        self.window_size = int(window_attention_cfg.get("window_size", 8))
-        self.shift_size = int(window_attention_cfg.get("shift_size", self.window_size // 2))
         if not 0 <= self.shift_size < self.window_size:
             raise ValueError(
-                "window_attention_cfg.shift_size must satisfy "
-                "0 <= shift_size < window_size, "
+                "shift_size must satisfy 0 <= shift_size < window_size, "
                 f"got shift_size={self.shift_size}, window_size={self.window_size}."
             )
-        self.window_dropout = float(window_attention_cfg.get("dropout", dropout))
 
         if self.tau_mask <= 0:
             raise ValueError(f"tau_mask must be positive, got {self.tau_mask}.")

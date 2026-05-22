@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Sequence
 
@@ -10,7 +10,8 @@ import torch
 from torch.amp import GradScaler, autocast
 
 from ..models.task_modes import OUTPUT_KEYS
-from .checkpoint import CheckpointManager, CheckpointManagerConfig
+from ..config_dataclasses import TrainerConfig
+from .checkpoint import CheckpointManager
 from .evaluator import (
     MulticlassSemanticEvaluator,
     extract_class_names_from_batch,
@@ -20,25 +21,6 @@ from .evaluator import (
 from .hooks import Hook, HookManager
 from .visualization import VisualizationManager
 
-
-@dataclass
-class TrainerConfig:
-    max_iters: int = 10000
-    log_window_size: int = 20
-    use_amp: bool = True
-    grad_clip_norm: Optional[float] = 0.1
-    save_dir: str = "./work_dirs/default"
-    save_interval: int = 1000
-    eval_interval: int = 1000
-    monitor: str = "semantic.miou"
-    monitor_mode: str = "max"
-    max_keep_ckpts: int = 5
-    device: str = "cuda"
-    auto_resume: bool = False
-    tta_cfg: Optional[Dict] = None
-    eval_cfg: Optional[Dict] = None
-
-
 class Trainer:
     def __init__(
         self,
@@ -46,11 +28,11 @@ class Trainer:
         optimizer: Optional[torch.optim.Optimizer],
         criterion: torch.nn.Module,
         train_dataloader: Optional[Iterable],
+        checkpoint_manager: CheckpointManager,
         val_dataloader: Optional[Iterable] = None,
         lr_scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None,
         cfg: Optional[TrainerConfig] = None,
         hooks: Optional[Sequence[Hook]] = None,
-        checkpoint_manager: Optional[CheckpointManager] = None,
         visualizer: Optional[VisualizationManager] = None,
     ):
         self.model = model
@@ -73,16 +55,7 @@ class Trainer:
         self.visualizer = visualizer
 
         self.hook_manager = HookManager(hooks or [])
-        self.checkpoint_manager = checkpoint_manager or CheckpointManager(
-            CheckpointManagerConfig(
-                save_dir=str(self.save_dir),
-                monitor=self.cfg.monitor,
-                mode=self.cfg.monitor_mode,
-                max_keep=self.cfg.max_keep_ckpts,
-                save_latest=True,
-                save_best=True,
-            )
-        )
+        self.checkpoint_manager = checkpoint_manager
 
         self.global_iter = 0
 

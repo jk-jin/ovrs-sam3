@@ -27,21 +27,19 @@ if __package__ in (None, ""):
     build_scheduler = _opt_mod.build_scheduler
     _trainer_mod = import_module(f"{package_name}.engine.trainer")
     Trainer = _trainer_mod.Trainer
-    TrainerConfig = _trainer_mod.TrainerConfig
-    _hooks_mod = import_module(f"{package_name}.engine.hooks")
-    LoggerHook = _hooks_mod.LoggerHook
-    _vis_mod = import_module(f"{package_name}.engine.visualization")
-    VisualizationManager = _vis_mod.VisualizationManager
+
     _builder_mod = import_module(f"{package_name}.model_builder")
-    FreezeConfig = _builder_mod.FreezeConfig
     build_training_components = _builder_mod.build_training_components
+    build_train_runtime_components = _builder_mod.build_train_runtime_components
 else:
     from ..data.build import build_dataloader
     from ..engine.config import Config
     from ..engine.optimizer_builder import build_optimizer, build_scheduler
-    from ..engine.trainer import Trainer, TrainerConfig
-    from ..engine.visualization import VisualizationManager
-    from ..model_builder import FreezeConfig, build_training_components
+    from ..engine.trainer import Trainer
+    from ..model_builder import (
+        build_train_runtime_components,
+        build_training_components,
+    )
 
 
 def set_seed(seed: int = 42):
@@ -63,18 +61,6 @@ def _to_dotdict(obj: Any):
     if isinstance(obj, list):
         return [_to_dotdict(x) for x in obj]
     return obj
-
-
-def build_hooks(cfg) -> List[object]:
-    logger_cfg = cfg.default_hooks["logger"]
-    return [
-        LoggerHook(
-            interval=int(logger_cfg["interval"]),
-            val_interval=int(logger_cfg["val_interval"]),
-            print_metric_tables=bool(logger_cfg.get("print_metric_tables", True)),
-            print_per_class_metrics=bool(logger_cfg.get("print_per_class_metrics", True)),
-        )
-    ]
 
 
 def build_log_getters(cfg) -> List[object]:
@@ -190,38 +176,24 @@ def main():
     seed = args.seed if args.seed is not None else int(cfg.get("seed", 42))
     set_seed(seed)
 
-    model_cfg = dict(cfg.model)
-    freeze_cfg = FreezeConfig(**model_cfg.pop("freeze_cfg", {}))
-
-    model, criterion = build_training_components(
-        **model_cfg,
-        freeze_cfg=freeze_cfg,
-    )
+    model, criterion = build_training_components(**dict(cfg.model))
 
     if args.load_model_from is not None:
         load_model_weights_only(model=model, path=args.load_model_from, strict=False)
 
-    work_dir = args.work_dir or cfg.get("work_dir", "./work_dirs/default")
-    Path(work_dir).mkdir(parents=True, exist_ok=True)
-
-    visualizer = VisualizationManager.from_cfg(cfg.get("visualization"), work_dir=work_dir)
-
-    trainer_cfg = TrainerConfig(
-        max_iters=int(cfg.train_cfg.max_iters),
-        log_window_size=int(cfg.train_cfg.get("log_window_size", 20)),
-        use_amp=bool(cfg.train_cfg.get("use_amp", True)),
-        grad_clip_norm=cfg.train_cfg.get("grad_clip_norm", 0.1),
-        save_dir=str(work_dir),
-        save_interval=int(cfg.train_cfg.get("save_interval", 1000)),
-        eval_interval=int(cfg.train_cfg.get("eval_interval", 1000)),
-        monitor=str(cfg.train_cfg.get("monitor", "semantic.miou")),
-        monitor_mode=str(cfg.train_cfg.get("monitor_mode", "max")),
-        max_keep_ckpts=int(cfg.train_cfg.get("max_keep_ckpts", 5)),
-        device=str(cfg.train_cfg.get("device", "cuda" if torch.cuda.is_available() else "cpu")),
-        auto_resume=bool(args.auto_resume or cfg.train_cfg.get("auto_resume", False)),
-        tta_cfg=cfg.get("tta_cfg", None),
-        eval_cfg=cfg.get("eval_cfg", None),
+    (
+        work_dir,
+        trainer_cfg,
+        hooks,
+        visualizer,
+        checkpoint_manager,
+    ) = build_train_runtime_components(
+        cfg,
+        work_dir_override=args.work_dir,
+        auto_resume=args.auto_resume,
     )
+
+    Path(work_dir).mkdir(parents=True, exist_ok=True)
 
     if args.eval_only:
         if cfg.get("val_dataloader") is None:
@@ -238,7 +210,8 @@ def main():
             val_dataloader=val_loader,
             lr_scheduler=None,
             cfg=trainer_cfg,
-            hooks=build_hooks(cfg),
+            hooks=hooks,
+            checkpoint_manager=checkpoint_manager,
             visualizer=visualizer,
         )
 
@@ -267,7 +240,8 @@ def main():
         val_dataloader=val_loader,
         lr_scheduler=scheduler,
         cfg=trainer_cfg,
-        hooks=build_hooks(cfg),
+        hooks=hooks,
+        checkpoint_manager=checkpoint_manager,
         visualizer=visualizer,
     )
 

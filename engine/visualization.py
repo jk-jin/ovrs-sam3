@@ -11,53 +11,7 @@ import torch.nn.functional as F
 from PIL import Image, ImageDraw, ImageFont
 
 from ..models.task_modes import OUTPUT_KEYS
-
-
-@dataclass
-class VisualizerConfig:
-    enabled: bool = False
-    save_dir: str = "./visualizations"
-    save_stage: str = "val"
-    alpha: float = 0.45
-
-    save_original: bool = True
-    save_prediction: bool = True
-    save_ground_truth: bool = True
-    save_semantic_prediction: bool = True
-
-    save_score_summary: bool = True
-    save_score_heatmaps: bool = True
-    heatmap_colormap: str = "turbo"
-
-    save_clip_argmax_prediction: bool = True
-
-    save_sam3_direct_segmentation: bool = True
-    sam3_direct_seg_threshold: float = 0.5
-
-    save_presence_scores: bool = True
-    save_presence_layers: bool = True
-
-    save_final_mixer_mask_layers: bool = True
-    save_final_mixer_layer_heatmaps: bool = True
-    save_final_mixer_layer_predictions: bool = True
-    save_final_mixer_layer_overlays: bool = True
-    max_final_mixer_layer_heatmap_classes: Optional[int] = None
-
-    vis_prob: float = 0.05
-    max_samples_per_epoch: Optional[int] = 50
-    vis_seed: int = 42
-
-    image_folder_pattern: str = "image_{image_id:06d}"
-    ignore_index: int = 255
-
-    # Deprecated legacy options.
-    # Kept only so old config files do not crash VisualizerConfig(**cfg).
-    # They are intentionally ignored because the new final mixer no longer
-    # outputs delta_logits or modulated_semantic_logits.
-    save_modulated_semantic_prediction: bool = False
-    save_delta_heatmaps: bool = False
-    save_modulated_semantic_heatmaps: bool = False
-
+from ..config_dataclasses import VisualizerConfig
 
 @dataclass
 class VisualizationContext:
@@ -743,29 +697,6 @@ class VisualizationManager:
             ).contiguous()
 
         return clip_score_map.detach()
-
-    @classmethod
-    def from_cfg(
-        cls,
-        cfg_dict: Optional[Dict[str, Any]],
-        work_dir: Optional[str] = None,
-    ) -> Optional["VisualizationManager"]:
-        if cfg_dict is None:
-            return None
-
-        # Filter unknown keys so old configs with removed visualization fields
-        # do not crash the new visualizer.
-        valid_keys = set(VisualizerConfig.__dataclass_fields__.keys())
-        cfg_dict = {k: v for k, v in dict(cfg_dict).items() if k in valid_keys}
-
-        cfg = VisualizerConfig(**cfg_dict)
-        if not cfg.enabled:
-            return None
-
-        save_dir = Path(cfg.save_dir)
-        if not save_dir.is_absolute() and work_dir is not None:
-            cfg.save_dir = str(Path(work_dir) / save_dir)
-        return cls(cfg)
 
     def should_save(self, stage: str) -> bool:
         if not self.cfg.enabled:

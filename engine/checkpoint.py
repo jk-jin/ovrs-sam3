@@ -2,22 +2,12 @@ from __future__ import annotations
 
 import json
 import shutil
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import torch
 
-
-@dataclass
-class CheckpointManagerConfig:
-    save_dir: str
-    monitor: str = "total_loss"
-    mode: str = "min"
-    max_keep: int = 5
-    save_latest: bool = True
-    save_best: bool = True
-
+from ..config_dataclasses import CheckpointManagerConfig
 
 class CheckpointManager:
     def __init__(self, cfg: CheckpointManagerConfig):

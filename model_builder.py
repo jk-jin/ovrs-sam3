@@ -4,20 +4,38 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TypeVar
 
 import torch
 import torch.nn as nn
 from huggingface_hub import hf_hub_download
 from iopath.common.file_io import g_pathmgr
 
+from .config_dataclasses import (
+    AdapterConfig,
+    CheckpointManagerConfig,
+    ClipSamUpsampleConfig,
+    DynamicCodeConfig,
+    FinalMixerConfig,
+    FreezeConfig,
+    LoggerHookConfig,
+    MaskHeadConfig,
+    MaskPriorConfig,
+    OpenCLIPConfig,
+    SegmentorBuildConfig,
+    SemanticCriterionConfig,
+    TrainerConfig,
+    VisualizerConfig,
+    WindowAttentionConfig,
+)
 from .losses.semantic_criterion import (
     HybridCriterion,
     SemanticCriterion,
-    SemanticCriterionConfig,
 )
+from .engine.checkpoint import CheckpointManager
+from .engine.hooks import LoggerHook
+from .engine.visualization import VisualizationManager
 from .models.adapters.semantic_adapter import (
     HybridSegAdapter,
     SemanticSegAdapter,
@@ -44,6 +62,8 @@ from .models.text_encoder_ve import VETextEncoder
 from .models.tokenizer_ve import SimpleTokenizer
 from .models.vitdet import ViT
 from .models.vl_combiner import SAM3VLBackbone
+
+ConfigT = TypeVar("ConfigT")
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
@@ -84,116 +104,6 @@ def _setup_tf32() -> None:
 
 _setup_tf32()
 
-
-@dataclass
-class FreezeConfig:
-    train_adapters_only: bool = False
-    trainable_modules: list[str] = field(default_factory=list)
-    frozen_modules: list[str] = field(default_factory=list)
-
-
-@dataclass
-class OpenCLIPConfig:
-    enabled: bool = False
-    model_name: str = "ViT-L-14"
-    pretrained: Optional[str] = None
-    default_output: str = "feat_map"
-
-    image_encoder_mode: str = "maskclip"
-    maskclip_skip_last_layers: int = 1
-
-    prompt_templates: list[str] = field(default_factory=lambda: [
-        "a remote sensing image of {}.",
-        "an aerial image of {}.",
-    ])
-    num_prompt_templates: int = 2
-    num_clip_text_latents: int = 32
-
-    normalize_label_for_clip: bool = True
-
-@dataclass
-class FinalMixerConfig:
-    enabled: bool = True
-
-    num_class_tokens: int = 32
-    fusion_layers: int = 4
-    num_heads: int = 8
-    dropout: float = 0.1
-    presence_enabled: bool = True
-
-    clip_sam_upsample_cfg: dict = field(default_factory=lambda: dict(
-        enabled=True,
-        window_size=8,
-        dropout=0.1,
-        gamma_init=0.0,
-        gamma_max=0.5,
-    ))
-
-    dynamic_code_cfg: dict = field(default_factory=lambda: dict(
-        source="class_token_to_sam3_text",
-    ))
-
-    mask_prior_cfg: dict = field(default_factory=lambda: dict(
-        type="softmax",
-        tau=64.0,
-        multiply_presence=True,
-    ))
-
-    window_attention_cfg: dict = field(default_factory=lambda: dict(
-        window_size=8,
-        dropout=0.1,
-    ))
-
-    mask_head_cfg: dict = field(default_factory=lambda: dict(
-        type="attn_feature_dot_dynamic_code",
-        direct_dot=True,
-    ))
-
-@dataclass
-class CriterionConfig:
-    ignore_index: int = 255
-
-    final_bce_weight: float = 0.4
-    final_dice_weight: float = 0.5
-    final_ce_weight: float = 1.0
-    final_ignore_bce_weight: float = 0.15
-
-    presence_loss_weight: float = 0.1
-    presence_layer_loss_weights: Optional[list[float]] = None
-
-    mask_layer_loss_weight: float = 1.0
-    mask_layer_weights: Optional[list[float]] = None
-
-    bce_class_balance_clamp_min: float = 0.2
-    bce_class_balance_clamp_max: float = 5.0
-
-    ce_class_balance_clamp_min: float = 0.2
-    ce_class_balance_clamp_max: float = 5.0
-
-    eps: float = 1e-6
-
-@dataclass
-class AdapterConfig:
-    pass
-
-@dataclass
-class SegmentorBuildConfig:
-    task_mode: str = TASK_MODE_SEMANTIC
-
-    bpe_path: Optional[str] = None
-    checkpoint_path: Optional[str] = None
-    load_from_hf: bool = True
-    device: str = "cuda" if torch.cuda.is_available() else "cpu"
-    eval_mode: bool = True
-    compile: bool = False
-
-    prompt_chunk_size: Optional[int] = None
-
-    freeze_cfg: FreezeConfig = field(default_factory=FreezeConfig)
-    openclip_cfg: OpenCLIPConfig = field(default_factory=OpenCLIPConfig)
-    final_mixer_cfg: FinalMixerConfig = field(default_factory=FinalMixerConfig)
-    criterion_cfg: CriterionConfig = field(default_factory=CriterionConfig)
-    adapter_cfg: AdapterConfig = field(default_factory=AdapterConfig)
 
 class FrozenModuleMixin:
     @staticmethod
@@ -250,6 +160,242 @@ class FrozenModuleMixin:
 
 
 class SAM3ModelBuilder(FrozenModuleMixin):
+    @staticmethod
+    def _coerce_config(obj, config_cls: type[ConfigT], name: str) -> ConfigT:
+        if isinstance(obj, config_cls):
+            return obj
+        if obj is None:
+            return config_cls()
+        if isinstance(obj, dict):
+            return config_cls(**dict(obj))
+        raise TypeError(f"Unsupported {name} type: {type(obj)}")
+
+    @classmethod
+    def _coerce_freeze_cfg(cls, obj) -> FreezeConfig:
+        return cls._coerce_config(obj, FreezeConfig, "freeze_cfg")
+
+    @classmethod
+    def _coerce_openclip_cfg(cls, obj) -> OpenCLIPConfig:
+        return cls._coerce_config(obj, OpenCLIPConfig, "openclip_cfg")
+
+    @classmethod
+    def _coerce_clip_sam_upsample_cfg(cls, obj) -> ClipSamUpsampleConfig:
+        return cls._coerce_config(
+            obj,
+            ClipSamUpsampleConfig,
+            "clip_sam_upsample_cfg",
+        )
+
+    @classmethod
+    def _coerce_dynamic_code_cfg(cls, obj) -> DynamicCodeConfig:
+        return cls._coerce_config(obj, DynamicCodeConfig, "dynamic_code_cfg")
+
+    @classmethod
+    def _coerce_mask_prior_cfg(cls, obj) -> MaskPriorConfig:
+        return cls._coerce_config(obj, MaskPriorConfig, "mask_prior_cfg")
+
+    @classmethod
+    def _coerce_window_attention_cfg(cls, obj) -> WindowAttentionConfig:
+        return cls._coerce_config(
+            obj,
+            WindowAttentionConfig,
+            "window_attention_cfg",
+        )
+
+    @classmethod
+    def _coerce_mask_head_cfg(cls, obj) -> MaskHeadConfig:
+        return cls._coerce_config(obj, MaskHeadConfig, "mask_head_cfg")
+
+    @classmethod
+    def _coerce_final_mixer_cfg(cls, obj) -> FinalMixerConfig:
+        if obj is None:
+            return FinalMixerConfig()
+
+        if isinstance(obj, FinalMixerConfig):
+            cfg = obj
+        elif isinstance(obj, dict):
+            raw = dict(obj)
+            nested_coercers = {
+                "clip_sam_upsample_cfg": cls._coerce_clip_sam_upsample_cfg,
+                "dynamic_code_cfg": cls._coerce_dynamic_code_cfg,
+                "mask_prior_cfg": cls._coerce_mask_prior_cfg,
+                "window_attention_cfg": cls._coerce_window_attention_cfg,
+                "mask_head_cfg": cls._coerce_mask_head_cfg,
+            }
+            for key, coerce_fn in nested_coercers.items():
+                if key in raw:
+                    raw[key] = coerce_fn(raw[key])
+            cfg = FinalMixerConfig(**raw)
+        else:
+            raise TypeError(f"Unsupported final_mixer_cfg type: {type(obj)}")
+
+        cfg.clip_sam_upsample_cfg = cls._coerce_clip_sam_upsample_cfg(
+            cfg.clip_sam_upsample_cfg
+        )
+        cfg.dynamic_code_cfg = cls._coerce_dynamic_code_cfg(cfg.dynamic_code_cfg)
+        cfg.mask_prior_cfg = cls._coerce_mask_prior_cfg(cfg.mask_prior_cfg)
+        cfg.window_attention_cfg = cls._coerce_window_attention_cfg(
+            cfg.window_attention_cfg
+        )
+        cfg.mask_head_cfg = cls._coerce_mask_head_cfg(cfg.mask_head_cfg)
+        return cfg
+
+    @classmethod
+    def _coerce_criterion_cfg(cls, obj) -> SemanticCriterionConfig:
+        return cls._coerce_config(obj, SemanticCriterionConfig, "criterion_cfg")
+
+    @classmethod
+    def _coerce_adapter_cfg(cls, obj) -> AdapterConfig:
+        return cls._coerce_config(obj, AdapterConfig, "adapter_cfg")
+
+    @classmethod
+    def _normalize_build_cfg(cls, cfg: SegmentorBuildConfig) -> SegmentorBuildConfig:
+        cfg.task_mode = normalize_task_mode(cfg.task_mode)
+        cfg.freeze_cfg = cls._coerce_freeze_cfg(cfg.freeze_cfg)
+        cfg.openclip_cfg = cls._coerce_openclip_cfg(cfg.openclip_cfg)
+        cfg.final_mixer_cfg = cls._coerce_final_mixer_cfg(cfg.final_mixer_cfg)
+        cfg.criterion_cfg = cls._coerce_criterion_cfg(cfg.criterion_cfg)
+        cfg.adapter_cfg = cls._coerce_adapter_cfg(cfg.adapter_cfg)
+        return cfg
+
+    @staticmethod
+    def _require_dict(obj, name: str) -> dict:
+        if not isinstance(obj, dict):
+            raise TypeError(f"{name} must be a dict, got {type(obj)}.")
+        return dict(obj)
+
+    @staticmethod
+    def resolve_work_dir(cfg, work_dir_override: Optional[str] = None) -> str:
+        if work_dir_override is not None:
+            return str(work_dir_override)
+        return str(cfg.get("work_dir", "./work_dirs/default"))
+
+    @staticmethod
+    def _resolve_openclip_pretrained(pretrained: Optional[str]) -> Optional[str]:
+        if pretrained is None:
+            return None
+
+        p = Path(str(pretrained)).expanduser()
+        if not p.is_file():
+            raise FileNotFoundError(
+                f"openclip_cfg.pretrained: expected a local checkpoint file, but got {pretrained!r}."
+            )
+
+        return str(p.resolve())
+
+    @classmethod
+    def validate_openclip_cfg(cls, openclip_cfg: OpenCLIPConfig) -> OpenCLIPConfig:
+        openclip_cfg = cls._coerce_openclip_cfg(openclip_cfg)
+
+        if not openclip_cfg.enabled:
+            return openclip_cfg
+
+        _ = cls._resolve_openclip_pretrained(openclip_cfg.pretrained)
+
+        if openclip_cfg.num_prompt_templates < 0:
+            raise ValueError(
+                "openclip_cfg.num_prompt_templates must be non-negative, "
+                f"got {openclip_cfg.num_prompt_templates}."
+            )
+
+        if openclip_cfg.num_prompt_templates > len(openclip_cfg.prompt_templates):
+            raise ValueError(
+                "openclip_cfg.num_prompt_templates cannot exceed "
+                "len(openclip_cfg.prompt_templates)."
+            )
+
+        if openclip_cfg.num_clip_text_latents <= 0:
+            raise ValueError(
+                "openclip_cfg.num_clip_text_latents must be positive, "
+                f"got {openclip_cfg.num_clip_text_latents}."
+            )
+
+        return openclip_cfg
+
+    @classmethod
+    def validate_final_mixer_cfg(cls, cfg: FinalMixerConfig) -> FinalMixerConfig:
+        cfg = cls._coerce_final_mixer_cfg(cfg)
+
+        if not cfg.enabled:
+            raise ValueError(
+                "final_mixer_cfg.enabled=False is not supported by the current "
+                "semantic training path."
+            )
+
+        if cfg.num_class_tokens <= 0:
+            raise ValueError(
+                "final_mixer_cfg.num_class_tokens must be positive, "
+                f"got {cfg.num_class_tokens}."
+            )
+
+        if cfg.fusion_layers <= 0:
+            raise ValueError(
+                "final_mixer_cfg.fusion_layers must be positive, "
+                f"got {cfg.fusion_layers}."
+            )
+
+        if cfg.num_heads <= 0:
+            raise ValueError(
+                "final_mixer_cfg.num_heads must be positive, "
+                f"got {cfg.num_heads}."
+            )
+
+        if cfg.dynamic_code_cfg.source != "class_token_to_sam3_text":
+            raise ValueError(
+                "final_mixer_cfg.dynamic_code_cfg.source must be "
+                "'class_token_to_sam3_text'."
+            )
+
+        if cfg.mask_prior_cfg.type != "softmax":
+            raise ValueError("final_mixer_cfg.mask_prior_cfg.type must be 'softmax'.")
+
+        if cfg.mask_prior_cfg.tau <= 0:
+            raise ValueError(
+                "final_mixer_cfg.mask_prior_cfg.tau must be positive, "
+                f"got {cfg.mask_prior_cfg.tau}."
+            )
+
+        if cfg.mask_head_cfg.type != "attn_feature_dot_dynamic_code":
+            raise ValueError(
+                "final_mixer_cfg.mask_head_cfg.type must be "
+                "'attn_feature_dot_dynamic_code'."
+            )
+
+        if not cfg.mask_head_cfg.direct_dot:
+            raise ValueError("final_mixer_cfg.mask_head_cfg.direct_dot must be True.")
+
+        if cfg.mask_head_cfg.class_feature_pool_stride <= 0:
+            raise ValueError(
+                "final_mixer_cfg.mask_head_cfg.class_feature_pool_stride must be "
+                f"positive, got {cfg.mask_head_cfg.class_feature_pool_stride}."
+            )
+
+        upsample_cfg = cfg.clip_sam_upsample_cfg
+        if upsample_cfg.window_size <= 0:
+            raise ValueError(
+                "final_mixer_cfg.clip_sam_upsample_cfg.window_size must be positive."
+            )
+
+        if not 0 <= upsample_cfg.shift_size < upsample_cfg.window_size:
+            raise ValueError(
+                "final_mixer_cfg.clip_sam_upsample_cfg.shift_size must satisfy "
+                "0 <= shift_size < window_size."
+            )
+
+        window_cfg = cfg.window_attention_cfg
+        if window_cfg.window_size <= 0:
+            raise ValueError(
+                "final_mixer_cfg.window_attention_cfg.window_size must be positive."
+            )
+
+        if not 0 <= window_cfg.shift_size < window_cfg.window_size:
+            raise ValueError(
+                "final_mixer_cfg.window_attention_cfg.shift_size must satisfy "
+                "0 <= shift_size < window_size."
+            )
+
+        return cfg
+
     @staticmethod
     def _create_position_encoding(precompute_resolution=None):
         return PositionEmbeddingSine(
@@ -425,77 +571,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             add_post_encode_proj=True,
         )
 
-    @staticmethod
-    def _coerce_openclip_cfg(obj) -> OpenCLIPConfig:
-        if isinstance(obj, OpenCLIPConfig):
-            return obj
-        if obj is None:
-            return OpenCLIPConfig()
-        if isinstance(obj, dict):
-            return OpenCLIPConfig(**dict(obj))
-        raise TypeError(f"Unsupported openclip_cfg type: {type(obj)}")
-
-    @staticmethod
-    def _coerce_final_mixer_cfg(obj) -> FinalMixerConfig:
-        if isinstance(obj, FinalMixerConfig):
-            return obj
-        if obj is None:
-            return FinalMixerConfig()
-        if isinstance(obj, dict):
-            return FinalMixerConfig(**dict(obj))
-        raise TypeError(f"Unsupported final_mixer_cfg type: {type(obj)}")
-
-    @staticmethod
-    def _coerce_criterion_cfg(obj) -> CriterionConfig:
-        if isinstance(obj, CriterionConfig):
-            return obj
-        if obj is None:
-            return CriterionConfig()
-        if isinstance(obj, dict):
-            return CriterionConfig(**dict(obj))
-        raise TypeError(f"Unsupported criterion_cfg type: {type(obj)}")
-
-    @staticmethod
-    def _coerce_adapter_cfg(obj) -> AdapterConfig:
-        if isinstance(obj, AdapterConfig):
-            return obj
-        if obj is None:
-            return AdapterConfig()
-        if isinstance(obj, dict):
-            return AdapterConfig(**dict(obj))
-        raise TypeError(f"Unsupported adapter_cfg type: {type(obj)}")
-
-    @classmethod
-    def _normalize_build_cfg(cls, cfg: SegmentorBuildConfig) -> SegmentorBuildConfig:
-        cfg.task_mode = normalize_task_mode(cfg.task_mode)
-        cfg.openclip_cfg = cls._coerce_openclip_cfg(cfg.openclip_cfg)
-        cfg.final_mixer_cfg = cls._coerce_final_mixer_cfg(cfg.final_mixer_cfg)
-        cfg.criterion_cfg = cls._coerce_criterion_cfg(cfg.criterion_cfg)
-        cfg.adapter_cfg = cls._coerce_adapter_cfg(cfg.adapter_cfg)
-        return cfg
-
-    @staticmethod
-    def _resolve_openclip_pretrained(pretrained: Optional[str]) -> Optional[str]:
-        if pretrained is None:
-            return None
-
-        p = Path(str(pretrained)).expanduser()
-        if not p.is_file():
-            raise FileNotFoundError(
-                f"openclip_cfg.pretrained: expected a local checkpoint file, but got {pretrained!r}."
-            )
-
-        return str(p.resolve())
-
-    @classmethod
-    def validate_openclip_cfg(cls, openclip_cfg: OpenCLIPConfig) -> OpenCLIPConfig:
-        openclip_cfg = cls._coerce_openclip_cfg(openclip_cfg)
-
-        if openclip_cfg.enabled:
-            _ = cls._resolve_openclip_pretrained(openclip_cfg.pretrained)
-
-        return openclip_cfg
-
     @classmethod
     def _create_openclip_encoders(
         cls,
@@ -596,11 +671,10 @@ class SAM3ModelBuilder(FrozenModuleMixin):
     @classmethod
     def build_semantic_core_model(cls, cfg: SegmentorBuildConfig) -> nn.Module:
         cfg = cls._normalize_build_cfg(cfg)
+        cfg.openclip_cfg = cls.validate_openclip_cfg(cfg.openclip_cfg)
+        cfg.final_mixer_cfg = cls.validate_final_mixer_cfg(cfg.final_mixer_cfg)
 
-        bpe_path = cfg.bpe_path
-        if bpe_path is None:
-            bpe_path = resolve_bpe_path(getattr(cfg, "bpe_path", None))
-
+        bpe_path = cfg.bpe_path or resolve_bpe_path(cfg.bpe_path)
         compile_mode = "default" if cfg.compile else None
 
         position_encoding = cls._create_position_encoding(precompute_resolution=1008)
@@ -611,17 +685,27 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         clip_text_encoder = None
         clip_image_encoder = None
-        openclip_cfg_for_model = None
+        clip_prompt_templates: list[str] = []
+        num_clip_prompt_templates = 0
 
         if cfg.openclip_cfg.enabled:
             clip_text_encoder, clip_image_encoder = cls._create_openclip_encoders(
                 cfg.openclip_cfg
             )
-            openclip_cfg_for_model = cfg.openclip_cfg
+            num_clip_prompt_templates = int(cfg.openclip_cfg.num_prompt_templates)
+            clip_prompt_templates = list(
+                cfg.openclip_cfg.prompt_templates[:num_clip_prompt_templates]
+            )
 
         transformer = cls._create_encoder_only_transformer()
         segmentation_head = cls._create_segmentation_head(compile_mode=compile_mode)
         input_geometry_encoder = cls._create_geometry_encoder()
+
+        final_cfg = cfg.final_mixer_cfg
+        upsample_cfg = final_cfg.clip_sam_upsample_cfg
+        mask_prior_cfg = final_cfg.mask_prior_cfg
+        window_cfg = final_cfg.window_attention_cfg
+        mask_head_cfg = final_cfg.mask_head_cfg
 
         model = Sam3Image(
             backbone=backbone,
@@ -636,8 +720,29 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             matcher=None,
             clip_image_encoder=clip_image_encoder,
             clip_text_encoder=clip_text_encoder,
-            openclip_cfg=openclip_cfg_for_model,
-            final_mixer_cfg=cfg.final_mixer_cfg,
+            clip_prompt_templates=clip_prompt_templates,
+            num_clip_prompt_templates=num_clip_prompt_templates,
+            num_clip_text_latents=int(cfg.openclip_cfg.num_clip_text_latents),
+            normalize_label_for_clip=bool(cfg.openclip_cfg.normalize_label_for_clip),
+            final_mixer_dropout=float(final_cfg.dropout),
+            final_mixer_num_heads=int(final_cfg.num_heads),
+            final_mixer_fusion_layers=int(final_cfg.fusion_layers),
+            clip_sam_upsample_enabled=bool(upsample_cfg.enabled),
+            clip_sam_upsample_window_size=int(upsample_cfg.window_size),
+            clip_sam_upsample_shift_size=int(upsample_cfg.shift_size),
+            clip_sam_upsample_dropout=float(upsample_cfg.dropout),
+            clip_sam_upsample_gamma_init=float(upsample_cfg.gamma_init),
+            clip_sam_upsample_gamma_max=float(upsample_cfg.gamma_max),
+            num_class_tokens=int(final_cfg.num_class_tokens),
+            presence_enabled=bool(final_cfg.presence_enabled),
+            final_mixer_tau_mask=float(mask_prior_cfg.tau),
+            final_mixer_multiply_presence=bool(mask_prior_cfg.multiply_presence),
+            final_mixer_window_size=int(window_cfg.window_size),
+            final_mixer_shift_size=int(window_cfg.shift_size),
+            final_mixer_window_dropout=float(window_cfg.dropout),
+            final_mixer_class_feature_pool_stride=int(
+                mask_head_cfg.class_feature_pool_stride
+            ),
             task_mode=TASK_MODE_SEMANTIC,
         )
 
@@ -667,39 +772,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         cfg = cls._normalize_build_cfg(cfg)
 
         if cfg.task_mode == TASK_MODE_SEMANTIC:
-            criterion_cfg = SemanticCriterionConfig(
-                ignore_index=int(cfg.criterion_cfg.ignore_index),
-
-                final_bce_weight=float(cfg.criterion_cfg.final_bce_weight),
-                final_dice_weight=float(cfg.criterion_cfg.final_dice_weight),
-                final_ce_weight=float(cfg.criterion_cfg.final_ce_weight),
-                final_ignore_bce_weight=float(
-                    cfg.criterion_cfg.final_ignore_bce_weight
-                ),
-
-                presence_loss_weight=float(cfg.criterion_cfg.presence_loss_weight),
-                presence_layer_loss_weights=(
-                    None
-                    if cfg.criterion_cfg.presence_layer_loss_weights is None
-                    else list(cfg.criterion_cfg.presence_layer_loss_weights)
-                ),
-
-                mask_layer_loss_weight=float(cfg.criterion_cfg.mask_layer_loss_weight),
-                mask_layer_weights=(
-                    None
-                    if cfg.criterion_cfg.mask_layer_weights is None
-                    else list(cfg.criterion_cfg.mask_layer_weights)
-                ),
-
-                bce_class_balance_clamp_min=float(
-                    cfg.criterion_cfg.bce_class_balance_clamp_min
-                ),
-                bce_class_balance_clamp_max=float(
-                    cfg.criterion_cfg.bce_class_balance_clamp_max
-                ),
-                eps=float(cfg.criterion_cfg.eps),
-            )
-            return SemanticCriterion(cfg=criterion_cfg)
+            return SemanticCriterion(cfg=cfg.criterion_cfg)
 
         if cfg.task_mode == TASK_MODE_HYBRID:
             return HybridCriterion()
@@ -709,7 +782,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
     @classmethod
     def build_semantic_segmentor(cls, cfg: SegmentorBuildConfig) -> nn.Module:
         cfg = cls._normalize_build_cfg(cfg)
-        cfg.openclip_cfg = cls.validate_openclip_cfg(cfg.openclip_cfg)
 
         core_model = cls.build_semantic_core_model(cfg)
         adapter = cls.build_adapter(cfg)
@@ -723,10 +795,9 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         model = model.to(cfg.device)
         cls.apply_freeze_cfg(model, cfg.freeze_cfg)
 
-        if cfg.prompt_chunk_size is not None:
-            model.core.prompt_chunk_size = int(cfg.prompt_chunk_size)
-        else:
-            model.core.prompt_chunk_size = None
+        model.core.prompt_chunk_size = (
+            None if cfg.prompt_chunk_size is None else int(cfg.prompt_chunk_size)
+        )
 
         if cfg.eval_mode:
             model.eval()
@@ -756,10 +827,105 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         raise ValueError(f"Unsupported task_mode: {cfg.task_mode}")
 
     @classmethod
-    def build_training_components(cls, cfg: SegmentorBuildConfig) -> tuple[nn.Module, nn.Module]:
+    def build_training_components(
+        cls,
+        cfg: SegmentorBuildConfig,
+    ) -> tuple[nn.Module, nn.Module]:
+        cfg = cls._normalize_build_cfg(cfg)
         model = cls.build_segmentor(cfg)
         criterion = cls.build_criterion(cfg)
         return model, criterion
+
+    @classmethod
+    def build_trainer_config_from_cfg(
+        cls,
+        cfg,
+        work_dir: str,
+        auto_resume: bool = False,
+    ) -> TrainerConfig:
+        train_cfg = cls._require_dict(cfg.train_cfg, "train_cfg")
+        train_cfg["save_dir"] = str(work_dir)
+        train_cfg["auto_resume"] = bool(
+            auto_resume or train_cfg.get("auto_resume", False)
+        )
+        train_cfg["tta_cfg"] = cfg.get("tta_cfg", None)
+        train_cfg["eval_cfg"] = cfg.get("eval_cfg", None)
+        return TrainerConfig(**train_cfg)
+
+    @classmethod
+    def build_checkpoint_manager(
+        cls,
+        trainer_cfg: TrainerConfig,
+    ) -> CheckpointManager:
+        checkpoint_cfg = CheckpointManagerConfig(
+            save_dir=str(trainer_cfg.save_dir),
+            monitor=str(trainer_cfg.monitor),
+            mode=str(trainer_cfg.monitor_mode),
+            max_keep=int(trainer_cfg.max_keep_ckpts),
+            save_latest=True,
+            save_best=True,
+        )
+        return CheckpointManager(checkpoint_cfg)
+
+    @classmethod
+    def build_hooks_from_cfg(cls, cfg) -> list:
+        default_hooks = cls._require_dict(cfg.default_hooks, "default_hooks")
+        logger_cfg = LoggerHookConfig(
+            **cls._require_dict(default_hooks["logger"], "default_hooks.logger")
+        )
+        return [LoggerHook(logger_cfg)]
+
+    @classmethod
+    def build_visualizer_from_cfg(
+        cls,
+        cfg,
+        work_dir: str,
+    ) -> Optional[VisualizationManager]:
+        visualization_cfg = cfg.get("visualization", None)
+        if visualization_cfg is None:
+            return None
+
+        visualizer_cfg = VisualizerConfig(
+            **cls._require_dict(visualization_cfg, "visualization")
+        )
+        if not visualizer_cfg.enabled:
+            return None
+
+        save_dir = Path(visualizer_cfg.save_dir)
+        if not save_dir.is_absolute():
+            visualizer_cfg.save_dir = str(Path(work_dir) / save_dir)
+
+        return VisualizationManager(visualizer_cfg)
+
+    @classmethod
+    def build_train_runtime_components(
+        cls,
+        cfg,
+        work_dir_override: Optional[str] = None,
+        auto_resume: bool = False,
+    ) -> tuple[
+        str,
+        TrainerConfig,
+        list,
+        Optional[VisualizationManager],
+        CheckpointManager,
+    ]:
+        work_dir = cls.resolve_work_dir(
+            cfg,
+            work_dir_override=work_dir_override,
+        )
+        trainer_cfg = cls.build_trainer_config_from_cfg(
+            cfg,
+            work_dir=work_dir,
+            auto_resume=auto_resume,
+        )
+        return (
+            work_dir,
+            trainer_cfg,
+            cls.build_hooks_from_cfg(cfg),
+            cls.build_visualizer_from_cfg(cfg, work_dir=work_dir),
+            cls.build_checkpoint_manager(trainer_cfg),
+        )
 
 
 def build_segmentor_model(**kwargs) -> nn.Module:
@@ -770,3 +936,15 @@ def build_segmentor_model(**kwargs) -> nn.Module:
 def build_training_components(**kwargs) -> tuple[nn.Module, nn.Module]:
     cfg = SegmentorBuildConfig(**kwargs)
     return SAM3ModelBuilder.build_training_components(cfg)
+
+
+def build_train_runtime_components(
+    cfg,
+    work_dir_override: Optional[str] = None,
+    auto_resume: bool = False,
+):
+    return SAM3ModelBuilder.build_train_runtime_components(
+        cfg,
+        work_dir_override=work_dir_override,
+        auto_resume=auto_resume,
+    )

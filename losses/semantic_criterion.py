@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Dict, Optional, Sequence
 
 import torch
@@ -8,31 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ..models.task_modes import OUTPUT_KEYS
-
-
-@dataclass
-class SemanticCriterionConfig:
-    ignore_index: int = 255
-
-    final_bce_weight: float = 0.4
-    final_dice_weight: float = 0.5
-    final_ce_weight: float = 1.0
-    final_ignore_bce_weight: float = 0.15
-
-    presence_loss_weight: float = 0.1
-    presence_layer_loss_weights: Optional[Sequence[float]] = None
-
-    mask_layer_loss_weight: float = 1.0
-    mask_layer_weights: Optional[Sequence[float]] = None
-
-    bce_class_balance_clamp_min: float = 0.2
-    bce_class_balance_clamp_max: float = 5.0
-
-    ce_class_balance_clamp_min: float = 0.2
-    ce_class_balance_clamp_max: float = 5.0
-
-    eps: float = 1e-6
-
+from ..config_dataclasses import SemanticCriterionConfig
 
 class SemanticCriterion(nn.Module):
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):

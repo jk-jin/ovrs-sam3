@@ -35,8 +35,27 @@ class Sam3Image(torch.nn.Module):
         num_interactive_steps_val: int = 0,
         clip_image_encoder=None,
         clip_text_encoder=None,
-        openclip_cfg=None,
-        final_mixer_cfg=None,
+        clip_prompt_templates: Optional[List[str]] = None,
+        num_clip_prompt_templates: int = 0,
+        num_clip_text_latents: int = 32,
+        normalize_label_for_clip: bool = True,
+        final_mixer_dropout: float = 0.1,
+        final_mixer_num_heads: int = 8,
+        final_mixer_fusion_layers: int = 4,
+        clip_sam_upsample_enabled: bool = True,
+        clip_sam_upsample_window_size: int = 8,
+        clip_sam_upsample_shift_size: int = 4,
+        clip_sam_upsample_dropout: float = 0.1,
+        clip_sam_upsample_gamma_init: float = 1.0,
+        clip_sam_upsample_gamma_max: float = 2.0,
+        num_class_tokens: int = 32,
+        presence_enabled: bool = True,
+        final_mixer_tau_mask: float = 16.0,
+        final_mixer_multiply_presence: bool = True,
+        final_mixer_window_size: int = 8,
+        final_mixer_shift_size: int = 4,
+        final_mixer_window_dropout: float = 0.1,
+        final_mixer_class_feature_pool_stride: int = 4,
         task_mode: str = TASK_MODE_SEMANTIC,
         **kwargs,
     ):
@@ -76,42 +95,20 @@ class Sam3Image(torch.nn.Module):
         if self.task_mode != TASK_MODE_SEMANTIC:
             raise NotImplementedError("Sam3Image currently only supports semantic task mode.")
 
-        self.clip_prompt_templates: List[str] = []
-        self.num_clip_prompt_templates = 0
-        self.num_clip_text_latents = 32
-        self.normalize_label_for_clip = True
+        self.clip_prompt_templates = list(clip_prompt_templates or [])
+        self.num_clip_prompt_templates = int(num_clip_prompt_templates)
+        self.clip_prompt_templates = self.clip_prompt_templates[
+            : self.num_clip_prompt_templates
+        ]
 
-        if openclip_cfg is not None:
-            self.clip_prompt_templates = list(
-                getattr(
-                    openclip_cfg,
-                    "prompt_templates",
-                    getattr(openclip_cfg, "extra_token_templates", []),
-                )
+        self.num_clip_text_latents = int(num_clip_text_latents)
+        if self.num_clip_text_latents <= 0:
+            raise ValueError(
+                "num_clip_text_latents must be positive, "
+                f"got {self.num_clip_text_latents}."
             )
-            self.num_clip_prompt_templates = int(
-                getattr(
-                    openclip_cfg,
-                    "num_prompt_templates",
-                    getattr(openclip_cfg, "num_extra_tokens", len(self.clip_prompt_templates)),
-                )
-            )
-            self.clip_prompt_templates = self.clip_prompt_templates[
-                : self.num_clip_prompt_templates
-            ]
 
-            self.num_clip_text_latents = int(
-                getattr(openclip_cfg, "num_clip_text_latents", 32)
-            )
-            if self.num_clip_text_latents <= 0:
-                raise ValueError(
-                    "num_clip_text_latents must be positive, "
-                    f"got {self.num_clip_text_latents}."
-                )
-
-            self.normalize_label_for_clip = bool(
-                getattr(openclip_cfg, "normalize_label_for_clip", True)
-            )
+        self.normalize_label_for_clip = bool(normalize_label_for_clip)
 
         if (self.clip_text_encoder is None) != (self.clip_image_encoder is None):
             raise RuntimeError(
@@ -131,78 +128,24 @@ class Sam3Image(torch.nn.Module):
                 )
             self.clip_align_dim = self.clip_text_dim
 
-        self.final_mixer_dropout = float(
-            getattr(final_mixer_cfg, "dropout", 0.1)
-        )
-        self.final_mixer_num_heads = int(
-            getattr(final_mixer_cfg, "num_heads", 8)
-        )
-        self.final_mixer_fusion_layers = int(
-            getattr(final_mixer_cfg, "fusion_layers", 2)
-        )
-        clip_sam_upsample_cfg = getattr(
-            final_mixer_cfg,
-            "clip_sam_upsample_cfg",
-            None,
-        )
-        if clip_sam_upsample_cfg is None:
-            clip_sam_upsample_cfg = {}
+        self.final_mixer_dropout = float(final_mixer_dropout)
+        self.final_mixer_num_heads = int(final_mixer_num_heads)
+        self.final_mixer_fusion_layers = int(final_mixer_fusion_layers)
 
-        self.clip_sam_upsample_enabled = bool(
-            clip_sam_upsample_cfg.get("enabled", True)
-        )
-        self.clip_sam_upsample_window_size = int(
-            clip_sam_upsample_cfg.get("window_size", 8)
-        )
-        self.clip_sam_upsample_shift_size = int(
-            clip_sam_upsample_cfg.get(
-                "shift_size",
-                self.clip_sam_upsample_window_size // 2,
-            )
-        )
-        self.clip_sam_upsample_dropout = float(
-            clip_sam_upsample_cfg.get("dropout", self.final_mixer_dropout)
-        )
-        self.clip_sam_upsample_gamma_init = float(
-            clip_sam_upsample_cfg.get("gamma_init", 0.0)
-        )
-        self.clip_sam_upsample_gamma_max = float(
-            clip_sam_upsample_cfg.get("gamma_max", 0.5)
-        )
+        self.clip_sam_upsample_enabled = bool(clip_sam_upsample_enabled)
+        self.clip_sam_upsample_window_size = int(clip_sam_upsample_window_size)
+        self.clip_sam_upsample_shift_size = int(clip_sam_upsample_shift_size)
+        self.clip_sam_upsample_dropout = float(clip_sam_upsample_dropout)
+        self.clip_sam_upsample_gamma_init = float(clip_sam_upsample_gamma_init)
+        self.clip_sam_upsample_gamma_max = float(clip_sam_upsample_gamma_max)
 
-        self.global_clip_sam_feature_builder = None
-        if self.clip_align_dim is not None:
-            self.global_clip_sam_feature_builder = GlobalClipSamFeatureBuilder(
-                clip_dim=self.clip_align_dim,
-                sam_dim=self.hidden_dim,
-                clip_feature_dim=self.hidden_dim,
-                attn_dim=self.clip_align_dim,
-                num_heads=self.final_mixer_num_heads,
-                dropout=self.final_mixer_dropout,
-                num_text_latents=self.num_clip_text_latents,
-            )
-
-        self.clip_sam_upsampler = None
-        if self.clip_sam_upsample_enabled:
-            self.clip_sam_upsampler = SamGuidedClipSamUpsampler(
-                hidden_dim=self.hidden_dim,
-                num_heads=self.final_mixer_num_heads,
-                window_size=self.clip_sam_upsample_window_size,
-                shift_size=self.clip_sam_upsample_shift_size,
-                dropout=self.clip_sam_upsample_dropout,
-                gamma_init=self.clip_sam_upsample_gamma_init,
-                gamma_max=self.clip_sam_upsample_gamma_max,
-            )
-        self.num_class_tokens = int(
-            getattr(final_mixer_cfg, "num_class_tokens", 32)
-        )
+        self.num_class_tokens = int(num_class_tokens)
         if self.num_class_tokens <= 0:
             raise ValueError(
                 f"num_class_tokens must be positive, got {self.num_class_tokens}."
             )
-        self.presence_enabled = bool(
-            getattr(final_mixer_cfg, "presence_enabled", True)
-        )
+
+        self.presence_enabled = bool(presence_enabled)
 
         self.class_token_query_embed = nn.Parameter(
             torch.zeros(1, self.num_class_tokens, self.hidden_dim)
@@ -231,10 +174,12 @@ class Sam3Image(torch.nn.Module):
             fusion_layers=self.final_mixer_fusion_layers,
             dropout=self.final_mixer_dropout,
             presence_enabled=self.presence_enabled,
-            dynamic_code_cfg=getattr(final_mixer_cfg, "dynamic_code_cfg", None),
-            mask_prior_cfg=getattr(final_mixer_cfg, "mask_prior_cfg", None),
-            window_attention_cfg=getattr(final_mixer_cfg, "window_attention_cfg", None),
-            mask_head_cfg=getattr(final_mixer_cfg, "mask_head_cfg", None),
+            tau_mask=float(final_mixer_tau_mask),
+            multiply_presence=bool(final_mixer_multiply_presence),
+            window_size=int(final_mixer_window_size),
+            shift_size=int(final_mixer_shift_size),
+            window_dropout=float(final_mixer_window_dropout),
+            class_feature_pool_stride=int(final_mixer_class_feature_pool_stride),
         )
 
         self.prompt_chunk_size = None

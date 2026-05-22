@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Dict, Optional, Sequence
 
 from .evaluator import format_semantic_metric_tables
+from ..config_dataclasses import LoggerHookConfig
 
 
 class Hook:
@@ -42,32 +42,15 @@ class HookManager:
                 fn(*args, **kwargs)
 
 
-@dataclass
 class LoggerHook(Hook):
-    interval: int = 20
-    val_interval: int = 50
-    print_metric_tables: bool = True
-    print_per_class_metrics: bool = True
-    priority: int = 70
+    def __init__(self, cfg: LoggerHookConfig):
+        self.cfg = cfg
 
-    @staticmethod
-    def _get_class_names_from_trainer(trainer):
-        dataloader = getattr(trainer, "val_dataloader", None)
-        if dataloader is None:
-            return None
-
-        dataset = getattr(dataloader, "dataset", None)
-        while dataset is not None and hasattr(dataset, "dataset"):
-            dataset = dataset.dataset
-
-        if dataset is None:
-            return None
-
-        classes = getattr(dataset, "classes", None)
-        if classes is None:
-            return None
-
-        return [str(x) for x in classes]
+        self.interval = int(cfg.interval)
+        self.val_interval = int(cfg.val_interval)
+        self.print_metric_tables = bool(cfg.print_metric_tables)
+        self.print_per_class_metrics = bool(cfg.print_per_class_metrics)
+        self.priority = int(cfg.priority)
 
     @staticmethod
     def _format_seconds(seconds) -> str:
