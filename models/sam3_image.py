@@ -154,6 +154,12 @@ class Sam3Image(torch.nn.Module):
         self.clip_sam_upsample_window_size = int(
             clip_sam_upsample_cfg.get("window_size", 8)
         )
+        self.clip_sam_upsample_shift_size = int(
+            clip_sam_upsample_cfg.get(
+                "shift_size",
+                self.clip_sam_upsample_window_size // 2,
+            )
+        )
         self.clip_sam_upsample_dropout = float(
             clip_sam_upsample_cfg.get("dropout", self.final_mixer_dropout)
         )
@@ -182,6 +188,7 @@ class Sam3Image(torch.nn.Module):
                 hidden_dim=self.hidden_dim,
                 num_heads=self.final_mixer_num_heads,
                 window_size=self.clip_sam_upsample_window_size,
+                shift_size=self.clip_sam_upsample_shift_size,
                 dropout=self.clip_sam_upsample_dropout,
                 gamma_init=self.clip_sam_upsample_gamma_init,
                 gamma_max=self.clip_sam_upsample_gamma_max,

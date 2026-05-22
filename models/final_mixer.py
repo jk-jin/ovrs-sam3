@@ -6,183 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .task_modes import OUTPUT_KEYS
-
-
-class ValuePreservingWindowAttention2D(nn.Module):
-    def __init__(
-        self,
-        hidden_dim: int,
-        num_heads: int = 8,
-        window_size: int = 8,
-        dropout: float = 0.1,
-    ) -> None:
-        super().__init__()
-
-        self.hidden_dim = int(hidden_dim)
-        self.num_heads = int(num_heads)
-        self.window_size = int(window_size)
-
-        if self.hidden_dim <= 0:
-            raise ValueError(f"hidden_dim must be positive, got {hidden_dim}.")
-        if self.num_heads <= 0:
-            raise ValueError(f"num_heads must be positive, got {num_heads}.")
-        if self.window_size <= 0:
-            raise ValueError(f"window_size must be positive, got {window_size}.")
-        if self.hidden_dim % self.num_heads != 0:
-            raise ValueError(
-                "hidden_dim must be divisible by num_heads, "
-                f"got hidden_dim={self.hidden_dim}, num_heads={self.num_heads}."
-            )
-
-        self.head_dim = self.hidden_dim // self.num_heads
-        self.scale = self.head_dim ** -0.5
-
-        self.q_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
-        self.k_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
-
-        self.attn_dropout = nn.Dropout(float(dropout))
-        self.out_dropout = nn.Dropout(float(dropout))
-
-        self.out_norm = nn.LayerNorm(self.hidden_dim, eps=1e-6)
-
-    @staticmethod
-    def _pad_to_window_size(
-        x: torch.Tensor,
-        window_size: int,
-    ) -> tuple[torch.Tensor, int, int]:
-        height, width = int(x.shape[-2]), int(x.shape[-1])
-        pad_h = (window_size - height % window_size) % window_size
-        pad_w = (window_size - width % window_size) % window_size
-
-        if pad_h == 0 and pad_w == 0:
-            return x, height, width
-
-        x = F.pad(x, (0, pad_w, 0, pad_h), value=0.0)
-        return x, height, width
-
-    def _map_to_windows(self, x: torch.Tensor) -> torch.Tensor:
-        batch_size, dim, height, width = x.shape
-        window = self.window_size
-
-        x = x.reshape(
-            batch_size,
-            dim,
-            height // window,
-            window,
-            width // window,
-            window,
-        )
-        x = x.permute(0, 2, 4, 3, 5, 1).contiguous()
-        x = x.reshape(-1, window * window, dim)
-        return x
-
-    def _windows_to_map(
-        self,
-        x: torch.Tensor,
-        batch_size: int,
-        padded_h: int,
-        padded_w: int,
-        original_h: int,
-        original_w: int,
-    ) -> torch.Tensor:
-        window = self.window_size
-        dim = self.hidden_dim
-
-        x = x.reshape(
-            batch_size,
-            padded_h // window,
-            padded_w // window,
-            window,
-            window,
-            dim,
-        )
-        x = x.permute(0, 5, 1, 3, 2, 4).contiguous()
-        x = x.reshape(batch_size, dim, padded_h, padded_w)
-        return x[:, :, :original_h, :original_w].contiguous()
-
-    def forward(
-        self,
-        query_map: torch.Tensor,
-        key_map: torch.Tensor,
-        value_map: torch.Tensor,
-    ) -> torch.Tensor:
-        if query_map.dim() != 4:
-            raise ValueError(
-                f"query_map must be [B, D, H, W], got {tuple(query_map.shape)}."
-            )
-        if key_map.shape != query_map.shape:
-            raise ValueError(
-                "key_map must have the same shape as query_map, "
-                f"got {tuple(key_map.shape)} vs {tuple(query_map.shape)}."
-            )
-        if value_map.shape != query_map.shape:
-            raise ValueError(
-                "value_map must have the same shape as query_map, "
-                f"got {tuple(value_map.shape)} vs {tuple(query_map.shape)}."
-            )
-
-        batch_size, dim, original_h, original_w = query_map.shape
-        if int(dim) != self.hidden_dim:
-            raise ValueError(
-                f"Feature dim mismatch: expected {self.hidden_dim}, got {dim}."
-            )
-
-        query_map, _, _ = self._pad_to_window_size(query_map, self.window_size)
-        key_map, _, _ = self._pad_to_window_size(key_map, self.window_size)
-        value_map, _, _ = self._pad_to_window_size(value_map, self.window_size)
-
-        padded_h, padded_w = int(query_map.shape[-2]), int(query_map.shape[-1])
-
-        query_windows = self._map_to_windows(query_map)  # [Nw, Ws*Ws, D]
-        key_windows = self._map_to_windows(key_map)      # [Nw, Ws*Ws, D]
-        value_windows = self._map_to_windows(value_map)  # [Nw, Ws*Ws, D]
-
-        num_windows, num_tokens, _ = query_windows.shape
-
-        q = self.q_proj(query_windows)
-        k = self.k_proj(key_windows)
-
-        q = q.reshape(
-            num_windows,
-            num_tokens,
-            self.num_heads,
-            self.head_dim,
-        ).permute(0, 2, 1, 3).contiguous()
-
-        k = k.reshape(
-            num_windows,
-            num_tokens,
-            self.num_heads,
-            self.head_dim,
-        ).permute(0, 2, 1, 3).contiguous()
-
-        v = value_windows.reshape(
-            num_windows,
-            num_tokens,
-            self.num_heads,
-            self.head_dim,
-        ).permute(0, 2, 1, 3).contiguous()
-
-        attn = torch.matmul(q, k.transpose(-2, -1)) * self.scale
-        attn = torch.softmax(attn, dim=-1)
-        attn = self.attn_dropout(attn)
-
-        attn_out = torch.matmul(attn, v)
-        attn_out = attn_out.permute(0, 2, 1, 3).contiguous()
-        attn_out = attn_out.reshape(num_windows, num_tokens, self.hidden_dim)
-
-        out = value_windows + self.out_dropout(attn_out)
-
-        out = self.out_norm(out)
-
-        return self._windows_to_map(
-            x=out,
-            batch_size=batch_size,
-            padded_h=padded_h,
-            padded_w=padded_w,
-            original_h=original_h,
-            original_w=original_w,
-        )
+from .shifted_window_attention import ShiftedWindowAttention2D
 
 class DynamicTextAlignedMaskFusionLayer(nn.Module):
     """
@@ -217,6 +41,7 @@ class DynamicTextAlignedMaskFusionLayer(nn.Module):
         dropout: float = 0.1,
         presence_enabled: bool = True,
         window_size: int = 8,
+        shift_size: int = 0,
         multiply_presence: bool = True,
         class_feature_pool_stride: int = 4,
     ) -> None:
@@ -293,11 +118,16 @@ class DynamicTextAlignedMaskFusionLayer(nn.Module):
 
         self.mask_embed_norm = nn.LayerNorm(self.hidden_dim)
 
-        self.mask_feature_attn = ValuePreservingWindowAttention2D(
+        self.mask_feature_attn = ShiftedWindowAttention2D(
             hidden_dim=self.hidden_dim,
             num_heads=self.num_heads,
             window_size=int(window_size),
+            shift_size=int(shift_size),
             dropout=float(dropout),
+            value_preserving=True,
+            residual_source="value",
+            use_residual_norm=True,
+            use_rel_pos_bias=True,
         )
 
         self.class_to_feature_attn = nn.MultiheadAttention(
@@ -823,25 +653,35 @@ class ClassTokenSemanticFinalMixer(nn.Module):
         self.tau_mask = float(mask_prior_cfg.get("tau", 64.0))
         self.multiply_presence = bool(mask_prior_cfg.get("multiply_presence", True))
         self.window_size = int(window_attention_cfg.get("window_size", 8))
+        self.shift_size = int(window_attention_cfg.get("shift_size", self.window_size // 2))
+        if not 0 <= self.shift_size < self.window_size:
+            raise ValueError(
+                "window_attention_cfg.shift_size must satisfy "
+                "0 <= shift_size < window_size, "
+                f"got shift_size={self.shift_size}, window_size={self.window_size}."
+            )
         self.window_dropout = float(window_attention_cfg.get("dropout", dropout))
 
         if self.tau_mask <= 0:
             raise ValueError(f"tau_mask must be positive, got {self.tau_mask}.")
 
-        self.layers = nn.ModuleList(
-            [
+        layers = []
+        for layer_idx in range(self.fusion_layers):
+            layer_shift_size = 0 if layer_idx % 2 == 0 else self.shift_size
+
+            layers.append(
                 DynamicTextAlignedMaskFusionLayer(
                     hidden_dim=self.sam_dim,
                     num_heads=self.num_heads,
                     dropout=float(dropout),
                     presence_enabled=self.presence_enabled,
                     window_size=self.window_size,
+                    shift_size=layer_shift_size,
                     multiply_presence=self.multiply_presence,
                     class_feature_pool_stride=self.class_feature_pool_stride,
                 )
-                for _ in range(self.fusion_layers)
-            ]
-        )
+            )
+        self.layers = nn.ModuleList(layers)
 
     def forward(
         self,

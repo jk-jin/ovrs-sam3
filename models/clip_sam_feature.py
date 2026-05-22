@@ -7,6 +7,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .shifted_window_attention import ShiftedWindowAttention2D
+
 
 class GlobalClipSamFeatureBuilder(nn.Module):
     """
@@ -431,177 +433,6 @@ class GlobalClipSamFeatureBuilder(nn.Module):
 
         return shared_clip_feature.contiguous()
 
-class WindowAttention2D(nn.Module):
-    """
-    Simple non-shifted 2D window cross-attention.
-
-    Input:
-        query_map: [B, D, H, W]
-        key_map:   [B, D, H, W]
-        value_map: [B, D, H, W]
-
-    Output:
-        out_map:   [B, D, H, W]
-
-    Symbol meanings:
-        B means batch size.
-        D means feature dimension.
-        H and W mean spatial height and width.
-    """
-
-    def __init__(
-        self,
-        hidden_dim: int,
-        num_heads: int = 8,
-        window_size: int = 8,
-        dropout: float = 0.1,
-        use_residual_norm: bool = True,
-    ) -> None:
-        super().__init__()
-
-        self.hidden_dim = int(hidden_dim)
-        self.num_heads = int(num_heads)
-        self.window_size = int(window_size)
-
-        if self.hidden_dim <= 0:
-            raise ValueError(f"hidden_dim must be positive, got {hidden_dim}.")
-        if self.num_heads <= 0:
-            raise ValueError(f"num_heads must be positive, got {num_heads}.")
-        if self.window_size <= 0:
-            raise ValueError(f"window_size must be positive, got {window_size}.")
-        if self.hidden_dim % self.num_heads != 0:
-            raise ValueError(
-                "hidden_dim must be divisible by num_heads, "
-                f"got hidden_dim={self.hidden_dim}, num_heads={self.num_heads}."
-            )
-
-        self.attn = nn.MultiheadAttention(
-            embed_dim=self.hidden_dim,
-            num_heads=self.num_heads,
-            dropout=float(dropout),
-            batch_first=True,
-        )
-
-        self.use_residual_norm = bool(use_residual_norm)
-
-        if self.use_residual_norm:
-            self.out_norm = nn.LayerNorm(self.hidden_dim)
-        else:
-            self.out_norm = None
-
-    @staticmethod
-    def _pad_to_window_size(
-        x: torch.Tensor,
-        window_size: int,
-    ) -> tuple[torch.Tensor, int, int]:
-        height, width = int(x.shape[-2]), int(x.shape[-1])
-        pad_h = (window_size - height % window_size) % window_size
-        pad_w = (window_size - width % window_size) % window_size
-
-        if pad_h == 0 and pad_w == 0:
-            return x, height, width
-
-        x = F.pad(x, (0, pad_w, 0, pad_h), value=0.0)
-        return x, height, width
-
-    def _map_to_windows(self, x: torch.Tensor) -> torch.Tensor:
-        batch_size, dim, height, width = x.shape
-        window = self.window_size
-
-        x = x.reshape(
-            batch_size,
-            dim,
-            height // window,
-            window,
-            width // window,
-            window,
-        )
-        x = x.permute(0, 2, 4, 3, 5, 1).contiguous()
-        x = x.reshape(-1, window * window, dim)
-        return x
-
-    def _windows_to_map(
-        self,
-        x: torch.Tensor,
-        batch_size: int,
-        padded_h: int,
-        padded_w: int,
-        original_h: int,
-        original_w: int,
-    ) -> torch.Tensor:
-        window = self.window_size
-        dim = self.hidden_dim
-
-        x = x.reshape(
-            batch_size,
-            padded_h // window,
-            padded_w // window,
-            window,
-            window,
-            dim,
-        )
-        x = x.permute(0, 5, 1, 3, 2, 4).contiguous()
-        x = x.reshape(batch_size, dim, padded_h, padded_w)
-        return x[:, :, :original_h, :original_w].contiguous()
-
-    def forward(
-        self,
-        query_map: torch.Tensor,
-        key_map: torch.Tensor,
-        value_map: torch.Tensor,
-    ) -> torch.Tensor:
-        if query_map.dim() != 4:
-            raise ValueError(
-                f"query_map must be [B, D, H, W], got {tuple(query_map.shape)}."
-            )
-        if key_map.shape != query_map.shape:
-            raise ValueError(
-                "key_map must have the same shape as query_map, "
-                f"got {tuple(key_map.shape)} vs {tuple(query_map.shape)}."
-            )
-        if value_map.shape != query_map.shape:
-            raise ValueError(
-                "value_map must have the same shape as query_map, "
-                f"got {tuple(value_map.shape)} vs {tuple(query_map.shape)}."
-            )
-
-        batch_size, dim, original_h, original_w = query_map.shape
-        if int(dim) != self.hidden_dim:
-            raise ValueError(
-                f"Feature dim mismatch: expected {self.hidden_dim}, got {dim}."
-            )
-
-        query_map, _, _ = self._pad_to_window_size(query_map, self.window_size)
-        key_map, _, _ = self._pad_to_window_size(key_map, self.window_size)
-        value_map, _, _ = self._pad_to_window_size(value_map, self.window_size)
-
-        padded_h, padded_w = int(query_map.shape[-2]), int(query_map.shape[-1])
-
-        query_windows = self._map_to_windows(query_map)
-        key_windows = self._map_to_windows(key_map)
-        value_windows = self._map_to_windows(value_map)
-
-        attn_out, attn_weights = self.attn(
-            query=query_windows,
-            key=key_windows,
-            value=value_windows,
-            need_weights=True,
-            average_attn_weights=False,
-        )
-        if self.use_residual_norm:
-            attn_out = self.out_norm(query_windows + attn_out)
-        else:
-            attn_out = self.out_norm(attn_out)
-
-        return self._windows_to_map(
-            x=attn_out,
-            batch_size=batch_size,
-            padded_h=padded_h,
-            padded_w=padded_w,
-            original_h=original_h,
-            original_w=original_w,
-        )
-
 class SamGuidedClipSamUpsampler(nn.Module):
     """
     Convert low-res CLIP-SAM feature to high-res CLIP-SAM feature.
@@ -626,6 +457,7 @@ class SamGuidedClipSamUpsampler(nn.Module):
         hidden_dim: int,
         num_heads: int = 8,
         window_size: int = 8,
+        shift_size: int | None = None,
         dropout: float = 0.1,
         gamma_init: float = 0.0,
         gamma_max: float = 0.5,
@@ -643,12 +475,33 @@ class SamGuidedClipSamUpsampler(nn.Module):
             raise ValueError(f"gamma_max must be positive, got {gamma_max}.")
 
         self.sam_norm = nn.LayerNorm(self.hidden_dim)
-        self.window_attn = WindowAttention2D(
+        self.shift_size = (
+            self.window_size // 2
+            if shift_size is None
+            else int(shift_size)
+        )
+        self.window_attn = ShiftedWindowAttention2D(
             hidden_dim=self.hidden_dim,
             num_heads=self.num_heads,
             window_size=self.window_size,
+            shift_size=0,
             dropout=float(dropout),
+            value_preserving=False,
+            residual_source="query",
             use_residual_norm=True,
+            use_rel_pos_bias=True,
+        )
+
+        self.shifted_window_attn = ShiftedWindowAttention2D(
+            hidden_dim=self.hidden_dim,
+            num_heads=self.num_heads,
+            window_size=self.window_size,
+            shift_size=shift_size,
+            dropout=float(dropout),
+            value_preserving=False,
+            residual_source="query",
+            use_residual_norm=True,
+            use_rel_pos_bias=True,
         )
 
         init_ratio = float(gamma_init) / self.gamma_max
@@ -729,6 +582,12 @@ class SamGuidedClipSamUpsampler(nn.Module):
             query_map=sam_map,
             key_map=sam_map,
             value_map=clip_high_base,
+        )
+
+        guided_clip_high = self.shifted_window_attn(
+            query_map=sam_map,
+            key_map=sam_map,
+            value_map=guided_clip_high,
         )
 
         gamma = self._gamma().to(

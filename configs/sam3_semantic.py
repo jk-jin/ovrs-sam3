@@ -48,6 +48,7 @@ model = dict(
         clip_sam_upsample_cfg=dict(
             enabled=True,
             window_size=8,
+            shift_size=4,
             dropout=0.1,
             gamma_init=1.0,
             gamma_max=2.0,
@@ -65,6 +66,7 @@ model = dict(
 
         window_attention_cfg=dict(
             window_size=8,
+            shift_size=4,
             dropout=0.1,
         ),
 
@@ -97,10 +99,10 @@ model = dict(
     criterion_cfg=dict(
         ignore_index=255,
 
-        final_bce_weight=0.1,
+        final_bce_weight=0.4,
         final_dice_weight=1.0,
-        final_ce_weight=0.1,
-        final_ignore_bce_weight=0.2,
+        final_ce_weight=0.4,
+        final_ignore_bce_weight=0.1,
 
         presence_loss_weight=1.0,
         presence_layer_loss_weights=[0.02, 0.05, 0.1, 0.2],
@@ -110,6 +112,10 @@ model = dict(
 
         bce_class_balance_clamp_min=0.2,
         bce_class_balance_clamp_max=5.0,
+
+        ce_class_balance_clamp_min=0.2,
+        ce_class_balance_clamp_max=5.0,
+
         eps=1e-6,
     ),
 )
@@ -134,7 +140,7 @@ eval_cfg = dict(
 optim_wrapper = dict(
     optimizer=dict(
         type="AdamW",
-        lr=3e-5,
+        lr=1e-4,
         weight_decay=0.01,
         betas=(0.9, 0.999),
         paramwise_cfg=dict(
@@ -144,33 +150,62 @@ optim_wrapper = dict(
                     lr_mult=2.0,
                     decay_mult=1.0,
                 ),
+
                 "core.clip_sam_upsampler": dict(
-                    lr_mult=2.0,
+                    lr_mult=4.0,
                     decay_mult=1.0,
                 ),
+
+                "core.clip_sam_upsampler.window_attn.q_proj": dict(
+                    lr_mult=10.0,
+                    decay_mult=0.0,
+                ),
+                "core.clip_sam_upsampler.window_attn.k_proj": dict(
+                    lr_mult=10.0,
+                    decay_mult=0.0,
+                ),
+                "core.clip_sam_upsampler.shifted_window_attn.q_proj": dict(
+                    lr_mult=10.0,
+                    decay_mult=0.0,
+                ),
+                "core.clip_sam_upsampler.shifted_window_attn.k_proj": dict(
+                    lr_mult=10.0,
+                    decay_mult=0.0,
+                ),
+
                 "core.class_token_query_embed": dict(
-                    lr_mult=3.0,
+                    lr_mult=4.0,
                     decay_mult=0.0,
                 ),
                 "core.class_token_text_cross_attn": dict(
-                    lr_mult=3.0,
+                    lr_mult=4.0,
                     decay_mult=1.0,
                 ),
                 "core.class_token_text_cross_attn_norm": dict(
-                    lr_mult=3.0,
+                    lr_mult=4.0,
                     decay_mult=0.0,
                 ),
                 "core.class_token_encoder_cross_attn": dict(
-                    lr_mult=3.0,
+                    lr_mult=4.0,
                     decay_mult=1.0,
                 ),
                 "core.class_token_encoder_cross_attn_norm": dict(
-                    lr_mult=3.0,
+                    lr_mult=4.0,
                     decay_mult=0.0,
                 ),
+
                 "core.final_mixer": dict(
-                    lr_mult=2.0,
+                    lr_mult=4.0,
                     decay_mult=1.0,
+                ),
+
+                "mask_feature_attn.q_proj": dict(
+                    lr_mult=10.0,
+                    decay_mult=0.0,
+                ),
+                "mask_feature_attn.k_proj": dict(
+                    lr_mult=10.0,
+                    decay_mult=0.0,
                 ),
             },
         ),

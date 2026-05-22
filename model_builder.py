@@ -166,6 +166,10 @@ class CriterionConfig:
 
     bce_class_balance_clamp_min: float = 0.2
     bce_class_balance_clamp_max: float = 5.0
+
+    ce_class_balance_clamp_min: float = 0.2
+    ce_class_balance_clamp_max: float = 5.0
+
     eps: float = 1e-6
 
 @dataclass

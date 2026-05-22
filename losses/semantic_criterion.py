@@ -27,6 +27,10 @@ class SemanticCriterionConfig:
 
     bce_class_balance_clamp_min: float = 0.2
     bce_class_balance_clamp_max: float = 5.0
+
+    ce_class_balance_clamp_min: float = 0.2
+    ce_class_balance_clamp_max: float = 5.0
+
     eps: float = 1e-6
 
 
@@ -349,6 +353,29 @@ class SemanticCriterion(nn.Module):
             max=float(self.cfg.bce_class_balance_clamp_max),
         )
 
+    def _build_dynamic_ce_class_weights(
+        self,
+        target: torch.Tensor,
+        valid_mask: torch.Tensor,
+        present_pair_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        target_valid = target * valid_mask.to(dtype=target.dtype)
+        fg_pixels = target_valid.flatten(2).sum(dim=2)
+
+        class_weights = torch.zeros_like(fg_pixels, dtype=target.dtype)
+
+        if present_pair_mask.any():
+            present_fg = fg_pixels[present_pair_mask]
+            mean_fg = present_fg.mean().clamp_min(1.0)
+            class_weights[present_pair_mask] = (
+                mean_fg / fg_pixels[present_pair_mask].clamp_min(1.0)
+            )
+
+        return class_weights.clamp(
+            min=float(self.cfg.ce_class_balance_clamp_min),
+            max=float(self.cfg.ce_class_balance_clamp_max),
+        )
+
     def _binary_cross_entropy_present_balanced_mean(
         self,
         logits: torch.Tensor,
@@ -419,6 +446,8 @@ class SemanticCriterion(nn.Module):
         self,
         logits: torch.Tensor,
         ce_label_map: torch.Tensor,
+        present_pair_mask: torch.Tensor,
+        ce_class_weights: torch.Tensor,
     ) -> tuple[torch.Tensor, int]:
         if logits.shape[0] != ce_label_map.shape[0]:
             raise ValueError(
@@ -432,17 +461,89 @@ class SemanticCriterion(nn.Module):
                 f"{tuple(logits.shape)} vs {tuple(ce_label_map.shape)}."
             )
 
-        num_valid = int((ce_label_map != int(self.cfg.ignore_index)).sum().item())
-        if num_valid <= 0:
+        if present_pair_mask.shape != logits.shape[:2]:
+            raise ValueError(
+                "present_pair_mask must be [B, C] matching logits, "
+                f"got {tuple(present_pair_mask.shape)} vs logits[:2]={tuple(logits.shape[:2])}."
+            )
+
+        if ce_class_weights.shape != logits.shape[:2]:
+            raise ValueError(
+                "ce_class_weights must be [B, C] matching logits, "
+                f"got {tuple(ce_class_weights.shape)} vs logits[:2]={tuple(logits.shape[:2])}."
+            )
+
+        batch_size, _, _, _ = logits.shape
+        ignore_index = int(self.cfg.ignore_index)
+
+        total_loss = logits.sum() * 0.0
+        total_weight = logits.new_tensor(0.0)
+        total_valid = 0
+
+        for batch_idx in range(batch_size):
+            present_ids = torch.nonzero(
+                present_pair_mask[batch_idx],
+                as_tuple=False,
+            ).flatten()
+
+            if int(present_ids.numel()) <= 1:
+                continue
+
+            label_b = ce_label_map[batch_idx]
+            valid_pixel_mask = label_b != ignore_index
+            if int(valid_pixel_mask.sum().item()) <= 0:
+                continue
+
+            logits_b = logits[batch_idx:batch_idx + 1, present_ids]
+
+            local_label = torch.full_like(label_b, fill_value=ignore_index)
+            for local_idx, class_idx in enumerate(present_ids.tolist()):
+                local_label[label_b == int(class_idx)] = int(local_idx)
+
+            local_valid = local_label != ignore_index
+            num_local_valid = int(local_valid.sum().item())
+            if num_local_valid <= 0:
+                continue
+
+            ce_weight = ce_class_weights[batch_idx, present_ids].to(
+                device=logits_b.device,
+                dtype=logits_b.dtype,
+            )
+
+            per_pixel_loss = F.cross_entropy(
+                logits_b,
+                local_label[None],
+                weight=ce_weight,
+                ignore_index=ignore_index,
+                reduction="none",
+            )
+
+            safe_local_label = local_label.clamp(min=0)
+            safe_local_label = safe_local_label.clamp(
+                max=int(present_ids.numel()) - 1,
+            )
+
+            pixel_weight = ce_weight[safe_local_label].to(
+                device=per_pixel_loss.device,
+                dtype=per_pixel_loss.dtype,
+            )
+            pixel_weight = pixel_weight[None]
+
+            valid_float = local_valid[None].to(dtype=per_pixel_loss.dtype)
+            valid_weight = pixel_weight * valid_float
+
+            denom_b = valid_weight.sum().clamp_min(1.0)
+            loss_b = (per_pixel_loss * valid_float).sum() / denom_b
+
+            image_weight = valid_weight.sum().detach()
+            total_loss = total_loss + loss_b * image_weight
+            total_weight = total_weight + image_weight
+            total_valid += num_local_valid
+
+        if total_valid <= 0:
             return logits.sum() * 0.0, 0
 
-        loss = F.cross_entropy(
-            logits,
-            ce_label_map,
-            ignore_index=int(self.cfg.ignore_index),
-            reduction="mean",
-        )
-        return loss, num_valid
+        return total_loss / total_weight.clamp_min(1.0), total_valid
 
     def _basic_mask_losses(
         self,
@@ -452,6 +553,7 @@ class SemanticCriterion(nn.Module):
         present_pair_mask: torch.Tensor,
         class_weights: torch.Tensor,
         ce_label_map: torch.Tensor,
+        ce_class_weights: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
         if present_pair_mask.any():
             loss_bce = self._binary_cross_entropy_present_balanced_mean(
@@ -474,6 +576,8 @@ class SemanticCriterion(nn.Module):
         loss_ce, num_ce_valid = self._cross_entropy_loss(
             logits=logits,
             ce_label_map=ce_label_map,
+            present_pair_mask=present_pair_mask,
+            ce_class_weights=ce_class_weights,
         )
 
         return loss_bce, loss_dice, loss_ce, num_ce_valid
@@ -487,6 +591,7 @@ class SemanticCriterion(nn.Module):
         present_pair_mask: torch.Tensor,
         class_weights: torch.Tensor,
         ce_label_map: torch.Tensor,
+        ce_class_weights: torch.Tensor,
     ) -> tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         mask_logits_layers = outputs.get(OUTPUT_KEYS.mask_logits_layers, None)
 
@@ -538,6 +643,7 @@ class SemanticCriterion(nn.Module):
                 present_pair_mask=present_pair_mask,
                 class_weights=class_weights,
                 ce_label_map=ce_label_map,
+                ce_class_weights=ce_class_weights,
             )
 
             layer_total = (
@@ -658,6 +764,12 @@ class SemanticCriterion(nn.Module):
             present_pair_mask=present_pair_mask,
         )
 
+        ce_class_weights = self._build_dynamic_ce_class_weights(
+            target=target,
+            valid_mask=valid_mask,
+            present_pair_mask=present_pair_mask,
+        )
+
         ce_label_map = self._build_ce_label_map(
             label_map=label_map,
             class_ids=class_ids,
@@ -671,6 +783,7 @@ class SemanticCriterion(nn.Module):
                 present_pair_mask=present_pair_mask,
                 class_weights=class_weights,
                 ce_label_map=ce_label_map,
+                ce_class_weights=ce_class_weights,
             )
         )
 
@@ -682,6 +795,7 @@ class SemanticCriterion(nn.Module):
             present_pair_mask=present_pair_mask,
             class_weights=class_weights,
             ce_label_map=ce_label_map,
+            ce_class_weights=ce_class_weights,
         )
 
         total_loss = (
