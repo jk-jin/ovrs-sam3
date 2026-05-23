@@ -79,13 +79,6 @@ class ClipSamFeatureInitializer(nn.Module):
         # Only query is projected into CLIP text space.
         # CLIP text tokens are intentionally not projected.
         self.class_query_to_clip = nn.Linear(self.sam_dim, self.clip_dim)
-
-        self.clip_template_attn = nn.MultiheadAttention(
-            embed_dim=self.clip_dim,
-            num_heads=self.num_heads,
-            dropout=float(dropout),
-            batch_first=True,
-        )
         self.clip_template_norm = nn.LayerNorm(self.clip_dim)
 
         self.dropout = nn.Dropout(float(dropout))
@@ -106,8 +99,8 @@ class ClipSamFeatureInitializer(nn.Module):
                 f"got {tuple(class_token_query_embed.shape)}."
             )
 
-        num_classes, _, text_dim = clip_text_tokens_native.shape
-        query_batch, _, query_dim = class_token_query_embed.shape
+        num_classes, num_templates, text_dim = clip_text_tokens_native.shape
+        query_batch, num_queries, query_dim = class_token_query_embed.shape
 
         if int(text_dim) != self.clip_dim:
             raise ValueError(
@@ -130,16 +123,53 @@ class ClipSamFeatureInitializer(nn.Module):
             dtype=clip_text_tokens_native.dtype,
         )
         query = query.expand(num_classes, -1, -1)
+
+        # The only learned projection here:
+        # class-token query: SAM space -> CLIP text space.
         query = self.class_query_to_clip(query)
 
-        # Important:
-        # key/value are original CLIP text tokens, no projection on text tokens.
-        attn_out, _ = self.clip_template_attn(
-            query=query,
-            key=clip_text_tokens_native,
-            value=clip_text_tokens_native,
-            need_weights=False,
+        # Do not project CLIP text tokens.
+        key = clip_text_tokens_native
+        value = clip_text_tokens_native
+
+        query_heads = query.reshape(
+            num_classes,
+            num_queries,
+            self.num_heads,
+            self.clip_head_dim,
+        ).permute(0, 2, 1, 3).contiguous()
+
+        key_heads = key.reshape(
+            num_classes,
+            num_templates,
+            self.num_heads,
+            self.clip_head_dim,
+        ).permute(0, 2, 1, 3).contiguous()
+
+        value_heads = value.reshape(
+            num_classes,
+            num_templates,
+            self.num_heads,
+            self.clip_head_dim,
+        ).permute(0, 2, 1, 3).contiguous()
+
+        attn_logits = torch.einsum(
+            "chqd,chkd->chqk",
+            query_heads,
+            key_heads,
         )
+        attn_logits = attn_logits / math.sqrt(float(self.clip_head_dim))
+
+        attn = F.softmax(attn_logits, dim=-1)
+        attn = self.dropout(attn)
+
+        attn_out = torch.einsum(
+            "chqk,chkd->chqd",
+            attn,
+            value_heads,
+        )
+        attn_out = attn_out.permute(0, 2, 1, 3).contiguous()
+        attn_out = attn_out.reshape(num_classes, num_queries, self.clip_dim)
 
         clip_keys = self.clip_template_norm(query + attn_out)
         return clip_keys.contiguous()

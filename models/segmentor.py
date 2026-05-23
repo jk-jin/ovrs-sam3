@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Dict, List, Optional, Any
 
 import torch
 import torch.nn as nn
 
 from .data_misc import BatchedDatapoint
 from .sam3_image import Sam3Image
-from .task_modes import OUTPUT_KEYS, normalize_task_mode
+from .task_modes import normalize_task_mode
 
 
 class SAM3Segmentor(nn.Module):
@@ -41,92 +41,27 @@ class SAM3Segmentor(nn.Module):
             force=force,
         )
 
-    @staticmethod
-    def _build_mixer_cache_item(
-        outputs: Dict[str, torch.Tensor],
-        chunk_class_ids: List[int],
-        detach_score_maps: bool,
-    ) -> Dict[str, torch.Tensor | list[int]]:
-        required_keys = (
-            OUTPUT_KEYS.semantic_logits,
-            OUTPUT_KEYS.class_tokens,
-        )
-
-        for key in required_keys:
-            if key not in outputs:
-                raise ValueError(
-                    f"Chunk outputs must contain '{key}' for final mixer."
-                )
-
-        semantic_logits = outputs[OUTPUT_KEYS.semantic_logits]
-        class_tokens = outputs[OUTPUT_KEYS.class_tokens]
-
-        if detach_score_maps:
-            semantic_logits = semantic_logits.detach()
-
-        return {
-            OUTPUT_KEYS.semantic_logits: semantic_logits,
-            OUTPUT_KEYS.class_tokens: class_tokens,
-            "chunk_class_ids": list(chunk_class_ids),
-        }
-
-    def iter_chunk_outputs(
+    def build_final_mixer_cache(
         self,
         batch: BatchedDatapoint,
-    ) -> Iterator[Dict[str, Any]]:
-        for chunk in self.core.iter_chunk_raw_outputs(batch):
-            raw_outputs = chunk["raw_outputs"]
-            chunk_class_ids = chunk["chunk_class_ids"]
+    ) -> Dict[str, Any]:
+        return self.core.build_final_mixer_cache(batch)
 
-            train_outputs = self.adapter(
-                raw_outputs=raw_outputs,
-                batch=batch,
-                expected_num_classes=len(chunk_class_ids),
-                output_mode="train",
-            )
-
-            yield {
-                "chunk_start": chunk["chunk_start"],
-                "chunk_end": chunk["chunk_end"],
-                "chunk_class_ids": chunk_class_ids,
-                "chunk_class_names": chunk["chunk_class_names"],
-                "raw_outputs": raw_outputs,
-                "train_outputs": train_outputs,
-            }
-
-    def run_final_mixer_from_chunks(
+    def run_final_mixer_from_cache(
         self,
-        mixer_cache: List[Dict[str, torch.Tensor | list[int]]],
+        final_mixer_cache: Dict[str, Any],
         batch: BatchedDatapoint,
     ) -> Dict[str, torch.Tensor]:
-        return self.core.run_final_mixer_from_chunks(
-            mixer_cache=mixer_cache,
+        return self.core.run_final_mixer_from_cache(
+            final_mixer_cache=final_mixer_cache,
             batch=batch,
         )
 
     def forward(self, batch: BatchedDatapoint) -> dict[str, torch.Tensor]:
-        mixer_cache = []
+        final_mixer_cache = self.build_final_mixer_cache(batch)
 
-        for chunk in self.core.iter_chunk_raw_outputs(batch):
-            raw_outputs = chunk["raw_outputs"]
-
-            chunk_outputs = self.adapter(
-                raw_outputs=raw_outputs,
-                batch=batch,
-                expected_num_classes=len(chunk["chunk_class_ids"]),
-                output_mode="train",
-            )
-
-            mixer_cache.append(
-                self._build_mixer_cache_item(
-                    outputs=chunk_outputs,
-                    chunk_class_ids=chunk["chunk_class_ids"],
-                    detach_score_maps=True,
-                )
-            )
-
-        final_raw_outputs = self.run_final_mixer_from_chunks(
-            mixer_cache=mixer_cache,
+        final_raw_outputs = self.run_final_mixer_from_cache(
+            final_mixer_cache=final_mixer_cache,
             batch=batch,
         )
 

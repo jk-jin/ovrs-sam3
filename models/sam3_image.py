@@ -473,19 +473,16 @@ class Sam3Image(torch.nn.Module):
         mask = mask.reshape(batch_size * num_classes, seq_len).contiguous()
         return feats, mask
 
-    @staticmethod
-    def _masked_mean_pool(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        valid = (~mask).to(dtype=x.dtype).unsqueeze(-1)
-        return (x * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1.0)
-
-    def iter_chunk_raw_outputs(
+    def build_final_mixer_cache(
         self,
         input: BatchedDatapoint,
-    ) -> Iterator[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         device = self.device
 
         if len(input.find_inputs) != 1:
-            raise ValueError("Current semantic-only pipeline assumes exactly one find stage per batch.")
+            raise ValueError(
+                "Current semantic-only pipeline assumes exactly one find stage per batch."
+            )
 
         base_find_input = input.find_inputs[0]
         class_texts = list(input.find_text_batch)
@@ -498,9 +495,21 @@ class Sam3Image(torch.nn.Module):
         num_classes = len(class_texts)
         chunk_size = self._get_prompt_chunk_size(num_classes)
 
+        # The only SAM3 image-backbone forward for this batch.
         with torch.no_grad():
             image_backbone_out = self.backbone.forward_image(input.img_batch)
         image_backbone_out = self._detach_tree(image_backbone_out)
+
+        # Reuse the same image_backbone_out to build high-res SAM3 feature.
+        # Do not call build_sam3_pixel_feature(input) here because that would
+        # run backbone.forward_image() again.
+        sam3_feature_high = self.build_sam3_pixel_feature_from_backbone(
+            backbone_out=image_backbone_out,
+        )
+
+        semantic_logits_chunks: list[torch.Tensor] = []
+        class_tokens_chunks: list[torch.Tensor] = []
+        merged_class_ids: list[int] = []
 
         for start in range(0, num_classes, chunk_size):
             end = min(start + chunk_size, num_classes)
@@ -510,10 +519,16 @@ class Sam3Image(torch.nn.Module):
             chunk_text_cache = self._slice_text_cache(start=start, end=end)
 
             chunk_backbone_out = dict(image_backbone_out)
-            chunk_backbone_out["language_features"] = chunk_text_cache["language_features"]
-            chunk_backbone_out["language_mask"] = chunk_text_cache["language_mask"]
+            chunk_backbone_out["language_features"] = chunk_text_cache[
+                "language_features"
+            ]
+            chunk_backbone_out["language_mask"] = chunk_text_cache[
+                "language_mask"
+            ]
             if "language_embeds" in chunk_text_cache:
-                chunk_backbone_out["language_embeds"] = chunk_text_cache["language_embeds"]
+                chunk_backbone_out["language_embeds"] = chunk_text_cache[
+                    "language_embeds"
+                ]
 
             chunk_find_input = self._build_prompt_expanded_find_stage(
                 batch_size=batch_size,
@@ -553,20 +568,63 @@ class Sam3Image(torch.nn.Module):
                 num_chunk_classes=num_chunk_classes,
             )
 
+            for key in (
+                OUTPUT_KEYS.semantic_logits,
+                OUTPUT_KEYS.class_tokens,
+            ):
+                if key not in chunk_outputs:
+                    raise ValueError(
+                        f"Chunk outputs must contain {key!r} for final mixer."
+                    )
+
             semantic_logits = self._ensure_4d_logits(
                 chunk_outputs[OUTPUT_KEYS.semantic_logits],
                 OUTPUT_KEYS.semantic_logits,
             )
+            class_tokens = chunk_outputs[OUTPUT_KEYS.class_tokens]
 
-            chunk_outputs[OUTPUT_KEYS.semantic_logits] = semantic_logits
+            if class_tokens.dim() != 4:
+                raise ValueError(
+                    "class_tokens must be [B, C_chunk, Q, D], "
+                    f"got {tuple(class_tokens.shape)}."
+                )
 
-            yield {
-                "chunk_start": start,
-                "chunk_end": end,
-                "chunk_class_ids": chunk_class_ids,
-                "chunk_class_names": chunk_texts,
-                "raw_outputs": chunk_outputs,
-            }
+            semantic_logits_chunks.append(semantic_logits.detach())
+            class_tokens_chunks.append(class_tokens)
+            merged_class_ids.extend(chunk_class_ids)
+
+        if len(semantic_logits_chunks) == 0:
+            raise ValueError("No chunk outputs were produced.")
+
+        expected_class_ids = list(range(num_classes))
+        if merged_class_ids != expected_class_ids:
+            raise ValueError(
+                "Chunk class ids must cover all classes in order without gaps. "
+                f"Got {merged_class_ids}, expected {expected_class_ids}."
+            )
+
+        semantic_logits = torch.cat(semantic_logits_chunks, dim=1)
+        class_tokens = torch.cat(class_tokens_chunks, dim=1)
+
+        if tuple(semantic_logits.shape[:2]) != (batch_size, num_classes):
+            raise ValueError(
+                "Merged semantic_logits shape mismatch: expected "
+                f"{(batch_size, num_classes)}, got {tuple(semantic_logits.shape[:2])}."
+            )
+
+        if tuple(class_tokens.shape[:2]) != (batch_size, num_classes):
+            raise ValueError(
+                "Merged class_tokens shape mismatch: expected "
+                f"{(batch_size, num_classes)}, got {tuple(class_tokens.shape[:2])}."
+            )
+
+        return {
+            OUTPUT_KEYS.semantic_logits: semantic_logits,
+            OUTPUT_KEYS.class_tokens: class_tokens,
+            OUTPUT_KEYS.sam3_pixel_feature: sam3_feature_high,
+            "class_names": class_texts,
+            "class_ids": merged_class_ids,
+        }
 
     @staticmethod
     def _has_nonempty_geometric_prompt(find_input: Optional[FindStage]) -> bool:
@@ -650,18 +708,6 @@ class Sam3Image(torch.nn.Module):
             )
 
         return out
-
-    @staticmethod
-    def _merge_chunk_outputs(chunk_outputs: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
-        if len(chunk_outputs) == 0:
-            raise ValueError("chunk_outputs is empty.")
-
-        merged = {}
-        for key in sorted({k for chunk_out in chunk_outputs for k in chunk_out.keys()}):
-            values = [chunk_out[key] for chunk_out in chunk_outputs if key in chunk_out]
-            if values:
-                merged[key] = torch.cat(values, dim=1)
-        return merged
 
     @staticmethod
     def _ensure_4d_logits(x: torch.Tensor, key: str) -> torch.Tensor:
@@ -782,53 +828,73 @@ class Sam3Image(torch.nn.Module):
 
         return out
 
-    def run_final_mixer_from_chunks(
+    def run_final_mixer_from_cache(
         self,
-        mixer_cache: List[Dict[str, torch.Tensor]],
+        final_mixer_cache: Dict[str, Any],
         batch: BatchedDatapoint,
     ) -> Dict[str, torch.Tensor]:
-        if len(mixer_cache) == 0:
-            raise ValueError("mixer_cache is empty.")
-
         if batch is None:
             raise ValueError("batch must be provided for final mixer inputs.")
+
+        required_keys = (
+            OUTPUT_KEYS.semantic_logits,
+            OUTPUT_KEYS.class_tokens,
+            OUTPUT_KEYS.sam3_pixel_feature,
+        )
+        for key in required_keys:
+            if key not in final_mixer_cache:
+                raise ValueError(
+                    f"final_mixer_cache must contain {key!r}."
+                )
+
+        semantic_logits = final_mixer_cache[OUTPUT_KEYS.semantic_logits]
+        class_tokens = final_mixer_cache[OUTPUT_KEYS.class_tokens]
+        sam3_feature_high = final_mixer_cache[OUTPUT_KEYS.sam3_pixel_feature]
+
+        if not isinstance(semantic_logits, torch.Tensor):
+            raise TypeError(
+                f"{OUTPUT_KEYS.semantic_logits} must be a Tensor, "
+                f"got {type(semantic_logits)}."
+            )
+        if not isinstance(class_tokens, torch.Tensor):
+            raise TypeError(
+                f"{OUTPUT_KEYS.class_tokens} must be a Tensor, "
+                f"got {type(class_tokens)}."
+            )
+        if not isinstance(sam3_feature_high, torch.Tensor):
+            raise TypeError(
+                f"{OUTPUT_KEYS.sam3_pixel_feature} must be a Tensor, "
+                f"got {type(sam3_feature_high)}."
+            )
 
         class_names = list(batch.find_text_batch)
         if len(class_names) == 0:
             raise ValueError("batch.find_text_batch is empty.")
 
-        mixer_cache = sorted(
-            mixer_cache,
-            key=lambda item: int(item["chunk_class_ids"][0]),
-        )
+        cached_class_names = final_mixer_cache.get("class_names", None)
+        if cached_class_names is not None:
+            cached_class_names = list(cached_class_names)
+            if cached_class_names != class_names:
+                raise ValueError(
+                    "Cached class_names do not match batch.find_text_batch."
+                )
 
-        semantic_logits = torch.cat(
-            [item[OUTPUT_KEYS.semantic_logits] for item in mixer_cache],
-            dim=1,
-        )
-        class_tokens = torch.cat(
-            [item[OUTPUT_KEYS.class_tokens] for item in mixer_cache],
-            dim=1,
-        )
-
-        merged_class_ids = []
-        for item in mixer_cache:
-            merged_class_ids.extend([int(x) for x in item["chunk_class_ids"]])
-
-        expected_class_ids = list(range(len(merged_class_ids)))
-        if merged_class_ids != expected_class_ids:
+        if semantic_logits.dim() != 4:
             raise ValueError(
-                "mixer_cache chunks must cover classes in order without gaps. "
-                f"Got {merged_class_ids}, expected {expected_class_ids}."
+                "semantic_logits must be [B, C, H, W], "
+                f"got {tuple(semantic_logits.shape)}."
+            )
+        if class_tokens.dim() != 4:
+            raise ValueError(
+                "class_tokens must be [B, C, Q, D], "
+                f"got {tuple(class_tokens.shape)}."
             )
 
-        if len(class_names) != len(merged_class_ids):
+        if int(semantic_logits.shape[1]) != len(class_names):
             raise ValueError(
-                "class_names length must match merged class count: "
-                f"{len(class_names)} vs {len(merged_class_ids)}."
+                "semantic_logits class count must match batch.find_text_batch: "
+                f"{semantic_logits.shape[1]} vs {len(class_names)}."
             )
-
-        sam3_feature_high = self.build_sam3_pixel_feature(batch)
 
         return self.run_final_mixer(
             semantic_logits=semantic_logits,
@@ -987,34 +1053,8 @@ class Sam3Image(torch.nn.Module):
         return out
 
     def forward(self, input: BatchedDatapoint) -> Dict[str, torch.Tensor]:
-        mixer_cache = []
-
-        for chunk in self.iter_chunk_raw_outputs(input):
-            raw_outputs = chunk["raw_outputs"]
-
-            required_keys = (
-                OUTPUT_KEYS.semantic_logits,
-                OUTPUT_KEYS.class_tokens,
-            )
-            for key in required_keys:
-                if key not in raw_outputs:
-                    raise ValueError(
-                        f"Chunk raw_outputs must contain '{key}' for final mixer."
-                    )
-
-            mixer_cache.append(
-                {
-                    OUTPUT_KEYS.semantic_logits: raw_outputs[
-                        OUTPUT_KEYS.semantic_logits
-                    ].detach(),
-                    OUTPUT_KEYS.class_tokens: raw_outputs[
-                        OUTPUT_KEYS.class_tokens
-                    ],
-                    "chunk_class_ids": list(chunk["chunk_class_ids"]),
-                }
-            )
-
-        return self.run_final_mixer_from_chunks(
-            mixer_cache=mixer_cache,
+        final_mixer_cache = self.build_final_mixer_cache(input)
+        return self.run_final_mixer_from_cache(
+            final_mixer_cache=final_mixer_cache,
             batch=input,
         )

@@ -130,67 +130,25 @@ class Trainer:
 
         return obj
 
-    def _build_final_mixer_cache_item(
-        self,
-        chunk: Dict,
-    ) -> Dict[str, torch.Tensor | list[int]]:
-        raw_outputs = chunk["raw_outputs"]
-
-        for key in (OUTPUT_KEYS.semantic_logits, OUTPUT_KEYS.class_tokens):
-            if key not in raw_outputs:
-                raise ValueError(
-                    f"Chunk raw_outputs must contain '{key}' for final mixer."
-                )
-
-        return {
-            OUTPUT_KEYS.semantic_logits: raw_outputs[OUTPUT_KEYS.semantic_logits].detach(),
-            OUTPUT_KEYS.class_tokens: raw_outputs[OUTPUT_KEYS.class_tokens],
-            "chunk_class_ids": list(chunk["chunk_class_ids"]),
-        }
-
     def _compute_train_loss(self, batch) -> tuple[Dict[str, torch.Tensor], torch.Tensor]:
-        if not hasattr(self.model, "iter_chunk_outputs"):
+        if not hasattr(self.model, "build_final_mixer_cache"):
             raise AttributeError(
-                "Model must provide iter_chunk_outputs(batch)."
+                "Model must provide build_final_mixer_cache(batch)."
             )
 
-        if not hasattr(self.model, "run_final_mixer_from_chunks"):
+        if not hasattr(self.model, "run_final_mixer_from_cache"):
             raise AttributeError(
-                "Model must provide run_final_mixer_from_chunks(mixer_cache, batch)."
+                "Model must provide run_final_mixer_from_cache(final_mixer_cache, batch)."
             )
 
         label_map = batch.find_targets[0].semantic_label_map
         use_amp = self.cfg.use_amp and self.device.type == "cuda"
 
         with autocast(device_type=self.device.type, enabled=use_amp):
-            mixer_cache = [
-                self._build_final_mixer_cache_item(chunk)
-                for chunk in self.model.iter_chunk_outputs(batch)
-            ]
+            final_mixer_cache = self.model.build_final_mixer_cache(batch)
 
-            if len(mixer_cache) == 0:
-                try:
-                    ref_param = next(self.model.parameters())
-                    zero = ref_param.sum() * 0.0
-                except StopIteration:
-                    zero = torch.zeros(
-                        (),
-                        device=self.device,
-                        dtype=torch.float32,
-                    )
-
-                loss_dict = {
-                    "total_loss": zero,
-                    "num_valid": torch.tensor(
-                        0,
-                        device=zero.device,
-                        dtype=torch.long,
-                    ),
-                }
-                return loss_dict, zero
-
-            final_raw_outputs = self.model.run_final_mixer_from_chunks(
-                mixer_cache=mixer_cache,
+            final_raw_outputs = self.model.run_final_mixer_from_cache(
+                final_mixer_cache=final_mixer_cache,
                 batch=batch,
             )
 
