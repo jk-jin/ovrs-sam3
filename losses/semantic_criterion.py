@@ -115,8 +115,8 @@ class SemanticCriterion(nn.Module):
 
         if num_valid_pixels <= 0:
             total_loss = (
-                float(self.cfg.final_ignore_bce_weight) * loss_final_ignore_bce
-                + float(self.cfg.presence_loss_weight) * loss_presence_bce
+                    float(self.cfg.final_ignore_bce_weight) * loss_final_ignore_bce
+                    + float(self.cfg.presence_loss_weight) * loss_presence_bce
             )
 
             loss_dict = {
@@ -126,6 +126,7 @@ class SemanticCriterion(nn.Module):
                 "loss_final_ignore_bce": loss_final_ignore_bce,
                 "loss_presence_bce": loss_presence_bce,
                 "loss_mask_layers_aux": zero,
+                "loss_clip_sam_layers_aux": zero,
                 "total_loss": total_loss,
                 "num_valid": torch.tensor(
                     0,
@@ -178,6 +179,19 @@ class SemanticCriterion(nn.Module):
             ce_class_weights=ce_class_weights,
         )
 
+        loss_aux_clip_sam_layers, clip_sam_aux_loss_dict = (
+            self._clip_sam_layer_losses(
+                outputs=outputs,
+                final_logits=final_logits,
+                target=target,
+                valid_mask=valid_mask,
+                present_pair_mask=present_pair_mask,
+                bce_class_weights=bce_class_weights,
+                ce_label_map=ce_label_map,
+                ce_class_weights=ce_class_weights,
+            )
+        )
+
         total_loss = (
             float(self.cfg.final_bce_weight) * loss_final_bce
             + float(self.cfg.final_dice_weight) * loss_final_dice
@@ -185,6 +199,7 @@ class SemanticCriterion(nn.Module):
             + float(self.cfg.final_ignore_bce_weight) * loss_final_ignore_bce
             + float(self.cfg.presence_loss_weight) * loss_presence_bce
             + loss_aux_mask_layers
+            + loss_aux_clip_sam_layers
         )
 
         loss_dict = {
@@ -193,6 +208,8 @@ class SemanticCriterion(nn.Module):
             "loss_final_ce": loss_final_ce,
             "loss_final_ignore_bce": loss_final_ignore_bce,
             "loss_presence_bce": loss_presence_bce,
+            "loss_mask_layers_aux": loss_aux_mask_layers,
+            "loss_clip_sam_layers_aux": loss_aux_clip_sam_layers,
             "total_loss": total_loss,
             "num_valid": torch.tensor(
                 max(num_valid_pixels, num_ce_valid),
@@ -202,6 +219,7 @@ class SemanticCriterion(nn.Module):
         }
         loss_dict.update(presence_loss_log_items)
         loss_dict.update(aux_loss_dict)
+        loss_dict.update(clip_sam_aux_loss_dict)
         return loss_dict
 
     @staticmethod
@@ -329,72 +347,16 @@ class SemanticCriterion(nn.Module):
         presence_target: torch.Tensor,
         presence_valid_mask: torch.Tensor,
     ) -> tuple[torch.Tensor, TensorDict]:
-        presence_logits_layers = outputs.get(OUTPUT_KEYS.presence_logits_layers, None)
+        # outputs is kept in the signature for call-site stability.
+        # The new design predicts presence only once before the fusion layers.
+        _ = outputs
 
-        if presence_logits_layers is None:
-            loss = self._presence_bce_loss(
-                presence_logits=presence_logits,
-                presence_target=presence_target,
-                presence_valid_mask=presence_valid_mask,
-            )
-            return loss, {"loss_presence_final_bce": loss.detach()}
-
-        if presence_logits_layers.dim() != 3:
-            raise ValueError(
-                "presence_logits_layers must be [L, B, C], got "
-                f"{tuple(presence_logits_layers.shape)}."
-            )
-
-        if tuple(presence_logits_layers.shape[1:]) != tuple(presence_target.shape):
-            raise ValueError(
-                "presence_logits_layers shape mismatch: expected [L, B, C] "
-                f"with B,C={tuple(presence_target.shape)}, got "
-                f"{tuple(presence_logits_layers.shape)}."
-            )
-
-        num_layers = int(presence_logits_layers.shape[0])
-        weights_tensor = self._build_presence_layer_weights(
-            presence_logits_layers=presence_logits_layers,
-            num_layers=num_layers,
+        loss = self._presence_bce_loss(
+            presence_logits=presence_logits,
+            presence_target=presence_target,
+            presence_valid_mask=presence_valid_mask,
         )
-
-        total_loss = self._zero_loss(presence_logits_layers)
-        log_items: TensorDict = {}
-
-        for layer_idx in range(num_layers):
-            layer_loss = self._presence_bce_loss(
-                presence_logits=presence_logits_layers[layer_idx],
-                presence_target=presence_target,
-                presence_valid_mask=presence_valid_mask,
-            )
-            layer_weighted_loss = weights_tensor[layer_idx] * layer_loss
-            total_loss = total_loss + layer_weighted_loss
-
-            log_items[f"loss_presence_layer_{layer_idx}_bce"] = layer_loss.detach()
-            log_items[f"loss_presence_layer_{layer_idx}_weighted"] = (
-                layer_weighted_loss.detach()
-            )
-
-        return total_loss, log_items
-
-    def _build_presence_layer_weights(
-        self,
-        presence_logits_layers: torch.Tensor,
-        num_layers: int,
-    ) -> torch.Tensor:
-        weights = self.cfg.presence_layer_loss_weights
-        if weights is None:
-            return presence_logits_layers.new_full(
-                (num_layers,),
-                1.0 / max(num_layers, 1),
-            )
-
-        if len(weights) != num_layers:
-            raise ValueError(
-                "presence_layer_loss_weights length must match presence "
-                f"layers: got {len(weights)} weights for {num_layers} layers."
-            )
-        return presence_logits_layers.new_tensor(list(weights))
+        return loss, {"loss_presence_final_bce": loss.detach()}
 
     @staticmethod
     def _presence_bce_loss(
@@ -775,6 +737,101 @@ class SemanticCriterion(nn.Module):
         loss_dict["loss_mask_layers_aux"] = aux_total
 
         return aux_total, loss_dict
+
+    def _clip_sam_layer_losses(
+        self,
+        outputs: TensorDict,
+        final_logits: torch.Tensor,
+        target: torch.Tensor,
+        valid_mask: torch.Tensor,
+        present_pair_mask: torch.Tensor,
+        bce_class_weights: torch.Tensor,
+        ce_label_map: torch.Tensor,
+        ce_class_weights: torch.Tensor,
+    ) -> tuple[torch.Tensor, TensorDict]:
+        clip_sam_logits_layers = outputs.get(
+            OUTPUT_KEYS.clip_sam_logits_layers,
+            None,
+        )
+
+        if clip_sam_logits_layers is None:
+            return self._zero_loss(final_logits), {}
+
+        if clip_sam_logits_layers.dim() != 5:
+            raise ValueError(
+                "clip_sam_logits_layers must be [L, B, C, H, W], "
+                f"got {tuple(clip_sam_logits_layers.shape)}."
+            )
+
+        if tuple(clip_sam_logits_layers.shape[1:]) != tuple(final_logits.shape):
+            raise ValueError(
+                "clip_sam_logits_layers shape mismatch: expected [L, B, C, H, W] "
+                f"with B,C,H,W={tuple(final_logits.shape)}, got "
+                f"{tuple(clip_sam_logits_layers.shape)}."
+            )
+
+        num_layers = int(clip_sam_logits_layers.shape[0])
+        if num_layers <= 0:
+            return self._zero_loss(final_logits), {}
+
+        weights_tensor = self._build_clip_sam_layer_weights(
+            clip_sam_logits_layers=clip_sam_logits_layers,
+            num_layers=num_layers,
+        )
+
+        aux_total = self._zero_loss(final_logits)
+        loss_dict: TensorDict = {}
+
+        for layer_idx in range(num_layers):
+            layer_logits = clip_sam_logits_layers[layer_idx]
+
+            loss_bce, loss_dice, loss_ce, _ = self._basic_mask_losses(
+                logits=layer_logits,
+                target=target,
+                valid_mask=valid_mask,
+                present_pair_mask=present_pair_mask,
+                bce_class_weights=bce_class_weights,
+                ce_label_map=ce_label_map,
+                ce_class_weights=ce_class_weights,
+            )
+
+            layer_total = (
+                float(self.cfg.final_bce_weight) * loss_bce
+                + float(self.cfg.final_dice_weight) * loss_dice
+                + float(self.cfg.final_ce_weight) * loss_ce
+            )
+
+            weighted_layer_total = weights_tensor[layer_idx] * layer_total
+            aux_total = aux_total + weighted_layer_total
+
+            loss_dict[f"loss_clip_sam_layer_{layer_idx}_bce"] = loss_bce.detach()
+            loss_dict[f"loss_clip_sam_layer_{layer_idx}_dice"] = loss_dice.detach()
+            loss_dict[f"loss_clip_sam_layer_{layer_idx}_ce"] = loss_ce.detach()
+            loss_dict[f"loss_clip_sam_layer_{layer_idx}_total"] = (
+                weighted_layer_total.detach()
+            )
+
+        aux_total = float(self.cfg.clip_sam_layer_loss_weight) * aux_total
+        loss_dict["loss_clip_sam_layers_aux"] = aux_total
+
+        return aux_total, loss_dict
+
+    def _build_clip_sam_layer_weights(
+        self,
+        clip_sam_logits_layers: torch.Tensor,
+        num_layers: int,
+    ) -> torch.Tensor:
+        weights = self.cfg.clip_sam_layer_weights
+        if weights is None:
+            return clip_sam_logits_layers.new_ones(num_layers)
+
+        if len(weights) != num_layers:
+            raise ValueError(
+                "clip_sam_layer_weights length must equal len(clip_sam_logits_layers). "
+                f"Got {len(weights)} weights for {num_layers} layers."
+            )
+
+        return clip_sam_logits_layers.new_tensor(list(weights))
 
     def _build_aux_mask_layer_weights(
         self,

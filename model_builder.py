@@ -17,13 +17,11 @@ from .config_dataclasses import (
     CheckpointManagerConfig,
     ClassCodeConfig,
     ClipSamFeatureConfig,
-    ClipSamUpsampleConfig,
     FinalMixerConfig,
     FreezeConfig,
     LoggerHookConfig,
     MaskHeadConfig,
     OpenCLIPConfig,
-    SemanticPriorConfig,
     SegmentorBuildConfig,
     SemanticCriterionConfig,
     TrainerConfig,
@@ -180,14 +178,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         return cls._coerce_config(obj, OpenCLIPConfig, "openclip_cfg")
 
     @classmethod
-    def _coerce_clip_sam_upsample_cfg(cls, obj) -> ClipSamUpsampleConfig:
-        return cls._coerce_config(
-            obj,
-            ClipSamUpsampleConfig,
-            "clip_sam_upsample_cfg",
-        )
-
-    @classmethod
     def _coerce_clip_sam_feature_cfg(cls, obj) -> ClipSamFeatureConfig:
         return cls._coerce_config(
             obj,
@@ -198,14 +188,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
     @classmethod
     def _coerce_class_code_cfg(cls, obj) -> ClassCodeConfig:
         return cls._coerce_config(obj, ClassCodeConfig, "class_code_cfg")
-
-    @classmethod
-    def _coerce_semantic_prior_cfg(cls, obj) -> SemanticPriorConfig:
-        return cls._coerce_config(
-            obj,
-            SemanticPriorConfig,
-            "semantic_prior_cfg",
-        )
 
     @classmethod
     def _coerce_window_attention_cfg(cls, obj) -> WindowAttentionConfig:
@@ -230,9 +212,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             raw = dict(obj)
             nested_coercers = {
                 "clip_sam_feature_cfg": cls._coerce_clip_sam_feature_cfg,
-                "clip_sam_upsample_cfg": cls._coerce_clip_sam_upsample_cfg,
                 "class_code_cfg": cls._coerce_class_code_cfg,
-                "semantic_prior_cfg": cls._coerce_semantic_prior_cfg,
                 "window_attention_cfg": cls._coerce_window_attention_cfg,
                 "mask_head_cfg": cls._coerce_mask_head_cfg,
             }
@@ -246,13 +226,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         cfg.clip_sam_feature_cfg = cls._coerce_clip_sam_feature_cfg(
             cfg.clip_sam_feature_cfg
         )
-        cfg.clip_sam_upsample_cfg = cls._coerce_clip_sam_upsample_cfg(
-            cfg.clip_sam_upsample_cfg
-        )
         cfg.class_code_cfg = cls._coerce_class_code_cfg(cfg.class_code_cfg)
-        cfg.semantic_prior_cfg = cls._coerce_semantic_prior_cfg(
-            cfg.semantic_prior_cfg
-        )
         cfg.window_attention_cfg = cls._coerce_window_attention_cfg(
             cfg.window_attention_cfg
         )
@@ -360,22 +334,15 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 f"got {cfg.num_heads}."
             )
 
+        if not cfg.clip_sam_feature_cfg.enabled:
+            raise ValueError(
+                "final_mixer_cfg.clip_sam_feature_cfg.enabled=False is not supported."
+            )
+
         if cfg.class_code_cfg.source != "mean_class_tokens":
             raise ValueError(
                 "final_mixer_cfg.class_code_cfg.source must be "
                 "'mean_class_tokens'."
-            )
-
-        if cfg.semantic_prior_cfg.type != "presence_signed_softmax":
-            raise ValueError(
-                "final_mixer_cfg.semantic_prior_cfg.type must be "
-                "'presence_signed_softmax'."
-            )
-
-        if cfg.semantic_prior_cfg.tau <= 0:
-            raise ValueError(
-                "final_mixer_cfg.semantic_prior_cfg.tau must be positive, "
-                f"got {cfg.semantic_prior_cfg.tau}."
             )
 
         if cfg.mask_head_cfg.type != "mask_embed_dot_class_code":
@@ -391,18 +358,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             raise ValueError(
                 "final_mixer_cfg.mask_head_cfg.class_feature_pool_stride must be "
                 f"positive, got {cfg.mask_head_cfg.class_feature_pool_stride}."
-            )
-
-        upsample_cfg = cfg.clip_sam_upsample_cfg
-        if upsample_cfg.window_size <= 0:
-            raise ValueError(
-                "final_mixer_cfg.clip_sam_upsample_cfg.window_size must be positive."
-            )
-
-        if not 0 <= upsample_cfg.shift_size < upsample_cfg.window_size:
-            raise ValueError(
-                "final_mixer_cfg.clip_sam_upsample_cfg.shift_size must satisfy "
-                "0 <= shift_size < window_size."
             )
 
         window_cfg = cfg.window_attention_cfg
@@ -721,8 +676,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         input_geometry_encoder = cls._create_geometry_encoder()
 
         final_cfg = cfg.final_mixer_cfg
-        upsample_cfg = final_cfg.clip_sam_upsample_cfg
-        semantic_prior_cfg = final_cfg.semantic_prior_cfg
         window_cfg = final_cfg.window_attention_cfg
         mask_head_cfg = final_cfg.mask_head_cfg
 
@@ -745,13 +698,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             final_mixer_dropout=float(final_cfg.dropout),
             final_mixer_num_heads=int(final_cfg.num_heads),
             final_mixer_fusion_layers=int(final_cfg.fusion_layers),
-            clip_sam_upsample_enabled=bool(upsample_cfg.enabled),
-            clip_sam_upsample_window_size=int(upsample_cfg.window_size),
-            clip_sam_upsample_shift_size=int(upsample_cfg.shift_size),
-            clip_sam_upsample_dropout=float(upsample_cfg.dropout),
             num_class_tokens=int(final_cfg.num_class_tokens),
             presence_enabled=bool(final_cfg.presence_enabled),
-            final_mixer_tau_mask=float(semantic_prior_cfg.tau),
             final_mixer_window_size=int(window_cfg.window_size),
             final_mixer_shift_size=int(window_cfg.shift_size),
             final_mixer_window_dropout=float(window_cfg.dropout),

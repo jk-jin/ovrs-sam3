@@ -25,12 +25,9 @@ class ModelOutputKeys:
 
     presence_logits: str = "presence_logits"
     presence_score: str = "presence_score"
-    presence_logits_layers: str = "presence_logits_layers"
 
     mask_logits_layers: str = "mask_logits_layers"
-
-    clip_coarse_logits: str = "clip_coarse_logits"
-    clip_coarse_pred: str = "clip_coarse_pred"
+    clip_sam_logits_layers: str = "clip_sam_logits_layers"
 
     sam3_pixel_feature: str = "sam3_pixel_feature"
 

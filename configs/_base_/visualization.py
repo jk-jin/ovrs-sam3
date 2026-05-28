@@ -25,8 +25,8 @@ visualization = dict(
     # If too many images are produced, change this to 8 or 16.
     max_final_mixer_layer_heatmap_classes=None,
 
-    # Final-mixer coarse CLIP segmentation visualization.
-    save_clip_coarse_prediction=True,
+    # Final mixer mask layer visualization.
+    save_final_mixer_clip_sam_layers=True,
 
     # Frozen SAM3 direct segmentation visualization.
     save_sam3_direct_segmentation=True,
@@ -34,7 +34,6 @@ visualization = dict(
 
     # Presence visualization.
     save_presence_scores=True,
-    save_presence_layers=True,
 
     # Sampling control.
     vis_prob=0.05,

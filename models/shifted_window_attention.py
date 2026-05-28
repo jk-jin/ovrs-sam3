@@ -18,6 +18,11 @@ class ShiftedWindowAttention2D(nn.Module):
         B means batch size.
         D means feature dimension.
         H and W mean spatial height and width.
+
+    New design support:
+        use_qkv_proj=False disables internal q/k/v linear projections.
+        use_out_proj=False disables internal output linear projection.
+        residual_source="query" keeps the query map as the residual branch.
     """
 
     def __init__(
@@ -31,6 +36,8 @@ class ShiftedWindowAttention2D(nn.Module):
         residual_source: str = "query",
         use_residual_norm: bool = True,
         use_rel_pos_bias: bool = True,
+        use_qkv_proj: bool = True,
+        use_out_proj: bool | None = None,
     ) -> None:
         super().__init__()
 
@@ -42,6 +49,7 @@ class ShiftedWindowAttention2D(nn.Module):
         self.residual_source = str(residual_source)
         self.use_residual_norm = bool(use_residual_norm)
         self.use_rel_pos_bias = bool(use_rel_pos_bias)
+        self.use_qkv_proj = bool(use_qkv_proj)
 
         if self.hidden_dim <= 0:
             raise ValueError(f"hidden_dim must be positive, got {hidden_dim}.")
@@ -68,15 +76,32 @@ class ShiftedWindowAttention2D(nn.Module):
         self.head_dim = self.hidden_dim // self.num_heads
         self.scale = self.head_dim ** -0.5
 
-        self.q_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
-        self.k_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
-
-        if self.value_preserving:
-            self.v_proj = None
-            self.out_proj = None
+        if use_out_proj is None:
+            # Backward-compatible default:
+            # old value_preserving=True had no v_proj/out_proj;
+            # old value_preserving=False had v_proj/out_proj.
+            self.use_out_proj = self.use_qkv_proj and not self.value_preserving
         else:
-            self.v_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
-            self.out_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
+            self.use_out_proj = bool(use_out_proj)
+
+        if self.use_qkv_proj:
+            self.q_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
+            self.k_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
+
+            if self.value_preserving:
+                self.v_proj = None
+            else:
+                self.v_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
+        else:
+            self.q_proj = None
+            self.k_proj = None
+            self.v_proj = None
+
+        self.out_proj = (
+            nn.Linear(self.hidden_dim, self.hidden_dim)
+            if self.use_out_proj
+            else None
+        )
 
         self.attn_dropout = nn.Dropout(float(dropout))
         self.out_dropout = nn.Dropout(float(dropout))
@@ -193,7 +218,6 @@ class ShiftedWindowAttention2D(nn.Module):
             device=device,
             dtype=dtype,
         )
-
         h_slices = (
             slice(0, -window),
             slice(-window, -shift),
@@ -228,6 +252,35 @@ class ShiftedWindowAttention2D(nn.Module):
         bias = bias.reshape(num_tokens, num_tokens, self.num_heads)
         bias = bias.permute(2, 0, 1).contiguous()
         return attn + bias.unsqueeze(0).to(dtype=attn.dtype, device=attn.device)
+
+    def _project_windows(
+        self,
+        query_windows: torch.Tensor,
+        key_windows: torch.Tensor,
+        value_windows: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if self.use_qkv_proj:
+            if self.q_proj is None or self.k_proj is None:
+                raise RuntimeError("q_proj/k_proj must exist when use_qkv_proj=True.")
+
+            q = self.q_proj(query_windows)
+            k = self.k_proj(key_windows)
+
+            if self.value_preserving:
+                v = value_windows
+            else:
+                if self.v_proj is None:
+                    raise RuntimeError(
+                        "v_proj must exist when value_preserving=False "
+                        "and use_qkv_proj=True."
+                    )
+                v = self.v_proj(value_windows)
+        else:
+            q = query_windows
+            k = key_windows
+            v = value_windows
+
+        return q, k, v
 
     def forward(
         self,
@@ -274,12 +327,11 @@ class ShiftedWindowAttention2D(nn.Module):
 
         num_windows_total, num_tokens, _ = query_windows.shape
 
-        q = self.q_proj(query_windows)
-        k = self.k_proj(key_windows)
-        if self.value_preserving:
-            v = value_windows
-        else:
-            v = self.v_proj(value_windows)
+        q, k, v = self._project_windows(
+            query_windows=query_windows,
+            key_windows=key_windows,
+            value_windows=value_windows,
+        )
 
         q = q.reshape(
             num_windows_total,

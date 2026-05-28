@@ -40,13 +40,8 @@ class Sam3Image(torch.nn.Module):
         final_mixer_dropout: float = 0.1,
         final_mixer_num_heads: int = 8,
         final_mixer_fusion_layers: int = 4,
-        clip_sam_upsample_enabled: bool = True,
-        clip_sam_upsample_window_size: int = 8,
-        clip_sam_upsample_shift_size: int = 4,
-        clip_sam_upsample_dropout: float = 0.1,
         num_class_tokens: int = 32,
         presence_enabled: bool = True,
-        final_mixer_tau_mask: float = 16.0,
         final_mixer_window_size: int = 8,
         final_mixer_shift_size: int = 4,
         final_mixer_window_dropout: float = 0.1,
@@ -120,11 +115,6 @@ class Sam3Image(torch.nn.Module):
         self.final_mixer_num_heads = int(final_mixer_num_heads)
         self.final_mixer_fusion_layers = int(final_mixer_fusion_layers)
 
-        self.clip_sam_upsample_enabled = bool(clip_sam_upsample_enabled)
-        self.clip_sam_upsample_window_size = int(clip_sam_upsample_window_size)
-        self.clip_sam_upsample_shift_size = int(clip_sam_upsample_shift_size)
-        self.clip_sam_upsample_dropout = float(clip_sam_upsample_dropout)
-
         self.num_class_tokens = int(num_class_tokens)
         if self.num_class_tokens <= 0:
             raise ValueError(
@@ -146,12 +136,7 @@ class Sam3Image(torch.nn.Module):
             fusion_layers=self.final_mixer_fusion_layers,
             dropout=self.final_mixer_dropout,
             presence_enabled=self.presence_enabled,
-            tau_mask=float(final_mixer_tau_mask),
             clip_sam_feature_enabled=True,
-            clip_sam_upsample_enabled=self.clip_sam_upsample_enabled,
-            clip_sam_upsample_window_size=self.clip_sam_upsample_window_size,
-            clip_sam_upsample_shift_size=self.clip_sam_upsample_shift_size,
-            clip_sam_upsample_dropout=self.clip_sam_upsample_dropout,
             window_size=int(final_mixer_window_size),
             shift_size=int(final_mixer_shift_size),
             window_dropout=float(final_mixer_window_dropout),
@@ -731,7 +716,7 @@ class Sam3Image(torch.nn.Module):
         semantic_logits: torch.Tensor,
         class_tokens: torch.Tensor,
         batch: BatchedDatapoint,
-        sam3_feature_high: torch.Tensor,
+        sam3_feature_high: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         semantic_logits = self._ensure_4d_logits(
             semantic_logits,
@@ -742,13 +727,8 @@ class Sam3Image(torch.nn.Module):
             raise ValueError(
                 f"class_tokens must be [B, C, Q, D], got {tuple(class_tokens.shape)}."
             )
-        if sam3_feature_high.dim() != 4:
-            raise ValueError(
-                "sam3_feature_high must be [B, D, H, W], "
-                f"got {tuple(sam3_feature_high.shape)}."
-            )
 
-        batch_size, num_classes, height, width = semantic_logits.shape
+        batch_size, num_classes, _, _ = semantic_logits.shape
 
         if tuple(class_tokens.shape[:2]) != (batch_size, num_classes):
             raise ValueError(
@@ -760,17 +740,6 @@ class Sam3Image(torch.nn.Module):
             raise ValueError(
                 f"class_tokens dim mismatch: expected {self.hidden_dim}, "
                 f"got {class_tokens.shape[-1]}."
-            )
-        if tuple(sam3_feature_high.shape) != (
-                batch_size,
-                self.hidden_dim,
-                height,
-                width,
-        ):
-            raise ValueError(
-                "sam3_feature_high shape mismatch: expected "
-                f"{(batch_size, self.hidden_dim, height, width)}, "
-                f"got {tuple(sam3_feature_high.shape)}."
             )
 
         (
@@ -787,7 +756,6 @@ class Sam3Image(torch.nn.Module):
             class_tokens=class_tokens,
             clip_image_feat_map_native=clip_image_feat_map_native,
             clip_text_tokens_native=clip_text_tokens_native,
-            sam3_feature_high=sam3_feature_high,
             clip_grid_hw=clip_grid_hw,
         )
 
@@ -795,8 +763,8 @@ class Sam3Image(torch.nn.Module):
             OUTPUT_KEYS.final_logits,
             OUTPUT_KEYS.presence_logits,
             OUTPUT_KEYS.presence_score,
-            OUTPUT_KEYS.presence_logits_layers,
             OUTPUT_KEYS.mask_logits_layers,
+            OUTPUT_KEYS.clip_sam_logits_layers,
         )
         for key in required_keys:
             if key not in mixer_outputs:
@@ -811,20 +779,13 @@ class Sam3Image(torch.nn.Module):
             OUTPUT_KEYS.final_logits: mixer_outputs[OUTPUT_KEYS.final_logits],
             OUTPUT_KEYS.presence_logits: mixer_outputs[OUTPUT_KEYS.presence_logits],
             OUTPUT_KEYS.presence_score: mixer_outputs[OUTPUT_KEYS.presence_score],
-            OUTPUT_KEYS.presence_logits_layers: mixer_outputs[
-                OUTPUT_KEYS.presence_logits_layers
-            ],
             OUTPUT_KEYS.mask_logits_layers: mixer_outputs[
                 OUTPUT_KEYS.mask_logits_layers
             ],
+            OUTPUT_KEYS.clip_sam_logits_layers: mixer_outputs[
+                OUTPUT_KEYS.clip_sam_logits_layers
+            ],
         }
-
-        for optional_key in (
-            OUTPUT_KEYS.clip_coarse_logits,
-            OUTPUT_KEYS.clip_coarse_pred,
-        ):
-            if optional_key in mixer_outputs:
-                out[optional_key] = mixer_outputs[optional_key]
 
         return out
 
@@ -839,7 +800,6 @@ class Sam3Image(torch.nn.Module):
         required_keys = (
             OUTPUT_KEYS.semantic_logits,
             OUTPUT_KEYS.class_tokens,
-            OUTPUT_KEYS.sam3_pixel_feature,
         )
         for key in required_keys:
             if key not in final_mixer_cache:
@@ -849,7 +809,6 @@ class Sam3Image(torch.nn.Module):
 
         semantic_logits = final_mixer_cache[OUTPUT_KEYS.semantic_logits]
         class_tokens = final_mixer_cache[OUTPUT_KEYS.class_tokens]
-        sam3_feature_high = final_mixer_cache[OUTPUT_KEYS.sam3_pixel_feature]
 
         if not isinstance(semantic_logits, torch.Tensor):
             raise TypeError(
@@ -860,11 +819,6 @@ class Sam3Image(torch.nn.Module):
             raise TypeError(
                 f"{OUTPUT_KEYS.class_tokens} must be a Tensor, "
                 f"got {type(class_tokens)}."
-            )
-        if not isinstance(sam3_feature_high, torch.Tensor):
-            raise TypeError(
-                f"{OUTPUT_KEYS.sam3_pixel_feature} must be a Tensor, "
-                f"got {type(sam3_feature_high)}."
             )
 
         class_names = list(batch.find_text_batch)
@@ -900,7 +854,6 @@ class Sam3Image(torch.nn.Module):
             semantic_logits=semantic_logits,
             class_tokens=class_tokens,
             batch=batch,
-            sam3_feature_high=sam3_feature_high,
         )
 
     def _get_img_feats(self, backbone_out, img_ids):

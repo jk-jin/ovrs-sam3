@@ -46,23 +46,10 @@ model = dict(
 
         clip_sam_feature_cfg=dict(
             enabled=True,
-            use_image_residual=False,
-        ),
-
-        clip_sam_upsample_cfg=dict(
-            enabled=True,
-            window_size=8,
-            shift_size=4,
-            dropout=0.1,
         ),
 
         class_code_cfg=dict(
             source="mean_class_tokens",
-        ),
-
-        semantic_prior_cfg=dict(
-            type="presence_signed_softmax",
-            tau=16.0,
         ),
 
         window_attention_cfg=dict(
@@ -97,10 +84,12 @@ model = dict(
         final_ignore_bce_weight=0.0,
 
         presence_loss_weight=1.0,
-        presence_layer_loss_weights=[0.02, 0.05, 0.1, 0.2],
 
         mask_layer_loss_weight=1.0,
         mask_layer_weights=[0.1, 0.2, 0.4],
+
+        clip_sam_layer_loss_weight=0.1,
+        clip_sam_layer_weights=None,
 
         bce_class_balance_clamp_min=0.2,
         bce_class_balance_clamp_max=5.0,

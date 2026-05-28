@@ -35,27 +35,10 @@ class OpenCLIPConfig:
 @dataclass
 class ClipSamFeatureConfig:
     enabled: bool = True
-    use_image_residual: bool = False
-
-
-@dataclass
-class ClipSamUpsampleConfig:
-    enabled: bool = True
-    window_size: int = 8
-    shift_size: int = 4
-    dropout: float = 0.1
-
 
 @dataclass
 class ClassCodeConfig:
     source: str = "mean_class_tokens"
-
-
-@dataclass
-class SemanticPriorConfig:
-    type: str = "presence_signed_softmax"
-    tau: float = 16.0
-
 
 @dataclass
 class WindowAttentionConfig:
@@ -84,13 +67,7 @@ class FinalMixerConfig:
     clip_sam_feature_cfg: ClipSamFeatureConfig = field(
         default_factory=ClipSamFeatureConfig
     )
-    clip_sam_upsample_cfg: ClipSamUpsampleConfig = field(
-        default_factory=ClipSamUpsampleConfig
-    )
     class_code_cfg: ClassCodeConfig = field(default_factory=ClassCodeConfig)
-    semantic_prior_cfg: SemanticPriorConfig = field(
-        default_factory=SemanticPriorConfig
-    )
     window_attention_cfg: WindowAttentionConfig = field(
         default_factory=WindowAttentionConfig
     )
@@ -107,14 +84,14 @@ class SemanticCriterionConfig:
     final_ignore_bce_weight: float = 0.1
 
     presence_loss_weight: float = 1.0
-    presence_layer_loss_weights: Optional[list[float]] = field(
-        default_factory=lambda: [0.02, 0.05, 0.1, 0.2]
-    )
 
     mask_layer_loss_weight: float = 1.0
     mask_layer_weights: Optional[list[float]] = field(
         default_factory=lambda: [0.1, 0.2, 0.4]
     )
+
+    clip_sam_layer_loss_weight: float = 0.1
+    clip_sam_layer_weights: Optional[list[float]] = None
 
     bce_class_balance_clamp_min: float = 0.2
     bce_class_balance_clamp_max: float = 5.0
@@ -207,15 +184,13 @@ class VisualizerConfig:
     save_score_heatmaps: bool = True
     heatmap_colormap: str = "turbo"
 
-    save_clip_coarse_prediction: bool = True
-
     save_sam3_direct_segmentation: bool = True
     sam3_direct_seg_threshold: float = 0.5
 
     save_presence_scores: bool = True
-    save_presence_layers: bool = True
 
     save_final_mixer_mask_layers: bool = True
+    save_final_mixer_clip_sam_layers: bool = True
     save_final_mixer_layer_heatmaps: bool = True
     save_final_mixer_layer_predictions: bool = True
     save_final_mixer_layer_overlays: bool = True

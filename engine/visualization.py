@@ -277,20 +277,6 @@ class PresenceScoreTask(VisualizationTask):
                     f"{tuple(presence_logits.shape)} vs {tuple(presence_score.shape)}."
                 )
 
-        presence_logits_layers = outputs.get(OUTPUT_KEYS.presence_logits_layers, None)
-        if presence_logits_layers is not None:
-            if presence_logits_layers.dim() != 3:
-                raise ValueError(
-                    "presence_logits_layers must be [L, B, C], "
-                    f"got {tuple(presence_logits_layers.shape)}."
-                )
-            if tuple(presence_logits_layers.shape[1:]) != tuple(presence_score.shape):
-                raise ValueError(
-                    "presence_logits_layers shape mismatch: expected [L, B, C] "
-                    f"with B,C={tuple(presence_score.shape)}, got "
-                    f"{tuple(presence_logits_layers.shape)}."
-                )
-
         try:
             class_names: Optional[List[str]] = [
                 str(x) for x in batch.find_metadatas[0].class_names
@@ -313,13 +299,6 @@ class PresenceScoreTask(VisualizationTask):
                 class_names=class_names,
             )
 
-            if manager.cfg.save_presence_layers and presence_logits_layers is not None:
-                manager._save_presence_layer_scores(
-                    sample_dir=sample_dir,
-                    presence_logits_layers=presence_logits_layers[:, b],
-                    class_names=class_names,
-                )
-
 
 class FinalMixerMaskLayerTask(VisualizationTask):
     name = "final_mixer_mask_layers"
@@ -330,7 +309,9 @@ class FinalMixerMaskLayerTask(VisualizationTask):
 
         outputs = ctx.semantic_outputs
         batch = ctx.batch
+
         mask_logits_layers = manager._get_mask_logits_layers(outputs)
+        clip_sam_logits_layers = manager._get_clip_sam_logits_layers(outputs)
 
         if mask_logits_layers is None:
             return
@@ -340,6 +321,19 @@ class FinalMixerMaskLayerTask(VisualizationTask):
                 "mask_logits_layers must be [L, B, C, H, W], "
                 f"got {tuple(mask_logits_layers.shape)}."
             )
+
+        if clip_sam_logits_layers is not None:
+            if clip_sam_logits_layers.dim() != 5:
+                raise ValueError(
+                    "clip_sam_logits_layers must be [L, B, C, H, W], "
+                    f"got {tuple(clip_sam_logits_layers.shape)}."
+                )
+            if tuple(clip_sam_logits_layers.shape) != tuple(mask_logits_layers.shape):
+                raise ValueError(
+                    "clip_sam_logits_layers and mask_logits_layers shape mismatch: "
+                    f"{tuple(clip_sam_logits_layers.shape)} vs "
+                    f"{tuple(mask_logits_layers.shape)}."
+                )
 
         num_layers = int(mask_logits_layers.shape[0])
         batch_size = int(mask_logits_layers.shape[1])
@@ -379,6 +373,11 @@ class FinalMixerMaskLayerTask(VisualizationTask):
                 sample_dir=sample_dir,
                 overlay_image=overlay_image,
                 mask_logits_layers=mask_logits_layers[:, b],
+                clip_sam_logits_layers=(
+                    clip_sam_logits_layers[:, b]
+                    if clip_sam_logits_layers is not None
+                    else None
+                ),
                 out_hw=out_hw,
                 class_names=class_names,
             )
@@ -444,80 +443,6 @@ class Sam3DirectSegmentationTask(VisualizationTask):
                 num_classes=max(2, int(logits_b.shape[0])),
             ).save(sample_dir / "sam3_direct_overlay.png")
 
-
-class ClipCoarsePredictionTask(VisualizationTask):
-    name = "clip_coarse_prediction"
-
-    def run(self, manager: "VisualizationManager", ctx: VisualizationContext) -> None:
-        if not manager.cfg.save_clip_coarse_prediction:
-            return
-
-        outputs = ctx.semantic_outputs
-        clip_coarse_pred = outputs.get(OUTPUT_KEYS.clip_coarse_pred, None)
-        clip_coarse_logits = outputs.get(OUTPUT_KEYS.clip_coarse_logits, None)
-
-        if clip_coarse_pred is None and clip_coarse_logits is not None:
-            if clip_coarse_logits.dim() != 4:
-                raise ValueError(
-                    "clip_coarse_logits must be [B, C, H, W], "
-                    f"got {tuple(clip_coarse_logits.shape)}."
-                )
-            clip_coarse_pred = clip_coarse_logits.argmax(dim=1)
-
-        if clip_coarse_pred is None:
-            return
-
-        if clip_coarse_pred.dim() != 3:
-            raise ValueError(
-                "clip_coarse_pred must be [B, H, W], "
-                f"got {tuple(clip_coarse_pred.shape)}."
-            )
-
-        if clip_coarse_logits is not None:
-            num_classes = int(clip_coarse_logits.shape[1])
-        else:
-            try:
-                class_names = list(ctx.batch.find_metadatas[0].class_names)
-                num_classes = len(class_names)
-            except Exception:
-                num_classes = int(clip_coarse_pred.max().item()) + 1
-
-        for b in ctx.selected_indices:
-            image_id = manager._extract_image_id(ctx.batch, b)
-            sample_dir = manager._resolve_sample_dir(
-                image_id=image_id,
-                epoch=ctx.epoch,
-                stage=ctx.stage,
-            )
-
-            overlay_image = manager._extract_overlay_image(ctx.batch, b)
-            out_hw = overlay_image.size[::-1]
-
-            coarse_pred = manager._prepare_label_map(
-                clip_coarse_pred[b],
-                out_hw,
-            )
-
-            manager._colorize_label_map(
-                coarse_pred.detach().cpu(),
-                num_classes=num_classes,
-            ).save(sample_dir / "clip_coarse_pred.png")
-
-            manager._overlay_label_map(
-                overlay_image,
-                coarse_pred.detach().cpu(),
-                num_classes=num_classes,
-            ).save(sample_dir / "clip_coarse_overlay.png")
-
-            if clip_coarse_logits is not None:
-                coarse_score = clip_coarse_logits[b].softmax(dim=0).max(dim=0).values
-                manager._to_heatmap_image(
-                    coarse_score,
-                    out_hw=out_hw,
-                    normalize="prob",
-                ).save(sample_dir / "clip_coarse_score_heatmap.png")
-
-
 class VisualizationManager:
     def __init__(
         self,
@@ -555,7 +480,6 @@ class VisualizationManager:
             PresenceScoreTask(),
             FinalMixerMaskLayerTask(),
             Sam3DirectSegmentationTask(),
-            ClipCoarsePredictionTask(),
         ]
 
     @staticmethod
@@ -864,6 +788,15 @@ class VisualizationManager:
         value = outputs.get(OUTPUT_KEYS.mask_logits_layers, None)
         if value is None:
             value = outputs.get("mask_logits_layers", None)
+        return value
+
+    @staticmethod
+    def _get_clip_sam_logits_layers(
+        outputs: Dict[str, torch.Tensor],
+    ) -> Optional[torch.Tensor]:
+        value = outputs.get(OUTPUT_KEYS.clip_sam_logits_layers, None)
+        if value is None:
+            value = outputs.get("clip_sam_logits_layers", None)
         return value
 
     def _extract_final_logits_and_score_map(
@@ -1264,6 +1197,7 @@ class VisualizationManager:
         layer_dir: Path,
         layer_logits: torch.Tensor,
         class_names: Optional[List[str]],
+        filename: str = "score_summary.txt",
     ) -> None:
         if layer_logits.dim() != 3:
             raise ValueError(
@@ -1280,7 +1214,7 @@ class VisualizationManager:
 
         order = torch.argsort(score_max, descending=True)
 
-        with open(layer_dir / "score_summary.txt", "w", encoding="utf-8") as f:
+        with open(layer_dir / filename, "w", encoding="utf-8") as f:
             f.write(
                 "rank\tclass_id\tclass_name\t"
                 "prob_max\tprob_mean\tlogit_max\tlogit_mean\n"
@@ -1306,6 +1240,7 @@ class VisualizationManager:
         sample_dir: Path,
         overlay_image: Image.Image,
         mask_logits_layers: torch.Tensor,
+        clip_sam_logits_layers: Optional[torch.Tensor],
         out_hw: Tuple[int, int],
         class_names: Optional[List[str]],
     ) -> None:
@@ -1315,6 +1250,19 @@ class VisualizationManager:
                 f"got {tuple(mask_logits_layers.shape)}."
             )
 
+        if clip_sam_logits_layers is not None:
+            if clip_sam_logits_layers.dim() != 4:
+                raise ValueError(
+                    "clip_sam_logits_layers for one sample must be [L, C, H, W], "
+                    f"got {tuple(clip_sam_logits_layers.shape)}."
+                )
+            if tuple(clip_sam_logits_layers.shape) != tuple(mask_logits_layers.shape):
+                raise ValueError(
+                    "clip_sam_logits_layers and mask_logits_layers shape mismatch: "
+                    f"{tuple(clip_sam_logits_layers.shape)} vs "
+                    f"{tuple(mask_logits_layers.shape)}."
+                )
+
         num_layers = int(mask_logits_layers.shape[0])
         num_classes = int(mask_logits_layers.shape[1])
 
@@ -1323,14 +1271,19 @@ class VisualizationManager:
 
         with open(layer_root / "README.txt", "w", encoding="utf-8") as f:
             f.write(
-                "This folder contains diagnostic per-layer final mixer mask outputs.\n"
+                "This folder contains diagnostic per-layer final mixer outputs.\n"
                 "Root pred.png and pred_overlay.png are not raw layer visualizations; "
                 "they are generated from final_score_map with eval_cfg thresholding.\n"
                 "Each layer folder contains:\n"
                 "- pred.png: argmax segmentation map from this layer's mask logits\n"
                 "- overlay.png: pred.png overlaid on the original image\n"
-                "- mask_heatmaps/: per-class softmax(logits, class_dim) heatmaps\n"
-                "- score_summary.txt: per-class score statistics for this layer\n"
+                "- mask_heatmaps/: per-class softmax(mask logits, class_dim) heatmaps\n"
+                "- score_summary.txt: per-class score statistics for mask logits\n"
+                "- clip_sam_pred.png: argmax segmentation map from this layer's "
+                "clip_sam_feature dot class_code logits\n"
+                "- clip_sam_overlay.png: clip_sam_pred.png overlaid on the original image\n"
+                "- clip_sam_heatmaps/: per-class softmax(clip_sam logits, class_dim) heatmaps\n"
+                "- clip_sam_score_summary.txt: per-class score statistics for clip_sam logits\n"
             )
 
         for layer_idx in range(num_layers):
@@ -1348,6 +1301,7 @@ class VisualizationManager:
                 layer_dir=layer_dir,
                 layer_logits=layer_logits,
                 class_names=class_names,
+                filename="score_summary.txt",
             )
 
             pred_mask = layer_logits.argmax(dim=0).long()
@@ -1366,28 +1320,88 @@ class VisualizationManager:
                     num_classes=num_classes,
                 ).save(layer_dir / "overlay.png")
 
-            if not self.cfg.save_final_mixer_layer_heatmaps:
-                continue
+            if self.cfg.save_final_mixer_layer_heatmaps:
+                heatmap_dir = layer_dir / "mask_heatmaps"
+                heatmap_dir.mkdir(parents=True, exist_ok=True)
 
-            heatmap_dir = layer_dir / "mask_heatmaps"
-            heatmap_dir.mkdir(parents=True, exist_ok=True)
+                score_map = layer_logits.softmax(dim=0)
+                class_indices = self._select_heatmap_class_indices(layer_logits)
 
-            score_map = layer_logits.softmax(dim=0)
-            class_indices = self._select_heatmap_class_indices(layer_logits)
+                for cls_idx in class_indices:
+                    class_name = (
+                        class_names[cls_idx]
+                        if class_names is not None and cls_idx < len(class_names)
+                        else f"class_{cls_idx}"
+                    )
+                    filename = f"{cls_idx:03d}_{self._sanitize_filename(class_name)}.png"
 
-            for cls_idx in class_indices:
-                class_name = (
-                    class_names[cls_idx]
-                    if class_names is not None and cls_idx < len(class_names)
-                    else f"class_{cls_idx}"
+                    self._to_heatmap_image(
+                        score_map[cls_idx],
+                        out_hw=out_hw,
+                        normalize="prob",
+                    ).save(heatmap_dir / filename)
+
+            if (
+                clip_sam_logits_layers is not None
+                and self.cfg.save_final_mixer_clip_sam_layers
+            ):
+                clip_sam_layer_logits = clip_sam_logits_layers[layer_idx]
+                if clip_sam_layer_logits.dim() != 3:
+                    raise ValueError(
+                        "Each clip_sam layer logits must be [C, H, W], "
+                        f"got {tuple(clip_sam_layer_logits.shape)}."
+                    )
+
+                self._save_final_mixer_layer_summary(
+                    layer_dir=layer_dir,
+                    layer_logits=clip_sam_layer_logits,
+                    class_names=class_names,
+                    filename="clip_sam_score_summary.txt",
                 )
-                filename = f"{cls_idx:03d}_{self._sanitize_filename(class_name)}.png"
 
-                self._to_heatmap_image(
-                    score_map[cls_idx],
-                    out_hw=out_hw,
-                    normalize="prob",
-                ).save(heatmap_dir / filename)
+                clip_sam_pred_mask = clip_sam_layer_logits.argmax(dim=0).long()
+                clip_sam_pred_mask_out = self._prepare_label_map(
+                    clip_sam_pred_mask,
+                    out_hw,
+                )
+
+                if self.cfg.save_final_mixer_layer_predictions:
+                    self._colorize_label_map(
+                        clip_sam_pred_mask_out,
+                        num_classes=num_classes,
+                    ).save(layer_dir / "clip_sam_pred.png")
+
+                if self.cfg.save_final_mixer_layer_overlays:
+                    self._overlay_label_map(
+                        overlay_image,
+                        clip_sam_pred_mask_out,
+                        num_classes=num_classes,
+                    ).save(layer_dir / "clip_sam_overlay.png")
+
+                if self.cfg.save_final_mixer_layer_heatmaps:
+                    clip_sam_heatmap_dir = layer_dir / "clip_sam_heatmaps"
+                    clip_sam_heatmap_dir.mkdir(parents=True, exist_ok=True)
+
+                    clip_sam_score_map = clip_sam_layer_logits.softmax(dim=0)
+                    clip_sam_class_indices = self._select_heatmap_class_indices(
+                        clip_sam_layer_logits
+                    )
+
+                    for cls_idx in clip_sam_class_indices:
+                        class_name = (
+                            class_names[cls_idx]
+                            if class_names is not None and cls_idx < len(class_names)
+                            else f"class_{cls_idx}"
+                        )
+                        filename = (
+                            f"{cls_idx:03d}_{self._sanitize_filename(class_name)}.png"
+                        )
+
+                        self._to_heatmap_image(
+                            clip_sam_score_map[cls_idx],
+                            out_hw=out_hw,
+                            normalize="prob",
+                        ).save(clip_sam_heatmap_dir / filename)
 
     def _save_presence_scores(
         self,
@@ -1408,7 +1422,7 @@ class VisualizationManager:
                 raise ValueError(
                     f"Expected presence_logits as [C], got {tuple(presence_logits.shape)}."
                 )
-            if presence_logits.shape[0] != num_classes:
+            if int(presence_logits.shape[0]) != num_classes:
                 raise ValueError(
                     "presence_logits and presence_score class count mismatch: "
                     f"{presence_logits.shape[0]} vs {num_classes}."
@@ -1499,9 +1513,17 @@ class VisualizationManager:
             x1 = left_w + bar_w
             y1 = y + row_h - 6
 
-            draw.rectangle((x0, y0, x1, y1), outline=(80, 80, 80), fill=(235, 235, 235))
+            draw.rectangle(
+                (x0, y0, x1, y1),
+                outline=(80, 80, 80),
+                fill=(235, 235, 235),
+            )
             fill_x1 = x0 + int(round(score * bar_w))
-            draw.rectangle((x0, y0, fill_x1, y1), outline=None, fill=(30, 144, 255))
+            draw.rectangle(
+                (x0, y0, fill_x1, y1),
+                outline=None,
+                fill=(30, 144, 255),
+            )
 
             draw.text(
                 (left_w + bar_w + 10, y + 6),
@@ -1511,118 +1533,6 @@ class VisualizationManager:
             )
 
         image.save(sample_dir / "presence_scores.png")
-
-    def _save_presence_layer_scores(
-        self,
-        sample_dir: Path,
-        presence_logits_layers: torch.Tensor,
-        class_names: Optional[List[str]],
-    ) -> None:
-        if presence_logits_layers.dim() != 2:
-            raise ValueError(
-                "presence_logits_layers for one sample must be [L, C], "
-                f"got {tuple(presence_logits_layers.shape)}."
-            )
-
-        logits_cpu = presence_logits_layers.detach().cpu().float()
-        scores_cpu = logits_cpu.sigmoid()
-
-        num_layers, num_classes = logits_cpu.shape
-
-        with open(sample_dir / "presence_layer_scores.txt", "w", encoding="utf-8") as f:
-            f.write("layer_id\tclass_id\tclass_name\tpresence_score\tpresence_logit\n")
-            for layer_idx in range(num_layers):
-                for cls_idx in range(num_classes):
-                    class_name = (
-                        class_names[cls_idx]
-                        if class_names is not None and cls_idx < len(class_names)
-                        else f"class_{cls_idx}"
-                    )
-                    f.write(
-                        f"{layer_idx}\t{cls_idx}\t{class_name}\t"
-                        f"{float(scores_cpu[layer_idx, cls_idx].item()):.6f}\t"
-                        f"{float(logits_cpu[layer_idx, cls_idx].item()):.6f}\n"
-                    )
-
-        self._save_presence_layer_image(
-            sample_dir=sample_dir,
-            presence_scores_layers=scores_cpu,
-            class_names=class_names,
-        )
-
-    def _save_presence_layer_image(
-        self,
-        sample_dir: Path,
-        presence_scores_layers: torch.Tensor,
-        class_names: Optional[List[str]],
-    ) -> None:
-        num_layers, num_classes = presence_scores_layers.shape
-
-        row_h = 26
-        header_h = 38
-        left_w = 260
-        cell_w = 90
-        right_w = 20
-        width = left_w + num_layers * cell_w + right_w
-        height = header_h + max(1, num_classes) * row_h + 12
-
-        image = Image.new("RGB", (width, height), color=(255, 255, 255))
-        draw = ImageDraw.Draw(image)
-        font = ImageFont.load_default()
-
-        draw.text((10, 10), "presence scores by mixer layer", fill=(0, 0, 0), font=font)
-
-        for layer_idx in range(num_layers):
-            x = left_w + layer_idx * cell_w
-            draw.text((x + 8, 22), f"L{layer_idx}", fill=(0, 0, 0), font=font)
-
-        for cls_idx in range(num_classes):
-            y = header_h + cls_idx * row_h
-
-            class_name = (
-                class_names[cls_idx]
-                if class_names is not None and cls_idx < len(class_names)
-                else f"class_{cls_idx}"
-            )
-            class_name = str(class_name)
-            if len(class_name) > 34:
-                class_name = class_name[:31] + "..."
-
-            draw.text(
-                (10, y + 6),
-                f"{cls_idx:03d} {class_name}",
-                fill=(0, 0, 0),
-                font=font,
-            )
-
-            for layer_idx in range(num_layers):
-                score = float(presence_scores_layers[layer_idx, cls_idx].item())
-                score = max(0.0, min(1.0, score))
-
-                x0 = left_w + layer_idx * cell_w + 6
-                y0 = y + 6
-                x1 = x0 + cell_w - 14
-                y1 = y + row_h - 6
-
-                draw.rectangle(
-                    (x0, y0, x1, y1),
-                    outline=(80, 80, 80),
-                    fill=(235, 235, 235),
-                )
-                fill_x1 = x0 + int(round(score * (x1 - x0)))
-                draw.rectangle(
-                    (x0, y0, fill_x1, y1),
-                    outline=None,
-                    fill=(30, 144, 255),
-                )
-                draw.text(
-                    (x0 + 3, y0 + 2),
-                    f"{score:.2f}",
-                    fill=(0, 0, 0),
-                    font=font,
-                )
-
-        image.save(sample_dir / "presence_layer_scores.png")
 
     def _infer_batch_size(
         self,
