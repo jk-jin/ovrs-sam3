@@ -157,6 +157,50 @@ class OpenCLIPTextEncoder(nn.Module):
             "Supported modes are: token_features, pooled, all."
         )
 
+    def encode_embeds(
+        self,
+        input_embeds: torch.Tensor,
+        tokenized: torch.Tensor,
+        normalize: bool = True,
+        detach_output: bool = False,
+    ) -> torch.Tensor:
+        """
+        Forward text embeddings through the frozen CLIP text transformer.
+
+        Unlike encode_text(), this method does NOT wrap the forward pass in
+        torch.no_grad().  CLIP text encoder parameters are frozen
+        (requires_grad=False), but autograd can still propagate gradients
+        back to input_embeds, which is required for dynamic prompt training.
+
+        Args:
+            input_embeds: [N, L, width]  token embeddings
+            tokenized:    [N, L]          token ids, used to locate EOT
+            normalize:    whether to L2-normalize pooled output
+            detach_output: if True, detach pooled before returning
+
+        Returns:
+            pooled: [N, output_dim]
+        """
+        seq_len = input_embeds.shape[1]
+        x = input_embeds + self._positional_embedding_buffer[:seq_len].to(
+            device=input_embeds.device,
+            dtype=input_embeds.dtype,
+        )
+        attn_mask = self._get_attn_mask(seq_len=seq_len, device=x.device, dtype=x.dtype)
+        x = self.transformer(x, attn_mask=attn_mask)
+        token_features = self.ln_final(x)
+
+        pooled = token_features[
+            torch.arange(token_features.shape[0], device=token_features.device),
+            tokenized.argmax(dim=-1),
+        ]
+        pooled = self._apply_text_projection(pooled)
+        if normalize:
+            pooled = F.normalize(pooled, dim=-1)
+        if detach_output:
+            pooled = pooled.detach()
+        return pooled
+
     def encode_prompt_templates(
         self,
         class_names: List[str],

@@ -33,45 +33,50 @@ class OpenCLIPConfig:
 
 
 @dataclass
-class ClipSamFeatureConfig:
-    enabled: bool = True
+class DynamicPromptConfig:
+    tokens_per_template: int = 4
+    insert_position: str = "before_class"
+
 
 @dataclass
-class ClassCodeConfig:
-    source: str = "mean_class_tokens"
-
-@dataclass
-class WindowAttentionConfig:
+class LowResMixerConfig:
+    hidden_dim: int = 256
+    score_embed_dim: int = 32
     window_size: int = 8
     shift_size: int = 4
-    dropout: float = 0.1
+    score_floor: float = 0.2
+    lambda_score: float = 1.0
 
 
 @dataclass
-class MaskHeadConfig:
-    type: str = "mask_embed_dot_class_code"
-    direct_dot: bool = True
-    class_feature_pool_stride: int = 4
+class UpsamplerConfig:
+    class_chunk_size: int = 4
+    decoder_channels: list[int] = field(default_factory=lambda: [256, 128, 96, 64, 32])
+    sam_guidance_channels: list[int] = field(default_factory=lambda: [32, 24, 16, 8])
+    score_channels: list[int] = field(default_factory=lambda: [8, 4, 4, 4])
+    score_input: str = "score_and_tanh_logit"
+    upsample_mode: str = "bilinear"
+    norm: str = "group_norm"
+    act: str = "gelu"
 
 
 @dataclass
 class FinalMixerConfig:
     enabled: bool = True
 
-    num_class_tokens: int = 32
     fusion_layers: int = 4
     num_heads: int = 8
     dropout: float = 0.1
-    presence_enabled: bool = True
 
-    clip_sam_feature_cfg: ClipSamFeatureConfig = field(
-        default_factory=ClipSamFeatureConfig
+    dynamic_prompt_cfg: DynamicPromptConfig = field(
+        default_factory=DynamicPromptConfig
     )
-    class_code_cfg: ClassCodeConfig = field(default_factory=ClassCodeConfig)
-    window_attention_cfg: WindowAttentionConfig = field(
-        default_factory=WindowAttentionConfig
+    lowres_cfg: LowResMixerConfig = field(
+        default_factory=LowResMixerConfig
     )
-    mask_head_cfg: MaskHeadConfig = field(default_factory=MaskHeadConfig)
+    upsampler_cfg: UpsamplerConfig = field(
+        default_factory=UpsamplerConfig
+    )
 
 
 @dataclass
@@ -80,18 +85,7 @@ class SemanticCriterionConfig:
 
     final_bce_weight: float = 0.4
     final_dice_weight: float = 1.0
-    final_ce_weight: float = 0.4
-    final_ignore_bce_weight: float = 0.1
-
-    presence_loss_weight: float = 1.0
-
-    mask_layer_loss_weight: float = 1.0
-    mask_layer_weights: Optional[list[float]] = field(
-        default_factory=lambda: [0.1, 0.2, 0.4]
-    )
-
-    clip_sam_layer_loss_weight: float = 0.1
-    clip_sam_layer_weights: Optional[list[float]] = None
+    final_ce_weight: float = 0.0
 
     bce_class_balance_clamp_min: float = 0.2
     bce_class_balance_clamp_max: float = 5.0

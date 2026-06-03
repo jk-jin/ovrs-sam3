@@ -18,18 +18,16 @@ class ModelOutputKeys:
     semantic_score_map: str = "semantic_score_map"
 
     class_tokens: str = "class_tokens"
+    class_feature_low: str = "class_feature_low"
 
     final_logits: str = "final_logits"
     final_score_map: str = "final_score_map"
     final_pred: str = "final_pred"
 
-    presence_logits: str = "presence_logits"
-    presence_score: str = "presence_score"
+    clip_score_maps: str = "clip_score_maps"
+    sam3_score_low: str = "sam3_score_low"
 
-    mask_logits_layers: str = "mask_logits_layers"
-    clip_sam_logits_layers: str = "clip_sam_logits_layers"
-
-    sam3_pixel_feature: str = "sam3_pixel_feature"
+    sam3_fpn_features: str = "sam3_fpn_features"
 
 
 OUTPUT_KEYS = ModelOutputKeys()

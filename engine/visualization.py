@@ -841,31 +841,9 @@ class VisualizationManager:
                 f"softmax({OUTPUT_KEYS.final_logits})",
             )
 
-        mask_logits_layers = self._get_mask_logits_layers(outputs)
-        if mask_logits_layers is not None:
-            if mask_logits_layers.dim() != 5:
-                raise ValueError(
-                    "mask_logits_layers must be [L, B, C, H, W], "
-                    f"got {tuple(mask_logits_layers.shape)}."
-                )
-            if int(mask_logits_layers.shape[0]) <= 0:
-                raise ValueError("mask_logits_layers must contain at least one layer.")
-
-            final_logits = mask_logits_layers[-1]
-            if final_logits.dim() != 4:
-                raise ValueError(
-                    "mask_logits_layers[-1] must be [B, C, H, W], "
-                    f"got {tuple(final_logits.shape)}."
-                )
-            return (
-                final_logits,
-                final_logits.softmax(dim=1),
-                "softmax(mask_logits_layers[-1])",
-            )
-
         raise ValueError(
-            f"outputs must contain '{OUTPUT_KEYS.final_score_map}', "
-            f"'{OUTPUT_KEYS.final_logits}', or '{OUTPUT_KEYS.mask_logits_layers}'."
+            f"outputs must contain '{OUTPUT_KEYS.final_score_map}' "
+            f"or '{OUTPUT_KEYS.final_logits}'."
         )
 
     def _extract_semantic_logits_and_score_map(

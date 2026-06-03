@@ -149,57 +149,28 @@ class OpenCLIPImageEncoder(nn.Module):
     def _expand_class_token(token: torch.Tensor, batch_size: int) -> torch.Tensor:
         return token.view(1, 1, -1).expand(batch_size, -1, -1)
 
-    def _interpolate_positional_embedding(
-        self,
-        target_grid_hw: Tuple[int, int],
-        dtype: torch.dtype,
-        device: torch.device,
-    ) -> torch.Tensor:
-        """
-        Args:
-            target_grid_hw: (Hc, Wc)
+    def get_native_image_size(self) -> tuple[int, int]:
+        image_size = getattr(self.visual, "image_size", None)
+        if image_size is not None:
+            return self._to_2tuple(image_size)
 
-        Returns:
-            pos_embed_resized: [1 + Hc * Wc, native_dim]
-        """
-        pos_embed = self.visual.positional_embedding
-        if pos_embed.ndim != 2:
-            raise ValueError(
-                "Expected visual.positional_embedding to have shape [L, C], "
-                f"but got {tuple(pos_embed.shape)}"
-            )
+        input_resolution = getattr(self.visual, "input_resolution", None)
+        if input_resolution is not None:
+            return self._to_2tuple(input_resolution)
 
-        target_h, target_w = int(target_grid_hw[0]), int(target_grid_hw[1])
-        if target_h <= 0 or target_w <= 0:
-            raise ValueError(f"Invalid target grid size: {target_grid_hw}")
+        grid_h, grid_w = self._get_base_grid_size()
+        patch_h, patch_w = self.get_patch_size()
+        return grid_h * patch_h, grid_w * patch_w
 
-        base_h, base_w = self._get_base_grid_size()
-        num_prefix_tokens = 1
+    def get_patch_size(self) -> tuple[int, int]:
+        patch_size = getattr(self.visual, "patch_size", None)
+        if patch_size is not None:
+            return self._to_2tuple(patch_size)
 
-        cls_pos = pos_embed[:num_prefix_tokens]
-        patch_pos = pos_embed[num_prefix_tokens:]
-        embed_dim = int(patch_pos.shape[-1])
-
-        if base_h == target_h and base_w == target_w:
-            return pos_embed.to(device=device, dtype=dtype)
-
-        patch_pos = patch_pos.reshape(base_h, base_w, embed_dim)
-        patch_pos = patch_pos.permute(2, 0, 1).unsqueeze(0)
-
-        patch_pos = F.interpolate(
-            patch_pos,
-            size=(target_h, target_w),
-            mode="bicubic",
-            align_corners=False,
-        )
-
-        patch_pos = patch_pos.squeeze(0).permute(1, 2, 0).reshape(
-            target_h * target_w,
-            embed_dim,
-        )
-
-        pos_embed_resized = torch.cat([cls_pos, patch_pos], dim=0)
-        return pos_embed_resized.to(device=device, dtype=dtype)
+        conv1 = getattr(self.visual, "conv1", None)
+        if conv1 is None:
+            raise AttributeError("Cannot infer OpenCLIP patch size.")
+        return self._to_2tuple(conv1.kernel_size)
 
     @staticmethod
     def _call_resblock(block: nn.Module, x: torch.Tensor) -> torch.Tensor:
@@ -351,11 +322,15 @@ class OpenCLIPImageEncoder(nn.Module):
         )
         x = torch.cat([cls_token, x], dim=1)
 
-        pos_embed = self._interpolate_positional_embedding(
-            target_grid_hw=(grid_h, grid_w),
-            dtype=x.dtype,
-            device=x.device,
-        )
+        base_h, base_w = self._get_base_grid_size()
+        if (grid_h, grid_w) != (base_h, base_w):
+            raise ValueError(
+                "OpenCLIP dense image encoder now requires native grid size. "
+                f"Got {(grid_h, grid_w)}, expected {(base_h, base_w)}. "
+                "Resize input images to clip_image_encoder.get_native_image_size() before calling."
+            )
+
+        pos_embed = self.visual.positional_embedding.to(device=x.device, dtype=x.dtype)
         x = x + pos_embed.unsqueeze(0)
 
         x = self.visual.patch_dropout(x)

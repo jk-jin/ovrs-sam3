@@ -15,18 +15,17 @@ from iopath.common.file_io import g_pathmgr
 from .config_dataclasses import (
     AdapterConfig,
     CheckpointManagerConfig,
-    ClassCodeConfig,
-    ClipSamFeatureConfig,
+    DynamicPromptConfig,
     FinalMixerConfig,
     FreezeConfig,
     LoggerHookConfig,
-    MaskHeadConfig,
+    LowResMixerConfig,
     OpenCLIPConfig,
     SegmentorBuildConfig,
     SemanticCriterionConfig,
     TrainerConfig,
+    UpsamplerConfig,
     VisualizerConfig,
-    WindowAttentionConfig,
 )
 from .losses.semantic_criterion import (
     HybridCriterion,
@@ -178,28 +177,20 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         return cls._coerce_config(obj, OpenCLIPConfig, "openclip_cfg")
 
     @classmethod
-    def _coerce_clip_sam_feature_cfg(cls, obj) -> ClipSamFeatureConfig:
+    def _coerce_dynamic_prompt_cfg(cls, obj) -> DynamicPromptConfig:
         return cls._coerce_config(
             obj,
-            ClipSamFeatureConfig,
-            "clip_sam_feature_cfg",
+            DynamicPromptConfig,
+            "dynamic_prompt_cfg",
         )
 
     @classmethod
-    def _coerce_class_code_cfg(cls, obj) -> ClassCodeConfig:
-        return cls._coerce_config(obj, ClassCodeConfig, "class_code_cfg")
+    def _coerce_lowres_cfg(cls, obj) -> LowResMixerConfig:
+        return cls._coerce_config(obj, LowResMixerConfig, "lowres_cfg")
 
     @classmethod
-    def _coerce_window_attention_cfg(cls, obj) -> WindowAttentionConfig:
-        return cls._coerce_config(
-            obj,
-            WindowAttentionConfig,
-            "window_attention_cfg",
-        )
-
-    @classmethod
-    def _coerce_mask_head_cfg(cls, obj) -> MaskHeadConfig:
-        return cls._coerce_config(obj, MaskHeadConfig, "mask_head_cfg")
+    def _coerce_upsampler_cfg(cls, obj) -> UpsamplerConfig:
+        return cls._coerce_config(obj, UpsamplerConfig, "upsampler_cfg")
 
     @classmethod
     def _coerce_final_mixer_cfg(cls, obj) -> FinalMixerConfig:
@@ -211,10 +202,9 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         elif isinstance(obj, dict):
             raw = dict(obj)
             nested_coercers = {
-                "clip_sam_feature_cfg": cls._coerce_clip_sam_feature_cfg,
-                "class_code_cfg": cls._coerce_class_code_cfg,
-                "window_attention_cfg": cls._coerce_window_attention_cfg,
-                "mask_head_cfg": cls._coerce_mask_head_cfg,
+                "dynamic_prompt_cfg": cls._coerce_dynamic_prompt_cfg,
+                "lowres_cfg": cls._coerce_lowres_cfg,
+                "upsampler_cfg": cls._coerce_upsampler_cfg,
             }
             for key, coerce_fn in nested_coercers.items():
                 if key in raw:
@@ -223,14 +213,11 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         else:
             raise TypeError(f"Unsupported final_mixer_cfg type: {type(obj)}")
 
-        cfg.clip_sam_feature_cfg = cls._coerce_clip_sam_feature_cfg(
-            cfg.clip_sam_feature_cfg
+        cfg.dynamic_prompt_cfg = cls._coerce_dynamic_prompt_cfg(
+            cfg.dynamic_prompt_cfg
         )
-        cfg.class_code_cfg = cls._coerce_class_code_cfg(cfg.class_code_cfg)
-        cfg.window_attention_cfg = cls._coerce_window_attention_cfg(
-            cfg.window_attention_cfg
-        )
-        cfg.mask_head_cfg = cls._coerce_mask_head_cfg(cfg.mask_head_cfg)
+        cfg.lowres_cfg = cls._coerce_lowres_cfg(cfg.lowres_cfg)
+        cfg.upsampler_cfg = cls._coerce_upsampler_cfg(cfg.upsampler_cfg)
         return cfg
 
     @classmethod
@@ -316,12 +303,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 "semantic training path."
             )
 
-        if cfg.num_class_tokens <= 0:
-            raise ValueError(
-                "final_mixer_cfg.num_class_tokens must be positive, "
-                f"got {cfg.num_class_tokens}."
-            )
-
         if cfg.fusion_layers <= 0:
             raise ValueError(
                 "final_mixer_cfg.fusion_layers must be positive, "
@@ -334,42 +315,40 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 f"got {cfg.num_heads}."
             )
 
-        if not cfg.clip_sam_feature_cfg.enabled:
+        dynamic_cfg = cfg.dynamic_prompt_cfg
+        if dynamic_cfg.tokens_per_template <= 0:
             raise ValueError(
-                "final_mixer_cfg.clip_sam_feature_cfg.enabled=False is not supported."
+                "dynamic_prompt_cfg.tokens_per_template must be positive, "
+                f"got {dynamic_cfg.tokens_per_template}."
             )
 
-        if cfg.class_code_cfg.source != "mean_class_tokens":
+        lowres_cfg = cfg.lowres_cfg
+        if lowres_cfg.window_size <= 0:
             raise ValueError(
-                "final_mixer_cfg.class_code_cfg.source must be "
-                "'mean_class_tokens'."
+                "final_mixer_cfg.lowres_cfg.window_size must be positive."
             )
-
-        if cfg.mask_head_cfg.type != "mask_embed_dot_class_code":
+        if not 0 <= lowres_cfg.shift_size < lowres_cfg.window_size:
             raise ValueError(
-                "final_mixer_cfg.mask_head_cfg.type must be "
-                "'mask_embed_dot_class_code'."
-            )
-
-        if not cfg.mask_head_cfg.direct_dot:
-            raise ValueError("final_mixer_cfg.mask_head_cfg.direct_dot must be True.")
-
-        if cfg.mask_head_cfg.class_feature_pool_stride <= 0:
-            raise ValueError(
-                "final_mixer_cfg.mask_head_cfg.class_feature_pool_stride must be "
-                f"positive, got {cfg.mask_head_cfg.class_feature_pool_stride}."
-            )
-
-        window_cfg = cfg.window_attention_cfg
-        if window_cfg.window_size <= 0:
-            raise ValueError(
-                "final_mixer_cfg.window_attention_cfg.window_size must be positive."
-            )
-
-        if not 0 <= window_cfg.shift_size < window_cfg.window_size:
-            raise ValueError(
-                "final_mixer_cfg.window_attention_cfg.shift_size must satisfy "
+                "final_mixer_cfg.lowres_cfg.shift_size must satisfy "
                 "0 <= shift_size < window_size."
+            )
+
+        upsampler_cfg = cfg.upsampler_cfg
+        if len(upsampler_cfg.decoder_channels) < 1:
+            raise ValueError(
+                "upsampler_cfg.decoder_channels must not be empty."
+            )
+
+        if len(upsampler_cfg.sam_guidance_channels) != len(upsampler_cfg.decoder_channels):
+            raise ValueError(
+                "upsampler_cfg.sam_guidance_channels length must match "
+                "decoder_channels length."
+            )
+
+        if len(upsampler_cfg.score_channels) != len(upsampler_cfg.decoder_channels):
+            raise ValueError(
+                "upsampler_cfg.score_channels length must match "
+                "decoder_channels length."
             )
 
         return cfg
@@ -676,8 +655,9 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         input_geometry_encoder = cls._create_geometry_encoder()
 
         final_cfg = cfg.final_mixer_cfg
-        window_cfg = final_cfg.window_attention_cfg
-        mask_head_cfg = final_cfg.mask_head_cfg
+        lowres_cfg = final_cfg.lowres_cfg
+        upsampler_cfg = final_cfg.upsampler_cfg
+        dynamic_cfg = final_cfg.dynamic_prompt_cfg
 
         model = Sam3Image(
             backbone=backbone,
@@ -695,17 +675,24 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             clip_prompt_templates=clip_prompt_templates,
             num_clip_prompt_templates=num_clip_prompt_templates,
             normalize_label_for_clip=bool(cfg.openclip_cfg.normalize_label_for_clip),
-            final_mixer_dropout=float(final_cfg.dropout),
-            final_mixer_num_heads=int(final_cfg.num_heads),
             final_mixer_fusion_layers=int(final_cfg.fusion_layers),
-            num_class_tokens=int(final_cfg.num_class_tokens),
-            presence_enabled=bool(final_cfg.presence_enabled),
-            final_mixer_window_size=int(window_cfg.window_size),
-            final_mixer_shift_size=int(window_cfg.shift_size),
-            final_mixer_window_dropout=float(window_cfg.dropout),
-            final_mixer_class_feature_pool_stride=int(
-                mask_head_cfg.class_feature_pool_stride
-            ),
+            final_mixer_num_heads=int(final_cfg.num_heads),
+            final_mixer_dropout=float(final_cfg.dropout),
+            lowres_hidden_dim=int(lowres_cfg.hidden_dim),
+            lowres_score_embed_dim=int(lowres_cfg.score_embed_dim),
+            lowres_window_size=int(lowres_cfg.window_size),
+            lowres_shift_size=int(lowres_cfg.shift_size),
+            lowres_score_floor=float(lowres_cfg.score_floor),
+            lowres_lambda_score=float(lowres_cfg.lambda_score),
+            dynamic_tokens_per_template=int(dynamic_cfg.tokens_per_template),
+            upsampler_class_chunk_size=int(upsampler_cfg.class_chunk_size),
+            upsampler_decoder_channels=list(upsampler_cfg.decoder_channels),
+            upsampler_sam_guidance_channels=list(upsampler_cfg.sam_guidance_channels),
+            upsampler_score_channels=list(upsampler_cfg.score_channels),
+            upsampler_score_input=str(upsampler_cfg.score_input),
+            upsampler_upsample_mode=str(upsampler_cfg.upsample_mode),
+            upsampler_norm=str(upsampler_cfg.norm),
+            upsampler_act=str(upsampler_cfg.act),
             task_mode=TASK_MODE_SEMANTIC,
         )
 

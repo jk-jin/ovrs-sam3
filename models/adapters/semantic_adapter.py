@@ -143,6 +143,17 @@ class SemanticSegAdapter(nn.Module):
             OUTPUT_KEYS.final_score_map
         ].argmax(dim=1)
 
+        # Pass through optional keys that the new mixer may produce.
+        for key in (
+            OUTPUT_KEYS.class_tokens,
+            OUTPUT_KEYS.class_feature_low,
+            OUTPUT_KEYS.clip_score_maps,
+            OUTPUT_KEYS.sam3_score_low,
+            OUTPUT_KEYS.sam3_fpn_features,
+        ):
+            if key in raw_outputs:
+                outputs[key] = raw_outputs[key]
+
         return outputs
 
 

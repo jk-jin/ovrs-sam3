@@ -38,30 +38,33 @@ model = dict(
     final_mixer_cfg=dict(
         enabled=True,
 
-        num_class_tokens=32,
         fusion_layers=4,
         num_heads=8,
         dropout=0.1,
-        presence_enabled=True,
 
-        clip_sam_feature_cfg=dict(
-            enabled=True,
+        dynamic_prompt_cfg=dict(
+            tokens_per_template=4,
+            insert_position="before_class",
         ),
 
-        class_code_cfg=dict(
-            source="mean_class_tokens",
-        ),
-
-        window_attention_cfg=dict(
+        lowres_cfg=dict(
+            hidden_dim=256,
+            score_embed_dim=32,
             window_size=8,
             shift_size=4,
-            dropout=0.1,
+            score_floor=0.2,
+            lambda_score=1.0,
         ),
 
-        mask_head_cfg=dict(
-            type="mask_embed_dot_class_code",
-            direct_dot=True,
-            class_feature_pool_stride=4,
+        upsampler_cfg=dict(
+            class_chunk_size=4,
+            decoder_channels=[256, 128, 96, 64, 32],
+            sam_guidance_channels=[32, 24, 16, 8],
+            score_channels=[8, 4, 4, 4],
+            score_input="score_and_tanh_logit",
+            upsample_mode="bilinear",
+            norm="group_norm",
+            act="gelu",
         ),
     ),
 
@@ -80,16 +83,7 @@ model = dict(
 
         final_bce_weight=0.4,
         final_dice_weight=1.0,
-        final_ce_weight=0.4,
-        final_ignore_bce_weight=0.0,
-
-        presence_loss_weight=1.0,
-
-        mask_layer_loss_weight=1.0,
-        mask_layer_weights=[0.1, 0.2, 0.4],
-
-        clip_sam_layer_loss_weight=0.1,
-        clip_sam_layer_weights=None,
+        final_ce_weight=0.0,
 
         bce_class_balance_clamp_min=0.2,
         bce_class_balance_clamp_max=5.0,
