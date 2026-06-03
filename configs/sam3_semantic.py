@@ -44,7 +44,6 @@ model = dict(
 
         dynamic_prompt_cfg=dict(
             tokens_per_template=4,
-            insert_position="before_class",
         ),
 
         lowres_cfg=dict(

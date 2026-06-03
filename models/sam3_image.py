@@ -223,16 +223,6 @@ class Sam3Image(torch.nn.Module):
         if text_out.get("language_embeds") is not None:
             cache["language_embeds"] = text_out["language_embeds"].contiguous()
 
-        if self.clip_text_encoder is not None and len(self.clip_prompt_templates) > 0:
-            with torch.no_grad():
-                clip_text_tokens = self.clip_text_encoder.encode_prompt_templates(
-                    class_names=class_texts,
-                    templates=self.clip_prompt_templates,
-                    device=device,
-                    normalize_label=self.normalize_label_for_clip,
-                )
-            cache["clip_text_tokens_native"] = clip_text_tokens.detach().contiguous()
-
         self._text_cache = cache
         self._text_cache_key = cache_key
         self._text_cache_device = cache_device
@@ -248,9 +238,10 @@ class Sam3Image(torch.nn.Module):
             "language_features": self._text_cache["language_features"][:, start:end].contiguous(),
             "language_mask": self._text_cache["language_mask"][start:end].contiguous(),
         }
-        for key in ("language_embeds", "clip_text_tokens_native"):
-            if key in self._text_cache:
-                out[key] = self._text_cache[key][start:end].contiguous() if key == "clip_text_tokens_native" else self._text_cache[key][:, start:end].contiguous()
+
+        if "language_embeds" in self._text_cache:
+            out["language_embeds"] = self._text_cache["language_embeds"][:, start:end].contiguous()
+
         return out
 
     def _get_prompt_chunk_size(self, num_classes: int) -> int:
@@ -354,51 +345,6 @@ class Sam3Image(torch.nn.Module):
             "clip_image_feat_map_native": clip_feat_map,
             "clip_image_grid_hw": (int(clip_feat_map.shape[-2]), int(clip_feat_map.shape[-1])),
         }
-
-    def _build_final_mixer_clip_inputs(
-        self,
-        input: BatchedDatapoint,
-        device: torch.device,
-    ) -> tuple[torch.Tensor, torch.Tensor, tuple[int, int]]:
-        class_texts = list(input.find_text_batch)
-        if len(class_texts) == 0:
-            raise ValueError("find_text_batch is empty.")
-
-        self.ensure_text_cache(class_texts=class_texts, device=device)
-
-        if self._text_cache is None:
-            raise RuntimeError("Text cache is not prepared.")
-        if "clip_text_tokens_native" not in self._text_cache:
-            raise ValueError(
-                "clip_text_tokens_native is missing. "
-                "Check openclip_cfg.prompt_templates."
-            )
-
-        clip_image_cache = self._build_clip_image_cache(
-            input=input,
-            device=device,
-        )
-        if clip_image_cache is None:
-            raise ValueError(
-                "clip_image_cache is None. "
-                "The new final mixer requires OpenCLIP image features."
-            )
-
-        clip_image_feat_map_native = clip_image_cache[
-            "clip_image_feat_map_native"
-        ]
-        clip_grid_hw = clip_image_cache["clip_image_grid_hw"]
-        clip_text_tokens_native = self._text_cache[
-            "clip_text_tokens_native"
-        ].detach()
-
-        self._last_clip_grid_hw = clip_grid_hw
-
-        return (
-            clip_image_feat_map_native,
-            clip_text_tokens_native,
-            clip_grid_hw,
-        )
 
     def build_sam3_pixel_feature_from_backbone(
         self,
@@ -788,6 +734,16 @@ class Sam3Image(torch.nn.Module):
             OUTPUT_KEYS.semantic_logits: semantic_logits,
             OUTPUT_KEYS.final_logits: mixer_outputs[OUTPUT_KEYS.final_logits],
         }
+
+        for key in (
+            OUTPUT_KEYS.class_tokens,
+            OUTPUT_KEYS.class_feature_low,
+            OUTPUT_KEYS.clip_score_maps,
+            OUTPUT_KEYS.sam3_score_low,
+        ):
+            if key in mixer_outputs:
+                out[key] = mixer_outputs[key]
+
         return out
 
     def run_final_mixer_from_cache(
@@ -1006,14 +962,12 @@ class Sam3Image(torch.nn.Module):
 
         Hc, Wc = int(clip_grid_hw[0]), int(clip_grid_hw[1])
 
-        # Pool to CLIP grid
-        class_feature_low = F.adaptive_avg_pool2d(mem, (Hc, Wc))
-        # [B*C_chunk, D, Hc, Wc] → [B, C_chunk, D, Hc, Wc]
-        class_feature_low = class_feature_low.reshape(
-            batch_size, num_chunk_classes, self.hidden_dim, Hc, Wc
+        return self.final_mixer.project_class_feature_low(
+            encoder_feature=mem,
+            target_hw=(Hc, Wc),
+            batch_size=batch_size,
+            num_classes=num_chunk_classes,
         )
-
-        return class_feature_low.contiguous()
 
     def forward_grounding_raw(
         self,

@@ -35,7 +35,6 @@ class OpenCLIPConfig:
 @dataclass
 class DynamicPromptConfig:
     tokens_per_template: int = 4
-    insert_position: str = "before_class"
 
 
 @dataclass
@@ -180,15 +179,6 @@ class VisualizerConfig:
 
     save_sam3_direct_segmentation: bool = True
     sam3_direct_seg_threshold: float = 0.5
-
-    save_presence_scores: bool = True
-
-    save_final_mixer_mask_layers: bool = True
-    save_final_mixer_clip_sam_layers: bool = True
-    save_final_mixer_layer_heatmaps: bool = True
-    save_final_mixer_layer_predictions: bool = True
-    save_final_mixer_layer_overlays: bool = True
-    max_final_mixer_layer_heatmap_classes: Optional[int] = None
 
     vis_prob: float = 0.05
     max_samples_per_epoch: Optional[int] = 50

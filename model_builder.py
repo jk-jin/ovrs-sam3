@@ -334,21 +334,27 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             )
 
         upsampler_cfg = cfg.upsampler_cfg
-        if len(upsampler_cfg.decoder_channels) < 1:
+
+        if len(upsampler_cfg.decoder_channels) < 2:
             raise ValueError(
-                "upsampler_cfg.decoder_channels must not be empty."
+                "upsampler_cfg.decoder_channels must contain at least "
+                "one input channel and one decoder stage channel."
             )
 
-        if len(upsampler_cfg.sam_guidance_channels) != len(upsampler_cfg.decoder_channels):
+        expected_stages = len(upsampler_cfg.decoder_channels) - 1
+
+        if len(upsampler_cfg.sam_guidance_channels) != expected_stages:
             raise ValueError(
                 "upsampler_cfg.sam_guidance_channels length must match "
-                "decoder_channels length."
+                f"the number of upsample stages. Expected {expected_stages}, "
+                f"got {len(upsampler_cfg.sam_guidance_channels)}."
             )
 
-        if len(upsampler_cfg.score_channels) != len(upsampler_cfg.decoder_channels):
+        if len(upsampler_cfg.score_channels) != expected_stages:
             raise ValueError(
                 "upsampler_cfg.score_channels length must match "
-                "decoder_channels length."
+                f"the number of upsample stages. Expected {expected_stages}, "
+                f"got {len(upsampler_cfg.score_channels)}."
             )
 
         return cfg

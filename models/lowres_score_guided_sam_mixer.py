@@ -208,6 +208,49 @@ class LowResScoreFusionStem(nn.Module):
         return self.fusion(x.reshape(B * C, -1, Hc, Wc)).reshape(B, C, -1, Hc, Wc).contiguous()
 
 
+class ClassFeatureLowProjector(nn.Module):
+    """Project frozen SAM3 encoder feature into trainable low-res class feature."""
+
+    def __init__(self, hidden_dim: int = 256):
+        super().__init__()
+        self.hidden_dim = int(hidden_dim)
+
+        num_groups = min(8, self.hidden_dim)
+        if self.hidden_dim % num_groups != 0:
+            num_groups = 1
+
+        self.proj = nn.Sequential(
+            nn.Conv2d(self.hidden_dim, self.hidden_dim, kernel_size=1, bias=False),
+            nn.GroupNorm(num_groups, self.hidden_dim),
+            nn.GELU(),
+            nn.Conv2d(self.hidden_dim, self.hidden_dim, kernel_size=3, padding=1, bias=False),
+            nn.GroupNorm(num_groups, self.hidden_dim),
+            nn.GELU(),
+        )
+
+    def forward(
+        self,
+        encoder_feature: torch.Tensor,
+        target_hw: Tuple[int, int],
+    ) -> torch.Tensor:
+        if encoder_feature.dim() != 4:
+            raise ValueError(
+                "encoder_feature must be [B*C, D, H, W], "
+                f"got {tuple(encoder_feature.shape)}."
+            )
+
+        if int(encoder_feature.shape[1]) != self.hidden_dim:
+            raise ValueError(
+                "encoder_feature channel mismatch: expected "
+                f"{self.hidden_dim}, got {encoder_feature.shape[1]}."
+            )
+
+        target_hw = (int(target_hw[0]), int(target_hw[1]))
+        x = F.adaptive_avg_pool2d(encoder_feature, target_hw)
+        x = self.proj(x)
+        return x.contiguous()
+
+
 class LowResScoreGuidedSamMixer(nn.Module):
     """
     New final mixer for open-vocabulary semantic segmentation.
@@ -275,6 +318,10 @@ class LowResScoreGuidedSamMixer(nn.Module):
             dropout=dropout,
         )
 
+        self.class_feature_low_projector = ClassFeatureLowProjector(
+            hidden_dim=self.sam_dim,
+        )
+
         # 2. Dynamic CLIP prompt encoder
         from .dynamic_clip_prompt import DynamicClipPromptEncoder
         self.dynamic_prompt_encoder = DynamicClipPromptEncoder(
@@ -338,6 +385,35 @@ class LowResScoreGuidedSamMixer(nn.Module):
 
     def _build_class_code(self, class_tokens: torch.Tensor) -> torch.Tensor:
         return class_tokens.mean(dim=2)  # [B, C, D]
+
+    def project_class_feature_low(
+        self,
+        encoder_feature: torch.Tensor,
+        target_hw: Tuple[int, int],
+        batch_size: int,
+        num_classes: int,
+    ) -> torch.Tensor:
+        num_pairs = int(batch_size) * int(num_classes)
+
+        if int(encoder_feature.shape[0]) != num_pairs:
+            raise ValueError(
+                "encoder_feature first dimension must equal B*C. "
+                f"Expected {num_pairs}, got {encoder_feature.shape[0]}."
+            )
+
+        class_feature_low = self.class_feature_low_projector(
+            encoder_feature=encoder_feature,
+            target_hw=target_hw,
+        )
+
+        h_low, w_low = class_feature_low.shape[-2:]
+        return class_feature_low.reshape(
+            int(batch_size),
+            int(num_classes),
+            self.sam_dim,
+            h_low,
+            w_low,
+        ).contiguous()
 
     def forward(
         self,
