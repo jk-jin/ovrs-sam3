@@ -267,7 +267,20 @@ def inference_with_tta(
         merged_outputs[key] = value / float(num_views)
 
     if OUTPUT_KEYS.final_score_map in merged_outputs:
-        merged_outputs[OUTPUT_KEYS.final_pred] = merged_outputs[OUTPUT_KEYS.final_score_map].argmax(dim=1)
+        score_map = merged_outputs[OUTPUT_KEYS.final_score_map]
+        max_score, pred = score_map.max(dim=1)
+
+        prob_thd = None
+        bg_idx = 0
+        if tta_cfg is not None:
+            prob_thd = tta_cfg.get("prob_thd", None)
+            bg_idx = int(tta_cfg.get("bg_idx", 0))
+
+        if prob_thd is not None:
+            pred = pred.clone()
+            pred[max_score < float(prob_thd)] = bg_idx
+
+        merged_outputs[OUTPUT_KEYS.final_pred] = pred.long()
 
     return merged_outputs
 

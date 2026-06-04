@@ -60,7 +60,7 @@ class SamClassFeatureWindowAttention(nn.Module):
     In shifted mode an attention mask prevents cross-region leakage.
 
     q/k concatenate class_feature_low for guidance.
-    v uses x only.  SAM3 score provides a logit bias.
+    v uses x only. No semantic-score logit bias is applied.
     """
 
     def __init__(
@@ -70,16 +70,12 @@ class SamClassFeatureWindowAttention(nn.Module):
         window_size: int = 8,
         shift_size: int = 0,
         dropout: float = 0.1,
-        score_floor: float = 0.2,
-        lambda_score: float = 1.0,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
         self.num_heads = int(num_heads)
         self.window_size = int(window_size)
         self.shift_size = int(shift_size)
-        self.score_floor = float(score_floor)
-        self.lambda_score = float(lambda_score)
 
         if self.hidden_dim % self.num_heads != 0:
             raise ValueError(f"hidden_dim={hidden_dim} not divisible by num_heads={num_heads}")
@@ -113,14 +109,6 @@ class SamClassFeatureWindowAttention(nn.Module):
         x = x.reshape(B, D, H // ws, ws, W // ws, ws)
         x = x.permute(0, 2, 4, 3, 5, 1).reshape(-1, ws * ws, D)
         return x
-
-    def _window_partition_score(self, score: torch.Tensor):
-        # [B, H, W] → [num_win, ws*ws]
-        B, H, W = score.shape
-        ws = self.window_size
-        score = score.reshape(B, H // ws, ws, W // ws, ws)
-        score = score.permute(0, 1, 3, 2, 4).reshape(-1, ws * ws)
-        return score
 
     def _window_reverse(self, x: torch.Tensor, B: int, H: int, W: int):
         ws = self.window_size
@@ -188,19 +176,16 @@ class SamClassFeatureWindowAttention(nn.Module):
         self,
         x: torch.Tensor,
         class_feature_low: torch.Tensor,
-        sam3_score_low: torch.Tensor,
     ) -> torch.Tensor:
         B, C, D, Hc, Wc = x.shape
         bc = B * C
 
         x_flat = x.reshape(bc, D, Hc, Wc)
         cf_flat = class_feature_low.reshape(bc, D, Hc, Wc)
-        score_flat = sam3_score_low.reshape(bc, Hc, Wc)
 
         # Pad to window multiples.
         x_flat, orig_h, orig_w = self._pad_to_window(x_flat, self.window_size)
         cf_flat, _, _ = self._pad_to_window(cf_flat, self.window_size)
-        score_flat, _, _ = self._pad_to_window(score_flat, self.window_size)
         pad_h, pad_w = x_flat.shape[-2], x_flat.shape[-1]
 
         # Shifted window: roll before partitioning.
@@ -208,12 +193,10 @@ class SamClassFeatureWindowAttention(nn.Module):
             shift = self.shift_size
             x_flat = torch.roll(x_flat, shifts=(-shift, -shift), dims=(-2, -1))
             cf_flat = torch.roll(cf_flat, shifts=(-shift, -shift), dims=(-2, -1))
-            score_flat = torch.roll(score_flat, shifts=(-shift, -shift), dims=(-2, -1))
 
         # Partition into windows.
-        x_windows = self._window_partition(x_flat)       # [num_win, ws*ws, D]
+        x_windows = self._window_partition(x_flat)
         cf_windows = self._window_partition(cf_flat)
-        score_tokens = self._window_partition_score(score_flat)  # [num_win, ws*ws]
 
         # Build attention mask for shifted mode.
         attn_mask = self._build_shift_attn_mask(pad_h, pad_w, bc, x.device, x.dtype)
@@ -231,11 +214,6 @@ class SamClassFeatureWindowAttention(nn.Module):
 
         attn = torch.matmul(q, k.transpose(-2, -1)) * (head_dim ** -0.5)
 
-        # SAM3 score logit bias.
-        gate = self.score_floor + (1.0 - self.score_floor) * score_tokens
-        attn = attn + self.lambda_score * torch.log(gate.clamp_min(1e-6))[:, None, None, :]
-
-        # Shifted-window mask.
         if attn_mask is not None:
             attn = attn + attn_mask.unsqueeze(1)
 
@@ -247,14 +225,11 @@ class SamClassFeatureWindowAttention(nn.Module):
         out = self.out_proj(out)
         out = self.norm(x_windows + self.dropout(out))
 
-        # Reverse window partitioning.
         out = self._window_reverse(out, bc, pad_h, pad_w)
 
-        # Reverse shift.
         if self.shift_size > 0:
             out = torch.roll(out, shifts=(shift, shift), dims=(-2, -1))
 
-        # Crop to original size.
         out = out[:, :, :orig_h, :orig_w]
         return out.reshape(B, C, D, Hc, Wc).contiguous()
 
@@ -295,18 +270,22 @@ class LowResClassGuidedAggregatorLayer(nn.Module):
         window_size: int = 8,
         shift_size: int = 4,
         dropout: float = 0.1,
-        score_floor: float = 0.2,
-        lambda_score: float = 1.0,
     ):
         super().__init__()
         self.class_attn = ClassCodeGuidedClassAttention(hidden_dim, num_heads, dropout)
         self.local_window_attn = SamClassFeatureWindowAttention(
-            hidden_dim, num_heads, window_size, shift_size=0,
-            dropout=dropout, score_floor=score_floor, lambda_score=lambda_score,
+            hidden_dim,
+            num_heads,
+            window_size,
+            shift_size=0,
+            dropout=dropout,
         )
         self.shifted_window_attn = SamClassFeatureWindowAttention(
-            hidden_dim, num_heads, window_size, shift_size=shift_size,
-            dropout=dropout, score_floor=score_floor, lambda_score=lambda_score,
+            hidden_dim,
+            num_heads,
+            window_size,
+            shift_size=shift_size,
+            dropout=dropout,
         )
         self.ffn = ClassFFN(hidden_dim, dropout)
 
@@ -315,11 +294,10 @@ class LowResClassGuidedAggregatorLayer(nn.Module):
         x: torch.Tensor,
         class_feature_low: torch.Tensor,
         class_code: torch.Tensor,
-        sam3_score_low: torch.Tensor,
     ) -> torch.Tensor:
         x = self.class_attn(x, class_code)
-        x = self.local_window_attn(x, class_feature_low, sam3_score_low)
-        x = self.shifted_window_attn(x, class_feature_low, sam3_score_low)
+        x = self.local_window_attn(x, class_feature_low)
+        x = self.shifted_window_attn(x, class_feature_low)
         x = self.ffn(x)
         return x
 
@@ -335,14 +313,15 @@ class LowResClassGuidedAggregator(nn.Module):
         window_size: int = 8,
         shift_size: int = 4,
         dropout: float = 0.1,
-        score_floor: float = 0.2,
-        lambda_score: float = 1.0,
     ):
         super().__init__()
         self.layers = nn.ModuleList([
             LowResClassGuidedAggregatorLayer(
-                hidden_dim, num_heads, window_size, shift_size,
-                dropout, score_floor, lambda_score,
+                hidden_dim,
+                num_heads,
+                window_size,
+                shift_size,
+                dropout,
             )
             for _ in range(num_layers)
         ])
@@ -352,8 +331,7 @@ class LowResClassGuidedAggregator(nn.Module):
         x: torch.Tensor,
         class_feature_low: torch.Tensor,
         class_code: torch.Tensor,
-        sam3_score_low: torch.Tensor,
     ) -> torch.Tensor:
         for layer in self.layers:
-            x = layer(x, class_feature_low, class_code, sam3_score_low)
+            x = layer(x, class_feature_low, class_code)
         return x

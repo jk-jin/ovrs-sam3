@@ -68,9 +68,10 @@ class SemanticCriterion(nn.Module):
         )
 
         num_valid_pixels = int((label_map != int(self.cfg.ignore_index)).sum().item())
+        num_loss_pixels = int(label_map.numel())
         zero = self._zero_loss(final_logits)
 
-        if num_valid_pixels <= 0:
+        if num_loss_pixels <= 0:
             return {
                 "loss_final_bce": zero,
                 "loss_final_dice": zero,
@@ -111,7 +112,7 @@ class SemanticCriterion(nn.Module):
             "loss_final_ce": loss_final_ce,
             "total_loss": total_loss,
             "num_valid": torch.tensor(
-                max(num_valid_pixels, num_ce_valid),
+                max(num_loss_pixels, num_ce_valid),
                 device=final_logits.device,
                 dtype=torch.long,
             ),
@@ -190,27 +191,41 @@ class SemanticCriterion(nn.Module):
         return class_weights.clamp(min=float(clamp_min), max=float(clamp_max))
 
     def _basic_mask_losses(
-        self, logits: torch.Tensor, target: torch.Tensor, valid_mask: torch.Tensor,
-        present_pair_mask: torch.Tensor, bce_class_weights: torch.Tensor,
-        ce_label_map: torch.Tensor, ce_class_weights: torch.Tensor,
+        self,
+        logits: torch.Tensor,
+        target: torch.Tensor,
+        valid_mask: torch.Tensor,
+        present_pair_mask: torch.Tensor,
+        bce_class_weights: torch.Tensor,
+        ce_label_map: torch.Tensor,
+        ce_class_weights: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
+        # BCE supervises all class channels.
+        # Ignore pixels are not removed; target is already 0 there.
+        loss_bce = self._binary_cross_entropy_all_classes_balanced_mean(
+            logits=logits,
+            target=target,
+            class_weights=bce_class_weights,
+        )
+
+        # Dice remains present-only.
+        # Ignore pixels are not removed; target is already 0 there.
         if present_pair_mask.any():
-            loss_bce = self._binary_cross_entropy_present_balanced_mean(
-                logits=logits, target=target, valid_mask=valid_mask,
-                present_pair_mask=present_pair_mask, class_weights=bce_class_weights,
-            )
             loss_dice = self._dice_loss_present_mean_from_logits(
-                logits=logits, target=target, valid_mask=valid_mask,
+                logits=logits,
+                target=target,
+                valid_mask=valid_mask,
                 present_pair_mask=present_pair_mask,
             )
         else:
-            loss_bce = self._zero_loss(logits)
             loss_dice = self._zero_loss(logits)
 
         if float(self.cfg.final_ce_weight) > 0:
             loss_ce, num_ce_valid = self._cross_entropy_loss(
-                logits=logits, ce_label_map=ce_label_map,
-                present_pair_mask=present_pair_mask, ce_class_weights=ce_class_weights,
+                logits=logits,
+                ce_label_map=ce_label_map,
+                present_pair_mask=present_pair_mask,
+                ce_class_weights=ce_class_weights,
             )
         else:
             loss_ce = self._zero_loss(logits)
@@ -219,34 +234,29 @@ class SemanticCriterion(nn.Module):
         return loss_bce, loss_dice, loss_ce, num_ce_valid
 
     @staticmethod
-    def _binary_cross_entropy_present_balanced_mean(
+    def _binary_cross_entropy_all_classes_balanced_mean(
         logits: torch.Tensor,
         target: torch.Tensor,
-        valid_mask: torch.Tensor,
-        present_pair_mask: torch.Tensor,
         class_weights: torch.Tensor,
     ) -> torch.Tensor:
         """
-        BCE for present classes only.
-
-        Ignore pixels are treated as negative pixels because target is already 0
-        at ignore locations.
+        BCE over all class channels.
 
         Important:
-            - present_pair_mask selects only classes that appear in labeled pixels.
-            - ignore pixels are NOT removed.
-            - absent classes are NOT supervised.
-            - loss is averaged over H*W pixels for each present class.
+            - All classes participate, including absent classes.
+            - Ignore pixels are NOT removed.
+            - Ignore pixels have target=0 because target is built by
+              target[:, c] = (label_map == class_id).
+            - Loss is averaged over H*W pixels per class first, then averaged
+              across classes with class_weights.
         """
-        del valid_mask  # intentionally unused
-
         per_elem = F.binary_cross_entropy_with_logits(
             logits,
             target,
             reduction="none",
         )  # [B, C, H, W]
 
-        # Average over all pixels, including ignore pixels as negative target=0.
+        # Stable scale: average over pixels first.
         per_pair_loss = per_elem.flatten(2).mean(dim=2)  # [B, C]
 
         pair_weight = class_weights.to(
@@ -254,10 +264,8 @@ class SemanticCriterion(nn.Module):
             dtype=per_pair_loss.dtype,
         )
 
-        present_float = present_pair_mask.to(dtype=per_pair_loss.dtype)
-
-        weighted_loss = per_pair_loss * pair_weight * present_float
-        denom = (pair_weight * present_float).sum().clamp_min(1.0)
+        weighted_loss = per_pair_loss * pair_weight
+        denom = pair_weight.sum().clamp_min(1.0)
 
         return weighted_loss.sum() / denom
 

@@ -110,7 +110,13 @@ class LowResClassTokenBuilder(nn.Module):
 
 class ClipScoreEmbedder(nn.Module):
     """
-    Build CLIP score embedding from dynamic text features and CLIP image features.
+    Build CLIP correlation embedding from dynamic text features and CLIP image features.
+
+    GSNet-style:
+        score_maps [B, C, P, H, W]
+        -> reshape [B*C, P, H, W]
+        -> 7x7 conv
+        -> [B, C, score_embed_dim, H, W]
     """
 
     def __init__(self, clip_output_dim: int = 768, score_embed_dim: int = 32, num_templates: int = 4):
@@ -120,7 +126,14 @@ class ClipScoreEmbedder(nn.Module):
         self.num_templates = int(num_templates)
 
         self.score_conv = nn.Sequential(
-            nn.Conv2d(self.num_templates, self.score_embed_dim, 1),
+            nn.Conv2d(
+                self.num_templates,
+                self.score_embed_dim,
+                kernel_size=7,
+                stride=1,
+                padding=3,
+                bias=False,
+            ),
             nn.GroupNorm(min(8, self.score_embed_dim), self.score_embed_dim),
             nn.GELU(),
         )
@@ -148,23 +161,45 @@ class ClipScoreEmbedder(nn.Module):
         img_norm = F.normalize(clip_image_feat_map, dim=1)
 
         text_flat = text_norm.reshape(B * C, P, D_clip)
-        img_flat = img_norm[:, None].expand(B, C, D_img, Hc, Wc).reshape(B * C, D_img, Hc * Wc)
+        img_flat = img_norm[:, None].expand(
+            B, C, D_img, Hc, Wc
+        ).reshape(B * C, D_img, Hc * Wc)
 
-        score_maps = torch.bmm(text_flat, img_flat).reshape(B * C, P, Hc, Wc) * 20.0
+        score_maps = torch.bmm(
+            text_flat,
+            img_flat,
+        ).reshape(B * C, P, Hc, Wc) * 20.0
 
-        clip_score_embed = self.score_conv(score_maps).reshape(B, C, self.score_embed_dim, Hc, Wc)
+        clip_score_embed = self.score_conv(score_maps)
+        clip_score_embed = clip_score_embed.reshape(
+            B,
+            C,
+            self.score_embed_dim,
+            Hc,
+            Wc,
+        )
+
         score_maps = score_maps.reshape(B, C, P, Hc, Wc)
+
         return clip_score_embed.contiguous(), score_maps.contiguous()
 
 
 class SamScoreEmbedder(nn.Module):
-    """Build SAM3 score embedding from semantic_logits."""
+    """Build SAM3 score embedding from semantic_logits using GSNet-style 7x7 conv."""
 
     def __init__(self, score_embed_dim: int = 32):
         super().__init__()
         self.score_embed_dim = int(score_embed_dim)
+
         self.score_conv = nn.Sequential(
-            nn.Conv2d(1, self.score_embed_dim, 1),
+            nn.Conv2d(
+                1,
+                self.score_embed_dim,
+                kernel_size=7,
+                stride=1,
+                padding=3,
+                bias=False,
+            ),
             nn.GroupNorm(min(8, self.score_embed_dim), self.score_embed_dim),
             nn.GELU(),
         )
@@ -180,24 +215,53 @@ class SamScoreEmbedder(nn.Module):
         score = torch.sigmoid(semantic_logits.detach())
         score_low = F.interpolate(
             score.reshape(B * C, 1, *semantic_logits.shape[-2:]),
-            size=(Hc, Wc), mode="bilinear", align_corners=False,
+            size=(Hc, Wc),
+            mode="bilinear",
+            align_corners=False,
         ).reshape(B, C, Hc, Wc)
 
-        sam_score_embed = self.score_conv(score_low.reshape(B * C, 1, Hc, Wc))
-        return sam_score_embed.reshape(B, C, self.score_embed_dim, Hc, Wc).contiguous(), score_low.contiguous()
+        sam_score_embed = self.score_conv(
+            score_low.reshape(B * C, 1, Hc, Wc)
+        )
+
+        return (
+            sam_score_embed.reshape(
+                B,
+                C,
+                self.score_embed_dim,
+                Hc,
+                Wc,
+            ).contiguous(),
+            score_low.contiguous(),
+        )
 
 
 class LowResScoreFusionStem(nn.Module):
-    """Fuse CLIP score embed and SAM score embed into initial fused feature."""
+    """Fuse CLIP score embed and SAM score embed using GSNet-style 7x7 conv."""
 
     def __init__(self, score_embed_dim: int = 32, hidden_dim: int = 256):
         super().__init__()
         in_ch = int(score_embed_dim) * 2
+
         self.fusion = nn.Sequential(
-            nn.Conv2d(in_ch, hidden_dim, 1),
+            nn.Conv2d(
+                in_ch,
+                hidden_dim,
+                kernel_size=7,
+                stride=1,
+                padding=3,
+                bias=False,
+            ),
             nn.GroupNorm(min(8, hidden_dim), hidden_dim),
             nn.GELU(),
-            nn.Conv2d(hidden_dim, hidden_dim, 1),
+            nn.Conv2d(
+                hidden_dim,
+                hidden_dim,
+                kernel_size=7,
+                stride=1,
+                padding=3,
+                bias=False,
+            ),
             nn.GroupNorm(min(8, hidden_dim), hidden_dim),
             nn.GELU(),
         )
@@ -205,7 +269,9 @@ class LowResScoreFusionStem(nn.Module):
     def forward(self, clip_score_embed: torch.Tensor, sam_score_embed: torch.Tensor) -> torch.Tensor:
         B, C, _, Hc, Wc = clip_score_embed.shape
         x = torch.cat([clip_score_embed, sam_score_embed], dim=2)
-        return self.fusion(x.reshape(B * C, -1, Hc, Wc)).reshape(B, C, -1, Hc, Wc).contiguous()
+        x = x.reshape(B * C, -1, Hc, Wc)
+        x = self.fusion(x)
+        return x.reshape(B, C, -1, Hc, Wc).contiguous()
 
 
 class ClassFeatureLowProjector(nn.Module):
@@ -283,8 +349,6 @@ class LowResScoreGuidedSamMixer(nn.Module):
         lowres_hidden_dim: int = 256,
         window_size: int = 8,
         shift_size: int = 4,
-        score_floor: float = 0.2,
-        lambda_score: float = 1.0,
         tokens_per_template: int = 4,
         upsampler_class_chunk_size: int = 4,
         upsampler_decoder_channels: Optional[List[int]] = None,
@@ -354,8 +418,6 @@ class LowResScoreGuidedSamMixer(nn.Module):
             window_size=int(window_size),
             shift_size=int(shift_size),
             dropout=dropout,
-            score_floor=float(score_floor),
-            lambda_score=float(lambda_score),
         )
 
         # 6. Upsampler (all params registered at init, target sizes resolved lazily)
@@ -452,7 +514,7 @@ class LowResScoreGuidedSamMixer(nn.Module):
         x = self.fusion_stem(clip_score_embed, sam_score_embed)
 
         # 7. Low-res aggregation
-        x = self.aggregator(x, class_feature_low, class_code, sam3_score_low)
+        x = self.aggregator(x, class_feature_low, class_code)
 
         # 8. Upsample
         x_up = self.upsampler(x, semantic_logits, sam3_fpn_features)

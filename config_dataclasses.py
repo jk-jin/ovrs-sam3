@@ -40,8 +40,6 @@ class LowResMixerConfig:
     score_embed_dim: int = 32
     window_size: int = 8
     shift_size: int = 4
-    score_floor: float = 0.2
-    lambda_score: float = 1.0
 
 
 @dataclass

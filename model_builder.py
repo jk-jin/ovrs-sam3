@@ -686,8 +686,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             lowres_score_embed_dim=int(lowres_cfg.score_embed_dim),
             lowres_window_size=int(lowres_cfg.window_size),
             lowres_shift_size=int(lowres_cfg.shift_size),
-            lowres_score_floor=float(lowres_cfg.score_floor),
-            lowres_lambda_score=float(lowres_cfg.lambda_score),
             dynamic_tokens_per_template=int(dynamic_cfg.tokens_per_template),
             upsampler_class_chunk_size=int(upsampler_cfg.class_chunk_size),
             upsampler_decoder_channels=list(upsampler_cfg.decoder_channels),

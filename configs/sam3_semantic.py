@@ -48,8 +48,6 @@ model = dict(
             score_embed_dim=32,
             window_size=8,
             shift_size=4,
-            score_floor=0.2,
-            lambda_score=1.0,
         ),
 
         upsampler_cfg=dict(
@@ -103,7 +101,7 @@ val_dataloader = dict(
 
 eval_cfg = dict(
     ignore_index=255,
-    prob_thd=0.0,
+    prob_thd=0.5,
     bg_idx=0,
     use_score_map=True,
 )

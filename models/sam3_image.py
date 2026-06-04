@@ -44,8 +44,6 @@ class Sam3Image(torch.nn.Module):
         lowres_score_embed_dim: int = 32,
         lowres_window_size: int = 8,
         lowres_shift_size: int = 4,
-        lowres_score_floor: float = 0.2,
-        lowres_lambda_score: float = 1.0,
         dynamic_tokens_per_template: int = 4,
         upsampler_class_chunk_size: int = 4,
         upsampler_decoder_channels: Optional[List[int]] = None,
@@ -141,8 +139,6 @@ class Sam3Image(torch.nn.Module):
             lowres_hidden_dim=int(lowres_hidden_dim),
             window_size=int(lowres_window_size),
             shift_size=int(lowres_shift_size),
-            score_floor=float(lowres_score_floor),
-            lambda_score=float(lowres_lambda_score),
             tokens_per_template=int(dynamic_tokens_per_template),
             upsampler_class_chunk_size=int(upsampler_class_chunk_size),
             upsampler_decoder_channels=(

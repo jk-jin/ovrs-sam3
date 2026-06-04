@@ -4,7 +4,6 @@ from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from ..data_misc import BatchedDatapoint
 from ..task_modes import OUTPUT_KEYS
@@ -131,14 +130,13 @@ class SemanticSegAdapter(nn.Module):
         outputs[OUTPUT_KEYS.semantic_logits] = semantic_logits
         outputs[OUTPUT_KEYS.final_logits] = final_logits
 
-        outputs[OUTPUT_KEYS.semantic_score_map] = F.softmax(
-            semantic_logits,
-            dim=1,
-        )
-        outputs[OUTPUT_KEYS.final_score_map] = F.softmax(
-            final_logits,
-            dim=1,
-        )
+        # BCE/Dice treats each class as an independent binary mask.
+        # Therefore score maps should be sigmoid-style, not softmax-style.
+        outputs[OUTPUT_KEYS.semantic_score_map] = semantic_logits.sigmoid()
+        outputs[OUTPUT_KEYS.final_score_map] = final_logits.sigmoid()
+
+        # Fallback prediction only. Evaluator / visualization should prefer
+        # final_score_map and apply prob_thd to suppress low-confidence pixels.
         outputs[OUTPUT_KEYS.final_pred] = outputs[
             OUTPUT_KEYS.final_score_map
         ].argmax(dim=1)
