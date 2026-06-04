@@ -220,31 +220,77 @@ class SemanticCriterion(nn.Module):
 
     @staticmethod
     def _binary_cross_entropy_present_balanced_mean(
-        logits: torch.Tensor, target: torch.Tensor, valid_mask: torch.Tensor,
-        present_pair_mask: torch.Tensor, class_weights: torch.Tensor,
+        logits: torch.Tensor,
+        target: torch.Tensor,
+        valid_mask: torch.Tensor,
+        present_pair_mask: torch.Tensor,
+        class_weights: torch.Tensor,
     ) -> torch.Tensor:
-        pair_mask_4d = present_pair_mask[:, :, None, None]
-        effective_mask = valid_mask & pair_mask_4d
-        per_elem = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
-        weight_4d = class_weights[:, :, None, None]
-        per_elem = per_elem * weight_4d
-        per_elem = per_elem * effective_mask.to(dtype=per_elem.dtype)
-        denom = (effective_mask.to(dtype=per_elem.dtype) * weight_4d).sum().clamp_min(1.0)
-        return per_elem.sum() / denom
+        """
+        BCE for present classes only.
+
+        Ignore pixels are treated as negative pixels because target is already 0
+        at ignore locations.
+
+        Important:
+            - present_pair_mask selects only classes that appear in labeled pixels.
+            - ignore pixels are NOT removed.
+            - absent classes are NOT supervised.
+            - loss is averaged over H*W pixels for each present class.
+        """
+        del valid_mask  # intentionally unused
+
+        per_elem = F.binary_cross_entropy_with_logits(
+            logits,
+            target,
+            reduction="none",
+        )  # [B, C, H, W]
+
+        # Average over all pixels, including ignore pixels as negative target=0.
+        per_pair_loss = per_elem.flatten(2).mean(dim=2)  # [B, C]
+
+        pair_weight = class_weights.to(
+            device=per_pair_loss.device,
+            dtype=per_pair_loss.dtype,
+        )
+
+        present_float = present_pair_mask.to(dtype=per_pair_loss.dtype)
+
+        weighted_loss = per_pair_loss * pair_weight * present_float
+        denom = (pair_weight * present_float).sum().clamp_min(1.0)
+
+        return weighted_loss.sum() / denom
 
     def _dice_loss_present_mean_from_logits(
-        self, logits: torch.Tensor, target: torch.Tensor,
-        valid_mask: torch.Tensor, present_pair_mask: torch.Tensor,
+        self,
+        logits: torch.Tensor,
+        target: torch.Tensor,
+        valid_mask: torch.Tensor,
+        present_pair_mask: torch.Tensor,
     ) -> torch.Tensor:
+        """
+        Dice for present classes only.
+
+        Ignore pixels are treated as negative pixels because target is already 0
+        at ignore locations.
+
+        This penalizes present-class masks leaking into ignore regions.
+        """
+        del valid_mask  # intentionally unused
+
         prob = logits.sigmoid()
-        prob = prob * valid_mask.to(dtype=prob.dtype)
-        target = target * valid_mask.to(dtype=target.dtype)
-        prob = prob.flatten(2)
-        target = target.flatten(2)
+
+        prob = prob.flatten(2)  # [B, C, H*W]
+        target = target.flatten(2)  # [B, C, H*W]
+
         intersection = (prob * target).sum(dim=2)
         denominator = prob.sum(dim=2) + target.sum(dim=2)
-        dice = (2.0 * intersection + self.cfg.eps) / (denominator + self.cfg.eps)
-        dice_loss = 1.0 - dice
+
+        dice = (2.0 * intersection + self.cfg.eps) / (
+                denominator + self.cfg.eps
+        )
+        dice_loss = 1.0 - dice  # [B, C]
+
         pair_weight = present_pair_mask.to(dtype=dice_loss.dtype)
         return (dice_loss * pair_weight).sum() / pair_weight.sum().clamp_min(1.0)
 

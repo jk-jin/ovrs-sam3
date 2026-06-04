@@ -5,34 +5,45 @@ from typing import Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 class OpenCLIPImageEncoder(nn.Module):
+    """
+    Dense OpenCLIP ViT image encoder.
+
+    This follows the GSNet-style dense CLIP usage:
+        image
+        → patch embedding
+        → class token
+        → positional embedding
+        → ln_pre
+        → full visual transformer
+        → keep patch tokens only
+        → ln_post
+        → visual projection
+        → reshape to [B, D_clip, Hc, Wc]
+
+    Important:
+        - Do NOT use MaskCLIP V-branch extraction.
+        - Do NOT skip transformer layers.
+        - Do NOT interpolate positional embedding.
+        - Input images must already be resized to CLIP native image size.
+    """
+
     def __init__(
         self,
         visual: nn.Module,
         default_output: str = "feat_map",
-        image_encoder_mode: str = "maskclip",
-        maskclip_skip_last_layers: int = 1,
     ) -> None:
         super().__init__()
 
         self.visual = visual
         self.default_output = str(default_output)
-        self.image_encoder_mode = str(image_encoder_mode).strip().lower()
-        self.maskclip_skip_last_layers = int(maskclip_skip_last_layers)
 
-        valid_modes = {"maskclip", "full_vit_dense"}
-        if self.image_encoder_mode not in valid_modes:
+        if self.default_output != "feat_map":
             raise ValueError(
-                f"Unknown image_encoder_mode={image_encoder_mode!r}. "
-                f"Supported modes are: {sorted(valid_modes)}"
-            )
-
-        if self.image_encoder_mode == "maskclip" and self.maskclip_skip_last_layers <= 0:
-            raise ValueError(
-                f"maskclip_skip_last_layers must be positive, got {self.maskclip_skip_last_layers}"
+                "OpenCLIPImageEncoder now only supports default_output='feat_map'. "
+                f"Got {self.default_output!r}."
             )
 
         self.native_dim = self._infer_native_feature_dim(visual)
@@ -109,7 +120,7 @@ class OpenCLIPImageEncoder(nn.Module):
         transformer = getattr(self.visual, "transformer", None)
         if transformer is None or not hasattr(transformer, "resblocks"):
             raise AttributeError(
-                "OpenCLIP visual.transformer.resblocks is required for MaskCLIP-style output."
+                "OpenCLIP visual.transformer.resblocks is required for dense ViT output."
             )
 
         blocks = list(transformer.resblocks)
@@ -183,103 +194,6 @@ class OpenCLIPImageEncoder(nn.Module):
             )
         return out
 
-    @staticmethod
-    def _extract_qkv(
-        attn: nn.Module,
-        x: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Args:
-            attn: OpenCLIP attention module
-            x: [B, N, C]
-
-        Returns:
-            q, k, v: each [B, N, C]
-        """
-        if hasattr(attn, "in_proj_weight") and attn.in_proj_weight is not None:
-            qkv = F.linear(x, attn.in_proj_weight, attn.in_proj_bias)
-            return qkv.chunk(3, dim=-1)
-
-        if hasattr(attn, "qkv"):
-            qkv = attn.qkv(x)
-            return qkv.chunk(3, dim=-1)
-
-        raise RuntimeError(
-            "Unsupported OpenCLIP attention qkv structure. "
-            "Expected attn.in_proj_weight or attn.qkv."
-        )
-
-    @staticmethod
-    def _apply_attention_out_proj(
-        attn: nn.Module,
-        x: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Args:
-            x: [B, N, C]
-
-        Returns:
-            out_proj(x): [B, N, C]
-        """
-        if not hasattr(attn, "out_proj"):
-            raise AttributeError("attention module must contain out_proj.")
-
-        x = attn.out_proj(x)
-
-        if hasattr(attn, "out_drop"):
-            x = attn.out_drop(x)
-
-        return x
-
-    @staticmethod
-    def _apply_first_residual(
-        block: nn.Module,
-        x_in: torch.Tensor,
-        attn_branch: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Official MaskCLIP ViT idea:
-            replace the attention output by V branch,
-            then keep residual structure.
-
-        Args:
-            x_in: [B, N, C]
-            attn_branch: [B, N, C]
-
-        Returns:
-            x: [B, N, C]
-        """
-        if hasattr(block, "ls_1"):
-            attn_branch = block.ls_1(attn_branch)
-
-        return x_in + attn_branch
-
-    @staticmethod
-    def _apply_second_residual(
-        block: nn.Module,
-        x: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Apply the block FFN/MLP after V-branch residual.
-
-        Args:
-            x: [B, N, C]
-
-        Returns:
-            x: [B, N, C]
-        """
-        if not hasattr(block, "ln_2") or not hasattr(block, "mlp"):
-            raise AttributeError(
-                "MaskCLIP-style V branch requires transformer block with ln_2 and mlp."
-            )
-
-        mlp_out = block.mlp(block.ln_2(x))
-
-        if hasattr(block, "ls_2"):
-            mlp_out = block.ls_2(mlp_out)
-
-        return x + mlp_out
-
     def _apply_visual_ln_post_and_projection(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
@@ -298,8 +212,8 @@ class OpenCLIPImageEncoder(nn.Module):
         return x @ proj
 
     def _prepare_vit_tokens(
-            self,
-            images: torch.Tensor,
+        self,
+        images: torch.Tensor,
     ) -> tuple[torch.Tensor, tuple[int, int]]:
         if not self._is_openclip_vit_like():
             raise NotImplementedError(
@@ -325,9 +239,10 @@ class OpenCLIPImageEncoder(nn.Module):
         base_h, base_w = self._get_base_grid_size()
         if (grid_h, grid_w) != (base_h, base_w):
             raise ValueError(
-                "OpenCLIP dense image encoder now requires native grid size. "
+                "OpenCLIP dense image encoder requires native grid size. "
                 f"Got {(grid_h, grid_w)}, expected {(base_h, base_w)}. "
-                "Resize input images to clip_image_encoder.get_native_image_size() before calling."
+                "Resize input images to clip_image_encoder.get_native_image_size() before calling. "
+                "Do not interpolate CLIP positional embeddings."
             )
 
         pos_embed = self.visual.positional_embedding.to(device=x.device, dtype=x.dtype)
@@ -338,70 +253,18 @@ class OpenCLIPImageEncoder(nn.Module):
 
         return x, (int(grid_h), int(grid_w))
 
-    def _forward_maskclip_dense_tokens(
-            self,
-            images: torch.Tensor,
-    ) -> tuple[torch.Tensor, tuple[int, int]]:
-        blocks = self._get_resblocks()
-        block_index = len(blocks) - self.maskclip_skip_last_layers
-
-        if block_index < 0:
-            raise ValueError(
-                "maskclip_skip_last_layers is larger than the number of transformer blocks: "
-                f"skip={self.maskclip_skip_last_layers}, num_blocks={len(blocks)}"
-            )
-
-        x, (grid_h, grid_w) = self._prepare_vit_tokens(images)
-
-        for block in blocks[:block_index]:
-            x = self._call_resblock(block, x)
-
-        maskclip_block = blocks[block_index]
-
-        if not hasattr(maskclip_block, "ln_1") or not hasattr(maskclip_block, "attn"):
-            raise AttributeError(
-                "MaskCLIP-style output requires transformer block with ln_1 and attn."
-            )
-
-        x_norm = maskclip_block.ln_1(x)
-
-        _, _, v = self._extract_qkv(
-            attn=maskclip_block.attn,
-            x=x_norm,
-        )
-
-        v = self._apply_attention_out_proj(
-            attn=maskclip_block.attn,
-            x=v,
-        )
-
-        v = self._apply_first_residual(
-            block=maskclip_block,
-            x_in=x,
-            attn_branch=v,
-        )
-
-        v = self._apply_second_residual(
-            block=maskclip_block,
-            x=v,
-        )
-
-        patch_tokens = v[:, 1:].contiguous()
-
-        expected_num_tokens = int(grid_h) * int(grid_w)
-        if patch_tokens.shape[1] != expected_num_tokens:
-            raise ValueError(
-                "Patch token count mismatch: "
-                f"expected {expected_num_tokens}, got {patch_tokens.shape[1]}"
-            )
-
-        dense_tokens = self._apply_visual_ln_post_and_projection(patch_tokens)
-        return dense_tokens, (int(grid_h), int(grid_w))
-
     def _forward_full_vit_dense_tokens(
-            self,
-            images: torch.Tensor,
+        self,
+        images: torch.Tensor,
     ) -> tuple[torch.Tensor, tuple[int, int]]:
+        """
+        Full ViT forward without final CLS pooling.
+
+        This is the intended dense CLIP path:
+            run all visual transformer blocks,
+            discard CLS only at the end,
+            keep patch tokens as dense features.
+        """
         blocks = self._get_resblocks()
         x, (grid_h, grid_w) = self._prepare_vit_tokens(images)
 
@@ -424,14 +287,7 @@ class OpenCLIPImageEncoder(nn.Module):
         self.visual.eval()
 
         with torch.no_grad():
-            if self.image_encoder_mode == "maskclip":
-                dense_tokens, (grid_h, grid_w) = self._forward_maskclip_dense_tokens(images)
-            elif self.image_encoder_mode == "full_vit_dense":
-                dense_tokens, (grid_h, grid_w) = self._forward_full_vit_dense_tokens(images)
-            else:
-                raise RuntimeError(
-                    f"Unexpected image_encoder_mode={self.image_encoder_mode!r}"
-                )
+            dense_tokens, (grid_h, grid_w) = self._forward_full_vit_dense_tokens(images)
 
         feat_map = dense_tokens.reshape(
             images.shape[0],

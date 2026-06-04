@@ -22,9 +22,6 @@ model = dict(
         pretrained="weights/RemoteCLIP-ViT-L-14.pt",
         default_output="feat_map",
 
-        image_encoder_mode="maskclip",
-        maskclip_skip_last_layers=1,
-
         prompt_templates=[
             "a remote sensing image of {}.",
             "an aerial image of {}.",
@@ -80,7 +77,7 @@ model = dict(
     criterion_cfg=dict(
         ignore_index=255,
 
-        final_bce_weight=0.4,
+        final_bce_weight=1.0,
         final_dice_weight=1.0,
         final_ce_weight=0.0,
 

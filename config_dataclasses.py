@@ -18,9 +18,6 @@ class OpenCLIPConfig:
     pretrained: Optional[str] = None
     default_output: str = "feat_map"
 
-    image_encoder_mode: str = "maskclip"
-    maskclip_skip_last_layers: int = 1
-
     prompt_templates: list[str] = field(
         default_factory=lambda: [
             "a remote sensing image of {}.",

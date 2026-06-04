@@ -578,8 +578,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         image_encoder = OpenCLIPImageEncoder(
             visual=clip_model.visual,
             default_output=openclip_cfg.default_output,
-            image_encoder_mode=openclip_cfg.image_encoder_mode,
-            maskclip_skip_last_layers=openclip_cfg.maskclip_skip_last_layers,
         )
 
         return text_encoder, image_encoder
@@ -744,6 +742,14 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         model = model.to(cfg.device)
         cls.apply_freeze_cfg(model, cfg.freeze_cfg)
+
+        core = getattr(model, "core", None)
+        if core is not None:
+            for module_name in ("clip_text_encoder", "clip_image_encoder"):
+                module = getattr(core, module_name, None)
+                if module is not None:
+                    cls.set_requires_grad(module, False)
+                    module.eval()
 
         model.core.prompt_chunk_size = (
             None if cfg.prompt_chunk_size is None else int(cfg.prompt_chunk_size)

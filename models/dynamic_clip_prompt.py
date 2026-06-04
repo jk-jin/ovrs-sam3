@@ -48,7 +48,8 @@ class DynamicClipPromptEncoder(nn.Module):
         if not prompt_templates:
             raise ValueError("prompt_templates must not be empty")
 
-        self.clip_text_encoder = clip_text_encoder
+        object.__setattr__(self, "clip_text_encoder", clip_text_encoder)
+
         self.prompt_templates = list(prompt_templates)
         self.sam_dim = int(sam_dim)
         self.num_groups = len(self.prompt_templates)
@@ -78,7 +79,7 @@ class DynamicClipPromptEncoder(nn.Module):
         self.dynamic_norm = nn.LayerNorm(self.text_width)
         self.dynamic_scale = nn.Parameter(torch.tensor(0.1))
 
-        self._frozen_token_embedding = clip_text_encoder.token_embedding
+        object.__setattr__(self, "_frozen_token_embedding", clip_text_encoder.token_embedding)
         self._tokenizer = clip_text_encoder.tokenizer
 
         # Pre-compute tokenized template parts (no class name).
