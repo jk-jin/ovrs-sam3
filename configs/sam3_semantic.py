@@ -85,7 +85,7 @@ model = dict(
 
         final_bce_weight=1.0,
         final_dice_weight=0.0,
-        presence_loss_weight=1.0,
+        presence_loss_weight=0.2,
 
         # 0.0 = absent classes not supervised for mask BCE.
         # Set to 0.01 / 0.05 for mild absent-class suppression.

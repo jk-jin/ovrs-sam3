@@ -143,11 +143,14 @@ class SemanticCriterion(nn.Module):
         else:
             loss_final_dice = zero
 
-        loss_presence_bce = F.binary_cross_entropy_with_logits(
-            presence_logits,
-            presence_target,
-            reduction="mean",
+        loss_presence_bce = self._balanced_presence_bce_with_logits(
+            presence_logits=presence_logits,
+            presence_target=presence_target,
+            eps=float(self.cfg.eps),
         )
+
+        num_presence_positive = presence_target.sum()
+        num_presence_negative = presence_target.numel() - num_presence_positive
 
         total_loss = (
             float(self.cfg.final_bce_weight) * loss_final_bce
@@ -165,6 +168,8 @@ class SemanticCriterion(nn.Module):
                 device=final_logits.device,
                 dtype=torch.long,
             ),
+            "num_presence_positive": num_presence_positive.detach(),
+            "num_presence_negative": num_presence_negative.detach(),
         }
 
     @staticmethod
@@ -334,6 +339,64 @@ class SemanticCriterion(nn.Module):
             return logits.sum() * 0.0
 
         return (pair_loss * pair_weight).sum() / weight_sum.clamp_min(float(eps))
+
+    @staticmethod
+    def _balanced_presence_bce_with_logits(
+        presence_logits: torch.Tensor,
+        presence_target: torch.Tensor,
+        eps: float,
+    ) -> torch.Tensor:
+        """
+        Balanced image-level presence BCE.
+
+        If both positive and negative samples exist:
+            loss = 0.5 * mean(pos_bce) + 0.5 * mean(neg_bce)
+
+        This prevents negative image-class pairs from dominating the presence loss.
+        """
+        if presence_logits.shape != presence_target.shape:
+            raise ValueError(
+                "presence_logits and presence_target must have the same shape, "
+                f"got {tuple(presence_logits.shape)} vs {tuple(presence_target.shape)}."
+            )
+
+        per_pair_loss = F.binary_cross_entropy_with_logits(
+            presence_logits,
+            presence_target,
+            reduction="none",
+        )
+
+        positive_mask = presence_target > 0.5
+        negative_mask = ~positive_mask
+
+        num_positive = positive_mask.to(dtype=per_pair_loss.dtype).sum()
+        num_negative = negative_mask.to(dtype=per_pair_loss.dtype).sum()
+
+        has_positive = bool(num_positive.detach().gt(0).item())
+        has_negative = bool(num_negative.detach().gt(0).item())
+
+        if has_positive and has_negative:
+            positive_loss = (
+                per_pair_loss * positive_mask.to(dtype=per_pair_loss.dtype)
+            ).sum() / num_positive.clamp_min(float(eps))
+
+            negative_loss = (
+                per_pair_loss * negative_mask.to(dtype=per_pair_loss.dtype)
+            ).sum() / num_negative.clamp_min(float(eps))
+
+            return 0.5 * positive_loss + 0.5 * negative_loss
+
+        if has_positive:
+            return (
+                per_pair_loss * positive_mask.to(dtype=per_pair_loss.dtype)
+            ).sum() / num_positive.clamp_min(float(eps))
+
+        if has_negative:
+            return (
+                per_pair_loss * negative_mask.to(dtype=per_pair_loss.dtype)
+            ).sum() / num_negative.clamp_min(float(eps))
+
+        return presence_logits.sum() * 0.0
 
     def _dice_loss_present_mean_from_logits(
         self,

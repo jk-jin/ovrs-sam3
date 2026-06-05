@@ -125,11 +125,18 @@ class ClipGuidedUpBlock(nn.Module):
         upsample_mode: str = "bilinear",
         norm: str = "group_norm",
         act: str = "gelu",
+        class_chunk_size: int = 4,
     ):
         super().__init__()
         self.out_ch = int(out_ch)
         self.upsample_mode = str(upsample_mode)
         self.use_clip_mid = bool(use_clip_mid)
+        self.class_chunk_size = int(class_chunk_size)
+
+        if self.class_chunk_size <= 0:
+            raise ValueError(
+                f"class_chunk_size must be positive, got {class_chunk_size}."
+            )
 
         self.in_proj = None
         if int(in_ch) != int(out_ch):
@@ -169,47 +176,103 @@ class ClipGuidedUpBlock(nn.Module):
         clip_mid: Optional[torch.Tensor],
         target_hw: Tuple[int, int],
     ) -> torch.Tensor:
+        if x.dim() != 5:
+            raise ValueError(
+                f"x must be [B, C, D, H, W], got {tuple(x.shape)}."
+            )
+
         B, C, _, H, W = x.shape
         target_hw = (int(target_hw[0]), int(target_hw[1]))
 
-        x_flat = x.reshape(B * C, -1, H, W)
+        if sam_fpn.dim() != 4:
+            raise ValueError(
+                f"sam_fpn must be [B, 256, Hs, Ws], got {tuple(sam_fpn.shape)}."
+            )
 
-        if (H, W) != target_hw:
-            x_flat = _resize(x_flat, target_hw, self.upsample_mode)
-
-        if self.in_proj is not None:
-            x_flat = self.in_proj(x_flat)
-
-        sam_fpn_proj = self.fpn_proj(sam_fpn)
-        if tuple(sam_fpn_proj.shape[-2:]) != target_hw:
-            sam_fpn_proj = _resize(sam_fpn_proj, target_hw, self.upsample_mode)
-
-        sam_fpn_proj = (
-            sam_fpn_proj[:, None]
-            .expand(B, C, -1, -1, -1)
-            .reshape(B * C, -1, *target_hw)
-        )
-
-        parts = [x_flat, sam_fpn_proj]
+        if int(sam_fpn.shape[0]) != B:
+            raise ValueError(
+                f"sam_fpn batch mismatch: expected {B}, got {sam_fpn.shape[0]}."
+            )
 
         if self.use_clip_mid:
             if clip_mid is None:
                 raise ValueError("clip_mid is required for this upsample stage.")
+            if clip_mid.dim() != 4:
+                raise ValueError(
+                    f"clip_mid must be [B, D_clip, Hc, Wc], got {tuple(clip_mid.shape)}."
+                )
+            if int(clip_mid.shape[0]) != B:
+                raise ValueError(
+                    f"clip_mid batch mismatch: expected {B}, got {clip_mid.shape[0]}."
+                )
 
+        # Project class-independent guidance once.
+        sam_fpn_proj = self.fpn_proj(sam_fpn)
+        if tuple(sam_fpn_proj.shape[-2:]) != target_hw:
+            sam_fpn_proj = _resize(
+                sam_fpn_proj,
+                target_hw,
+                self.upsample_mode,
+            )
+
+        if self.use_clip_mid:
             clip_proj = self.clip_proj(clip_mid)
             if tuple(clip_proj.shape[-2:]) != target_hw:
-                clip_proj = _resize(clip_proj, target_hw, self.upsample_mode)
+                clip_proj = _resize(
+                    clip_proj,
+                    target_hw,
+                    self.upsample_mode,
+                )
+        else:
+            clip_proj = None
 
-            clip_proj = (
-                clip_proj[:, None]
-                .expand(B, C, -1, -1, -1)
-                .reshape(B * C, -1, *target_hw)
+        chunk_outputs: list[torch.Tensor] = []
+
+        for start in range(0, C, self.class_chunk_size):
+            end = min(start + self.class_chunk_size, C)
+            chunk_c = end - start
+
+            x_chunk = x[:, start:end]
+            x_flat = x_chunk.reshape(B * chunk_c, -1, H, W)
+
+            if (H, W) != target_hw:
+                x_flat = _resize(
+                    x_flat,
+                    target_hw,
+                    self.upsample_mode,
+                )
+
+            if self.in_proj is not None:
+                x_flat = self.in_proj(x_flat)
+
+            sam_chunk = (
+                sam_fpn_proj[:, None]
+                .expand(B, chunk_c, -1, -1, -1)
+                .reshape(B * chunk_c, -1, *target_hw)
             )
-            parts.append(clip_proj)
 
-        y = torch.cat(parts, dim=1)
-        y = self.conv(y)
-        return y.reshape(B, C, self.out_ch, *target_hw).contiguous()
+            parts = [x_flat, sam_chunk]
+
+            if self.use_clip_mid:
+                clip_chunk = (
+                    clip_proj[:, None]
+                    .expand(B, chunk_c, -1, -1, -1)
+                    .reshape(B * chunk_c, -1, *target_hw)
+                )
+                parts.append(clip_chunk)
+
+            y_chunk = torch.cat(parts, dim=1)
+            y_chunk = self.conv(y_chunk)
+            y_chunk = y_chunk.reshape(
+                B,
+                chunk_c,
+                self.out_ch,
+                *target_hw,
+            )
+
+            chunk_outputs.append(y_chunk)
+
+        return torch.cat(chunk_outputs, dim=1).contiguous()
 
 
 class StagewisePresenceRefiner(nn.Module):
@@ -301,6 +364,7 @@ class StagewisePresenceRefiner(nn.Module):
         class_text_guidance: torch.Tensor,
         x_stage: torch.Tensor,
         stage_idx: int,
+        presence_pool_hw: Tuple[int, int],
     ) -> torch.Tensor:
         if class_text_guidance.dim() != 3:
             raise ValueError(
@@ -326,10 +390,33 @@ class StagewisePresenceRefiner(nn.Module):
                 f"class_text_guidance dim mismatch: expected {self.text_dim}, got {D_t}."
             )
 
+        if stage_idx < 0 or stage_idx >= len(self.stage_feature_projs):
+            raise IndexError(
+                f"stage_idx={stage_idx} out of range for "
+                f"{len(self.stage_feature_projs)} presence stages."
+            )
+
+        pool_h = int(presence_pool_hw[0])
+        pool_w = int(presence_pool_hw[1])
+
+        if pool_h <= 0 or pool_w <= 0:
+            raise ValueError(
+                f"presence_pool_hw must be positive, got {presence_pool_hw}."
+            )
+
         x_flat = x_stage.reshape(B * C, D_x, H, W)
+
+        # Critical memory fix:
+        # pool BEFORE projection and attention.
+        if (H, W) != (pool_h, pool_w):
+            x_flat = F.adaptive_avg_pool2d(
+                x_flat,
+                output_size=(pool_h, pool_w),
+            )
+
         kv = self.stage_feature_projs[stage_idx](x_flat)
         kv = kv.flatten(2).transpose(1, 2).contiguous()
-        # [B*C, H*W, D_t]
+        # [B*C, pool_h*pool_w, D_t]
 
         q = class_text_guidance.reshape(B * C, 1, D_t)
 
@@ -393,7 +480,11 @@ class SamFpnClipGuidedUpsampler(nn.Module):
     ):
         super().__init__()
 
-        del class_chunk_size
+        self.class_chunk_size = int(class_chunk_size)
+        if self.class_chunk_size <= 0:
+            raise ValueError(
+                f"class_chunk_size must be positive, got {class_chunk_size}."
+            )
 
         if decoder_channels is None:
             decoder_channels = [256, 128, 96, 64, 32]
@@ -453,6 +544,7 @@ class SamFpnClipGuidedUpsampler(nn.Module):
                     upsample_mode=upsample_mode,
                     norm=norm,
                     act=act,
+                    class_chunk_size=self.class_chunk_size,
                 )
             )
 
@@ -579,6 +671,7 @@ class SamFpnClipGuidedUpsampler(nn.Module):
                 class_text_guidance=class_text_guidance,
                 x_stage=x,
                 stage_idx=stage_idx,
+                presence_pool_hw=low_hw,
             )
 
             stage_text_guidance_history.append(class_text_guidance)
