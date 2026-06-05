@@ -27,8 +27,13 @@ model = dict(
             "an aerial image of {}.",
             "a satellite image of {}.",
             "an overhead view of {}.",
+
+            "an overhead remote sensing image of {}.",
+            "a high-resolution aerial image of {}.",
+            "a top-down satellite view of {}.",
+            "a remote sensing scene containing {}.",
         ],
-        num_prompt_templates=4,
+        num_prompt_templates=8,
         normalize_label_for_clip=True,
     ),
 
@@ -76,21 +81,16 @@ model = dict(
         ignore_index=255,
 
         final_bce_weight=1.0,
-        final_dice_weight=1.0,
-        final_ce_weight=0.0,
+        final_dice_weight=0.0,
 
-        bce_class_balance_clamp_min=0.2,
-        bce_class_balance_clamp_max=5.0,
-
-        ce_class_balance_clamp_min=0.2,
-        ce_class_balance_clamp_max=5.0,
+        bce_absent_class_weight=1.0,
 
         eps=1e-6,
     ),
 )
 
 train_dataloader = dict(
-    batch_size=2,
+    batch_size=4,
     num_workers=8,
 )
 
@@ -101,7 +101,7 @@ val_dataloader = dict(
 
 eval_cfg = dict(
     ignore_index=255,
-    prob_thd=0.5,
+    prob_thd=0.2,
     bg_idx=0,
     use_score_map=True,
 )

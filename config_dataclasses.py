@@ -77,15 +77,10 @@ class FinalMixerConfig:
 class SemanticCriterionConfig:
     ignore_index: int = 255
 
-    final_bce_weight: float = 0.4
+    final_bce_weight: float = 1.0
     final_dice_weight: float = 1.0
-    final_ce_weight: float = 0.0
 
-    bce_class_balance_clamp_min: float = 0.2
-    bce_class_balance_clamp_max: float = 5.0
-
-    ce_class_balance_clamp_min: float = 0.2
-    ce_class_balance_clamp_max: float = 5.0
+    bce_absent_class_weight: float = 1.0
 
     eps: float = 1e-6
 

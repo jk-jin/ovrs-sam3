@@ -14,7 +14,7 @@ TensorDict = Dict[str, torch.Tensor]
 
 
 class SemanticCriterion(nn.Module):
-    """Simplified criterion: only final BCE + Dice + optional CE."""
+    """Semantic criterion: final BCE + present-only Dice."""
 
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
         super().__init__()
@@ -62,12 +62,12 @@ class SemanticCriterion(nn.Module):
             class_ids=class_ids,
             num_channels=num_channels,
         )
+
         present_pair_mask = self._build_present_pair_mask(
             target=target,
             valid_mask=valid_mask,
         )
 
-        num_valid_pixels = int((label_map != int(self.cfg.ignore_index)).sum().item())
         num_loss_pixels = int(label_map.numel())
         zero = self._zero_loss(final_logits)
 
@@ -75,44 +75,42 @@ class SemanticCriterion(nn.Module):
             return {
                 "loss_final_bce": zero,
                 "loss_final_dice": zero,
-                "loss_final_ce": zero,
                 "total_loss": zero,
-                "num_valid": torch.tensor(0, device=final_logits.device, dtype=torch.long),
+                "num_valid": torch.tensor(
+                    0,
+                    device=final_logits.device,
+                    dtype=torch.long,
+                ),
             }
 
-        bce_class_weights = self._build_dynamic_pair_weights(
+        loss_final_bce = self._binary_cross_entropy_present_absent_mean(
+            logits=final_logits,
             target=target,
-            valid_mask=valid_mask,
             present_pair_mask=present_pair_mask,
-            clamp_min=float(self.cfg.bce_class_balance_clamp_min),
-            clamp_max=float(self.cfg.bce_class_balance_clamp_max),
+            absent_weight=float(self.cfg.bce_absent_class_weight),
         )
 
-        loss_final_bce, loss_final_dice, loss_final_ce, num_ce_valid = (
-            self._basic_mask_losses(
+        if present_pair_mask.any():
+            loss_final_dice = self._dice_loss_present_mean_from_logits(
                 logits=final_logits,
                 target=target,
                 valid_mask=valid_mask,
                 present_pair_mask=present_pair_mask,
-                bce_class_weights=bce_class_weights,
-                ce_label_map=label_map,
-                ce_class_weights=bce_class_weights,
             )
-        )
+        else:
+            loss_final_dice = zero
 
         total_loss = (
             float(self.cfg.final_bce_weight) * loss_final_bce
             + float(self.cfg.final_dice_weight) * loss_final_dice
-            + float(self.cfg.final_ce_weight) * loss_final_ce
         )
 
         return {
             "loss_final_bce": loss_final_bce,
             "loss_final_dice": loss_final_dice,
-            "loss_final_ce": loss_final_ce,
             "total_loss": total_loss,
             "num_valid": torch.tensor(
-                max(num_loss_pixels, num_ce_valid),
+                num_loss_pixels,
                 device=final_logits.device,
                 dtype=torch.long,
             ),
@@ -175,80 +173,23 @@ class SemanticCriterion(nn.Module):
         return fg_pixels_per_pair > 0
 
     @staticmethod
-    def _build_dynamic_pair_weights(
-        target: torch.Tensor, valid_mask: torch.Tensor,
-        present_pair_mask: torch.Tensor, clamp_min: float, clamp_max: float,
-    ) -> torch.Tensor:
-        target_valid = target * valid_mask.to(dtype=target.dtype)
-        fg_pixels = target_valid.flatten(2).sum(dim=2)
-        class_weights = torch.zeros_like(fg_pixels, dtype=target.dtype)
-        if present_pair_mask.any():
-            present_fg = fg_pixels[present_pair_mask]
-            mean_fg = present_fg.mean().clamp_min(1.0)
-            class_weights[present_pair_mask] = (
-                mean_fg / fg_pixels[present_pair_mask].clamp_min(1.0)
-            )
-        return class_weights.clamp(min=float(clamp_min), max=float(clamp_max))
-
-    def _basic_mask_losses(
-        self,
+    def _binary_cross_entropy_present_absent_mean(
         logits: torch.Tensor,
         target: torch.Tensor,
-        valid_mask: torch.Tensor,
         present_pair_mask: torch.Tensor,
-        bce_class_weights: torch.Tensor,
-        ce_label_map: torch.Tensor,
-        ce_class_weights: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
-        # BCE supervises all class channels.
-        # Ignore pixels are not removed; target is already 0 there.
-        loss_bce = self._binary_cross_entropy_all_classes_balanced_mean(
-            logits=logits,
-            target=target,
-            class_weights=bce_class_weights,
-        )
-
-        # Dice remains present-only.
-        # Ignore pixels are not removed; target is already 0 there.
-        if present_pair_mask.any():
-            loss_dice = self._dice_loss_present_mean_from_logits(
-                logits=logits,
-                target=target,
-                valid_mask=valid_mask,
-                present_pair_mask=present_pair_mask,
-            )
-        else:
-            loss_dice = self._zero_loss(logits)
-
-        if float(self.cfg.final_ce_weight) > 0:
-            loss_ce, num_ce_valid = self._cross_entropy_loss(
-                logits=logits,
-                ce_label_map=ce_label_map,
-                present_pair_mask=present_pair_mask,
-                ce_class_weights=ce_class_weights,
-            )
-        else:
-            loss_ce = self._zero_loss(logits)
-            num_ce_valid = 0
-
-        return loss_bce, loss_dice, loss_ce, num_ce_valid
-
-    @staticmethod
-    def _binary_cross_entropy_all_classes_balanced_mean(
-        logits: torch.Tensor,
-        target: torch.Tensor,
-        class_weights: torch.Tensor,
+        absent_weight: float,
     ) -> torch.Tensor:
         """
-        BCE over all class channels.
+        BCE with fixed present/absent image-class pair weights.
 
-        Important:
-            - All classes participate, including absent classes.
-            - Ignore pixels are NOT removed.
-            - Ignore pixels have target=0 because target is built by
-              target[:, c] = (label_map == class_id).
-            - Loss is averaged over H*W pixels per class first, then averaged
-              across classes with class_weights.
+        Present classes:
+            weight = 1.0
+
+        Absent classes:
+            weight = absent_weight
+
+        No dynamic class balancing.
+        No CE-style class competition.
         """
         per_elem = F.binary_cross_entropy_with_logits(
             logits,
@@ -256,13 +197,13 @@ class SemanticCriterion(nn.Module):
             reduction="none",
         )  # [B, C, H, W]
 
-        # Stable scale: average over pixels first.
         per_pair_loss = per_elem.flatten(2).mean(dim=2)  # [B, C]
 
-        pair_weight = class_weights.to(
-            device=per_pair_loss.device,
-            dtype=per_pair_loss.dtype,
+        pair_weight = torch.full_like(
+            per_pair_loss,
+            fill_value=max(float(absent_weight), 0.0),
         )
+        pair_weight[present_pair_mask] = 1.0
 
         weighted_loss = per_pair_loss * pair_weight
         denom = pair_weight.sum().clamp_min(1.0)
@@ -301,54 +242,6 @@ class SemanticCriterion(nn.Module):
 
         pair_weight = present_pair_mask.to(dtype=dice_loss.dtype)
         return (dice_loss * pair_weight).sum() / pair_weight.sum().clamp_min(1.0)
-
-    def _cross_entropy_loss(
-        self, logits: torch.Tensor, ce_label_map: torch.Tensor,
-        present_pair_mask: torch.Tensor, ce_class_weights: torch.Tensor,
-    ) -> tuple[torch.Tensor, int]:
-        B = int(logits.shape[0])
-        ignore_index = int(self.cfg.ignore_index)
-        total_loss = self._zero_loss(logits)
-        total_weight = logits.new_tensor(0.0)
-        total_valid = 0
-
-        for batch_idx in range(B):
-            present_ids = torch.nonzero(present_pair_mask[batch_idx], as_tuple=False).flatten()
-            if int(present_ids.numel()) <= 1:
-                continue
-
-            label_b = ce_label_map[batch_idx]
-            valid_pixel_mask = label_b != ignore_index
-            if int(valid_pixel_mask.sum().item()) <= 0:
-                continue
-
-            logits_b = logits[batch_idx:batch_idx + 1, present_ids]
-            local_label = torch.full_like(label_b, fill_value=ignore_index)
-            for local_idx, class_idx in enumerate(present_ids.tolist()):
-                local_label[label_b == int(class_idx)] = int(local_idx)
-            local_valid = local_label != ignore_index
-            num_local_valid = int(local_valid.sum().item())
-            if num_local_valid <= 0:
-                continue
-
-            ce_weight = ce_class_weights[batch_idx, present_ids].to(
-                device=logits_b.device, dtype=logits_b.dtype,
-            )
-            per_pixel_loss = F.cross_entropy(
-                logits_b, local_label[None], weight=ce_weight,
-                ignore_index=ignore_index, reduction="none",
-            )
-            valid_float = local_valid[None].to(dtype=per_pixel_loss.dtype)
-            denom_b = valid_float.sum().clamp_min(1.0)
-            loss_b = (per_pixel_loss * valid_float).sum() / denom_b
-            image_weight = valid_float.sum().detach()
-            total_loss = total_loss + loss_b * image_weight
-            total_weight = total_weight + image_weight
-            total_valid += num_local_valid
-
-        if total_valid <= 0:
-            return self._zero_loss(logits), 0
-        return total_loss / total_weight.clamp_min(1.0), total_valid
 
 
 class HybridCriterion(nn.Module):
