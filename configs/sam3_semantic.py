@@ -21,6 +21,7 @@ model = dict(
         model_name="ViT-L-14",
         pretrained="weights/RemoteCLIP-ViT-L-14.pt",
         default_output="feat_map",
+        image_intermediate_layers=[7, 15],
 
         prompt_templates=[
             "a remote sensing image of {}.",
@@ -59,8 +60,10 @@ model = dict(
             class_chunk_size=4,
             decoder_channels=[256, 128, 96, 64, 32],
             sam_guidance_channels=[32, 24, 16, 8],
-            score_channels=[8, 4, 4, 4],
-            score_input="score_and_tanh_logit",
+
+            clip_guidance_channels=[32, 24],
+            clip_guidance_stage_indices=[0, 1],
+
             upsample_mode="bilinear",
             norm="group_norm",
             act="gelu",
@@ -82,8 +85,11 @@ model = dict(
 
         final_bce_weight=1.0,
         final_dice_weight=0.0,
+        presence_loss_weight=1.0,
 
-        bce_absent_class_weight=1.0,
+        # 0.0 = absent classes not supervised for mask BCE.
+        # Set to 0.01 / 0.05 for mild absent-class suppression.
+        bce_absent_class_weight=0.0,
 
         eps=1e-6,
     ),

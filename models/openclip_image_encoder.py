@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Sequence, Tuple, Union
+from typing import Optional, Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -11,7 +11,7 @@ class OpenCLIPImageEncoder(nn.Module):
     """
     Dense OpenCLIP ViT image encoder.
 
-    This follows the GSNet-style dense CLIP usage:
+    Dense CLIP usage:
         image
         → patch embedding
         → class token
@@ -34,6 +34,7 @@ class OpenCLIPImageEncoder(nn.Module):
         self,
         visual: nn.Module,
         default_output: str = "feat_map",
+        intermediate_layers: Optional[Sequence[int]] = None,
     ) -> None:
         super().__init__()
 
@@ -49,6 +50,23 @@ class OpenCLIPImageEncoder(nn.Module):
         self.native_dim = self._infer_native_feature_dim(visual)
         self.output_dim = self._infer_projected_feature_dim(visual)
         self.channel_list = [self.output_dim]
+
+        blocks = self._get_resblocks()
+        self.num_visual_blocks = len(blocks)
+
+        if intermediate_layers is None:
+            if self.num_visual_blocks >= 16:
+                intermediate_layers = (7, 15)
+            else:
+                intermediate_layers = (3, 7)
+
+        self.intermediate_layers = tuple(int(i) for i in intermediate_layers)
+        for layer_idx in self.intermediate_layers:
+            if layer_idx < 0 or layer_idx >= self.num_visual_blocks:
+                raise ValueError(
+                    f"Invalid CLIP intermediate layer index {layer_idx}; "
+                    f"visual transformer has {self.num_visual_blocks} blocks."
+                )
 
         self.visual.eval()
         for param in self.visual.parameters():
@@ -211,6 +229,30 @@ class OpenCLIPImageEncoder(nn.Module):
         proj = proj.to(device=x.device, dtype=x.dtype)
         return x @ proj
 
+    @staticmethod
+    def _tokens_to_feature_map(
+        tokens: torch.Tensor,
+        grid_h: int,
+        grid_w: int,
+    ) -> torch.Tensor:
+        """
+        Args:
+            tokens: [B, Hc*Wc, D]
+
+        Returns:
+            feat_map: [B, D, Hc, Wc]
+        """
+        B, N, D = tokens.shape
+        expected = int(grid_h) * int(grid_w)
+        if N != expected:
+            raise ValueError(
+                f"Token count mismatch: expected {expected}, got {N}."
+            )
+
+        return tokens.reshape(B, int(grid_h), int(grid_w), D).permute(
+            0, 3, 1, 2
+        ).contiguous()
+
     def _prepare_vit_tokens(
         self,
         images: torch.Tensor,
@@ -256,20 +298,42 @@ class OpenCLIPImageEncoder(nn.Module):
     def _forward_full_vit_dense_tokens(
         self,
         images: torch.Tensor,
-    ) -> tuple[torch.Tensor, tuple[int, int]]:
+        return_intermediate: bool = False,
+    ) -> tuple[torch.Tensor, tuple[int, int], list[torch.Tensor]]:
         """
         Full ViT forward without final CLS pooling.
 
-        This is the intended dense CLIP path:
-            run all visual transformer blocks,
-            discard CLS only at the end,
-            keep patch tokens as dense features.
+        Args:
+            images: [B, 3, H_img, W_img]
+            return_intermediate: whether to collect intermediate block outputs.
+
+        Returns:
+            dense_tokens:
+                final projected patch tokens, [B, Hc*Wc, output_dim]
+            grid_hw:
+                (Hc, Wc)
+            mid_features:
+                selected intermediate CLIP ViT feature maps.
+                Each item is [B, D_native, Hc, Wc].
         """
         blocks = self._get_resblocks()
         x, (grid_h, grid_w) = self._prepare_vit_tokens(images)
 
-        for block in blocks:
+        mid_features: list[torch.Tensor] = []
+        target_layers = set(self.intermediate_layers) if return_intermediate else set()
+
+        for layer_idx, block in enumerate(blocks):
             x = self._call_resblock(block, x)
+
+            if layer_idx in target_layers:
+                patch_tokens_mid = x[:, 1:].contiguous()
+                mid_features.append(
+                    self._tokens_to_feature_map(
+                        patch_tokens_mid,
+                        grid_h=grid_h,
+                        grid_w=grid_w,
+                    )
+                )
 
         patch_tokens = x[:, 1:].contiguous()
 
@@ -281,13 +345,26 @@ class OpenCLIPImageEncoder(nn.Module):
             )
 
         dense_tokens = self._apply_visual_ln_post_and_projection(patch_tokens)
-        return dense_tokens, (int(grid_h), int(grid_w))
+        return dense_tokens, (int(grid_h), int(grid_w)), mid_features
 
-    def encode_image(self, images: torch.Tensor) -> torch.Tensor:
+    def encode_image_with_intermediate(self, images: torch.Tensor) -> dict:
+        """
+        Returns:
+            {
+                "feat_map": [B, D_clip, Hc, Wc],
+                "mid_features": List[[B, D_native, Hc, Wc]],
+                "mid_layer_indices": tuple[int, ...],
+            }
+        """
         self.visual.eval()
 
         with torch.no_grad():
-            dense_tokens, (grid_h, grid_w) = self._forward_full_vit_dense_tokens(images)
+            dense_tokens, (grid_h, grid_w), mid_features = (
+                self._forward_full_vit_dense_tokens(
+                    images,
+                    return_intermediate=True,
+                )
+            )
 
         feat_map = dense_tokens.reshape(
             images.shape[0],
@@ -296,7 +373,11 @@ class OpenCLIPImageEncoder(nn.Module):
             self.output_dim,
         ).permute(0, 3, 1, 2).contiguous()
 
-        return feat_map
+        return {
+            "feat_map": feat_map,
+            "mid_features": [x.contiguous() for x in mid_features],
+            "mid_layer_indices": self.intermediate_layers,
+        }
 
-    def forward(self, images: torch.Tensor) -> torch.Tensor:
-        return self.encode_image(images)
+    def forward(self, images: torch.Tensor) -> dict:
+        return self.encode_image_with_intermediate(images)

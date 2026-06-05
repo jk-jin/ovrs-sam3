@@ -18,6 +18,8 @@ class OpenCLIPConfig:
     pretrained: Optional[str] = None
     default_output: str = "feat_map"
 
+    image_intermediate_layers: list[int] = field(default_factory=lambda: [7, 15])
+
     prompt_templates: list[str] = field(
         default_factory=lambda: [
             "a remote sensing image of {}.",
@@ -47,8 +49,8 @@ class UpsamplerConfig:
     class_chunk_size: int = 4
     decoder_channels: list[int] = field(default_factory=lambda: [256, 128, 96, 64, 32])
     sam_guidance_channels: list[int] = field(default_factory=lambda: [32, 24, 16, 8])
-    score_channels: list[int] = field(default_factory=lambda: [8, 4, 4, 4])
-    score_input: str = "score_and_tanh_logit"
+    clip_guidance_channels: list[int] = field(default_factory=lambda: [32, 24])
+    clip_guidance_stage_indices: list[int] = field(default_factory=lambda: [0, 1])
     upsample_mode: str = "bilinear"
     norm: str = "group_norm"
     act: str = "gelu"
@@ -78,9 +80,12 @@ class SemanticCriterionConfig:
     ignore_index: int = 255
 
     final_bce_weight: float = 1.0
-    final_dice_weight: float = 1.0
+    final_dice_weight: float = 0.0
+    presence_loss_weight: float = 1.0
 
-    bce_absent_class_weight: float = 1.0
+    # 0.0 = absent classes not supervised for mask BCE.
+    # Set to 0.01 / 0.05 for mild absent-class suppression.
+    bce_absent_class_weight: float = 0.0
 
     eps: float = 1e-6
 

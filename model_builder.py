@@ -350,11 +350,19 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 f"got {len(upsampler_cfg.sam_guidance_channels)}."
             )
 
-        if len(upsampler_cfg.score_channels) != expected_stages:
+        for stage_idx in upsampler_cfg.clip_guidance_stage_indices:
+            if stage_idx < 0 or stage_idx >= expected_stages:
+                raise ValueError(
+                    "upsampler_cfg.clip_guidance_stage_indices contains invalid "
+                    f"stage index {stage_idx}; valid range is [0, {expected_stages - 1}]."
+                )
+
+        if len(upsampler_cfg.clip_guidance_channels) != len(
+            upsampler_cfg.clip_guidance_stage_indices
+        ):
             raise ValueError(
-                "upsampler_cfg.score_channels length must match "
-                f"the number of upsample stages. Expected {expected_stages}, "
-                f"got {len(upsampler_cfg.score_channels)}."
+                "upsampler_cfg.clip_guidance_channels length must match "
+                "upsampler_cfg.clip_guidance_stage_indices length."
             )
 
         return cfg
@@ -578,6 +586,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         image_encoder = OpenCLIPImageEncoder(
             visual=clip_model.visual,
             default_output=openclip_cfg.default_output,
+            intermediate_layers=list(openclip_cfg.image_intermediate_layers),
         )
 
         return text_encoder, image_encoder
@@ -690,8 +699,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             upsampler_class_chunk_size=int(upsampler_cfg.class_chunk_size),
             upsampler_decoder_channels=list(upsampler_cfg.decoder_channels),
             upsampler_sam_guidance_channels=list(upsampler_cfg.sam_guidance_channels),
-            upsampler_score_channels=list(upsampler_cfg.score_channels),
-            upsampler_score_input=str(upsampler_cfg.score_input),
+            upsampler_clip_guidance_channels=list(upsampler_cfg.clip_guidance_channels),
+            upsampler_clip_guidance_stage_indices=list(upsampler_cfg.clip_guidance_stage_indices),
             upsampler_upsample_mode=str(upsampler_cfg.upsample_mode),
             upsampler_norm=str(upsampler_cfg.norm),
             upsampler_act=str(upsampler_cfg.act),

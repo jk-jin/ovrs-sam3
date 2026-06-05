@@ -21,6 +21,7 @@ class ModelOutputKeys:
     class_feature_low: str = "class_feature_low"
 
     final_logits: str = "final_logits"
+    raw_final_score_map: str = "raw_final_score_map"
     final_score_map: str = "final_score_map"
     final_pred: str = "final_pred"
 
@@ -28,6 +29,15 @@ class ModelOutputKeys:
     sam3_score_low: str = "sam3_score_low"
 
     sam3_fpn_features: str = "sam3_fpn_features"
+
+    clip_mid_features: str = "clip_mid_features"
+    clip_dense_low: str = "clip_dense_low"
+
+    class_text_guidance: str = "class_text_guidance"
+    stage_text_guidance_history: str = "stage_text_guidance_history"
+
+    presence_logits: str = "presence_logits"
+    presence_score: str = "presence_score"
 
 
 OUTPUT_KEYS = ModelOutputKeys()

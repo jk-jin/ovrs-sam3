@@ -7,7 +7,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .data_misc import BatchedDatapoint, FindStage
-from .lowres_score_guided_sam_mixer import LowResScoreGuidedSamMixer
+from .class_text_guided_mask_prior_clip_fusion_mixer import (
+    ClassTextGuidedMaskPriorClipFusionFinalMixer,
+)
 from .geometry_encoders import Prompt
 from .task_modes import OUTPUT_KEYS, TASK_MODE_SEMANTIC, normalize_task_mode
 from .vl_combiner import SAM3VLBackbone
@@ -48,8 +50,8 @@ class Sam3Image(torch.nn.Module):
         upsampler_class_chunk_size: int = 4,
         upsampler_decoder_channels: Optional[List[int]] = None,
         upsampler_sam_guidance_channels: Optional[List[int]] = None,
-        upsampler_score_channels: Optional[List[int]] = None,
-        upsampler_score_input: str = "score_and_tanh_logit",
+        upsampler_clip_guidance_channels: Optional[List[int]] = None,
+        upsampler_clip_guidance_stage_indices: Optional[List[int]] = None,
         upsampler_upsample_mode: str = "bilinear",
         upsampler_norm: str = "group_norm",
         upsampler_act: str = "gelu",
@@ -108,6 +110,12 @@ class Sam3Image(torch.nn.Module):
 
         self.clip_text_dim = self._infer_clip_text_dim() if self.clip_text_encoder is not None else None
         self.clip_image_dim = self._infer_clip_image_dim() if self.clip_image_encoder is not None else None
+        self.clip_image_native_dim = (
+            int(getattr(self.clip_image_encoder, "native_dim", None))
+            if self.clip_image_encoder is not None
+            and hasattr(self.clip_image_encoder, "native_dim")
+            else self.clip_image_dim
+        )
         self.clip_align_dim = None
 
         if self.clip_text_dim is not None and self.clip_image_dim is not None:
@@ -127,7 +135,7 @@ class Sam3Image(torch.nn.Module):
                 "OpenCLIP image/text encoders are required by the final mixer."
             )
 
-        self.final_mixer = LowResScoreGuidedSamMixer(
+        self.final_mixer = ClassTextGuidedMaskPriorClipFusionFinalMixer(
             sam_dim=self.hidden_dim,
             fusion_layers=self.final_mixer_fusion_layers,
             num_heads=self.final_mixer_num_heads,
@@ -135,6 +143,7 @@ class Sam3Image(torch.nn.Module):
             clip_text_encoder=self.clip_text_encoder,
             clip_prompt_templates=self.clip_prompt_templates,
             normalize_label_for_clip=self.normalize_label_for_clip,
+            clip_image_native_dim=self.clip_image_native_dim,
             score_embed_dim=int(lowres_score_embed_dim),
             lowres_hidden_dim=int(lowres_hidden_dim),
             window_size=int(lowres_window_size),
@@ -151,12 +160,16 @@ class Sam3Image(torch.nn.Module):
                 if upsampler_sam_guidance_channels is not None
                 else None
             ),
-            upsampler_score_channels=(
-                list(upsampler_score_channels)
-                if upsampler_score_channels is not None
+            upsampler_clip_guidance_channels=(
+                list(upsampler_clip_guidance_channels)
+                if upsampler_clip_guidance_channels is not None
                 else None
             ),
-            upsampler_score_input=str(upsampler_score_input),
+            upsampler_clip_guidance_stage_indices=(
+                list(upsampler_clip_guidance_stage_indices)
+                if upsampler_clip_guidance_stage_indices is not None
+                else None
+            ),
             upsampler_upsample_mode=str(upsampler_upsample_mode),
             upsampler_norm=str(upsampler_norm),
             upsampler_act=str(upsampler_act),
@@ -329,17 +342,63 @@ class Sam3Image(torch.nn.Module):
 
         clip_img_batch = self._prepare_openclip_image_batch(raw_images=input.raw_images, device=device)
         with torch.no_grad():
-            clip_feat_map = self.clip_image_encoder(clip_img_batch)
+            clip_out = self.clip_image_encoder.encode_image_with_intermediate(
+                clip_img_batch
+            )
+
+        if not isinstance(clip_out, dict):
+            raise TypeError(
+                "clip_image_encoder must return a dict with keys "
+                "'feat_map', 'mid_features', and 'mid_layer_indices'."
+            )
+
+        clip_feat_map = clip_out["feat_map"]
+        clip_mid_features = clip_out["mid_features"]
+        clip_mid_layer_indices = clip_out["mid_layer_indices"]
 
         if not isinstance(clip_feat_map, torch.Tensor) or clip_feat_map.ndim != 4:
             raise ValueError(
-                "clip_image_encoder must return a tensor with shape [B, D_clip, Hc, Wc]."
+                "clip_out['feat_map'] must be [B, D_clip, Hc, Wc]."
+            )
+
+        if not isinstance(clip_mid_features, list):
+            raise TypeError("clip_out['mid_features'] must be a list of tensors.")
+
+        if len(clip_mid_features) != 2:
+            raise ValueError(
+                f"Expected exactly 2 CLIP middle features, got {len(clip_mid_features)}."
             )
 
         clip_feat_map = clip_feat_map.detach().contiguous()
+        clip_grid_hw = (
+            int(clip_feat_map.shape[-2]),
+            int(clip_feat_map.shape[-1]),
+        )
+
+        clean_mid_features = []
+        for i, feat in enumerate(clip_mid_features):
+            if not isinstance(feat, torch.Tensor) or feat.ndim != 4:
+                raise ValueError(
+                    f"clip_mid_features[{i}] must be [B, D, Hc, Wc], "
+                    f"got {None if not isinstance(feat, torch.Tensor) else tuple(feat.shape)}."
+                )
+            if int(feat.shape[0]) != int(clip_feat_map.shape[0]):
+                raise ValueError(
+                    f"clip_mid_features[{i}] batch mismatch: "
+                    f"{feat.shape[0]} vs {clip_feat_map.shape[0]}."
+                )
+            if tuple(feat.shape[-2:]) != clip_grid_hw:
+                raise ValueError(
+                    f"clip_mid_features[{i}] spatial size mismatch: "
+                    f"{tuple(feat.shape[-2:])} vs {clip_grid_hw}."
+                )
+            clean_mid_features.append(feat.detach().contiguous())
+
         return {
             "clip_image_feat_map_native": clip_feat_map,
-            "clip_image_grid_hw": (int(clip_feat_map.shape[-2]), int(clip_feat_map.shape[-1])),
+            "clip_image_grid_hw": clip_grid_hw,
+            OUTPUT_KEYS.clip_mid_features: clean_mid_features,
+            "clip_mid_layer_indices": tuple(int(x) for x in clip_mid_layer_indices),
         }
 
     def build_sam3_pixel_feature_from_backbone(
@@ -576,6 +635,8 @@ class Sam3Image(torch.nn.Module):
             OUTPUT_KEYS.semantic_logits: semantic_logits,
             OUTPUT_KEYS.class_feature_low: class_feature_low,
             OUTPUT_KEYS.sam3_fpn_features: sam3_fpn_features,
+            OUTPUT_KEYS.clip_mid_features: clip_image_cache[OUTPUT_KEYS.clip_mid_features],
+            "clip_mid_layer_indices": clip_image_cache["clip_mid_layer_indices"],
             "sam3_text_features": sam3_text_features,
             "sam3_text_mask": sam3_text_mask,
             "clip_image_feat_map": clip_image_cache["clip_image_feat_map_native"],
@@ -692,6 +753,7 @@ class Sam3Image(torch.nn.Module):
         sam3_text_mask: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
         class_names: List[str],
+        clip_mid_features: List[torch.Tensor],
     ) -> Dict[str, torch.Tensor]:
         semantic_logits = self._ensure_4d_logits(
             semantic_logits,
@@ -719,6 +781,7 @@ class Sam3Image(torch.nn.Module):
             sam3_text_mask=sam3_text_mask,
             clip_image_feat_map=clip_image_feat_map,
             class_names=class_names,
+            clip_mid_features=clip_mid_features,
         )
 
         required_keys = (OUTPUT_KEYS.final_logits,)
@@ -736,6 +799,7 @@ class Sam3Image(torch.nn.Module):
             OUTPUT_KEYS.class_feature_low,
             OUTPUT_KEYS.clip_score_maps,
             OUTPUT_KEYS.sam3_score_low,
+            OUTPUT_KEYS.clip_mid_features,
         ):
             if key in mixer_outputs:
                 out[key] = mixer_outputs[key]
@@ -765,6 +829,8 @@ class Sam3Image(torch.nn.Module):
         sam3_fpn_features = final_mixer_cache[OUTPUT_KEYS.sam3_fpn_features]
         sam3_text_features = final_mixer_cache["sam3_text_features"]
         sam3_text_mask = final_mixer_cache["sam3_text_mask"]
+
+        clip_mid_features = final_mixer_cache[OUTPUT_KEYS.clip_mid_features]
 
         class_names = list(batch.find_text_batch)
         if len(class_names) == 0:
@@ -809,6 +875,7 @@ class Sam3Image(torch.nn.Module):
             sam3_text_mask=sam3_text_mask,
             clip_image_feat_map=clip_image_feat_map,
             class_names=class_names,
+            clip_mid_features=clip_mid_features,
         )
 
     def _get_img_feats(self, backbone_out, img_ids):

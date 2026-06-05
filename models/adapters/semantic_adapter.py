@@ -44,6 +44,26 @@ class SemanticSegAdapter(nn.Module):
         return x
 
     @staticmethod
+    def _as_presence_score(
+        x: torch.Tensor,
+        batch_size: int,
+        num_classes: int,
+        key: str,
+    ) -> torch.Tensor:
+        if x.dim() != 2:
+            raise ValueError(
+                f"Expected {key} as [B, C], got {tuple(x.shape)}."
+            )
+
+        if tuple(x.shape) != (int(batch_size), int(num_classes)):
+            raise ValueError(
+                f"Expected {key} shape {(int(batch_size), int(num_classes))}, "
+                f"got {tuple(x.shape)}."
+            )
+
+        return x
+
+    @staticmethod
     def _infer_expected_num_classes(
         batch: BatchedDatapoint,
         expected_num_classes: Optional[int],
@@ -125,29 +145,47 @@ class SemanticSegAdapter(nn.Module):
             expected_num_classes=expected_num_classes,
         )
 
+        B, C = int(final_logits.shape[0]), int(final_logits.shape[1])
+
+        presence_logits = self._as_presence_score(
+            self._require(raw_outputs, OUTPUT_KEYS.presence_logits),
+            batch_size=B,
+            num_classes=C,
+            key=OUTPUT_KEYS.presence_logits,
+        )
+        presence_score = self._as_presence_score(
+            self._require(raw_outputs, OUTPUT_KEYS.presence_score),
+            batch_size=B,
+            num_classes=C,
+            key=OUTPUT_KEYS.presence_score,
+        )
+
         outputs = dict(raw_outputs)
 
         outputs[OUTPUT_KEYS.semantic_logits] = semantic_logits
         outputs[OUTPUT_KEYS.final_logits] = final_logits
+        outputs[OUTPUT_KEYS.presence_logits] = presence_logits
+        outputs[OUTPUT_KEYS.presence_score] = presence_score
 
-        # BCE/Dice treats each class as an independent binary mask.
-        # Therefore score maps should be sigmoid-style, not softmax-style.
         outputs[OUTPUT_KEYS.semantic_score_map] = semantic_logits.sigmoid()
-        outputs[OUTPUT_KEYS.final_score_map] = final_logits.sigmoid()
 
-        # Fallback prediction only. Evaluator / visualization should prefer
-        # final_score_map and apply prob_thd to suppress low-confidence pixels.
-        outputs[OUTPUT_KEYS.final_pred] = outputs[
-            OUTPUT_KEYS.final_score_map
-        ].argmax(dim=1)
+        raw_final_score_map = final_logits.sigmoid()
+        final_score_map = raw_final_score_map * presence_score[:, :, None, None]
 
-        # Pass through optional keys that the new mixer may produce.
+        outputs[OUTPUT_KEYS.raw_final_score_map] = raw_final_score_map
+        outputs[OUTPUT_KEYS.final_score_map] = final_score_map
+        outputs[OUTPUT_KEYS.final_pred] = final_score_map.argmax(dim=1)
+
         for key in (
             OUTPUT_KEYS.class_tokens,
             OUTPUT_KEYS.class_feature_low,
             OUTPUT_KEYS.clip_score_maps,
             OUTPUT_KEYS.sam3_score_low,
             OUTPUT_KEYS.sam3_fpn_features,
+            OUTPUT_KEYS.clip_mid_features,
+            OUTPUT_KEYS.clip_dense_low,
+            OUTPUT_KEYS.class_text_guidance,
+            OUTPUT_KEYS.stage_text_guidance_history,
         ):
             if key in raw_outputs:
                 outputs[key] = raw_outputs[key]
