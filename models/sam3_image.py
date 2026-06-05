@@ -342,9 +342,7 @@ class Sam3Image(torch.nn.Module):
 
         clip_img_batch = self._prepare_openclip_image_batch(raw_images=input.raw_images, device=device)
         with torch.no_grad():
-            clip_out = self.clip_image_encoder.encode_image_with_intermediate(
-                clip_img_batch
-            )
+            clip_out = self.clip_image_encoder(clip_img_batch)
 
         if not isinstance(clip_out, dict):
             raise TypeError(
@@ -784,26 +782,18 @@ class Sam3Image(torch.nn.Module):
             clip_mid_features=clip_mid_features,
         )
 
-        required_keys = (OUTPUT_KEYS.final_logits,)
+        required_keys = (
+            OUTPUT_KEYS.final_logits,
+            OUTPUT_KEYS.presence_logits,
+            OUTPUT_KEYS.presence_score,
+        )
         for key in required_keys:
             if key not in mixer_outputs:
                 raise ValueError(f"final_mixer output is missing key={key!r}.")
 
-        out = {
-            OUTPUT_KEYS.semantic_logits: semantic_logits,
-            OUTPUT_KEYS.final_logits: mixer_outputs[OUTPUT_KEYS.final_logits],
-        }
-
-        for key in (
-            OUTPUT_KEYS.class_tokens,
-            OUTPUT_KEYS.class_feature_low,
-            OUTPUT_KEYS.clip_score_maps,
-            OUTPUT_KEYS.sam3_score_low,
-            OUTPUT_KEYS.clip_mid_features,
-        ):
-            if key in mixer_outputs:
-                out[key] = mixer_outputs[key]
-
+        out = dict(mixer_outputs)
+        out[OUTPUT_KEYS.semantic_logits] = semantic_logits
+        out[OUTPUT_KEYS.final_logits] = mixer_outputs[OUTPUT_KEYS.final_logits]
         return out
 
     def run_final_mixer_from_cache(
@@ -836,13 +826,12 @@ class Sam3Image(torch.nn.Module):
         if len(class_names) == 0:
             raise ValueError("batch.find_text_batch is empty.")
 
-        cached_class_names = final_mixer_cache.get("class_names", None)
-        if cached_class_names is not None:
-            cached_class_names = list(cached_class_names)
-            if cached_class_names != class_names:
-                raise ValueError(
-                    "Cached class_names do not match batch.find_text_batch."
-                )
+        cached_class_names = final_mixer_cache["class_names"]
+        cached_class_names = list(cached_class_names)
+        if cached_class_names != class_names:
+            raise ValueError(
+                "Cached class_names do not match batch.find_text_batch."
+            )
 
         if semantic_logits.dim() != 4:
             raise ValueError(
@@ -856,16 +845,7 @@ class Sam3Image(torch.nn.Module):
                 f"{semantic_logits.shape[1]} vs {len(class_names)}."
             )
 
-        # Use cached CLIP image features (already computed in build_final_mixer_cache).
-        clip_image_feat_map = final_mixer_cache.get("clip_image_feat_map", None)
-        if clip_image_feat_map is None:
-            clip_image_cache = self._build_clip_image_cache(
-                input=batch,
-                device=self.device,
-            )
-            if clip_image_cache is None:
-                raise ValueError("CLIP image cache is required for final mixer.")
-            clip_image_feat_map = clip_image_cache["clip_image_feat_map_native"]
+        clip_image_feat_map = final_mixer_cache["clip_image_feat_map"]
 
         return self.run_final_mixer(
             semantic_logits=semantic_logits,
