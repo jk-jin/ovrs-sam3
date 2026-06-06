@@ -782,11 +782,7 @@ class Sam3Image(torch.nn.Module):
             clip_mid_features=clip_mid_features,
         )
 
-        required_keys = (
-            OUTPUT_KEYS.final_logits,
-            OUTPUT_KEYS.presence_logits,
-            OUTPUT_KEYS.presence_score,
-        )
+        required_keys = (OUTPUT_KEYS.final_logits,)
         for key in required_keys:
             if key not in mixer_outputs:
                 raise ValueError(f"final_mixer output is missing key={key!r}.")

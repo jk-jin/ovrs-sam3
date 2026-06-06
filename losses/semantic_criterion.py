@@ -15,20 +15,18 @@ TensorDict = Dict[str, torch.Tensor]
 
 class SemanticCriterion(nn.Module):
     """
-    Presence-aware semantic criterion.
+    Semantic segmentation criterion.
 
     Losses:
         1. mask BCE on final_logits
            - all pixels participate
            - ignore_index pixels are NOT removed
            - absent class pairs are weighted by bce_absent_class_weight
+           - valid/ignore pixels weighted independently
 
         2. present-only Dice on final_logits
            - optional
            - controlled by final_dice_weight
-
-        3. image-level presence BCE on presence_logits
-           - supervises whether each class appears in each image
     """
 
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
@@ -54,11 +52,6 @@ class SemanticCriterion(nn.Module):
                 f"SemanticCriterion requires outputs[{OUTPUT_KEYS.final_logits!r}]."
             )
 
-        if OUTPUT_KEYS.presence_logits not in outputs:
-            raise ValueError(
-                f"SemanticCriterion requires outputs[{OUTPUT_KEYS.presence_logits!r}]."
-            )
-
         return self._forward_final(outputs=outputs, targets=targets)
 
     def _forward_final(
@@ -72,19 +65,7 @@ class SemanticCriterion(nn.Module):
             "[B, C, H, W]",
         )
 
-        presence_logits = self._extract_2d_tensor(
-            outputs,
-            OUTPUT_KEYS.presence_logits,
-            "[B, C]",
-        )
-
         B, C, H, W = final_logits.shape
-
-        if tuple(presence_logits.shape) != (B, C):
-            raise ValueError(
-                f"{OUTPUT_KEYS.presence_logits} must be [B, C] = {(B, C)}, "
-                f"got {tuple(presence_logits.shape)}."
-            )
 
         label_map = self._extract_label_map(targets)
         label_map = self._resize_label_map_to_hw(
@@ -115,7 +96,6 @@ class SemanticCriterion(nn.Module):
             return {
                 "loss_final_bce": zero,
                 "loss_final_dice": zero,
-                "loss_presence_bce": zero,
                 "total_loss": zero,
                 "num_valid": torch.tensor(
                     0,
@@ -127,8 +107,11 @@ class SemanticCriterion(nn.Module):
         loss_final_bce = self._binary_cross_entropy_pair_weighted_all_pixels(
             logits=final_logits,
             target=target,
+            valid_mask=valid_mask,
             presence_target=presence_target,
             absent_weight=float(self.cfg.bce_absent_class_weight),
+            valid_pixel_weight=float(self.cfg.bce_valid_pixel_weight),
+            ignore_pixel_weight=float(self.cfg.bce_ignore_pixel_weight),
             eps=float(self.cfg.eps),
         )
 
@@ -143,33 +126,20 @@ class SemanticCriterion(nn.Module):
         else:
             loss_final_dice = zero
 
-        loss_presence_bce = self._balanced_presence_bce_with_logits(
-            presence_logits=presence_logits,
-            presence_target=presence_target,
-            eps=float(self.cfg.eps),
-        )
-
-        num_presence_positive = presence_target.sum()
-        num_presence_negative = presence_target.numel() - num_presence_positive
-
         total_loss = (
             float(self.cfg.final_bce_weight) * loss_final_bce
             + float(self.cfg.final_dice_weight) * loss_final_dice
-            + float(self.cfg.presence_loss_weight) * loss_presence_bce
         )
 
         return {
             "loss_final_bce": loss_final_bce,
             "loss_final_dice": loss_final_dice,
-            "loss_presence_bce": loss_presence_bce,
             "total_loss": total_loss,
             "num_valid": torch.tensor(
                 num_loss_pixels,
                 device=final_logits.device,
                 dtype=torch.long,
             ),
-            "num_presence_positive": num_presence_positive.detach(),
-            "num_presence_negative": num_presence_negative.detach(),
         }
 
     @staticmethod
@@ -186,21 +156,6 @@ class SemanticCriterion(nn.Module):
         if tensor is None:
             raise ValueError(f"SemanticCriterion expects outputs[{key!r}].")
         if tensor.dim() != 4:
-            raise ValueError(
-                f"Expected {key} as {shape_name}, got {tuple(tensor.shape)}."
-            )
-        return tensor
-
-    @staticmethod
-    def _extract_2d_tensor(
-        outputs: TensorDict,
-        key: str,
-        shape_name: str,
-    ) -> torch.Tensor:
-        tensor = outputs.get(key, None)
-        if tensor is None:
-            raise ValueError(f"SemanticCriterion expects outputs[{key!r}].")
-        if tensor.dim() != 2:
             raise ValueError(
                 f"Expected {key} as {shape_name}, got {tuple(tensor.shape)}."
             )
@@ -302,28 +257,57 @@ class SemanticCriterion(nn.Module):
     def _binary_cross_entropy_pair_weighted_all_pixels(
         logits: torch.Tensor,
         target: torch.Tensor,
+        valid_mask: torch.Tensor,
         presence_target: torch.Tensor,
         absent_weight: float,
+        valid_pixel_weight: float,
+        ignore_pixel_weight: float,
         eps: float,
     ) -> torch.Tensor:
         """
-        BCE over all pixels.
+        BCE over all pixels with per-pixel and per-pair weighting.
 
-        present image-class pairs:
-            pair weight = 1.0
+        Pixel-level weights:
+            valid pixels (label_map != ignore_index): valid_pixel_weight
+            ignore pixels (label_map == ignore_index): ignore_pixel_weight
 
-        absent image-class pairs:
-            pair weight = absent_weight
+        Pair-level weights:
+            present image-class pairs: 1.0
+            absent image-class pairs:  absent_weight
 
-        ignore_index pixels:
-            not removed; they are already target=0 for every class.
+        ignore_index pixels are not removed; they are already target=0 for every class.
         """
         pixel_loss = F.binary_cross_entropy_with_logits(
             logits,
             target,
             reduction="none",
         )
-        pair_loss = pixel_loss.flatten(2).mean(dim=2)
+
+        valid_pixel_weight = max(float(valid_pixel_weight), 0.0)
+        ignore_pixel_weight = max(float(ignore_pixel_weight), 0.0)
+
+        if valid_mask.dim() != 3:
+            raise ValueError(
+                f"valid_mask must be [B, H, W], got {tuple(valid_mask.shape)}."
+            )
+
+        if tuple(valid_mask.shape) != tuple(logits.shape[0:1] + logits.shape[-2:]):
+            raise ValueError(
+                "valid_mask shape mismatch: "
+                f"expected {(logits.shape[0], logits.shape[-2], logits.shape[-1])}, "
+                f"got {tuple(valid_mask.shape)}."
+            )
+
+        pixel_weight = torch.where(
+            valid_mask[:, None],
+            torch.full_like(pixel_loss, valid_pixel_weight),
+            torch.full_like(pixel_loss, ignore_pixel_weight),
+        )
+
+        weighted_pixel_loss = pixel_loss * pixel_weight
+
+        pixel_weight_sum = pixel_weight.flatten(2).sum(dim=2).clamp_min(float(eps))
+        pair_loss = weighted_pixel_loss.flatten(2).sum(dim=2) / pixel_weight_sum
 
         absent_weight = max(float(absent_weight), 0.0)
 
@@ -339,64 +323,6 @@ class SemanticCriterion(nn.Module):
             return logits.sum() * 0.0
 
         return (pair_loss * pair_weight).sum() / weight_sum.clamp_min(float(eps))
-
-    @staticmethod
-    def _balanced_presence_bce_with_logits(
-        presence_logits: torch.Tensor,
-        presence_target: torch.Tensor,
-        eps: float,
-    ) -> torch.Tensor:
-        """
-        Balanced image-level presence BCE.
-
-        If both positive and negative samples exist:
-            loss = 0.5 * mean(pos_bce) + 0.5 * mean(neg_bce)
-
-        This prevents negative image-class pairs from dominating the presence loss.
-        """
-        if presence_logits.shape != presence_target.shape:
-            raise ValueError(
-                "presence_logits and presence_target must have the same shape, "
-                f"got {tuple(presence_logits.shape)} vs {tuple(presence_target.shape)}."
-            )
-
-        per_pair_loss = F.binary_cross_entropy_with_logits(
-            presence_logits,
-            presence_target,
-            reduction="none",
-        )
-
-        positive_mask = presence_target > 0.5
-        negative_mask = ~positive_mask
-
-        num_positive = positive_mask.to(dtype=per_pair_loss.dtype).sum()
-        num_negative = negative_mask.to(dtype=per_pair_loss.dtype).sum()
-
-        has_positive = bool(num_positive.detach().gt(0).item())
-        has_negative = bool(num_negative.detach().gt(0).item())
-
-        if has_positive and has_negative:
-            positive_loss = (
-                per_pair_loss * positive_mask.to(dtype=per_pair_loss.dtype)
-            ).sum() / num_positive.clamp_min(float(eps))
-
-            negative_loss = (
-                per_pair_loss * negative_mask.to(dtype=per_pair_loss.dtype)
-            ).sum() / num_negative.clamp_min(float(eps))
-
-            return 0.5 * positive_loss + 0.5 * negative_loss
-
-        if has_positive:
-            return (
-                per_pair_loss * positive_mask.to(dtype=per_pair_loss.dtype)
-            ).sum() / num_positive.clamp_min(float(eps))
-
-        if has_negative:
-            return (
-                per_pair_loss * negative_mask.to(dtype=per_pair_loss.dtype)
-            ).sum() / num_negative.clamp_min(float(eps))
-
-        return presence_logits.sum() * 0.0
 
     def _dice_loss_present_mean_from_logits(
         self,

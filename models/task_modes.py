@@ -34,10 +34,6 @@ class ModelOutputKeys:
     clip_dense_low: str = "clip_dense_low"
 
     class_text_guidance: str = "class_text_guidance"
-    stage_text_guidance_history: str = "stage_text_guidance_history"
-
-    presence_logits: str = "presence_logits"
-    presence_score: str = "presence_score"
 
 
 OUTPUT_KEYS = ModelOutputKeys()

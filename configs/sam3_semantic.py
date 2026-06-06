@@ -3,7 +3,7 @@ _base_ = [
     "./_base_/optimizer.py",
     "./_base_/schedule.py",
     "./_base_/visualization.py",
-    "./datasets/isaid.py",
+    "./datasets/loveda.py",
 ]
 
 model = dict(
@@ -85,11 +85,16 @@ model = dict(
 
         final_bce_weight=1.0,
         final_dice_weight=0.0,
-        presence_loss_weight=0.2,
 
         # 0.0 = absent classes not supervised for mask BCE.
         # Set to 0.01 / 0.05 for mild absent-class suppression.
         bce_absent_class_weight=0.0,
+
+        # BCE pixel weights:
+        # valid pixels keep full supervision;
+        # ignore pixels get weaker suppression to avoid over-penalizing unlabeled regions.
+        bce_valid_pixel_weight=5.0,
+        bce_ignore_pixel_weight=0.1,
 
         eps=1e-6,
     ),
@@ -107,7 +112,7 @@ val_dataloader = dict(
 
 eval_cfg = dict(
     ignore_index=255,
-    prob_thd=0.2,
+    prob_thd=0.5,
     bg_idx=0,
     use_score_map=True,
 )

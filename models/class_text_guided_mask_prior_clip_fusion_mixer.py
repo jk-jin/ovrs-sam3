@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .clip_guided_upsampler import SamFpnClipGuidedUpsampler
-from .final_mask_head import FinalMaskConvHead
+from .final_mask_head import FinalScoreFusionHead
 from .lowres_aggregator import TextGuidedLowResAggregator
 from .task_modes import OUTPUT_KEYS
 
@@ -183,65 +183,6 @@ class ClipDenseFeatureProjector(nn.Module):
             )
 
         return self.proj(x).contiguous()
-
-
-class PresenceHead(nn.Module):
-    """
-    Predict per-class image-level presence from stage-wise guidance history.
-
-    Input:
-        stage_text_guidance_history: [B, C, S, D]
-
-    Output:
-        presence_logits: [B, C]
-    """
-
-    def __init__(
-        self,
-        hidden_dim: int = 256,
-        num_stages: int = 4,
-        dropout: float = 0.1,
-    ):
-        super().__init__()
-
-        self.hidden_dim = int(hidden_dim)
-        self.num_stages = int(num_stages)
-
-        self.stage_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
-
-        self.mlp = nn.Sequential(
-            nn.LayerNorm(self.hidden_dim),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.GELU(),
-            nn.Dropout(float(dropout)),
-            nn.Linear(self.hidden_dim, 1),
-        )
-
-    def forward(self, stage_text_guidance_history: torch.Tensor) -> torch.Tensor:
-        if stage_text_guidance_history.dim() != 4:
-            raise ValueError(
-                "stage_text_guidance_history must be [B, C, S, D], "
-                f"got {tuple(stage_text_guidance_history.shape)}."
-            )
-
-        B, C, S, D = stage_text_guidance_history.shape
-
-        if S != self.num_stages:
-            raise ValueError(
-                f"Expected {self.num_stages} stages, got {S}."
-            )
-
-        if D != self.hidden_dim:
-            raise ValueError(
-                f"Expected hidden_dim={self.hidden_dim}, got {D}."
-            )
-
-        t = self.stage_proj(stage_text_guidance_history)
-        t = t.mean(dim=2)
-        # [B, C, D]
-
-        presence_logits = self.mlp(t).squeeze(-1)
-        return presence_logits.contiguous()
 
 
 class ClassTextGuidanceBuilder(nn.Module):
@@ -704,8 +645,6 @@ class ClassTextGuidedMaskPriorClipFusionFinalMixer(nn.Module):
                SAM FPN guidance
              + CLIP middle-layer guidance.
         9. Predict final mask logits.
-       10. Refine class text guidance across upsample stages.
-       11. Predict image-level class presence logits.
 
     Frozen:
         SAM3 backbone and original SAM3 heads.
@@ -841,22 +780,12 @@ class ClassTextGuidedMaskPriorClipFusionFinalMixer(nn.Module):
             norm=str(upsampler_norm),
             act=str(upsampler_act),
             class_chunk_size=int(upsampler_class_chunk_size),
-            presence_text_dim=int(lowres_hidden_dim),
-            presence_num_heads=int(num_heads),
-            presence_dropout=float(dropout),
         )
 
         # 7. Mask head
-        self.mask_head = FinalMaskConvHead(
+        self.mask_head = FinalScoreFusionHead(
             in_ch=self.upsampler.out_ch,
             class_chunk_size=int(upsampler_class_chunk_size),
-        )
-
-        # 8. Presence head
-        self.presence_head = PresenceHead(
-            hidden_dim=int(lowres_hidden_dim),
-            num_stages=len(self.upsampler.blocks),
-            dropout=dropout,
         )
 
     def project_class_feature_low(
@@ -957,21 +886,16 @@ class ClassTextGuidedMaskPriorClipFusionFinalMixer(nn.Module):
             class_text_guidance=class_text_guidance,
         )
 
-        # 9. Upsample with SAM FPN + CLIP middle features + presence refinement
-        x_up, stage_text_guidance_history = self.upsampler(
+        # 9. Upsample with SAM FPN + CLIP middle features
+        x_up = self.upsampler(
             x_low_refined=x,
-            class_text_guidance=class_text_guidance,
             final_hw=tuple(semantic_logits.shape[-2:]),
             sam_fpn_features=sam3_fpn_features,
             clip_mid_features=clip_mid_features,
         )
 
-        # 10. Final mask
-        final_logits = self.mask_head(x_up)
-
-        # 11. Presence
-        presence_logits = self.presence_head(stage_text_guidance_history)
-        presence_score = torch.sigmoid(presence_logits)
+        # 10. Final mask with SAM3 score fusion
+        final_logits = self.mask_head(x_up, semantic_logits)
 
         out = {
             OUTPUT_KEYS.final_logits: final_logits.contiguous(),
@@ -980,11 +904,6 @@ class ClassTextGuidedMaskPriorClipFusionFinalMixer(nn.Module):
             OUTPUT_KEYS.clip_score_maps: clip_score_maps.contiguous(),
             OUTPUT_KEYS.sam3_score_low: sam3_score_low.contiguous(),
             OUTPUT_KEYS.class_text_guidance: class_text_guidance.contiguous(),
-            OUTPUT_KEYS.stage_text_guidance_history: (
-                stage_text_guidance_history.contiguous()
-            ),
-            OUTPUT_KEYS.presence_logits: presence_logits.contiguous(),
-            OUTPUT_KEYS.presence_score: presence_score.contiguous(),
             OUTPUT_KEYS.clip_mid_features: [
                 feat.contiguous() for feat in clip_mid_features
             ],

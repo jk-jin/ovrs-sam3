@@ -6,6 +6,7 @@ visualization = dict(
 
     save_original=True,
     save_prediction=True,
+    save_raw_final_prediction=True,
     save_ground_truth=True,
     save_semantic_prediction=True,
 

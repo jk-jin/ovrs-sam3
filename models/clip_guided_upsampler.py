@@ -275,177 +275,6 @@ class ClipGuidedUpBlock(nn.Module):
         return torch.cat(chunk_outputs, dim=1).contiguous()
 
 
-class StagewisePresenceRefiner(nn.Module):
-    """
-    Update per-class text guidance after each upsample stage.
-
-    For each stage:
-        1. each class guidance cross-attends to its own class feature map
-        2. all class guidance vectors self-attend across classes
-
-    Input:
-        class_text_guidance: [B, C, D_t]
-        x_stage:             [B, C, D_x, H, W]
-
-    Output:
-        updated_guidance: [B, C, D_t]
-    """
-
-    def __init__(
-        self,
-        text_dim: int,
-        stage_channels: Sequence[int],
-        num_heads: int = 8,
-        dropout: float = 0.1,
-    ):
-        super().__init__()
-
-        self.text_dim = int(text_dim)
-        self.num_heads = int(num_heads)
-
-        if self.text_dim % self.num_heads != 0:
-            raise ValueError(
-                f"text_dim={text_dim} must be divisible by num_heads={num_heads}."
-            )
-
-        self.stage_feature_projs = nn.ModuleList([
-            nn.Sequential(
-                nn.Conv2d(int(ch), self.text_dim, kernel_size=1, bias=False),
-                nn.GroupNorm(min(8, self.text_dim), self.text_dim),
-                nn.GELU(),
-            )
-            for ch in stage_channels
-        ])
-
-        self.cross_attn = nn.ModuleList([
-            nn.MultiheadAttention(
-                embed_dim=self.text_dim,
-                num_heads=self.num_heads,
-                dropout=float(dropout),
-                batch_first=True,
-            )
-            for _ in stage_channels
-        ])
-
-        self.cross_norm = nn.ModuleList([
-            nn.LayerNorm(self.text_dim)
-            for _ in stage_channels
-        ])
-
-        self.self_attn = nn.ModuleList([
-            nn.MultiheadAttention(
-                embed_dim=self.text_dim,
-                num_heads=self.num_heads,
-                dropout=float(dropout),
-                batch_first=True,
-            )
-            for _ in stage_channels
-        ])
-
-        self.self_norm = nn.ModuleList([
-            nn.LayerNorm(self.text_dim)
-            for _ in stage_channels
-        ])
-
-        self.ffn = nn.ModuleList([
-            nn.Sequential(
-                nn.LayerNorm(self.text_dim),
-                nn.Linear(self.text_dim, self.text_dim * 4),
-                nn.GELU(),
-                nn.Dropout(float(dropout)),
-                nn.Linear(self.text_dim * 4, self.text_dim),
-                nn.Dropout(float(dropout)),
-            )
-            for _ in stage_channels
-        ])
-
-    def forward_stage(
-        self,
-        class_text_guidance: torch.Tensor,
-        x_stage: torch.Tensor,
-        stage_idx: int,
-        presence_pool_hw: Tuple[int, int],
-    ) -> torch.Tensor:
-        if class_text_guidance.dim() != 3:
-            raise ValueError(
-                f"class_text_guidance must be [B, C, D], "
-                f"got {tuple(class_text_guidance.shape)}."
-            )
-
-        if x_stage.dim() != 5:
-            raise ValueError(
-                f"x_stage must be [B, C, D_x, H, W], got {tuple(x_stage.shape)}."
-            )
-
-        B, C, D_t = class_text_guidance.shape
-        Bx, Cx, D_x, H, W = x_stage.shape
-
-        if (Bx, Cx) != (B, C):
-            raise ValueError(
-                f"x_stage batch/class mismatch: expected {(B, C)}, got {(Bx, Cx)}."
-            )
-
-        if D_t != self.text_dim:
-            raise ValueError(
-                f"class_text_guidance dim mismatch: expected {self.text_dim}, got {D_t}."
-            )
-
-        if stage_idx < 0 or stage_idx >= len(self.stage_feature_projs):
-            raise IndexError(
-                f"stage_idx={stage_idx} out of range for "
-                f"{len(self.stage_feature_projs)} presence stages."
-            )
-
-        pool_h = int(presence_pool_hw[0])
-        pool_w = int(presence_pool_hw[1])
-
-        if pool_h <= 0 or pool_w <= 0:
-            raise ValueError(
-                f"presence_pool_hw must be positive, got {presence_pool_hw}."
-            )
-
-        x_flat = x_stage.reshape(B * C, D_x, H, W)
-
-        # Critical memory fix:
-        # pool BEFORE projection and attention.
-        if (H, W) != (pool_h, pool_w):
-            x_flat = F.adaptive_avg_pool2d(
-                x_flat,
-                output_size=(pool_h, pool_w),
-            )
-
-        kv = self.stage_feature_projs[stage_idx](x_flat)
-        kv = kv.flatten(2).transpose(1, 2).contiguous()
-        # [B*C, pool_h*pool_w, D_t]
-
-        q = class_text_guidance.reshape(B * C, 1, D_t)
-
-        cross_out, _ = self.cross_attn[stage_idx](
-            query=q,
-            key=kv,
-            value=kv,
-            need_weights=False,
-        )
-
-        guidance_after_cross = self.cross_norm[stage_idx](
-            q + cross_out
-        ).reshape(B, C, D_t)
-
-        self_out, _ = self.self_attn[stage_idx](
-            query=guidance_after_cross,
-            key=guidance_after_cross,
-            value=guidance_after_cross,
-            need_weights=False,
-        )
-
-        guidance_after_self = self.self_norm[stage_idx](
-            guidance_after_cross + self_out
-        )
-
-        updated = guidance_after_self + self.ffn[stage_idx](guidance_after_self)
-        return updated.contiguous()
-
-
 class SamFpnClipGuidedUpsampler(nn.Module):
     """
     Four-stage upsampler.
@@ -474,9 +303,6 @@ class SamFpnClipGuidedUpsampler(nn.Module):
         norm: str = "group_norm",
         act: str = "gelu",
         class_chunk_size: int = 4,
-        presence_text_dim: int = 256,
-        presence_num_heads: int = 8,
-        presence_dropout: float = 0.1,
     ):
         super().__init__()
 
@@ -553,13 +379,6 @@ class SamFpnClipGuidedUpsampler(nn.Module):
         self.out_ch = int(prev_ch)
         self.clip_guidance_stage_indices = tuple(clip_guidance_stage_indices)
 
-        self.presence_refiner = StagewisePresenceRefiner(
-            text_dim=int(presence_text_dim),
-            stage_channels=stage_out_chs,
-            num_heads=int(presence_num_heads),
-            dropout=float(presence_dropout),
-        )
-
         self._target_hws: Optional[List[Tuple[int, int]]] = None
         self._resolved_low_hw: Optional[Tuple[int, int]] = None
         self._resolved_final_hw: Optional[Tuple[int, int]] = None
@@ -615,18 +434,18 @@ class SamFpnClipGuidedUpsampler(nn.Module):
     def forward(
         self,
         x_low_refined: torch.Tensor,
-        class_text_guidance: torch.Tensor,
         final_hw: Tuple[int, int],
         sam_fpn_features: List[torch.Tensor],
         clip_mid_features: List[torch.Tensor],
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        low_hw = (
-            int(x_low_refined.shape[-2]),
-            int(x_low_refined.shape[-1]),
-        )
+    ) -> torch.Tensor:
         final_hw = (
             int(final_hw[0]),
             int(final_hw[1]),
+        )
+
+        low_hw = (
+            int(x_low_refined.shape[-2]),
+            int(x_low_refined.shape[-1]),
         )
 
         if (
@@ -649,7 +468,6 @@ class SamFpnClipGuidedUpsampler(nn.Module):
                 )
 
         x = x_low_refined
-        stage_text_guidance_history: list[torch.Tensor] = []
 
         for stage_idx, (block, target_hw) in enumerate(
             zip(self.blocks, self._target_hws)
@@ -667,18 +485,4 @@ class SamFpnClipGuidedUpsampler(nn.Module):
                 target_hw=target_hw,
             )
 
-            class_text_guidance = self.presence_refiner.forward_stage(
-                class_text_guidance=class_text_guidance,
-                x_stage=x,
-                stage_idx=stage_idx,
-                presence_pool_hw=low_hw,
-            )
-
-            stage_text_guidance_history.append(class_text_guidance)
-
-        stage_text_guidance_history = torch.stack(
-            stage_text_guidance_history,
-            dim=2,
-        ).contiguous()
-
-        return x.contiguous(), stage_text_guidance_history
+        return x.contiguous()

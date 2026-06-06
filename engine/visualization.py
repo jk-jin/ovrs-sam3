@@ -40,9 +40,19 @@ class BaseSemanticOverlayTask(VisualizationTask):
         targets = ctx.semantic_targets
         batch = ctx.batch
 
-        final_logits, final_score_map, final_source = (
-            manager._extract_final_logits_and_score_map(outputs)
+        (
+            final_logits,
+            raw_final_score_map,
+            final_score_map,
+            raw_final_source,
+            final_source,
+        ) = manager._extract_final_logits_raw_and_gated_score_maps(outputs)
+
+        raw_final_pred = manager._build_eval_style_final_pred(
+            outputs=outputs,
+            final_score_map=raw_final_score_map,
         )
+
         final_pred = manager._build_eval_style_final_pred(
             outputs=outputs,
             final_score_map=final_score_map,
@@ -108,6 +118,23 @@ class BaseSemanticOverlayTask(VisualizationTask):
             if manager.cfg.save_original:
                 original_image.save(sample_dir / "original.png")
 
+            if manager.cfg.save_raw_final_prediction:
+                raw_final_pred_label = manager._prepare_label_map(
+                    raw_final_pred[b],
+                    out_hw,
+                )
+
+                manager._colorize_label_map(
+                    raw_final_pred_label,
+                    final_num_classes,
+                ).save(sample_dir / "pred_raw_final.png")
+
+                manager._overlay_label_map(
+                    overlay_image,
+                    raw_final_pred_label,
+                    final_num_classes,
+                ).save(sample_dir / "pred_raw_final_overlay.png")
+
             if manager.cfg.save_prediction:
                 manager._colorize_label_map(
                     final_pred_label,
@@ -151,6 +178,21 @@ class BaseSemanticOverlayTask(VisualizationTask):
 
             with open(sample_dir / "visualization_sources.txt", "w", encoding="utf-8") as f:
                 f.write("item\tsource\n")
+                if manager.cfg.save_raw_final_prediction:
+                    f.write(
+                        "pred_raw_final.png\t"
+                        f"{raw_final_source}; eval_style_pred="
+                        f"use_score_map={manager.eval_use_score_map}, "
+                        f"prob_thd={manager.eval_prob_thd}, "
+                        f"bg_idx={manager.eval_bg_idx}\n"
+                    )
+                    f.write(
+                        "pred_raw_final_overlay.png\t"
+                        f"{raw_final_source}; eval_style_pred="
+                        f"use_score_map={manager.eval_use_score_map}, "
+                        f"prob_thd={manager.eval_prob_thd}, "
+                        f"bg_idx={manager.eval_bg_idx}\n"
+                    )
                 f.write(
                     "pred.png\t"
                     f"{final_source}; eval_style_pred="
@@ -184,7 +226,14 @@ class ScoreAnalysisTask(VisualizationTask):
         batch = ctx.batch
 
         _, semantic_score_map, _ = manager._extract_semantic_logits_and_score_map(outputs)
-        _, final_score_map, _ = manager._extract_final_logits_and_score_map(outputs)
+
+        (
+            _,
+            raw_final_score_map,
+            final_score_map,
+            _,
+            _,
+        ) = manager._extract_final_logits_raw_and_gated_score_maps(outputs)
 
         if semantic_score_map is None:
             return
@@ -194,10 +243,20 @@ class ScoreAnalysisTask(VisualizationTask):
                 f"Expected semantic_score_map as [B, C, H, W], "
                 f"got {tuple(semantic_score_map.shape)}."
             )
+        if raw_final_score_map.dim() != 4:
+            raise ValueError(
+                f"Expected raw_final_score_map as [B, C, H, W], "
+                f"got {tuple(raw_final_score_map.shape)}."
+            )
         if final_score_map.dim() != 4:
             raise ValueError(
                 f"Expected final_score_map as [B, C, H, W], "
                 f"got {tuple(final_score_map.shape)}."
+            )
+        if semantic_score_map.shape != raw_final_score_map.shape:
+            raise ValueError(
+                "semantic_score_map and raw_final_score_map shape mismatch: "
+                f"{tuple(semantic_score_map.shape)} vs {tuple(raw_final_score_map.shape)}."
             )
         if semantic_score_map.shape != final_score_map.shape:
             raise ValueError(
@@ -227,6 +286,7 @@ class ScoreAnalysisTask(VisualizationTask):
                 manager._save_score_summary(
                     sample_dir=sample_dir,
                     semantic_scores=semantic_score_map[b],
+                    raw_final_scores=raw_final_score_map[b],
                     final_scores=final_score_map[b],
                     class_names=class_names,
                 )
@@ -235,6 +295,7 @@ class ScoreAnalysisTask(VisualizationTask):
                 manager._save_all_score_heatmaps(
                     sample_dir=sample_dir,
                     semantic_scores=semantic_score_map[b],
+                    raw_final_scores=raw_final_score_map[b],
                     final_scores=final_score_map[b],
                     out_hw=out_hw,
                     class_names=class_names,
@@ -637,52 +698,82 @@ class VisualizationManager:
             value = outputs.get(str(key), None)
         return value
 
-    def _extract_final_logits_and_score_map(
+    def _extract_final_logits_raw_and_gated_score_maps(
         self,
         outputs: Dict[str, torch.Tensor],
-    ) -> Tuple[torch.Tensor, torch.Tensor, str]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, str, str]:
+        raw_final_score_map = self._get_output(outputs, OUTPUT_KEYS.raw_final_score_map)
         final_score_map = self._get_output(outputs, OUTPUT_KEYS.final_score_map)
         final_logits = self._get_output(outputs, OUTPUT_KEYS.final_logits)
 
-        if final_score_map is not None:
+        if raw_final_score_map is None:
+            if final_logits is None:
+                raise ValueError(
+                    f"outputs must contain '{OUTPUT_KEYS.raw_final_score_map}' "
+                    f"or '{OUTPUT_KEYS.final_logits}'."
+                )
+            if final_logits.dim() != 4:
+                raise ValueError(
+                    f"Expected final_logits as [B, C, H, W], "
+                    f"got {tuple(final_logits.shape)}."
+                )
+            raw_final_score_map = final_logits.sigmoid()
+            raw_source = f"sigmoid({OUTPUT_KEYS.final_logits})"
+        else:
+            if raw_final_score_map.dim() != 4:
+                raise ValueError(
+                    f"Expected raw_final_score_map as [B, C, H, W], "
+                    f"got {tuple(raw_final_score_map.shape)}."
+                )
+            raw_source = OUTPUT_KEYS.raw_final_score_map
+
+            if final_logits is None:
+                eps = 1e-6
+                final_logits = torch.logit(raw_final_score_map.clamp(eps, 1.0 - eps))
+
+        if final_logits is None:
+            raise ValueError(
+                f"Cannot infer {OUTPUT_KEYS.final_logits} for visualization."
+            )
+
+        if final_score_map is None:
+            final_score_map = raw_final_score_map
+        else:
             if final_score_map.dim() != 4:
                 raise ValueError(
                     f"Expected final_score_map as [B, C, H, W], "
                     f"got {tuple(final_score_map.shape)}."
                 )
 
-            if final_logits is not None:
-                if final_logits.dim() != 4:
-                    raise ValueError(
-                        f"Expected final_logits as [B, C, H, W], "
-                        f"got {tuple(final_logits.shape)}."
-                    )
-                if tuple(final_logits.shape) != tuple(final_score_map.shape):
-                    raise ValueError(
-                        "final_logits and final_score_map shape mismatch: "
-                        f"{tuple(final_logits.shape)} vs {tuple(final_score_map.shape)}."
-                    )
-            else:
-                final_logits = final_score_map.clamp_min(1e-12).log()
-
-            return final_logits, final_score_map, OUTPUT_KEYS.final_score_map
-
-        if final_logits is not None:
-            if final_logits.dim() != 4:
-                raise ValueError(
-                    f"Expected final_logits as [B, C, H, W], "
-                    f"got {tuple(final_logits.shape)}."
-                )
-            return (
-                final_logits,
-                final_logits.softmax(dim=1),
-                f"softmax({OUTPUT_KEYS.final_logits})",
+        if tuple(final_score_map.shape) != tuple(raw_final_score_map.shape):
+            raise ValueError(
+                "raw_final_score_map and final_score_map shape mismatch: "
+                f"{tuple(raw_final_score_map.shape)} vs {tuple(final_score_map.shape)}."
             )
 
-        raise ValueError(
-            f"outputs must contain '{OUTPUT_KEYS.final_score_map}' "
-            f"or '{OUTPUT_KEYS.final_logits}'."
+        if tuple(final_logits.shape) != tuple(raw_final_score_map.shape):
+            raise ValueError(
+                "final_logits and raw_final_score_map shape mismatch: "
+                f"{tuple(final_logits.shape)} vs {tuple(raw_final_score_map.shape)}."
+            )
+
+        gated_source = raw_source
+        return (
+            final_logits,
+            raw_final_score_map,
+            final_score_map,
+            raw_source,
+            gated_source,
         )
+
+    def _extract_final_logits_and_score_map(
+        self,
+        outputs: Dict[str, torch.Tensor],
+    ) -> Tuple[torch.Tensor, torch.Tensor, str]:
+        final_logits, _, final_score_map, _, gated_source = (
+            self._extract_final_logits_raw_and_gated_score_maps(outputs)
+        )
+        return final_logits, final_score_map, gated_source
 
     def _extract_semantic_logits_and_score_map(
         self,
@@ -879,6 +970,7 @@ class VisualizationManager:
         self,
         sample_dir: Path,
         semantic_scores: torch.Tensor,
+        raw_final_scores: torch.Tensor,
         final_scores: torch.Tensor,
         class_names: Optional[List[str]],
     ) -> None:
@@ -886,18 +978,28 @@ class VisualizationManager:
             raise ValueError(
                 f"Expected semantic_scores as [C, H, W], got {tuple(semantic_scores.shape)}."
             )
+        if raw_final_scores.dim() != 3:
+            raise ValueError(
+                f"Expected raw_final_scores as [C, H, W], got {tuple(raw_final_scores.shape)}."
+            )
         if final_scores.dim() != 3:
             raise ValueError(
                 f"Expected final_scores as [C, H, W], got {tuple(final_scores.shape)}."
             )
 
         num_classes = int(semantic_scores.shape[0])
+        if raw_final_scores.shape[0] != num_classes:
+            raise ValueError(
+                f"Class count mismatch: semantic={num_classes}, "
+                f"raw_final={raw_final_scores.shape[0]}."
+            )
         if final_scores.shape[0] != num_classes:
             raise ValueError(
                 f"Class count mismatch: semantic={num_classes}, final={final_scores.shape[0]}."
             )
 
         semantic_max, semantic_mean = self._per_class_max_mean(semantic_scores)
+        raw_final_max, raw_final_mean = self._per_class_max_mean(raw_final_scores)
         final_max, final_mean = self._per_class_max_mean(final_scores)
 
         order = torch.argsort(final_max, descending=True)
@@ -906,7 +1008,8 @@ class VisualizationManager:
             f.write(
                 "rank\tclass_id\tclass_name\t"
                 "semantic_max\tsemantic_mean\t"
-                "final_max\tfinal_mean\n"
+                "raw_final_max\traw_final_mean\t"
+                "gated_final_max\tgated_final_mean\n"
             )
 
             for rank, cls_idx in enumerate(order.tolist()):
@@ -920,6 +1023,8 @@ class VisualizationManager:
                     f"{rank}\t{cls_idx}\t{class_name}\t"
                     f"{float(semantic_max[cls_idx].item()):.6f}\t"
                     f"{float(semantic_mean[cls_idx].item()):.6f}\t"
+                    f"{float(raw_final_max[cls_idx].item()):.6f}\t"
+                    f"{float(raw_final_mean[cls_idx].item()):.6f}\t"
                     f"{float(final_max[cls_idx].item()):.6f}\t"
                     f"{float(final_mean[cls_idx].item()):.6f}\n"
                 )
@@ -928,6 +1033,7 @@ class VisualizationManager:
         self,
         sample_dir: Path,
         semantic_scores: torch.Tensor,
+        raw_final_scores: torch.Tensor,
         final_scores: torch.Tensor,
         out_hw: Tuple[int, int],
         class_names: Optional[List[str]],
@@ -936,12 +1042,21 @@ class VisualizationManager:
             raise ValueError(
                 f"Expected semantic_scores as [C, H, W], got {tuple(semantic_scores.shape)}."
             )
+        if raw_final_scores.dim() != 3:
+            raise ValueError(
+                f"Expected raw_final_scores as [C, H, W], got {tuple(raw_final_scores.shape)}."
+            )
         if final_scores.dim() != 3:
             raise ValueError(
                 f"Expected final_scores as [C, H, W], got {tuple(final_scores.shape)}."
             )
 
         num_classes = int(semantic_scores.shape[0])
+        if raw_final_scores.shape[0] != num_classes:
+            raise ValueError(
+                f"Class count mismatch in score heatmaps: "
+                f"semantic={num_classes}, raw_final={raw_final_scores.shape[0]}."
+            )
         if final_scores.shape[0] != num_classes:
             raise ValueError(
                 f"Class count mismatch in score heatmaps: "
@@ -950,10 +1065,12 @@ class VisualizationManager:
 
         heatmap_root = sample_dir / "score_heatmaps"
         semantic_dir = heatmap_root / "semantic"
-        final_dir = heatmap_root / "final"
+        raw_final_dir = heatmap_root / "final_raw"
+        gated_final_dir = heatmap_root / "final_presence_gated"
 
         semantic_dir.mkdir(parents=True, exist_ok=True)
-        final_dir.mkdir(parents=True, exist_ok=True)
+        raw_final_dir.mkdir(parents=True, exist_ok=True)
+        gated_final_dir.mkdir(parents=True, exist_ok=True)
 
         for cls_idx in range(num_classes):
             class_name = (
@@ -970,10 +1087,16 @@ class VisualizationManager:
             ).save(semantic_dir / filename)
 
             self._to_heatmap_image(
+                raw_final_scores[cls_idx],
+                out_hw=out_hw,
+                normalize="prob",
+            ).save(raw_final_dir / filename)
+
+            self._to_heatmap_image(
                 final_scores[cls_idx],
                 out_hw=out_hw,
                 normalize="prob",
-            ).save(final_dir / filename)
+            ).save(gated_final_dir / filename)
 
     def _infer_batch_size(
         self,

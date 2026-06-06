@@ -81,11 +81,16 @@ class SemanticCriterionConfig:
 
     final_bce_weight: float = 1.0
     final_dice_weight: float = 0.0
-    presence_loss_weight: float = 1.0
 
     # 0.0 = absent classes not supervised for mask BCE.
     # Set to 0.01 / 0.05 for mild absent-class suppression.
     bce_absent_class_weight: float = 0.0
+
+    # Pixel-level BCE weights.
+    # valid pixels: label_map != ignore_index
+    # ignore pixels: label_map == ignore_index
+    bce_valid_pixel_weight: float = 1.0
+    bce_ignore_pixel_weight: float = 1.0
 
     eps: float = 1e-6
 
@@ -165,6 +170,7 @@ class VisualizerConfig:
 
     save_original: bool = True
     save_prediction: bool = True
+    save_raw_final_prediction: bool = True
     save_ground_truth: bool = True
     save_semantic_prediction: bool = True
 
