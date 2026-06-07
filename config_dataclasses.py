@@ -40,9 +40,8 @@ class EncoderRefinerConfig:
 
     clip_score_embed_dim: int = 32
     clip_score_conv_kernel: int = 7
-    clip_score_mid_hw: int = 32
 
-    encoder_hw: int = 36
+    encoder_hw: int = 72
     window_size: int = 9
     shift_size: int = 4
 

@@ -671,7 +671,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             encoder_refiner_hidden_dim=int(refiner_cfg.hidden_dim),
             encoder_refiner_score_embed_dim=int(refiner_cfg.clip_score_embed_dim),
             encoder_refiner_conv_kernel=int(refiner_cfg.clip_score_conv_kernel),
-            encoder_refiner_mid_hw=int(refiner_cfg.clip_score_mid_hw),
             encoder_refiner_encoder_hw=int(refiner_cfg.encoder_hw),
             encoder_refiner_window_size=int(refiner_cfg.window_size),
             encoder_refiner_shift_size=int(refiner_cfg.shift_size),
@@ -722,12 +721,28 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         cls.apply_freeze_cfg(model, cfg.freeze_cfg)
 
         core = getattr(model, "core", None)
+
+        # --- Set overall train/eval mode first ---
+        if cfg.eval_mode:
+            model.eval()
+        else:
+            model.train()
+
+        # --- Then force frozen modules back to eval ---
         if core is not None:
+            # SAM3 frozen modules.
+            core.backbone.eval()
+            core.transformer.eval()
+            core.geometry_encoder.eval()
+            core.segmentation_head.eval()
+
+            # OpenCLIP image encoder — always frozen, always eval.
             clip_image_encoder = getattr(core, "clip_image_encoder", None)
             if clip_image_encoder is not None:
                 cls.set_requires_grad(clip_image_encoder, False)
                 clip_image_encoder.eval()
 
+            # OpenCLIP text encoder.
             clip_text_encoder = getattr(core, "clip_text_encoder", None)
             if clip_text_encoder is not None:
                 text_ft = str(
@@ -744,16 +759,19 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                         f"'frozen' or 'attention', got {text_ft!r}."
                     )
 
+                # CLIP text encoder stays in eval mode regardless of
+                # finetune mode — we only train q/v weights, not
+                # dropout / layernorm statistics.
                 clip_text_encoder.eval()
+
+            # Encoder refiner is the only module that should be in
+            # train mode during training.
+            if not cfg.eval_mode:
+                core.encoder_refiner.train()
 
         model.core.prompt_chunk_size = (
             None if cfg.prompt_chunk_size is None else int(cfg.prompt_chunk_size)
         )
-
-        if cfg.eval_mode:
-            model.eval()
-        else:
-            model.train()
 
         return model
 

@@ -39,9 +39,8 @@ model = dict(
 
         clip_score_embed_dim=32,
         clip_score_conv_kernel=7,
-        clip_score_mid_hw=32,
 
-        encoder_hw=36,
+        encoder_hw=72,
         window_size=9,
         shift_size=4,
     ),
@@ -70,7 +69,7 @@ model = dict(
         # BCE pixel weights:
         # valid pixels keep full supervision;
         # ignore pixels get weaker suppression to avoid over-penalizing unlabeled regions.
-        bce_valid_pixel_weight=1.0,
+        bce_valid_pixel_weight=5.0,
         bce_ignore_pixel_weight=1.0,
 
         eps=1e-6,
@@ -78,7 +77,7 @@ model = dict(
 )
 
 train_dataloader = dict(
-    batch_size=2,
+    batch_size=1,
     num_workers=8,
 )
 

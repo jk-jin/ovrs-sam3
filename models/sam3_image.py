@@ -43,8 +43,7 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_hidden_dim: int = 256,
         encoder_refiner_score_embed_dim: int = 32,
         encoder_refiner_conv_kernel: int = 7,
-        encoder_refiner_mid_hw: int = 32,
-        encoder_refiner_encoder_hw: int = 36,
+        encoder_refiner_encoder_hw: int = 72,
         encoder_refiner_window_size: int = 9,
         encoder_refiner_shift_size: int = 4,
         task_mode: str = TASK_MODE_SEMANTIC,
@@ -115,8 +114,6 @@ class Sam3Image(torch.nn.Module):
                 "OpenCLIP image/text encoders are required by the encoder refiner."
             )
 
-        self.encoder_hw = int(encoder_refiner_encoder_hw)
-
         self.encoder_refiner = ClassConditionedEncoderRefiner(
             clip_text_encoder=self.clip_text_encoder,
             hidden_dim=int(encoder_refiner_hidden_dim),
@@ -131,7 +128,6 @@ class Sam3Image(torch.nn.Module):
             prompt_template=str(openclip_prompt_template),
             normalize_label_for_clip=bool(normalize_label_for_clip),
             score_conv_kernel=int(encoder_refiner_conv_kernel),
-            score_mid_hw=int(encoder_refiner_mid_hw),
             encoder_hw=int(encoder_refiner_encoder_hw),
         )
 

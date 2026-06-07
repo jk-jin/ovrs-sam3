@@ -49,8 +49,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         prompt_template: str = "a remote sensing image of {}.",
         normalize_label_for_clip: bool = True,
         score_conv_kernel: int = 7,
-        score_mid_hw: int = 32,
-        encoder_hw: int = 36,
+        encoder_hw: int = 72,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -73,13 +72,12 @@ class ClassConditionedEncoderRefiner(nn.Module):
             normalize_label=bool(normalize_label_for_clip),
         )
 
-        # Score embedding builder — config params passed through.
+        # Score embedding builder.
         self.score_builder = ClipScoreEmbeddingBuilder(
             clip_output_dim=int(clip_dim),
             score_embed_dim=int(score_embed_dim),
             num_query_tokens=self.num_query_tokens,
             conv_kernel=int(score_conv_kernel),
-            mid_hw=int(score_mid_hw),
             encoder_hw=int(encoder_hw),
         )
 
@@ -168,8 +166,15 @@ class ClassConditionedEncoderRefiner(nn.Module):
         )
 
         clip_score_embed, clip_score_maps = self.score_builder(
-            dynamic_clip_text, clip_image_feat_map
+            dynamic_clip_text, clip_image_feat_map,
+            target_hw=(H, W),
         )
+
+        if clip_score_embed.shape[-2:] != (H, W):
+            raise ValueError(
+                "clip_score_embed spatial size must match e. "
+                f"Expected {(H, W)}, got {tuple(clip_score_embed.shape[-2:])}."
+            )
 
         sam_text_mean = self._compute_text_mean(
             sam_text_features, sam_text_mask, B
