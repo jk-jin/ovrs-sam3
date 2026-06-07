@@ -15,24 +15,28 @@ class ClassConditionedEncoderRefiner(nn.Module):
     """
     Multi-layer encoder feature refiner.
 
-    Inputs:
+    All sub-modules are created eagerly in __init__ so that parameters are
+    visible to apply_freeze_cfg and the optimizer before the first forward.
+
+    Inputs (forward):
         e:                 [B, C, D, H, W]
         sam_text_features: [M, C, D]
         sam_text_mask:     [C, M]
-        clip_text_encoder  — OpenCLIP text encoder
         clip_image_feat_map: [B, D_clip, Hc, Wc]
         class_names:       list of C strings
         sam_image_last:    [B, D, H, W]
 
-    Output:
+    Output (forward):
         refined_e:          [B, C, D, H, W]
         class_query_tokens: [B, C, Q, D]
         dynamic_clip_text:  [B, C, Q, D_clip]
         clip_score_embed:   [B, C, D_score, H, W]
+        clip_score_maps:    [B, C, Q, Hc, Wc]
     """
 
     def __init__(
         self,
+        clip_text_encoder,
         hidden_dim: int = 256,
         clip_dim: int = 768,
         score_embed_dim: int = 32,
@@ -44,13 +48,16 @@ class ClassConditionedEncoderRefiner(nn.Module):
         num_query_tokens: int = 32,
         prompt_template: str = "a remote sensing image of {}.",
         normalize_label_for_clip: bool = True,
+        score_conv_kernel: int = 7,
+        score_mid_hw: int = 32,
+        encoder_hw: int = 36,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
         self.clip_dim = int(clip_dim)
-
         self.num_query_tokens = int(num_query_tokens)
 
+        # Query extractor — created eagerly.
         self.query_extractor = EncoderQueryExtractor(
             hidden_dim=self.hidden_dim,
             num_query_tokens=self.num_query_tokens,
@@ -58,18 +65,25 @@ class ClassConditionedEncoderRefiner(nn.Module):
             dropout=float(dropout),
         )
 
-        self.clip_prompt_encoder = None
-        self._prompt_template = str(prompt_template)
-        self._normalize_label_for_clip = bool(normalize_label_for_clip)
+        # CLIP prompt encoder — created eagerly so parameters enter optimizer.
+        self.clip_prompt_encoder = SingleTokenClipPromptEncoder(
+            clip_text_encoder=clip_text_encoder,
+            prompt_template=str(prompt_template),
+            sam_dim=self.hidden_dim,
+            normalize_label=bool(normalize_label_for_clip),
+        )
 
+        # Score embedding builder — config params passed through.
         self.score_builder = ClipScoreEmbeddingBuilder(
             clip_output_dim=int(clip_dim),
             score_embed_dim=int(score_embed_dim),
-            conv_kernel=7,
-            mid_hw=32,
-            encoder_hw=36,
+            num_query_tokens=self.num_query_tokens,
+            conv_kernel=int(score_conv_kernel),
+            mid_hw=int(score_mid_hw),
+            encoder_hw=int(encoder_hw),
         )
 
+        # Refiner layers.
         self.layers = nn.ModuleList([
             EncoderRefinerLayer(
                 hidden_dim=self.hidden_dim,
@@ -84,26 +98,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
         ])
 
     # ------------------------------------------------------------------
-    # Lazy CLIP prompt encoder
-    # ------------------------------------------------------------------
-
-    def set_clip_prompt_encoder(self, encoder: SingleTokenClipPromptEncoder) -> None:
-        self.clip_prompt_encoder = encoder
-
-    def _build_clip_prompt_encoder(self, clip_text_encoder) -> SingleTokenClipPromptEncoder:
-        if self.clip_prompt_encoder is not None:
-            return self.clip_prompt_encoder
-
-        encoder = SingleTokenClipPromptEncoder(
-            clip_text_encoder=clip_text_encoder,
-            prompt_template=self._prompt_template,
-            sam_dim=self.hidden_dim,
-            normalize_label=self._normalize_label_for_clip,
-        )
-        self.clip_prompt_encoder = encoder
-        return encoder
-
-    # ------------------------------------------------------------------
     # Text mean helpers
     # ------------------------------------------------------------------
 
@@ -113,13 +107,11 @@ class ClassConditionedEncoderRefiner(nn.Module):
         sam3_text_mask: torch.Tensor,
         batch_size: int,
     ) -> torch.Tensor:
-        """
-        Compute mean of valid SAM3 text tokens per class.
+        """Compute mean of valid SAM3 text tokens per class.
 
         Args:
             sam3_text_features: [M, C, D]
             sam3_text_mask:     [C, M]  (True = ignore/padded)
-
         Returns:
             sam_text_mean: [B, C, D]
         """
@@ -137,12 +129,10 @@ class ClassConditionedEncoderRefiner(nn.Module):
     def _compute_clip_text_mean(
         dynamic_clip_text: torch.Tensor,
     ) -> torch.Tensor:
-        """
-        Compute mean of Q dynamic CLIP text features per class.
+        """Compute mean of Q dynamic CLIP text features per class.
 
         Args:
             dynamic_clip_text: [B, C, Q, D_clip]
-
         Returns:
             clip_text_mean: [B, C, D_clip]
         """
@@ -157,43 +147,35 @@ class ClassConditionedEncoderRefiner(nn.Module):
         e: torch.Tensor,
         sam_text_features: torch.Tensor,
         sam_text_mask: torch.Tensor,
-        clip_text_encoder,
         clip_image_feat_map: torch.Tensor,
         class_names: List[str],
         sam_image_last: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Returns:
             refined_e:          [B, C, D, H, W]
             class_query_tokens: [B, C, Q, D]
             dynamic_clip_text:  [B, C, Q, D_clip]
             clip_score_embed:   [B, C, D_score, H, W]
+            clip_score_maps:    [B, C, Q, Hc, Wc]
         """
         B, C, D, H, W = e.shape
 
-        # 1. Extract class query tokens
         class_query_tokens = self.query_extractor(e)
 
-        # 2. Build CLIP prompt encoder on first call
-        self._build_clip_prompt_encoder(clip_text_encoder)
-
-        # 3. Build dynamic CLIP text features
         dynamic_clip_text = self.clip_prompt_encoder(
             class_query_tokens, class_names
         )
 
-        # 4. Build CLIP score embedding
         clip_score_embed, clip_score_maps = self.score_builder(
             dynamic_clip_text, clip_image_feat_map
         )
 
-        # 5. Build text means for attention guidance
         sam_text_mean = self._compute_text_mean(
             sam_text_features, sam_text_mask, B
         )
         clip_text_mean = self._compute_clip_text_mean(dynamic_clip_text)
 
-        # 6. Run refiner layers
         refined_e = e
         for layer in self.layers:
             refined_e = layer(
@@ -204,4 +186,10 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 clip_score_embed=clip_score_embed,
             )
 
-        return refined_e, class_query_tokens, dynamic_clip_text, clip_score_embed
+        return (
+            refined_e,
+            class_query_tokens,
+            dynamic_clip_text,
+            clip_score_embed,
+            clip_score_maps,
+        )

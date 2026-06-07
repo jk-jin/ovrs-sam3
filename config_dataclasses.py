@@ -150,7 +150,7 @@ class VisualizerConfig:
     save_score_heatmaps: bool = True
     heatmap_colormap: str = "turbo"
 
-    save_sam3_direct_segmentation: bool = True
+    save_sam3_direct_segmentation: bool = False
     sam3_direct_seg_threshold: float = 0.5
 
     vis_prob: float = 0.05

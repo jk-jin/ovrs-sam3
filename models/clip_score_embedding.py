@@ -17,7 +17,7 @@ class ClipScoreEmbeddingBuilder(nn.Module):
 
     Flow:
         score_maps [B, C, Q, Hc, Wc]
-        → 7×7 Conv per query, mean over Q → [B, C, D_score, Hc, Wc]
+        → Conv2d(Q → D_score) → [B, C, D_score, Hc, Wc]
         → upsample to mid_hw → bilinear to encoder_hw
         → clip_score_embed [B, C, D_score, encoder_hw, encoder_hw]
     """
@@ -26,6 +26,7 @@ class ClipScoreEmbeddingBuilder(nn.Module):
         self,
         clip_output_dim: int = 768,
         score_embed_dim: int = 32,
+        num_query_tokens: int = 32,
         conv_kernel: int = 7,
         mid_hw: int = 32,
         encoder_hw: int = 36,
@@ -33,6 +34,7 @@ class ClipScoreEmbeddingBuilder(nn.Module):
         super().__init__()
         self.clip_output_dim = int(clip_output_dim)
         self.score_embed_dim = int(score_embed_dim)
+        self.num_query_tokens = int(num_query_tokens)
         self.mid_hw = int(mid_hw)
         self.encoder_hw = int(encoder_hw)
 
@@ -43,7 +45,7 @@ class ClipScoreEmbeddingBuilder(nn.Module):
 
         self.score_conv = nn.Sequential(
             nn.Conv2d(
-                1,
+                self.num_query_tokens,
                 self.score_embed_dim,
                 kernel_size=int(conv_kernel),
                 stride=1,
@@ -72,6 +74,11 @@ class ClipScoreEmbeddingBuilder(nn.Module):
                 f"CLIP dimension mismatch: text={D_clip}, image={D_img}"
             )
 
+        if Q != self.num_query_tokens:
+            raise ValueError(
+                f"Query count mismatch: expected {self.num_query_tokens}, got {Q}"
+            )
+
         text_norm = F.normalize(dynamic_clip_text, dim=-1)
         img_norm = F.normalize(clip_image_feat_map, dim=1)
 
@@ -86,10 +93,12 @@ class ClipScoreEmbeddingBuilder(nn.Module):
             text_flat.unsqueeze(1), img_expanded
         ).reshape(B * C * Q, Hc, Wc) * 20.0
 
-        # Conv per query token, then mean over Q
-        score_embed = self.score_conv(score_maps.unsqueeze(1))
-        score_embed = score_embed.reshape(B, C, Q, self.score_embed_dim, Hc, Wc)
-        score_embed = score_embed.mean(dim=2)  # [B, C, D_score, Hc, Wc]
+        clip_score_maps = score_maps.reshape(B, C, Q, Hc, Wc)
+
+        # Conv with Q as input channels: [B*C, Q, Hc, Wc] → [B*C, D_score, Hc, Wc]
+        score_flat = clip_score_maps.reshape(B * C, Q, Hc, Wc)
+        score_embed = self.score_conv(score_flat)
+        score_embed = score_embed.reshape(B, C, self.score_embed_dim, Hc, Wc)
 
         # Upsample: Hc×Wc → mid_hw×mid_hw → encoder_hw×encoder_hw
         if (Hc, Wc) != (self.mid_hw, self.mid_hw):
@@ -117,7 +126,5 @@ class ClipScoreEmbeddingBuilder(nn.Module):
             score_embed = score_embed.reshape(
                 B, C, self.score_embed_dim, self.encoder_hw, self.encoder_hw
             )
-
-        clip_score_maps = score_maps.reshape(B, C, Q, Hc, Wc)
 
         return score_embed.contiguous(), clip_score_maps.contiguous()

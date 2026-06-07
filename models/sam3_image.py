@@ -118,6 +118,7 @@ class Sam3Image(torch.nn.Module):
         self.encoder_hw = int(encoder_refiner_encoder_hw)
 
         self.encoder_refiner = ClassConditionedEncoderRefiner(
+            clip_text_encoder=self.clip_text_encoder,
             hidden_dim=int(encoder_refiner_hidden_dim),
             clip_dim=self.clip_align_dim,
             score_embed_dim=int(encoder_refiner_score_embed_dim),
@@ -129,6 +130,9 @@ class Sam3Image(torch.nn.Module):
             num_query_tokens=int(encoder_refiner_num_query_tokens),
             prompt_template=str(openclip_prompt_template),
             normalize_label_for_clip=bool(normalize_label_for_clip),
+            score_conv_kernel=int(encoder_refiner_conv_kernel),
+            score_mid_hw=int(encoder_refiner_mid_hw),
+            encoder_hw=int(encoder_refiner_encoder_hw),
         )
 
         self.prompt_chunk_size = None
@@ -621,18 +625,20 @@ class Sam3Image(torch.nn.Module):
         sam_image_last = backbone_fpn[-1].detach()
 
         # Run the encoder refiner.
-        refined_e, class_query_tokens, dynamic_clip_text, clip_score_embed = (
-            self.encoder_refiner(
-                e=e,
-                sam_text_features=sam3_text_features,
-                sam_text_mask=sam3_text_mask,
-                clip_text_encoder=self.clip_text_encoder,
-                clip_image_feat_map=clip_image_feat_map,
-                class_names=class_names,
-                sam_image_last=sam_image_last,
-            )
+        (
+            refined_e,
+            class_query_tokens,
+            dynamic_clip_text,
+            clip_score_embed,
+            clip_score_maps,
+        ) = self.encoder_refiner(
+            e=e,
+            sam_text_features=sam3_text_features,
+            sam_text_mask=sam3_text_mask,
+            clip_image_feat_map=clip_image_feat_map,
+            class_names=class_names,
+            sam_image_last=sam_image_last,
         )
-        # refined_e: [B, C, D, H, W]
 
         # For each chunk, write refined_e back and call segmentation_head.
         final_logits_chunks: list[torch.Tensor] = []
@@ -697,6 +703,7 @@ class Sam3Image(torch.nn.Module):
             OUTPUT_KEYS.class_query_tokens: class_query_tokens.contiguous(),
             OUTPUT_KEYS.dynamic_clip_text_features: dynamic_clip_text.contiguous(),
             OUTPUT_KEYS.clip_score_embed: clip_score_embed.contiguous(),
+            OUTPUT_KEYS.clip_score_maps: clip_score_maps.contiguous(),
             OUTPUT_KEYS.clip_mid_features: [
                 feat.contiguous() for feat in clip_mid_features
             ],
