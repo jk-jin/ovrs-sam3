@@ -190,12 +190,8 @@ class ClassTextGuidanceBuilder(nn.Module):
     Build fused per-class text guidance vector.
 
     Inputs:
-        sam3_text_features:
-            [M, C, D_sam]
-
-        sam3_text_mask:
-            [C, M]
-            True means padding / invalid token.
+        class_tokens:
+            [B, C, Q, D_sam]
 
         dynamic_text_features:
             [B, C, G, D_clip]
@@ -218,7 +214,7 @@ class ClassTextGuidanceBuilder(nn.Module):
         self.clip_dim = int(clip_dim)
         self.hidden_dim = int(hidden_dim)
 
-        self.sam_text_proj = nn.Sequential(
+        self.class_token_proj = nn.Sequential(
             nn.LayerNorm(self.sam_dim),
             nn.Linear(self.sam_dim, self.hidden_dim),
         )
@@ -239,20 +235,13 @@ class ClassTextGuidanceBuilder(nn.Module):
 
     def forward(
         self,
-        sam3_text_features: torch.Tensor,
-        sam3_text_mask: torch.Tensor,
+        class_tokens: torch.Tensor,
         dynamic_text_features: torch.Tensor,
     ) -> torch.Tensor:
-        if sam3_text_features.dim() != 3:
+        if class_tokens.dim() != 4:
             raise ValueError(
-                "sam3_text_features must be [M, C, D_sam], "
-                f"got {tuple(sam3_text_features.shape)}."
-            )
-
-        if sam3_text_mask.dim() != 2:
-            raise ValueError(
-                "sam3_text_mask must be [C, M], "
-                f"got {tuple(sam3_text_mask.shape)}."
+                "class_tokens must be [B, C, Q, D_sam], "
+                f"got {tuple(class_tokens.shape)}."
             )
 
         if dynamic_text_features.dim() != 4:
@@ -261,18 +250,18 @@ class ClassTextGuidanceBuilder(nn.Module):
                 f"got {tuple(dynamic_text_features.shape)}."
             )
 
-        M, C_sam, D_sam = sam3_text_features.shape
-        B, C_clip, G, D_clip = dynamic_text_features.shape
+        B, C_sam, Q, D_sam = class_tokens.shape
+        _, C_clip, G, D_clip = dynamic_text_features.shape
 
         if C_sam != C_clip:
             raise ValueError(
-                f"Class count mismatch: SAM3 text has C={C_sam}, "
+                f"Class count mismatch: class_tokens has C={C_sam}, "
                 f"CLIP text has C={C_clip}."
             )
 
         if D_sam != self.sam_dim:
             raise ValueError(
-                f"SAM3 text dim mismatch: expected {self.sam_dim}, got {D_sam}."
+                f"SAM3 dim mismatch: expected {self.sam_dim}, got {D_sam}."
             )
 
         if D_clip != self.clip_dim:
@@ -280,34 +269,14 @@ class ClassTextGuidanceBuilder(nn.Module):
                 f"CLIP text dim mismatch: expected {self.clip_dim}, got {D_clip}."
             )
 
-        if tuple(sam3_text_mask.shape) != (C_sam, M):
-            raise ValueError(
-                f"sam3_text_mask must be [C, M] = {(C_sam, M)}, "
-                f"got {tuple(sam3_text_mask.shape)}."
-            )
-
-        # SAM3 branch.
-        # [M, C, D_sam] → [C, M, D_sam]
-        sam_tokens = sam3_text_features.permute(1, 0, 2).detach()
-        sam_tokens = self.sam_text_proj(sam_tokens)  # [C, M, D_low]
-
-        valid = (~sam3_text_mask.bool()).to(
-            device=sam_tokens.device,
-            dtype=sam_tokens.dtype,
-        )  # [C, M]
-
-        valid_sum = valid.sum(dim=1, keepdim=True).clamp_min(1.0)
-        sam_vec = (sam_tokens * valid[:, :, None]).sum(dim=1) / valid_sum
-        # [C, D_low]
+        # Class token branch.
+        # [B, C, Q, D_sam] → linear proj → [B, C, Q, D_low] → mean over Q → [B, C, D_low]
+        ct_proj = self.class_token_proj(class_tokens)
+        sam_vec = ct_proj.mean(dim=2)
 
         # CLIP branch.
         clip_tokens = self.clip_text_proj(dynamic_text_features)
-        # [B, C, G, D_low]
-
         clip_vec = clip_tokens.mean(dim=2)
-        # [B, C, D_low]
-
-        sam_vec = sam_vec[None].expand(B, C_sam, self.hidden_dim)
         # [B, C, D_low]
 
         class_text_guidance = self.fuse(torch.cat([sam_vec, clip_vec], dim=-1))
@@ -432,9 +401,8 @@ class SamMaskPriorEncoder(nn.Module):
         sam_mask_prior_embed: [B, C, D_score, Hc, Wc]
         sam3_score_low:       [B, C, Hc, Wc]
 
-    Only sigmoid(semantic_logits) is used as input.
-    No tanh(logit).
-    No direct bilinear-downsample-then-7x7-conv shortcut.
+    Raw semantic logits are used as conv input (no sigmoid) to preserve
+    SAM3 scale information.
     """
 
     def __init__(
@@ -500,9 +468,8 @@ class SamMaskPriorEncoder(nn.Module):
         B, C, H, W = semantic_logits.shape
         Hc, Wc = int(target_hw[0]), int(target_hw[1])
 
-        score = torch.sigmoid(semantic_logits.detach())  # [B, C, H, W]
-
-        x = score.reshape(B * C, 1, H, W)
+        # Use raw logits for the conv embedding to preserve SAM3 scale information.
+        x = semantic_logits.detach().reshape(B * C, 1, H, W)
         x = self.encoder(x)
 
         if tuple(x.shape[-2:]) != (Hc, Wc):
@@ -524,7 +491,7 @@ class SamMaskPriorEncoder(nn.Module):
         ).contiguous()
 
         sam3_score_low = F.interpolate(
-            score.reshape(B * C, 1, H, W),
+            torch.sigmoid(semantic_logits.detach()).reshape(B * C, 1, H, W),
             size=(Hc, Wc),
             mode="bilinear",
             align_corners=False,
@@ -847,8 +814,7 @@ class ClassTextGuidedMaskPriorClipFusionFinalMixer(nn.Module):
 
         # 3. Build fused text guidance vector
         class_text_guidance = self.text_guidance_builder(
-            sam3_text_features=sam3_text_features,
-            sam3_text_mask=sam3_text_mask,
+            class_tokens=class_tokens,
             dynamic_text_features=dynamic_text_features,
         )
         # [B, C, D_low]

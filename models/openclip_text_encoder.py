@@ -54,10 +54,9 @@ class OpenCLIPTextEncoder(nn.Module):
             self.text_projection = nn.Parameter(proj)
             self.output_dim = int(proj.shape[1])
 
-        self.register_buffer(
-            "_positional_embedding_buffer",
+        self.positional_embedding = nn.Parameter(
             positional_embedding.detach().clone(),
-            persistent=False,
+            requires_grad=False,
         )
 
         self.register_buffer(
@@ -110,7 +109,7 @@ class OpenCLIPTextEncoder(nn.Module):
         with torch.no_grad():
             input_embeds = self.token_embedding(tokenized)
 
-            x = input_embeds + self._positional_embedding_buffer[:seq_len].to(
+            x = input_embeds + self.positional_embedding[:seq_len].to(
                 device=input_embeds.device,
                 dtype=input_embeds.dtype,
             )
@@ -182,7 +181,7 @@ class OpenCLIPTextEncoder(nn.Module):
             pooled: [N, output_dim]
         """
         seq_len = input_embeds.shape[1]
-        x = input_embeds + self._positional_embedding_buffer[:seq_len].to(
+        x = input_embeds + self.positional_embedding[:seq_len].to(
             device=input_embeds.device,
             dtype=input_embeds.dtype,
         )

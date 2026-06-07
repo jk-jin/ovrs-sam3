@@ -638,6 +638,80 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 strict=True,
             )
 
+    @staticmethod
+    def _register_qv_only_grad_mask(param: nn.Parameter) -> None:
+        """Register a backward hook that zeros gradients for the k projection
+        inside a fused qkv weight/bias (OpenCLIP in_proj_weight / in_proj_bias).
+
+        Fused qkv layout: [q, k, v] along dim 0.
+        Only q and v receive gradients; k gradients are zeroed.
+        """
+        if getattr(param, "_qv_only_grad_mask_registered", False):
+            return
+
+        with torch.no_grad():
+            mask = torch.zeros_like(param)
+
+            if param.ndim == 2:
+                if param.shape[0] % 3 != 0:
+                    return
+                d = param.shape[0] // 3
+                mask[:d, :] = 1.0          # q
+                mask[2 * d:, :] = 1.0      # v
+
+            elif param.ndim == 1:
+                if param.shape[0] % 3 != 0:
+                    return
+                d = param.shape[0] // 3
+                mask[:d] = 1.0             # q bias
+                mask[2 * d:] = 1.0         # v bias
+
+            else:
+                return
+
+        def hook(grad):
+            return grad * mask.to(device=grad.device, dtype=grad.dtype)
+
+        param.register_hook(hook)
+        param._qv_only_grad_mask_registered = True
+
+    @classmethod
+    def set_openclip_text_finetune_attention(cls, clip_text_encoder: nn.Module) -> None:
+        """RSKT-like partial finetuning of CLIP text encoder.
+
+        Freezes all parameters, then selectively unfreezes:
+        - positional embeddings
+        - text transformer attention q/v projections only (k stays frozen)
+
+        For fused qkv projections (in_proj_weight / in_proj_bias), a gradient
+        mask hook zeros out k gradients while keeping q/v trainable.
+        """
+        cls.set_requires_grad(clip_text_encoder, False)
+
+        for name, param in clip_text_encoder.named_parameters():
+            lname = name.lower()
+            train = False
+
+            # Position-related params trainable.
+            if "positional_embedding" in lname or "position" in lname:
+                train = True
+
+            # Text transformer attention q/v trainable.
+            elif "transformer" in lname and "attn" in lname:
+                if "q_proj" in lname or "v_proj" in lname:
+                    train = True
+
+                # OpenCLIP / PyTorch MultiheadAttention often uses fused qkv.
+                elif "in_proj_weight" in lname or "in_proj_bias" in lname:
+                    train = True
+
+            if train:
+                param.requires_grad_(True)
+
+            # Register gradient mask AFTER enabling grad so the hook is allowed.
+            if train and ("in_proj_weight" in lname or "in_proj_bias" in lname):
+                cls._register_qv_only_grad_mask(param)
+
     @classmethod
     def build_semantic_core_model(cls, cfg: SegmentorBuildConfig) -> nn.Module:
         bpe_path = resolve_bpe_path(cfg.bpe_path)
@@ -752,11 +826,28 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         core = getattr(model, "core", None)
         if core is not None:
-            for module_name in ("clip_text_encoder", "clip_image_encoder"):
-                module = getattr(core, module_name, None)
-                if module is not None:
-                    cls.set_requires_grad(module, False)
-                    module.eval()
+            clip_image_encoder = getattr(core, "clip_image_encoder", None)
+            if clip_image_encoder is not None:
+                cls.set_requires_grad(clip_image_encoder, False)
+                clip_image_encoder.eval()
+
+            clip_text_encoder = getattr(core, "clip_text_encoder", None)
+            if clip_text_encoder is not None:
+                text_ft = str(
+                    getattr(cfg.freeze_cfg, "openclip_text_finetune", "frozen")
+                ).lower()
+
+                if text_ft == "attention":
+                    cls.set_openclip_text_finetune_attention(clip_text_encoder)
+                elif text_ft == "frozen":
+                    cls.set_requires_grad(clip_text_encoder, False)
+                else:
+                    raise ValueError(
+                        "freeze_cfg.openclip_text_finetune must be "
+                        f"'frozen' or 'attention', got {text_ft!r}."
+                    )
+
+                clip_text_encoder.eval()
 
         model.core.prompt_chunk_size = (
             None if cfg.prompt_chunk_size is None else int(cfg.prompt_chunk_size)

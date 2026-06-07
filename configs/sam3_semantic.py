@@ -3,7 +3,7 @@ _base_ = [
     "./_base_/optimizer.py",
     "./_base_/schedule.py",
     "./_base_/visualization.py",
-    "./datasets/loveda.py",
+    "./datasets/isaid.py",
 ]
 
 model = dict(
@@ -76,6 +76,7 @@ model = dict(
             "core.final_mixer",
         ],
         frozen_modules=[],
+        openclip_text_finetune="attention",
     ),
 
     adapter_cfg=dict(),
@@ -93,15 +94,15 @@ model = dict(
         # BCE pixel weights:
         # valid pixels keep full supervision;
         # ignore pixels get weaker suppression to avoid over-penalizing unlabeled regions.
-        bce_valid_pixel_weight=5.0,
-        bce_ignore_pixel_weight=0.1,
+        bce_valid_pixel_weight=1.0,
+        bce_ignore_pixel_weight=1.0,
 
         eps=1e-6,
     ),
 )
 
 train_dataloader = dict(
-    batch_size=4,
+    batch_size=2,
     num_workers=8,
 )
 
@@ -112,7 +113,7 @@ val_dataloader = dict(
 
 eval_cfg = dict(
     ignore_index=255,
-    prob_thd=0.5,
+    prob_thd=0.2,
     bg_idx=0,
     use_score_map=True,
 )
@@ -129,6 +130,13 @@ optim_wrapper = dict(
                 "core.final_mixer": dict(
                     lr_mult=4.0,
                     decay_mult=1.0,
+                ),
+
+                # 1e-4 × 0.02 = 2e-6
+                # Align with RSKT-Seg CLIP attention effective lr.
+                "core.clip_text_encoder": dict(
+                    lr_mult=0.02,
+                    decay_mult=0.0,
                 ),
             },
         ),
@@ -155,7 +163,7 @@ train_cfg = dict(
     eval_interval=20000,
     log_window_size=20,
     use_amp=True,
-    grad_clip_norm=0.1,
+    grad_clip_norm=0.01,
     monitor="semantic.miou",
     monitor_mode="max",
     max_keep_ckpts=20,

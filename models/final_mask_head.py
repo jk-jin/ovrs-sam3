@@ -45,7 +45,7 @@ class FinalScoreFusionHead(nn.Module):
         semantic_logits: [B, C, H, W]
 
     Flow:
-        semantic_logits → sigmoid
+        semantic_logits (raw, no sigmoid)
           → ConvGnGelu(1→16) → ConvGnGelu(16→32)
           → final_score_embed [B*C, 32, H, W]
 
@@ -115,9 +115,9 @@ class FinalScoreFusionHead(nn.Module):
                 f"x_up channel mismatch: expected {self.in_ch}, got {D}."
             )
 
-        # Build score embedding: [B, C, H, W] → [B*C, 1, H, W] → [B*C, 32, H, W]
-        score = torch.sigmoid(semantic_logits.detach())
-        score_flat = score.reshape(B * C, 1, H, W)
+        # Build score embedding from raw logits to preserve SAM3 scale information.
+        # [B, C, H, W] → [B*C, 1, H, W] → [B*C, 32, H, W]
+        score_flat = semantic_logits.detach().reshape(B * C, 1, H, W)
         score_embed = self.score_embed(score_flat)  # [B*C, 32, H, W]
 
         # Fuse per class chunk

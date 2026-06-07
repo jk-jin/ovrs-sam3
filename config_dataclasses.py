@@ -10,6 +10,9 @@ class FreezeConfig:
     trainable_modules: list[str] = field(default_factory=list)
     frozen_modules: list[str] = field(default_factory=list)
 
+    # "frozen" or "attention"
+    openclip_text_finetune: str = "frozen"
+
 
 @dataclass
 class OpenCLIPConfig:
