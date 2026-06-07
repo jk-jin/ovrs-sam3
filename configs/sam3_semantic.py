@@ -23,57 +23,33 @@ model = dict(
         default_output="feat_map",
         image_intermediate_layers=[7, 15],
 
-        prompt_templates=[
-            "a remote sensing image of {}.",
-            "an aerial image of {}.",
-            "a satellite image of {}.",
-            "an overhead view of {}.",
-
-            "an overhead remote sensing image of {}.",
-            "a high-resolution aerial image of {}.",
-            "a top-down satellite view of {}.",
-            "a remote sensing scene containing {}.",
-        ],
-        num_prompt_templates=8,
+        prompt_template="a remote sensing image of {}.",
         normalize_label_for_clip=True,
     ),
 
-    final_mixer_cfg=dict(
+    encoder_refiner_cfg=dict(
         enabled=True,
 
+        num_query_tokens=32,
         fusion_layers=4,
         num_heads=8,
         dropout=0.1,
 
-        dynamic_prompt_cfg=dict(
-            tokens_per_template=4,
-        ),
+        hidden_dim=256,
 
-        lowres_cfg=dict(
-            hidden_dim=256,
-            score_embed_dim=32,
-            window_size=8,
-            shift_size=4,
-        ),
+        clip_score_embed_dim=32,
+        clip_score_conv_kernel=7,
+        clip_score_mid_hw=32,
 
-        upsampler_cfg=dict(
-            class_chunk_size=4,
-            decoder_channels=[256, 128, 96, 64, 32],
-            sam_guidance_channels=[32, 24, 16, 8],
-
-            clip_guidance_channels=[32, 24],
-            clip_guidance_stage_indices=[0, 1],
-
-            upsample_mode="bilinear",
-            norm="group_norm",
-            act="gelu",
-        ),
+        encoder_hw=36,
+        window_size=9,
+        shift_size=4,
     ),
 
     freeze_cfg=dict(
         train_adapters_only=True,
         trainable_modules=[
-            "core.final_mixer",
+            "core.encoder_refiner",
         ],
         frozen_modules=[],
         openclip_text_finetune="attention",
@@ -127,7 +103,7 @@ optim_wrapper = dict(
         paramwise_cfg=dict(
             norm_decay_mult=0.0,
             custom_keys={
-                "core.final_mixer": dict(
+                "core.encoder_refiner": dict(
                     lr_mult=4.0,
                     decay_mult=1.0,
                 ),

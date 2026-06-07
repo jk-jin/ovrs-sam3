@@ -100,19 +100,8 @@ class SemanticSegAdapter(nn.Module):
                 "Supported modes are: 'final', 'infer'."
             )
 
-        semantic_logits = self._as_4d_map(
-            self._require(raw_outputs, OUTPUT_KEYS.semantic_logits),
-            OUTPUT_KEYS.semantic_logits,
-        )
         final_logits = self._as_4d_map(
             self._require(raw_outputs, OUTPUT_KEYS.final_logits),
-            OUTPUT_KEYS.final_logits,
-        )
-
-        self._check_same_shape(
-            semantic_logits,
-            final_logits,
-            OUTPUT_KEYS.semantic_logits,
             OUTPUT_KEYS.final_logits,
         )
 
@@ -126,11 +115,7 @@ class SemanticSegAdapter(nn.Module):
         )
 
         outputs = dict(raw_outputs)
-
-        outputs[OUTPUT_KEYS.semantic_logits] = semantic_logits
         outputs[OUTPUT_KEYS.final_logits] = final_logits
-
-        outputs[OUTPUT_KEYS.semantic_score_map] = semantic_logits.sigmoid()
 
         raw_final_score_map = final_logits.sigmoid()
 
@@ -139,14 +124,13 @@ class SemanticSegAdapter(nn.Module):
         outputs[OUTPUT_KEYS.final_pred] = raw_final_score_map.argmax(dim=1)
 
         for key in (
-            OUTPUT_KEYS.class_tokens,
-            OUTPUT_KEYS.class_feature_low,
+            OUTPUT_KEYS.encoder_features,
+            OUTPUT_KEYS.refined_encoder_features,
+            OUTPUT_KEYS.class_query_tokens,
+            OUTPUT_KEYS.dynamic_clip_text_features,
             OUTPUT_KEYS.clip_score_maps,
-            OUTPUT_KEYS.sam3_score_low,
-            OUTPUT_KEYS.sam3_fpn_features,
+            OUTPUT_KEYS.clip_score_embed,
             OUTPUT_KEYS.clip_mid_features,
-            OUTPUT_KEYS.clip_dense_low,
-            OUTPUT_KEYS.class_text_guidance,
         ):
             if key in raw_outputs:
                 outputs[key] = raw_outputs[key]

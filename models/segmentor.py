@@ -41,27 +41,27 @@ class SAM3Segmentor(nn.Module):
             force=force,
         )
 
-    def build_final_mixer_cache(
+    def build_encoder_refiner_cache(
         self,
         batch: BatchedDatapoint,
     ) -> Dict[str, Any]:
-        return self.core.build_final_mixer_cache(batch)
+        return self.core.build_encoder_refiner_cache(batch)
 
-    def run_final_mixer_from_cache(
+    def run_encoder_refiner_from_cache(
         self,
-        final_mixer_cache: Dict[str, Any],
+        encoder_refiner_cache: Dict[str, Any],
         batch: BatchedDatapoint,
     ) -> Dict[str, torch.Tensor]:
-        return self.core.run_final_mixer_from_cache(
-            final_mixer_cache=final_mixer_cache,
+        return self.core.run_encoder_refiner_from_cache(
+            encoder_refiner_cache=encoder_refiner_cache,
             batch=batch,
         )
 
     def forward(self, batch: BatchedDatapoint) -> dict[str, torch.Tensor]:
-        final_mixer_cache = self.build_final_mixer_cache(batch)
+        encoder_refiner_cache = self.build_encoder_refiner_cache(batch)
 
-        final_raw_outputs = self.run_final_mixer_from_cache(
-            final_mixer_cache=final_mixer_cache,
+        final_raw_outputs = self.run_encoder_refiner_from_cache(
+            encoder_refiner_cache=encoder_refiner_cache,
             batch=batch,
         )
 

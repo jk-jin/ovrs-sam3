@@ -15,16 +15,13 @@ from iopath.common.file_io import g_pathmgr
 from .config_dataclasses import (
     AdapterConfig,
     CheckpointManagerConfig,
-    DynamicPromptConfig,
-    FinalMixerConfig,
+    EncoderRefinerConfig,
     FreezeConfig,
     LoggerHookConfig,
-    LowResMixerConfig,
     OpenCLIPConfig,
     SegmentorBuildConfig,
     SemanticCriterionConfig,
     TrainerConfig,
-    UpsamplerConfig,
     VisualizerConfig,
 )
 from .losses.semantic_criterion import (
@@ -177,48 +174,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         return cls._coerce_config(obj, OpenCLIPConfig, "openclip_cfg")
 
     @classmethod
-    def _coerce_dynamic_prompt_cfg(cls, obj) -> DynamicPromptConfig:
-        return cls._coerce_config(
-            obj,
-            DynamicPromptConfig,
-            "dynamic_prompt_cfg",
-        )
-
-    @classmethod
-    def _coerce_lowres_cfg(cls, obj) -> LowResMixerConfig:
-        return cls._coerce_config(obj, LowResMixerConfig, "lowres_cfg")
-
-    @classmethod
-    def _coerce_upsampler_cfg(cls, obj) -> UpsamplerConfig:
-        return cls._coerce_config(obj, UpsamplerConfig, "upsampler_cfg")
-
-    @classmethod
-    def _coerce_final_mixer_cfg(cls, obj) -> FinalMixerConfig:
-        if obj is None:
-            return FinalMixerConfig()
-
-        if isinstance(obj, FinalMixerConfig):
-            cfg = obj
-        elif isinstance(obj, dict):
-            raw = dict(obj)
-            nested_coercers = {
-                "dynamic_prompt_cfg": cls._coerce_dynamic_prompt_cfg,
-                "lowres_cfg": cls._coerce_lowres_cfg,
-                "upsampler_cfg": cls._coerce_upsampler_cfg,
-            }
-            for key, coerce_fn in nested_coercers.items():
-                if key in raw:
-                    raw[key] = coerce_fn(raw[key])
-            cfg = FinalMixerConfig(**raw)
-        else:
-            raise TypeError(f"Unsupported final_mixer_cfg type: {type(obj)}")
-
-        cfg.dynamic_prompt_cfg = cls._coerce_dynamic_prompt_cfg(
-            cfg.dynamic_prompt_cfg
-        )
-        cfg.lowres_cfg = cls._coerce_lowres_cfg(cfg.lowres_cfg)
-        cfg.upsampler_cfg = cls._coerce_upsampler_cfg(cfg.upsampler_cfg)
-        return cfg
+    def _coerce_encoder_refiner_cfg(cls, obj) -> EncoderRefinerConfig:
+        return cls._coerce_config(obj, EncoderRefinerConfig, "encoder_refiner_cfg")
 
     @classmethod
     def _coerce_criterion_cfg(cls, obj) -> SemanticCriterionConfig:
@@ -233,7 +190,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         cfg.task_mode = normalize_task_mode(cfg.task_mode)
         cfg.freeze_cfg = cls._coerce_freeze_cfg(cfg.freeze_cfg)
         cfg.openclip_cfg = cls._coerce_openclip_cfg(cfg.openclip_cfg)
-        cfg.final_mixer_cfg = cls._coerce_final_mixer_cfg(cfg.final_mixer_cfg)
+        cfg.encoder_refiner_cfg = cls._coerce_encoder_refiner_cfg(cfg.encoder_refiner_cfg)
         cfg.criterion_cfg = cls._coerce_criterion_cfg(cfg.criterion_cfg)
         cfg.adapter_cfg = cls._coerce_adapter_cfg(cfg.adapter_cfg)
         return cfg
@@ -243,7 +200,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         cfg = SegmentorBuildConfig(**kwargs)
         cfg = cls._normalize_build_cfg(cfg)
         cfg.openclip_cfg = cls.validate_openclip_cfg(cfg.openclip_cfg)
-        cfg.final_mixer_cfg = cls.validate_final_mixer_cfg(cfg.final_mixer_cfg)
+        cfg.encoder_refiner_cfg = cls.validate_encoder_refiner_cfg(cfg.encoder_refiner_cfg)
         return cfg
 
     @staticmethod
@@ -280,89 +237,44 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         _ = cls._resolve_openclip_pretrained(openclip_cfg.pretrained)
 
-        if openclip_cfg.num_prompt_templates < 0:
+        if "{}" not in openclip_cfg.prompt_template:
             raise ValueError(
-                "openclip_cfg.num_prompt_templates must be non-negative, "
-                f"got {openclip_cfg.num_prompt_templates}."
-            )
-
-        if openclip_cfg.num_prompt_templates > len(openclip_cfg.prompt_templates):
-            raise ValueError(
-                "openclip_cfg.num_prompt_templates cannot exceed "
-                "len(openclip_cfg.prompt_templates)."
+                "openclip_cfg.prompt_template must contain '{}' placeholder."
             )
         return openclip_cfg
 
     @classmethod
-    def validate_final_mixer_cfg(cls, cfg: FinalMixerConfig) -> FinalMixerConfig:
-        cfg = cls._coerce_final_mixer_cfg(cfg)
+    def validate_encoder_refiner_cfg(cls, cfg: EncoderRefinerConfig) -> EncoderRefinerConfig:
+        cfg = cls._coerce_encoder_refiner_cfg(cfg)
 
         if not cfg.enabled:
             raise ValueError(
-                "final_mixer_cfg.enabled=False is not supported by the current "
+                "encoder_refiner_cfg.enabled=False is not supported by the current "
                 "semantic training path."
             )
 
         if cfg.fusion_layers <= 0:
             raise ValueError(
-                "final_mixer_cfg.fusion_layers must be positive, "
-                f"got {cfg.fusion_layers}."
+                f"encoder_refiner_cfg.fusion_layers must be positive, got {cfg.fusion_layers}."
             )
 
         if cfg.num_heads <= 0:
             raise ValueError(
-                "final_mixer_cfg.num_heads must be positive, "
-                f"got {cfg.num_heads}."
+                f"encoder_refiner_cfg.num_heads must be positive, got {cfg.num_heads}."
             )
 
-        dynamic_cfg = cfg.dynamic_prompt_cfg
-        if dynamic_cfg.tokens_per_template <= 0:
+        if cfg.num_query_tokens <= 0:
             raise ValueError(
-                "dynamic_prompt_cfg.tokens_per_template must be positive, "
-                f"got {dynamic_cfg.tokens_per_template}."
+                f"encoder_refiner_cfg.num_query_tokens must be positive, got {cfg.num_query_tokens}."
             )
 
-        lowres_cfg = cfg.lowres_cfg
-        if lowres_cfg.window_size <= 0:
+        if cfg.window_size <= 0:
             raise ValueError(
-                "final_mixer_cfg.lowres_cfg.window_size must be positive."
+                "encoder_refiner_cfg.window_size must be positive."
             )
-        if not 0 <= lowres_cfg.shift_size < lowres_cfg.window_size:
+        if not 0 <= cfg.shift_size < cfg.window_size:
             raise ValueError(
-                "final_mixer_cfg.lowres_cfg.shift_size must satisfy "
-                "0 <= shift_size < window_size."
-            )
-
-        upsampler_cfg = cfg.upsampler_cfg
-
-        if len(upsampler_cfg.decoder_channels) < 2:
-            raise ValueError(
-                "upsampler_cfg.decoder_channels must contain at least "
-                "one input channel and one decoder stage channel."
-            )
-
-        expected_stages = len(upsampler_cfg.decoder_channels) - 1
-
-        if len(upsampler_cfg.sam_guidance_channels) != expected_stages:
-            raise ValueError(
-                "upsampler_cfg.sam_guidance_channels length must match "
-                f"the number of upsample stages. Expected {expected_stages}, "
-                f"got {len(upsampler_cfg.sam_guidance_channels)}."
-            )
-
-        for stage_idx in upsampler_cfg.clip_guidance_stage_indices:
-            if stage_idx < 0 or stage_idx >= expected_stages:
-                raise ValueError(
-                    "upsampler_cfg.clip_guidance_stage_indices contains invalid "
-                    f"stage index {stage_idx}; valid range is [0, {expected_stages - 1}]."
-                )
-
-        if len(upsampler_cfg.clip_guidance_channels) != len(
-            upsampler_cfg.clip_guidance_stage_indices
-        ):
-            raise ValueError(
-                "upsampler_cfg.clip_guidance_channels length must match "
-                "upsampler_cfg.clip_guidance_stage_indices length."
+                "encoder_refiner_cfg.shift_size must satisfy 0 <= shift_size < window_size."
             )
 
         return cfg
@@ -725,26 +637,17 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         clip_text_encoder = None
         clip_image_encoder = None
-        clip_prompt_templates: list[str] = []
-        num_clip_prompt_templates = 0
 
         if cfg.openclip_cfg.enabled:
             clip_text_encoder, clip_image_encoder = cls._create_openclip_encoders(
                 cfg.openclip_cfg
-            )
-            num_clip_prompt_templates = int(cfg.openclip_cfg.num_prompt_templates)
-            clip_prompt_templates = list(
-                cfg.openclip_cfg.prompt_templates[:num_clip_prompt_templates]
             )
 
         transformer = cls._create_encoder_only_transformer()
         segmentation_head = cls._create_segmentation_head(compile_mode=compile_mode)
         input_geometry_encoder = cls._create_geometry_encoder()
 
-        final_cfg = cfg.final_mixer_cfg
-        lowres_cfg = final_cfg.lowres_cfg
-        upsampler_cfg = final_cfg.upsampler_cfg
-        dynamic_cfg = final_cfg.dynamic_prompt_cfg
+        refiner_cfg = cfg.encoder_refiner_cfg
 
         model = Sam3Image(
             backbone=backbone,
@@ -759,25 +662,19 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             matcher=None,
             clip_image_encoder=clip_image_encoder,
             clip_text_encoder=clip_text_encoder,
-            clip_prompt_templates=clip_prompt_templates,
-            num_clip_prompt_templates=num_clip_prompt_templates,
+            openclip_prompt_template=str(cfg.openclip_cfg.prompt_template),
             normalize_label_for_clip=bool(cfg.openclip_cfg.normalize_label_for_clip),
-            final_mixer_fusion_layers=int(final_cfg.fusion_layers),
-            final_mixer_num_heads=int(final_cfg.num_heads),
-            final_mixer_dropout=float(final_cfg.dropout),
-            lowres_hidden_dim=int(lowres_cfg.hidden_dim),
-            lowres_score_embed_dim=int(lowres_cfg.score_embed_dim),
-            lowres_window_size=int(lowres_cfg.window_size),
-            lowres_shift_size=int(lowres_cfg.shift_size),
-            dynamic_tokens_per_template=int(dynamic_cfg.tokens_per_template),
-            upsampler_class_chunk_size=int(upsampler_cfg.class_chunk_size),
-            upsampler_decoder_channels=list(upsampler_cfg.decoder_channels),
-            upsampler_sam_guidance_channels=list(upsampler_cfg.sam_guidance_channels),
-            upsampler_clip_guidance_channels=list(upsampler_cfg.clip_guidance_channels),
-            upsampler_clip_guidance_stage_indices=list(upsampler_cfg.clip_guidance_stage_indices),
-            upsampler_upsample_mode=str(upsampler_cfg.upsample_mode),
-            upsampler_norm=str(upsampler_cfg.norm),
-            upsampler_act=str(upsampler_cfg.act),
+            encoder_refiner_num_query_tokens=int(refiner_cfg.num_query_tokens),
+            encoder_refiner_fusion_layers=int(refiner_cfg.fusion_layers),
+            encoder_refiner_num_heads=int(refiner_cfg.num_heads),
+            encoder_refiner_dropout=float(refiner_cfg.dropout),
+            encoder_refiner_hidden_dim=int(refiner_cfg.hidden_dim),
+            encoder_refiner_score_embed_dim=int(refiner_cfg.clip_score_embed_dim),
+            encoder_refiner_conv_kernel=int(refiner_cfg.clip_score_conv_kernel),
+            encoder_refiner_mid_hw=int(refiner_cfg.clip_score_mid_hw),
+            encoder_refiner_encoder_hw=int(refiner_cfg.encoder_hw),
+            encoder_refiner_window_size=int(refiner_cfg.window_size),
+            encoder_refiner_shift_size=int(refiner_cfg.shift_size),
             task_mode=TASK_MODE_SEMANTIC,
         )
 

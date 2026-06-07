@@ -131,24 +131,24 @@ class Trainer:
         return obj
 
     def _compute_train_loss(self, batch) -> tuple[Dict[str, torch.Tensor], torch.Tensor]:
-        if not hasattr(self.model, "build_final_mixer_cache"):
+        if not hasattr(self.model, "build_encoder_refiner_cache"):
             raise AttributeError(
-                "Model must provide build_final_mixer_cache(batch)."
+                "Model must provide build_encoder_refiner_cache(batch)."
             )
 
-        if not hasattr(self.model, "run_final_mixer_from_cache"):
+        if not hasattr(self.model, "run_encoder_refiner_from_cache"):
             raise AttributeError(
-                "Model must provide run_final_mixer_from_cache(final_mixer_cache, batch)."
+                "Model must provide run_encoder_refiner_from_cache(encoder_refiner_cache, batch)."
             )
 
         label_map = batch.find_targets[0].semantic_label_map
         use_amp = self.cfg.use_amp and self.device.type == "cuda"
 
         with autocast(device_type=self.device.type, enabled=use_amp):
-            final_mixer_cache = self.model.build_final_mixer_cache(batch)
+            encoder_refiner_cache = self.model.build_encoder_refiner_cache(batch)
 
-            final_raw_outputs = self.model.run_final_mixer_from_cache(
-                final_mixer_cache=final_mixer_cache,
+            final_raw_outputs = self.model.run_encoder_refiner_from_cache(
+                encoder_refiner_cache=encoder_refiner_cache,
                 batch=batch,
             )
 

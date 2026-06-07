@@ -23,59 +23,28 @@ class OpenCLIPConfig:
 
     image_intermediate_layers: list[int] = field(default_factory=lambda: [7, 15])
 
-    prompt_templates: list[str] = field(
-        default_factory=lambda: [
-            "a remote sensing image of {}.",
-            "an aerial image of {}.",
-        ]
-    )
-    num_prompt_templates: int = 2
-
+    prompt_template: str = "a remote sensing image of {}."
     normalize_label_for_clip: bool = True
 
 
 @dataclass
-class DynamicPromptConfig:
-    tokens_per_template: int = 4
-
-
-@dataclass
-class LowResMixerConfig:
-    hidden_dim: int = 256
-    score_embed_dim: int = 32
-    window_size: int = 8
-    shift_size: int = 4
-
-
-@dataclass
-class UpsamplerConfig:
-    class_chunk_size: int = 4
-    decoder_channels: list[int] = field(default_factory=lambda: [256, 128, 96, 64, 32])
-    sam_guidance_channels: list[int] = field(default_factory=lambda: [32, 24, 16, 8])
-    clip_guidance_channels: list[int] = field(default_factory=lambda: [32, 24])
-    clip_guidance_stage_indices: list[int] = field(default_factory=lambda: [0, 1])
-    upsample_mode: str = "bilinear"
-    norm: str = "group_norm"
-    act: str = "gelu"
-
-
-@dataclass
-class FinalMixerConfig:
+class EncoderRefinerConfig:
     enabled: bool = True
 
+    num_query_tokens: int = 32
     fusion_layers: int = 4
     num_heads: int = 8
     dropout: float = 0.1
 
-    dynamic_prompt_cfg: DynamicPromptConfig = field(
-        default_factory=DynamicPromptConfig
-    )
-    lowres_cfg: LowResMixerConfig = field(
-        default_factory=LowResMixerConfig
-    )
-    upsampler_cfg: UpsamplerConfig = field(
-        default_factory=UpsamplerConfig
-    )
+    hidden_dim: int = 256
+
+    clip_score_embed_dim: int = 32
+    clip_score_conv_kernel: int = 7
+    clip_score_mid_hw: int = 32
+
+    encoder_hw: int = 36
+    window_size: int = 9
+    shift_size: int = 4
 
 
 @dataclass
@@ -118,7 +87,7 @@ class SegmentorBuildConfig:
 
     freeze_cfg: FreezeConfig = field(default_factory=FreezeConfig)
     openclip_cfg: OpenCLIPConfig = field(default_factory=OpenCLIPConfig)
-    final_mixer_cfg: FinalMixerConfig = field(default_factory=FinalMixerConfig)
+    encoder_refiner_cfg: EncoderRefinerConfig = field(default_factory=EncoderRefinerConfig)
     criterion_cfg: SemanticCriterionConfig = field(
         default_factory=SemanticCriterionConfig
     )

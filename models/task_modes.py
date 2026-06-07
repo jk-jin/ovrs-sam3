@@ -14,26 +14,20 @@ VALID_TASK_MODES = {
 
 @dataclass(frozen=True)
 class ModelOutputKeys:
-    semantic_logits: str = "semantic_logits"
-    semantic_score_map: str = "semantic_score_map"
-
-    class_tokens: str = "class_tokens"
-    class_feature_low: str = "class_feature_low"
-
+    # Final outputs
     final_logits: str = "final_logits"
     raw_final_score_map: str = "raw_final_score_map"
     final_score_map: str = "final_score_map"
     final_pred: str = "final_pred"
 
+    # Encoder feature refiner outputs
+    encoder_features: str = "encoder_features"
+    refined_encoder_features: str = "refined_encoder_features"
+    class_query_tokens: str = "class_query_tokens"
+    dynamic_clip_text_features: str = "dynamic_clip_text_features"
     clip_score_maps: str = "clip_score_maps"
-    sam3_score_low: str = "sam3_score_low"
-
-    sam3_fpn_features: str = "sam3_fpn_features"
-
+    clip_score_embed: str = "clip_score_embed"
     clip_mid_features: str = "clip_mid_features"
-    clip_dense_low: str = "clip_dense_low"
-
-    class_text_guidance: str = "class_text_guidance"
 
 
 OUTPUT_KEYS = ModelOutputKeys()
