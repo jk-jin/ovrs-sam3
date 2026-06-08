@@ -46,6 +46,7 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_encoder_hw: int = 72,
         encoder_refiner_window_size: int = 9,
         encoder_refiner_shift_size: int = 4,
+        encoder_refiner_use_checkpoint: bool = True,
         task_mode: str = TASK_MODE_SEMANTIC,
         **kwargs,
     ):
@@ -129,6 +130,7 @@ class Sam3Image(torch.nn.Module):
             normalize_label_for_clip=bool(normalize_label_for_clip),
             score_conv_kernel=int(encoder_refiner_conv_kernel),
             encoder_hw=int(encoder_refiner_encoder_hw),
+            use_checkpoint=bool(encoder_refiner_use_checkpoint),
         )
 
         self.prompt_chunk_size = None
@@ -614,6 +616,7 @@ class Sam3Image(torch.nn.Module):
         clip_image_feat_map: torch.Tensor,
         class_names: List[str],
         clip_mid_features: List[torch.Tensor],
+        return_debug: bool = False,
     ) -> Dict[str, torch.Tensor]:
         B, C, D, H, W = e.shape
 
@@ -692,23 +695,30 @@ class Sam3Image(torch.nn.Module):
                 f"got {tuple(final_logits.shape[:2])}."
             )
 
-        return {
+        result = {
             OUTPUT_KEYS.final_logits: final_logits.contiguous(),
-            OUTPUT_KEYS.encoder_features: e.contiguous(),
-            OUTPUT_KEYS.refined_encoder_features: refined_e.contiguous(),
-            OUTPUT_KEYS.class_query_tokens: class_query_tokens.contiguous(),
-            OUTPUT_KEYS.dynamic_clip_text_features: dynamic_clip_text.contiguous(),
-            OUTPUT_KEYS.clip_score_embed: clip_score_embed.contiguous(),
-            OUTPUT_KEYS.clip_score_maps: clip_score_maps.contiguous(),
-            OUTPUT_KEYS.clip_mid_features: [
-                feat.contiguous() for feat in clip_mid_features
-            ],
         }
+
+        if return_debug:
+            result.update({
+                OUTPUT_KEYS.encoder_features: e.detach().contiguous(),
+                OUTPUT_KEYS.refined_encoder_features: refined_e.detach().contiguous(),
+                OUTPUT_KEYS.class_query_tokens: class_query_tokens.detach().contiguous(),
+                OUTPUT_KEYS.dynamic_clip_text_features: dynamic_clip_text.detach().contiguous(),
+                OUTPUT_KEYS.clip_score_embed: clip_score_embed.detach().contiguous(),
+                OUTPUT_KEYS.clip_score_maps: clip_score_maps.detach().contiguous(),
+                OUTPUT_KEYS.clip_mid_features: [
+                    feat.detach().contiguous() for feat in clip_mid_features
+                ],
+            })
+
+        return result
 
     def run_encoder_refiner_from_cache(
         self,
         encoder_refiner_cache: Dict[str, Any],
         batch: BatchedDatapoint,
+        return_debug: bool = False,
     ) -> Dict[str, torch.Tensor]:
         if batch is None:
             raise ValueError("batch must be provided.")
@@ -746,6 +756,7 @@ class Sam3Image(torch.nn.Module):
             clip_image_feat_map=clip_image_feat_map,
             class_names=class_names,
             clip_mid_features=clip_mid_features,
+            return_debug=return_debug,
         )
 
     def _get_img_feats(self, backbone_out, img_ids):

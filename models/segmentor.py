@@ -51,10 +51,12 @@ class SAM3Segmentor(nn.Module):
         self,
         encoder_refiner_cache: Dict[str, Any],
         batch: BatchedDatapoint,
+        return_debug: bool = False,
     ) -> Dict[str, torch.Tensor]:
         return self.core.run_encoder_refiner_from_cache(
             encoder_refiner_cache=encoder_refiner_cache,
             batch=batch,
+            return_debug=return_debug,
         )
 
     def forward(self, batch: BatchedDatapoint) -> dict[str, torch.Tensor]:

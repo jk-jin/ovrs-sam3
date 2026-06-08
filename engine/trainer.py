@@ -150,6 +150,7 @@ class Trainer:
             final_raw_outputs = self.model.run_encoder_refiner_from_cache(
                 encoder_refiner_cache=encoder_refiner_cache,
                 batch=batch,
+                return_debug=False,
             )
 
             final_outputs = self.model.adapter(

@@ -674,6 +674,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             encoder_refiner_encoder_hw=int(refiner_cfg.encoder_hw),
             encoder_refiner_window_size=int(refiner_cfg.window_size),
             encoder_refiner_shift_size=int(refiner_cfg.shift_size),
+            encoder_refiner_use_checkpoint=bool(refiner_cfg.use_checkpoint),
             task_mode=TASK_MODE_SEMANTIC,
         )
 

@@ -1027,8 +1027,6 @@ class VisualizationManager:
         for key in (
             OUTPUT_KEYS.final_score_map,
             OUTPUT_KEYS.final_logits,
-            OUTPUT_KEYS.semantic_score_map,
-            OUTPUT_KEYS.semantic_logits,
         ):
             value = semantic_outputs.get(key, None)
             if isinstance(value, torch.Tensor) and value.dim() >= 1:

@@ -4,6 +4,7 @@ from typing import List, Tuple
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 from .clip_prompt_encoder import SingleTokenClipPromptEncoder
 from .clip_score_embedding import ClipScoreEmbeddingBuilder
@@ -50,11 +51,13 @@ class ClassConditionedEncoderRefiner(nn.Module):
         normalize_label_for_clip: bool = True,
         score_conv_kernel: int = 7,
         encoder_hw: int = 72,
+        use_checkpoint: bool = True,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
         self.clip_dim = int(clip_dim)
         self.num_query_tokens = int(num_query_tokens)
+        self.use_checkpoint = bool(use_checkpoint)
 
         # Query extractor — created eagerly.
         self.query_extractor = EncoderQueryExtractor(
@@ -183,13 +186,24 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
         refined_e = e
         for layer in self.layers:
-            refined_e = layer(
-                e=refined_e,
-                sam_text_mean=sam_text_mean,
-                clip_text_mean=clip_text_mean,
-                sam_image_last=sam_image_last,
-                clip_score_embed=clip_score_embed,
-            )
+            if self.use_checkpoint and self.training:
+                refined_e = checkpoint(
+                    layer,
+                    refined_e,
+                    sam_text_mean,
+                    clip_text_mean,
+                    sam_image_last,
+                    clip_score_embed,
+                    use_reentrant=False,
+                )
+            else:
+                refined_e = layer(
+                    e=refined_e,
+                    sam_text_mean=sam_text_mean,
+                    clip_text_mean=clip_text_mean,
+                    sam_image_last=sam_image_last,
+                    clip_score_embed=clip_score_embed,
+                )
 
         return (
             refined_e,

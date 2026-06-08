@@ -114,6 +114,11 @@ class SemanticSegAdapter(nn.Module):
             expected_num_classes=expected_num_classes,
         )
 
+        if output_mode == "final":
+            return {OUTPUT_KEYS.final_logits: final_logits}
+
+        # --- infer mode below ---
+
         outputs = dict(raw_outputs)
         outputs[OUTPUT_KEYS.final_logits] = final_logits
 

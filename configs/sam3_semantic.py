@@ -60,11 +60,11 @@ model = dict(
         ignore_index=255,
 
         final_bce_weight=1.0,
-        final_dice_weight=0.0,
+        final_dice_weight=0.2,
 
         # 0.0 = absent classes not supervised for mask BCE.
         # Set to 0.01 / 0.05 for mild absent-class suppression.
-        bce_absent_class_weight=0.0,
+        bce_absent_class_weight=1.0,
 
         # BCE pixel weights:
         # valid pixels keep full supervision;
@@ -77,7 +77,7 @@ model = dict(
 )
 
 train_dataloader = dict(
-    batch_size=1,
+    batch_size=2,
     num_workers=8,
 )
 

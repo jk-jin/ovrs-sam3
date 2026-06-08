@@ -45,6 +45,8 @@ class EncoderRefinerConfig:
     window_size: int = 9
     shift_size: int = 4
 
+    use_checkpoint: bool = True
+
 
 @dataclass
 class SemanticCriterionConfig:
