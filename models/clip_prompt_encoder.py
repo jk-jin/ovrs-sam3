@@ -4,6 +4,7 @@ from typing import List
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 
 class SingleTokenClipPromptEncoder(nn.Module):
@@ -30,6 +31,7 @@ class SingleTokenClipPromptEncoder(nn.Module):
         prompt_template: str = "a remote sensing image of {}.",
         sam_dim: int = 256,
         normalize_label: bool = True,
+        use_checkpoint: bool = True,
     ):
         super().__init__()
 
@@ -38,6 +40,7 @@ class SingleTokenClipPromptEncoder(nn.Module):
         self.prompt_template = str(prompt_template)
         self.sam_dim = int(sam_dim)
         self.normalize_label = bool(normalize_label)
+        self.use_checkpoint = bool(use_checkpoint)
 
         if "{}" not in self.prompt_template:
             raise ValueError(
@@ -237,11 +240,22 @@ class SingleTokenClipPromptEncoder(nn.Module):
         merged_embeds = torch.stack(all_embeds_list, dim=0)  # [B*C*Q, L, text_width]
         merged_tokens = torch.stack(all_tokens_list, dim=0)  # [B*C*Q, L]
 
-        pooled = self.clip_text_encoder.encode_embeds(
-            input_embeds=merged_embeds,
-            tokenized=merged_tokens,
-            normalize=True,
-            detach_output=False,
-        )
+        def _encode_embeds(input_embeds, tokenized):
+            return self.clip_text_encoder.encode_embeds(
+                input_embeds=input_embeds,
+                tokenized=tokenized,
+                normalize=True,
+                detach_output=False,
+            )
+
+        if self.use_checkpoint and self.training:
+            pooled = checkpoint(
+                _encode_embeds,
+                merged_embeds,
+                merged_tokens,
+                use_reentrant=False,
+            )
+        else:
+            pooled = _encode_embeds(merged_embeds, merged_tokens)
 
         return pooled.reshape(B, C, Q, self.clip_output_dim).contiguous()

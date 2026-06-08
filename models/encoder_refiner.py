@@ -73,6 +73,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
             prompt_template=str(prompt_template),
             sam_dim=self.hidden_dim,
             normalize_label=bool(normalize_label_for_clip),
+            use_checkpoint=bool(use_checkpoint),
         )
 
         # Score embedding builder.
