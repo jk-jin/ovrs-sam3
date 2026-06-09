@@ -341,7 +341,7 @@ class Sam3Image(torch.nn.Module):
         if clip_image_cache is None:
             raise ValueError("CLIP image cache is required.")
 
-        e_chunks: list[torch.Tensor] = []
+        encoder_feature_chunks: list[torch.Tensor] = []
         encoder_out_chunks: list[Dict] = []
         chunk_prompts: list[torch.Tensor] = []
         chunk_prompt_masks: list[torch.Tensor] = []
@@ -390,20 +390,20 @@ class Sam3Image(torch.nn.Module):
             prompt = raw_outputs["prompt"]
             prompt_mask = raw_outputs["prompt_mask"]
 
-            e_chunk = self._extract_encoder_last_feature(
+            encoder_feature_chunk = self._extract_encoder_last_feature(
                 encoder_out=encoder_out,
                 batch_size=batch_size,
                 num_chunk_classes=num_chunk_classes,
             )
 
-            e_chunks.append(e_chunk)
+            encoder_feature_chunks.append(encoder_feature_chunk)
             encoder_out_chunks.append(encoder_out)
             chunk_prompts.append(prompt)
             chunk_prompt_masks.append(prompt_mask)
             merged_class_ids.extend(chunk_class_ids)
             chunk_class_counts.append(num_chunk_classes)
 
-        if len(e_chunks) == 0:
+        if len(encoder_feature_chunks) == 0:
             raise ValueError("No chunk outputs were produced.")
 
         expected_class_ids = list(range(num_classes))
@@ -413,16 +413,16 @@ class Sam3Image(torch.nn.Module):
                 f"Got {merged_class_ids}, expected {expected_class_ids}."
             )
 
-        e = torch.cat(e_chunks, dim=1)
+        encoder_features_72 = torch.cat(encoder_feature_chunks, dim=1)
 
-        if tuple(e.shape[:2]) != (batch_size, num_classes):
+        if tuple(encoder_features_72.shape[:2]) != (batch_size, num_classes):
             raise ValueError(
                 "Merged encoder features shape mismatch: expected "
                 f"{(batch_size, num_classes)}, got {tuple(e.shape[:2])}."
             )
 
         return {
-            "e": e,
+            "encoder_features_72": encoder_features_72,
             "encoder_out_chunks": encoder_out_chunks,
             "chunk_prompts": chunk_prompts,
             "chunk_prompt_masks": chunk_prompt_masks,
@@ -468,18 +468,18 @@ class Sam3Image(torch.nn.Module):
         ).contiguous()
 
     @staticmethod
-    def _write_refined_e_to_encoder_hidden_states(
+    def _write_refined_encoder_features_to_encoder_hidden_states(
         encoder_out: Dict[str, torch.Tensor],
-        refined_e_chunk: torch.Tensor,
+        refined_encoder_features_chunk: torch.Tensor,
         batch_size: int,
         num_chunk_classes: int,
     ) -> torch.Tensor:
         """
-        Write refined_e back into encoder_hidden_states visual token region.
+        Write refined encoder features back into encoder_hidden_states visual token region.
 
         Args:
             encoder_out: original encoder output dict
-            refined_e_chunk: [B, C_chunk, D, H, W]
+            refined_encoder_features_chunk: [B, C_chunk, D, H, W]
             batch_size: B
             num_chunk_classes: C_chunk
 
@@ -492,9 +492,9 @@ class Sam3Image(torch.nn.Module):
         h_feat, w_feat = int(spatial_shapes[0][0]), int(spatial_shapes[0][1])
         num_img_tokens = h_feat * w_feat
 
-        B, C_chunk, D, H, W = refined_e_chunk.shape
+        B, C_chunk, D, H, W = refined_encoder_features_chunk.shape
 
-        refined_flat = refined_e_chunk.reshape(B * C_chunk, D, H * W)
+        refined_flat = refined_encoder_features_chunk.reshape(B * C_chunk, D, H * W)
         refined_flat = refined_flat.permute(2, 0, 1)  # [H*W, B*C_chunk, D]
 
         encoder_hidden_states[:num_img_tokens] = refined_flat.to(
@@ -542,7 +542,7 @@ class Sam3Image(torch.nn.Module):
 
     def run_encoder_refiner(
         self,
-        e: torch.Tensor,
+        encoder_features_72: torch.Tensor,
         encoder_out_chunks: List[Dict],
         chunk_prompts: List[torch.Tensor],
         chunk_prompt_masks: List[torch.Tensor],
@@ -553,37 +553,37 @@ class Sam3Image(torch.nn.Module):
         clip_mid_features: List[torch.Tensor],
         return_debug: bool = False,
     ) -> Dict[str, torch.Tensor]:
-        B, C, D, H, W = e.shape
+        B, C, D, H, W = encoder_features_72.shape
 
         # Use the last FPN feature as sam_image_last for window attention guide.
-        sam_image_last = backbone_fpn[-1].detach()
+        sam_image_last_72 = backbone_fpn[-1].detach()
 
         # Run the encoder refiner.
         (
-            refined_e,
+            refined_encoder_features_72,
             class_query_tokens,
             dynamic_clip_text,
             clip_score_embeds,
             clip_score_maps_18,
         ) = self.encoder_refiner(
-            encoder_features=e,
+            encoder_features=encoder_features_72,
             clip_image_feat_map=clip_image_feat_map,
             class_names=class_names,
-            sam_image_last=sam_image_last,
+            sam_image_last=sam_image_last_72,
         )
 
-        # For each chunk, write refined_e back and call segmentation_head.
+        # For each chunk, write refined_encoder_features_72 back and call segmentation_head.
         final_logits_chunks: list[torch.Tensor] = []
         chunk_start = 0
 
         for chunk_idx, encoder_out in enumerate(encoder_out_chunks):
             C_chunk = chunk_class_counts[chunk_idx]
 
-            refined_e_chunk = refined_e[:, chunk_start:chunk_start + C_chunk]
+            refined_encoder_features_chunk = refined_encoder_features_72[:, chunk_start:chunk_start + C_chunk]
 
-            refined_hidden_states = self._write_refined_e_to_encoder_hidden_states(
+            refined_hidden_states = self._write_refined_encoder_features_to_encoder_hidden_states(
                 encoder_out=encoder_out,
-                refined_e_chunk=refined_e_chunk,
+                refined_encoder_features_chunk=refined_encoder_features_chunk,
                 batch_size=B,
                 num_chunk_classes=C_chunk,
             )
@@ -591,12 +591,12 @@ class Sam3Image(torch.nn.Module):
             chunk_find_input = self._build_prompt_expanded_find_stage(
                 batch_size=B,
                 num_chunk_classes=C_chunk,
-                device=refined_e.device,
+                device=refined_encoder_features_72.device,
             )
 
             seg_outputs = self.segmentation_head(
                 backbone_feats=backbone_fpn,
-                obj_queries=torch.empty(0, device=refined_e.device),
+                obj_queries=torch.empty(0, device=refined_encoder_features_72.device),
                 image_ids=chunk_find_input.img_ids,
                 encoder_hidden_states=refined_hidden_states,
                 prompt=chunk_prompts[chunk_idx],
@@ -634,8 +634,8 @@ class Sam3Image(torch.nn.Module):
 
         if return_debug:
             result.update({
-                OUTPUT_KEYS.encoder_features: e.detach().contiguous(),
-                OUTPUT_KEYS.refined_encoder_features: refined_e.detach().contiguous(),
+                OUTPUT_KEYS.encoder_features: encoder_features_72.detach().contiguous(),
+                OUTPUT_KEYS.refined_encoder_features: refined_encoder_features_72.detach().contiguous(),
                 OUTPUT_KEYS.class_query_tokens: class_query_tokens.detach().contiguous(),
                 OUTPUT_KEYS.dynamic_clip_text_features: dynamic_clip_text.detach().contiguous(),
                 OUTPUT_KEYS.clip_score_embed: clip_score_embeds["scale_72"].detach().contiguous(),
@@ -656,7 +656,7 @@ class Sam3Image(torch.nn.Module):
         if batch is None:
             raise ValueError("batch must be provided.")
 
-        e = encoder_refiner_cache["e"]
+        encoder_features_72 = encoder_refiner_cache["encoder_features_72"]
         encoder_out_chunks = encoder_refiner_cache["encoder_out_chunks"]
         chunk_prompts = encoder_refiner_cache["chunk_prompts"]
         chunk_prompt_masks = encoder_refiner_cache["chunk_prompt_masks"]
@@ -676,7 +676,7 @@ class Sam3Image(torch.nn.Module):
             )
 
         return self.run_encoder_refiner(
-            e=e,
+            encoder_features_72=encoder_features_72,
             encoder_out_chunks=encoder_out_chunks,
             chunk_prompts=chunk_prompts,
             chunk_prompt_masks=chunk_prompt_masks,

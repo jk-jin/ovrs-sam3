@@ -28,12 +28,19 @@ def unflatten_batch_class(
     return features.reshape(batch_size, num_classes, channels, height, width).contiguous()
 
 
+def _safe_group_norm(num_channels: int) -> nn.GroupNorm:
+    num_groups = min(8, num_channels)
+    if num_channels % num_groups != 0:
+        num_groups = 1
+    return nn.GroupNorm(num_groups, num_channels)
+
+
 class ConvDownsample2d(nn.Module):
     def __init__(self, channels: int):
         super().__init__()
         self.layers = nn.Sequential(
             nn.Conv2d(channels, channels, kernel_size=3, stride=2, padding=1, bias=False),
-            nn.GroupNorm(8, channels),
+            _safe_group_norm(channels),
             nn.GELU(),
         )
 
@@ -46,7 +53,7 @@ class BilinearConvUpsample2d(nn.Module):
         super().__init__()
         self.conv = nn.Sequential(
             nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False),
-            nn.GroupNorm(8, channels),
+            _safe_group_norm(channels),
             nn.GELU(),
         )
 
@@ -408,8 +415,9 @@ class ImageScoreWindowAttention(nn.Module):
 
         pad_h, pad_w = e_flat.shape[-2], e_flat.shape[-1]
 
-        if self.shift_size > 0:
-            shift = self.shift_size
+        shift = self.shift_size
+
+        if shift > 0:
             e_flat = torch.roll(e_flat, shifts=(-shift, -shift), dims=(-2, -1))
             score_flat = torch.roll(score_flat, shifts=(-shift, -shift), dims=(-2, -1))
             sam_flat = torch.roll(sam_flat, shifts=(-shift, -shift), dims=(-2, -1))
@@ -458,7 +466,7 @@ class ImageScoreWindowAttention(nn.Module):
 
         out = self._window_reverse(out, bc, pad_h, pad_w)
 
-        if self.shift_size > 0:
+        if shift > 0:
             out = torch.roll(out, shifts=(shift, shift), dims=(-2, -1))
 
         out = out[:, :, :orig_h, :orig_w]
