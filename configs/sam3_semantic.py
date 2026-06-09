@@ -37,7 +37,7 @@ model = dict(
 
         hidden_dim=256,
 
-        clip_score_embed_dim=32,
+        clip_score_embed_dim=128,
         clip_score_conv_kernel=7,
 
         encoder_hw=72,
@@ -51,7 +51,7 @@ model = dict(
             "core.encoder_refiner",
         ],
         frozen_modules=[],
-        openclip_text_finetune="attention",
+        openclip_text_finetune="frozen",
     ),
 
     adapter_cfg=dict(),
@@ -60,17 +60,17 @@ model = dict(
         ignore_index=255,
 
         final_bce_weight=1.0,
-        final_dice_weight=0.2,
+        final_dice_weight=0.0,
 
         # 0.0 = absent classes not supervised for mask BCE.
         # Set to 0.01 / 0.05 for mild absent-class suppression.
-        bce_absent_class_weight=1.0,
+        bce_absent_class_weight=0.0,
 
         # BCE pixel weights:
         # valid pixels keep full supervision;
         # ignore pixels get weaker suppression to avoid over-penalizing unlabeled regions.
-        bce_valid_pixel_weight=5.0,
-        bce_ignore_pixel_weight=1.0,
+        bce_valid_pixel_weight=1.0,
+        bce_ignore_pixel_weight=0.05,
 
         eps=1e-6,
     ),

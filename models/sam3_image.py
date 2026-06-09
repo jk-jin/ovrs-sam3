@@ -478,18 +478,12 @@ class Sam3Image(torch.nn.Module):
                 f"{(batch_size, num_classes)}, got {tuple(e.shape[:2])}."
             )
 
-        # Extract SAM3 text features from cache.
-        sam3_text_features = self._text_cache["language_features"].contiguous()
-        sam3_text_mask = self._text_cache["language_mask"].contiguous()
-
         return {
             "e": e,
             "encoder_out_chunks": encoder_out_chunks,
             "chunk_prompts": chunk_prompts,
             "chunk_prompt_masks": chunk_prompt_masks,
             "backbone_fpn": backbone_fpn,
-            "sam3_text_features": sam3_text_features,
-            "sam3_text_mask": sam3_text_mask,
             "clip_image_feat_map": clip_image_cache["clip_image_feat_map_native"],
             OUTPUT_KEYS.clip_mid_features: clip_image_cache[OUTPUT_KEYS.clip_mid_features],
             "clip_mid_layer_indices": clip_image_cache["clip_mid_layer_indices"],
@@ -611,8 +605,6 @@ class Sam3Image(torch.nn.Module):
         chunk_prompt_masks: List[torch.Tensor],
         chunk_class_counts: List[int],
         backbone_fpn: List[torch.Tensor],
-        sam3_text_features: torch.Tensor,
-        sam3_text_mask: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
         class_names: List[str],
         clip_mid_features: List[torch.Tensor],
@@ -632,8 +624,6 @@ class Sam3Image(torch.nn.Module):
             clip_score_maps,
         ) = self.encoder_refiner(
             e=e,
-            sam_text_features=sam3_text_features,
-            sam_text_mask=sam3_text_mask,
             clip_image_feat_map=clip_image_feat_map,
             class_names=class_names,
             sam_image_last=sam_image_last,
@@ -729,8 +719,6 @@ class Sam3Image(torch.nn.Module):
         chunk_prompt_masks = encoder_refiner_cache["chunk_prompt_masks"]
         chunk_class_counts = encoder_refiner_cache["chunk_class_counts"]
         backbone_fpn = encoder_refiner_cache["backbone_fpn"]
-        sam3_text_features = encoder_refiner_cache["sam3_text_features"]
-        sam3_text_mask = encoder_refiner_cache["sam3_text_mask"]
         clip_image_feat_map = encoder_refiner_cache["clip_image_feat_map"]
         clip_mid_features = encoder_refiner_cache[OUTPUT_KEYS.clip_mid_features]
 
@@ -751,8 +739,6 @@ class Sam3Image(torch.nn.Module):
             chunk_prompt_masks=chunk_prompt_masks,
             chunk_class_counts=chunk_class_counts,
             backbone_fpn=backbone_fpn,
-            sam3_text_features=sam3_text_features,
-            sam3_text_mask=sam3_text_mask,
             clip_image_feat_map=clip_image_feat_map,
             class_names=class_names,
             clip_mid_features=clip_mid_features,

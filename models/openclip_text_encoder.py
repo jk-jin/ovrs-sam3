@@ -200,6 +200,20 @@ class OpenCLIPTextEncoder(nn.Module):
             pooled = pooled.detach()
         return pooled
 
+    def encode_tokenized(
+        self,
+        tokenized: torch.Tensor,
+        normalize: bool = True,
+        detach_output: bool = False,
+    ) -> torch.Tensor:
+        input_embeds = self.token_embedding(tokenized)
+        return self.encode_embeds(
+            input_embeds=input_embeds,
+            tokenized=tokenized,
+            normalize=normalize,
+            detach_output=detach_output,
+        )
+
     def encode_prompt_templates(
         self,
         class_names: List[str],

@@ -6,31 +6,30 @@ import torch.nn.functional as F
 
 
 # ---------------------------------------------------------------------------
-# TextConditionedClassAttention
+# ClassTokenScoreClassAttention
 # ---------------------------------------------------------------------------
 
 
-class TextConditionedClassAttention(nn.Module):
+class ClassTokenScoreClassAttention(nn.Module):
     """
-    Class-wise attention conditioned on text features.
+    Inter-class attention at each spatial position.
 
-    At each spatial position, classes attend to each other guided by
-    SAM3 text mean and CLIP text mean.
-
-    q/k = concat(e, sam_text_mean_broadcast, clip_text_mean_proj_broadcast)
+    q/k = concat(e, class_token_mean (projected+pooled from class_query_tokens), clip_score_embed)
     v   = e
+
+    Attention happens across C classes at every spatial position.
     """
 
     def __init__(
         self,
         hidden_dim: int = 256,
-        clip_dim: int = 768,
+        score_embed_dim: int = 32,
         num_heads: int = 8,
         dropout: float = 0.1,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
-        self.clip_dim = int(clip_dim)
+        self.score_embed_dim = int(score_embed_dim)
         self.num_heads = int(num_heads)
 
         if self.hidden_dim % self.num_heads != 0:
@@ -38,12 +37,12 @@ class TextConditionedClassAttention(nn.Module):
                 f"hidden_dim={hidden_dim} not divisible by num_heads={num_heads}"
             )
 
-        qk_in_dim = self.hidden_dim * 3
-
-        self.clip_text_proj = nn.Sequential(
-            nn.LayerNorm(self.clip_dim),
-            nn.Linear(self.clip_dim, self.hidden_dim),
+        self.class_token_proj = nn.Sequential(
+            nn.LayerNorm(self.hidden_dim),
+            nn.Linear(self.hidden_dim, self.hidden_dim),
         )
+
+        qk_in_dim = self.hidden_dim * 2 + self.score_embed_dim
 
         self.q_proj = nn.Linear(qk_in_dim, self.hidden_dim)
         self.k_proj = nn.Linear(qk_in_dim, self.hidden_dim)
@@ -56,49 +55,60 @@ class TextConditionedClassAttention(nn.Module):
     def forward(
         self,
         e: torch.Tensor,
-        sam_text_mean: torch.Tensor,
-        clip_text_mean: torch.Tensor,
+        class_query_tokens: torch.Tensor,
+        clip_score_embed: torch.Tensor,
     ) -> torch.Tensor:
         """
         Args:
-            e:               [B, C, D, H, W]
-            sam_text_mean:   [B, C, D]
-            clip_text_mean:  [B, C, D_clip]
+            e:                  [B, C, D, H, W]
+            class_query_tokens: [B, C, Q, D]
+            clip_score_embed:   [B, C, D_score, H, W]
 
         Returns:
             e: [B, C, D, H, W]
         """
         B, C, D, H, W = e.shape
+        Q = class_query_tokens.shape[2]
 
-        if sam_text_mean.shape != (B, C, D):
+        if class_query_tokens.ndim != 4:
             raise ValueError(
-                f"sam_text_mean must be [{B}, {C}, {D}], "
-                f"got {tuple(sam_text_mean.shape)}"
+                f"class_query_tokens must be 4D [B, C, Q, D], "
+                f"got {tuple(class_query_tokens.shape)}"
             )
-        if clip_text_mean.shape != (B, C, self.clip_dim):
+        if class_query_tokens.shape[0] != B or class_query_tokens.shape[1] != C:
             raise ValueError(
-                f"clip_text_mean must be [{B}, {C}, {self.clip_dim}], "
-                f"got {tuple(clip_text_mean.shape)}"
+                f"class_query_tokens batch/class mismatch: "
+                f"expected [{B}, {C}], got [{class_query_tokens.shape[0]}, {class_query_tokens.shape[1]}]"
+            )
+        if class_query_tokens.shape[-1] != D:
+            raise ValueError(
+                f"class_query_tokens last dim must be {D}, "
+                f"got {class_query_tokens.shape[-1]}"
+            )
+        if tuple(clip_score_embed.shape) != (B, C, self.score_embed_dim, H, W):
+            raise ValueError(
+                f"clip_score_embed must be [{B}, {C}, {self.score_embed_dim}, {H}, {W}], "
+                f"got {tuple(clip_score_embed.shape)}"
             )
 
         N = H * W
 
-        clip_text_proj = self.clip_text_proj(clip_text_mean)  # [B, C, D]
-
         e_flat = e.permute(0, 3, 4, 1, 2).reshape(B * N, C, D)
 
-        sam_broadcast = (
-            sam_text_mean[:, None]
-            .expand(B, N, C, D)
-            .reshape(B * N, C, D)
-        )
-        clip_broadcast = (
-            clip_text_proj[:, None]
+        class_token_mean = self.class_token_proj(class_query_tokens).mean(dim=2)
+        class_token_broadcast = (
+            class_token_mean[:, None]
             .expand(B, N, C, D)
             .reshape(B * N, C, D)
         )
 
-        qk_input = torch.cat([e_flat, sam_broadcast, clip_broadcast], dim=-1)
+        score_flat = (
+            clip_score_embed
+            .permute(0, 3, 4, 1, 2)
+            .reshape(B * N, C, self.score_embed_dim)
+        )
+
+        qk_input = torch.cat([e_flat, class_token_broadcast, score_flat], dim=-1)
 
         q = self.q_proj(qk_input)
         k = self.k_proj(qk_input)
@@ -128,15 +138,16 @@ class TextConditionedClassAttention(nn.Module):
 
 class ImageScoreWindowAttention(nn.Module):
     """
-    Window attention within each class, guided by SAM image and CLIP score.
+    Intra-class window attention.
 
-    q/k = concat(e, sam_image_last, clip_score_embed)
+    q/k = concat(e, sam_image_last, upsampled_clip_image_feat, clip_score_embed)
     v   = e
     """
 
     def __init__(
         self,
         hidden_dim: int = 256,
+        clip_dim: int = 768,
         score_embed_dim: int = 32,
         num_heads: int = 8,
         window_size: int = 9,
@@ -145,6 +156,7 @@ class ImageScoreWindowAttention(nn.Module):
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
+        self.clip_dim = int(clip_dim)
         self.score_embed_dim = int(score_embed_dim)
         self.num_heads = int(num_heads)
         self.window_size = int(window_size)
@@ -159,7 +171,13 @@ class ImageScoreWindowAttention(nn.Module):
                 f"shift_size={shift_size} must be in [0, window_size={window_size})"
             )
 
-        qk_in_dim = self.hidden_dim * 2 + self.score_embed_dim
+        self.clip_image_proj = nn.Sequential(
+            nn.Conv2d(self.clip_dim, self.hidden_dim, kernel_size=1),
+            nn.GELU(),
+            nn.Conv2d(self.hidden_dim, self.hidden_dim, kernel_size=1),
+        )
+
+        qk_in_dim = self.hidden_dim * 3 + self.score_embed_dim
 
         self.q_proj = nn.Linear(qk_in_dim, self.hidden_dim)
         self.k_proj = nn.Linear(qk_in_dim, self.hidden_dim)
@@ -236,17 +254,38 @@ class ImageScoreWindowAttention(nn.Module):
 
         return attn_mask.to(dtype=dtype)
 
+    def _prepare_clip_image_feat(
+        self,
+        clip_image_feat_map: torch.Tensor,
+        target_hw: tuple[int, int],
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        H, W = target_hw
+        clip_image_feat_map = clip_image_feat_map.to(dtype=dtype)
+
+        if clip_image_feat_map.shape[-2:] != (H, W):
+            clip_image_feat_map = F.interpolate(
+                clip_image_feat_map,
+                size=(H, W),
+                mode="bilinear",
+                align_corners=False,
+            )
+
+        return self.clip_image_proj(clip_image_feat_map)
+
     def forward(
         self,
         e: torch.Tensor,
         sam_image_last: torch.Tensor,
+        clip_image_feat_map: torch.Tensor,
         clip_score_embed: torch.Tensor,
     ) -> torch.Tensor:
         """
         Args:
-            e:                 [B, C, D, H, W]
-            sam_image_last:    [B, D, H, W]
-            clip_score_embed:  [B, C, D_score, H, W]
+            e:                   [B, C, D, H, W]
+            sam_image_last:      [B, D, H, W]
+            clip_image_feat_map: [B, D_clip, Hc, Wc]
+            clip_score_embed:    [B, C, D_score, H, W]
 
         Returns:
             e: [B, C, D, H, W]
@@ -258,25 +297,55 @@ class ImageScoreWindowAttention(nn.Module):
                 f"sam_image_last must be [{B}, {D}, {H}, {W}], "
                 f"got {tuple(sam_image_last.shape)}"
             )
+        if clip_image_feat_map.ndim != 4:
+            raise ValueError(
+                f"clip_image_feat_map must be [B, D_clip, Hc, Wc], "
+                f"got {tuple(clip_image_feat_map.shape)}"
+            )
+        if clip_image_feat_map.shape[0] != B:
+            raise ValueError(
+                f"clip_image_feat_map batch mismatch: expected {B}, "
+                f"got {clip_image_feat_map.shape[0]}"
+            )
+        if clip_image_feat_map.shape[1] != self.clip_dim:
+            raise ValueError(
+                f"clip_image_feat_map channel mismatch: expected {self.clip_dim}, "
+                f"got {clip_image_feat_map.shape[1]}"
+            )
         if tuple(clip_score_embed.shape) != (B, C, self.score_embed_dim, H, W):
             raise ValueError(
-                f"clip_score_embed must be [{B}, {C}, {self.score_embed_dim}, {H}, {W}], "
+                f"clip_score_embed must be "
+                f"[{B}, {C}, {self.score_embed_dim}, {H}, {W}], "
                 f"got {tuple(clip_score_embed.shape)}"
             )
 
         bc = B * C
 
+        clip_image_up = self._prepare_clip_image_feat(
+            clip_image_feat_map=clip_image_feat_map,
+            target_hw=(H, W),
+            dtype=e.dtype,
+        )
+
         e_flat = e.reshape(bc, D, H, W)
         score_flat = clip_score_embed.reshape(bc, self.score_embed_dim, H, W)
-        img_flat = (
+
+        sam_flat = (
             sam_image_last[:, None]
+            .expand(B, C, D, H, W)
+            .reshape(bc, D, H, W)
+        )
+
+        clip_flat = (
+            clip_image_up[:, None]
             .expand(B, C, D, H, W)
             .reshape(bc, D, H, W)
         )
 
         e_flat, orig_h, orig_w = self._pad_to_window(e_flat, self.window_size)
         score_flat, _, _ = self._pad_to_window(score_flat, self.window_size)
-        img_flat, _, _ = self._pad_to_window(img_flat, self.window_size)
+        sam_flat, _, _ = self._pad_to_window(sam_flat, self.window_size)
+        clip_flat, _, _ = self._pad_to_window(clip_flat, self.window_size)
 
         pad_h, pad_w = e_flat.shape[-2], e_flat.shape[-1]
 
@@ -284,11 +353,13 @@ class ImageScoreWindowAttention(nn.Module):
             shift = self.shift_size
             e_flat = torch.roll(e_flat, shifts=(-shift, -shift), dims=(-2, -1))
             score_flat = torch.roll(score_flat, shifts=(-shift, -shift), dims=(-2, -1))
-            img_flat = torch.roll(img_flat, shifts=(-shift, -shift), dims=(-2, -1))
+            sam_flat = torch.roll(sam_flat, shifts=(-shift, -shift), dims=(-2, -1))
+            clip_flat = torch.roll(clip_flat, shifts=(-shift, -shift), dims=(-2, -1))
 
         e_windows = self._window_partition(e_flat)
         score_windows = self._window_partition(score_flat)
-        img_windows = self._window_partition(img_flat)
+        sam_windows = self._window_partition(sam_flat)
+        clip_windows = self._window_partition(clip_flat)
 
         attn_mask = self._build_shift_attn_mask(
             padded_h=pad_h,
@@ -298,7 +369,9 @@ class ImageScoreWindowAttention(nn.Module):
             dtype=e.dtype,
         )
 
-        qk_input = torch.cat([e_windows, img_windows, score_windows], dim=-1)
+        qk_input = torch.cat(
+            [e_windows, sam_windows, clip_windows, score_windows], dim=-1,
+        )
 
         q = self.q_proj(qk_input)
         k = self.k_proj(qk_input)
@@ -341,10 +414,12 @@ class ImageScoreWindowAttention(nn.Module):
 class EncoderRefinerLayer(nn.Module):
     """
     One refiner layer:
-        1. TextConditionedClassAttention
+        1. ClassTokenScoreClassAttention
         2. ImageScoreWindowAttention (regular window)
         3. ImageScoreWindowAttention (shifted window)
         4. FFN
+
+    Layer-level residual: output = input + f(input)
     """
 
     def __init__(
@@ -358,14 +433,15 @@ class EncoderRefinerLayer(nn.Module):
         dropout: float = 0.1,
     ):
         super().__init__()
-        self.class_attn = TextConditionedClassAttention(
+        self.class_attn = ClassTokenScoreClassAttention(
             hidden_dim=hidden_dim,
-            clip_dim=clip_dim,
+            score_embed_dim=score_embed_dim,
             num_heads=num_heads,
             dropout=dropout,
         )
         self.regular_window_attn = ImageScoreWindowAttention(
             hidden_dim=hidden_dim,
+            clip_dim=clip_dim,
             score_embed_dim=score_embed_dim,
             num_heads=num_heads,
             window_size=window_size,
@@ -374,6 +450,7 @@ class EncoderRefinerLayer(nn.Module):
         )
         self.shifted_window_attn = ImageScoreWindowAttention(
             hidden_dim=hidden_dim,
+            clip_dim=clip_dim,
             score_embed_dim=score_embed_dim,
             num_heads=num_heads,
             window_size=window_size,
@@ -399,13 +476,28 @@ class EncoderRefinerLayer(nn.Module):
     def forward(
         self,
         e: torch.Tensor,
-        sam_text_mean: torch.Tensor,
-        clip_text_mean: torch.Tensor,
+        class_query_tokens: torch.Tensor,
         sam_image_last: torch.Tensor,
+        clip_image_feat_map: torch.Tensor,
         clip_score_embed: torch.Tensor,
     ) -> torch.Tensor:
-        e = self.class_attn(e, sam_text_mean, clip_text_mean)
-        e = self.regular_window_attn(e, sam_image_last, clip_score_embed)
-        e = self.shifted_window_attn(e, sam_image_last, clip_score_embed)
+        identity = e
+        e = self.class_attn(
+            e=e,
+            class_query_tokens=class_query_tokens,
+            clip_score_embed=clip_score_embed,
+        )
+        e = self.regular_window_attn(
+            e=e,
+            sam_image_last=sam_image_last,
+            clip_image_feat_map=clip_image_feat_map,
+            clip_score_embed=clip_score_embed,
+        )
+        e = self.shifted_window_attn(
+            e=e,
+            sam_image_last=sam_image_last,
+            clip_image_feat_map=clip_image_feat_map,
+            clip_score_embed=clip_score_embed,
+        )
         e = self._ffn(e)
-        return e
+        return e + identity
