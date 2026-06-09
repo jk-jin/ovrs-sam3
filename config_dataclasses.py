@@ -42,6 +42,7 @@ class EncoderRefinerConfig:
     clip_score_conv_kernel: int = 7
 
     encoder_hw: int = 72
+    score_base_hw: int = 18
     window_size: int = 9
     shift_size: int = 4
 

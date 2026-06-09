@@ -671,7 +671,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             encoder_refiner_hidden_dim=int(refiner_cfg.hidden_dim),
             encoder_refiner_score_embed_dim=int(refiner_cfg.clip_score_embed_dim),
             encoder_refiner_conv_kernel=int(refiner_cfg.clip_score_conv_kernel),
-            encoder_refiner_encoder_hw=int(refiner_cfg.encoder_hw),
+            encoder_refiner_score_base_hw=int(refiner_cfg.score_base_hw),
             encoder_refiner_window_size=int(refiner_cfg.window_size),
             encoder_refiner_shift_size=int(refiner_cfg.shift_size),
             encoder_refiner_use_checkpoint=bool(refiner_cfg.use_checkpoint),

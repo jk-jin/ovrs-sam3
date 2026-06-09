@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Tuple
 
 import torch
 import torch.nn as nn
@@ -9,40 +9,40 @@ import torch.nn.functional as F
 
 class ClipScoreEmbeddingBuilder(nn.Module):
     """
-    Build CLIP score embedding from dynamic CLIP text and image feature map.
+    Build 3-scale CLIP score embeddings from dynamic CLIP text and image feature map.
 
     Input:
         dynamic_clip_text: [B, C, Q, D_clip]
         clip_image_feat_map: [B, D_clip, Hc, Wc]  (Hc=Wc=16 for ViT-L/14)
 
     Flow:
-        score_maps [B, C, Q, Hc, Wc]
-        → Conv2d(Q → D_score, 7×7)         → [B*C, D_score, 16, 16]
-        → ConvTranspose2d ×2 (learnable 4×) → [B*C, D_score, 64, 64]
-        → bilinear interpolate to target_hw  → [B*C, D_score, Th, Tw]
+        clip_image_feat_map → bilinear to 18×18
+        → text-image dot product → score_maps_18: [B, C, Q, 18, 18]
+        → Conv2d(Q → D_score, 7×7)          → score_embed_18: [B, C, D_score, 18, 18]
+        → ConvTranspose2d ×1 (learnable 2×)  → score_embed_36: [B, C, D_score, 36, 36]
+        → ConvTranspose2d ×1 (learnable 2×)  → score_embed_72: [B, C, D_score, 72, 72]
     """
 
     def __init__(
         self,
         clip_output_dim: int = 768,
-        score_embed_dim: int = 32,
+        score_embed_dim: int = 128,
         num_query_tokens: int = 32,
         conv_kernel: int = 7,
-        encoder_hw: int = 72,
+        base_hw: int = 18,
     ):
         super().__init__()
         self.clip_output_dim = int(clip_output_dim)
         self.score_embed_dim = int(score_embed_dim)
         self.num_query_tokens = int(num_query_tokens)
-        self.encoder_hw = int(encoder_hw)
+        self.base_hw = int(base_hw)
 
         padding = int(conv_kernel) // 2
         num_groups = min(8, self.score_embed_dim)
         if self.score_embed_dim % num_groups != 0:
             num_groups = 1
 
-        # Q-channel 7×7 conv: Q score maps → D_score channels.
-        self.score_conv = nn.Sequential(
+        self.score_conv_18 = nn.Sequential(
             nn.Conv2d(
                 self.num_query_tokens,
                 self.score_embed_dim,
@@ -55,9 +55,7 @@ class ClipScoreEmbeddingBuilder(nn.Module):
             nn.GELU(),
         )
 
-        # Learnable 4× upsampling: 16×16 → 32×32 → 64×64.
-        # kernel_size=4, stride=2, padding=1 gives exact 2× size doubling.
-        self.score_upsampler = nn.Sequential(
+        self.score_up_18_to_36 = nn.Sequential(
             nn.ConvTranspose2d(
                 self.score_embed_dim,
                 self.score_embed_dim,
@@ -68,7 +66,9 @@ class ClipScoreEmbeddingBuilder(nn.Module):
             ),
             nn.GroupNorm(num_groups, self.score_embed_dim),
             nn.GELU(),
+        )
 
+        self.score_up_36_to_72 = nn.Sequential(
             nn.ConvTranspose2d(
                 self.score_embed_dim,
                 self.score_embed_dim,
@@ -85,73 +85,121 @@ class ClipScoreEmbeddingBuilder(nn.Module):
         self,
         dynamic_clip_text: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
-        target_hw: Optional[Tuple[int, int]] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[dict[str, torch.Tensor], torch.Tensor]:
         """
         Args:
             dynamic_clip_text:  [B, C, Q, D_clip]
             clip_image_feat_map: [B, D_clip, Hc, Wc]
-            target_hw:          (Th, Tw) — final spatial size.
-                                If None, falls back to (encoder_hw, encoder_hw).
 
         Returns:
-            clip_score_embed: [B, C, D_score, Th, Tw]
-            clip_score_maps:  [B, C, Q, Hc, Wc]
+            clip_score_embeds:
+                {
+                    "scale_18": [B, C, D_score, 18, 18],
+                    "scale_36": [B, C, D_score, 36, 36],
+                    "scale_72": [B, C, D_score, 72, 72],
+                }
+            clip_score_maps_18: [B, C, Q, 18, 18]
         """
-        B, C, Q, D_clip = dynamic_clip_text.shape
-        _, D_img, Hc, Wc = clip_image_feat_map.shape
+        batch_size, num_classes, num_queries, clip_dim = dynamic_clip_text.shape
+        image_batch_size, image_clip_dim, _, _ = clip_image_feat_map.shape
 
-        if D_clip != D_img:
+        if image_batch_size != batch_size:
             raise ValueError(
-                f"CLIP dimension mismatch: text={D_clip}, image={D_img}"
+                f"clip_image_feat_map batch mismatch: "
+                f"expected {batch_size}, got {image_batch_size}."
             )
 
-        if Q != self.num_query_tokens:
+        if clip_dim != image_clip_dim:
             raise ValueError(
-                f"Query count mismatch: expected {self.num_query_tokens}, got {Q}"
+                f"CLIP dimension mismatch: text={clip_dim}, image={image_clip_dim}."
             )
+
+        if num_queries != self.num_query_tokens:
+            raise ValueError(
+                f"Query count mismatch: expected {self.num_query_tokens}, got {num_queries}."
+            )
+
+        clip_image_feat_18 = F.interpolate(
+            clip_image_feat_map,
+            size=(self.base_hw, self.base_hw),
+            mode="bilinear",
+            align_corners=False,
+        )
 
         text_norm = F.normalize(dynamic_clip_text, dim=-1)
-        img_norm = F.normalize(clip_image_feat_map, dim=1)
+        image_norm = F.normalize(clip_image_feat_18, dim=1)
 
-        text_flat = text_norm.reshape(B * C * Q, D_clip)
-
-        img_expanded = (
-            img_norm[:, None, None]
-            .expand(B, C, Q, D_img, Hc, Wc)
-            .reshape(B * C * Q, D_img, Hc * Wc)
-        )
-        score_maps = torch.bmm(
-            text_flat.unsqueeze(1), img_expanded
-        ).reshape(B * C * Q, Hc, Wc) * 20.0
-
-        clip_score_maps = score_maps.reshape(B, C, Q, Hc, Wc)
-
-        # Q-channel 7×7 conv: [B*C, Q, 16, 16] → [B*C, D_score, 16, 16]
-        score_flat = clip_score_maps.reshape(B * C, Q, Hc, Wc)
-        score_embed = self.score_conv(score_flat)
-
-        # Learnable 4× upsampling: 16→32→64
-        score_embed = self.score_upsampler(score_embed)
-        # [B*C, D_score, 64, 64]
-
-        # Final bilinear interpolation to align with encoder feature size.
-        th, tw = (
-            (int(target_hw[0]), int(target_hw[1]))
-            if target_hw is not None
-            else (self.encoder_hw, self.encoder_hw)
+        text_flat = text_norm.reshape(
+            batch_size * num_classes * num_queries,
+            clip_dim,
         )
 
-        if score_embed.shape[-2:] != (th, tw):
-            score_embed = F.interpolate(
-                score_embed,
-                size=(th, tw),
-                mode="bilinear",
-                align_corners=False,
+        image_expanded = (
+            image_norm[:, None, None]
+            .expand(
+                batch_size,
+                num_classes,
+                num_queries,
+                image_clip_dim,
+                self.base_hw,
+                self.base_hw,
             )
-
-        score_embed = score_embed.reshape(
-            B, C, self.score_embed_dim, th, tw
+            .reshape(
+                batch_size * num_classes * num_queries,
+                image_clip_dim,
+                self.base_hw * self.base_hw,
+            )
         )
 
-        return score_embed.contiguous(), clip_score_maps.contiguous()
+        score_maps_18 = torch.bmm(
+            text_flat.unsqueeze(1),
+            image_expanded,
+        ).reshape(
+            batch_size,
+            num_classes,
+            num_queries,
+            self.base_hw,
+            self.base_hw,
+        ) * 20.0
+
+        score_embed_18_flat = self.score_conv_18(
+            score_maps_18.reshape(
+                batch_size * num_classes,
+                num_queries,
+                self.base_hw,
+                self.base_hw,
+            )
+        )
+
+        score_embed_36_flat = self.score_up_18_to_36(score_embed_18_flat)
+        score_embed_72_flat = self.score_up_36_to_72(score_embed_36_flat)
+
+        clip_score_embed_18 = score_embed_18_flat.reshape(
+            batch_size,
+            num_classes,
+            self.score_embed_dim,
+            self.base_hw,
+            self.base_hw,
+        ).contiguous()
+
+        clip_score_embed_36 = score_embed_36_flat.reshape(
+            batch_size,
+            num_classes,
+            self.score_embed_dim,
+            self.base_hw * 2,
+            self.base_hw * 2,
+        ).contiguous()
+
+        clip_score_embed_72 = score_embed_72_flat.reshape(
+            batch_size,
+            num_classes,
+            self.score_embed_dim,
+            self.base_hw * 4,
+            self.base_hw * 4,
+        ).contiguous()
+
+        return {
+            "scale_18": clip_score_embed_18,
+            "scale_36": clip_score_embed_36,
+            "scale_72": clip_score_embed_72,
+        }, score_maps_18.contiguous()

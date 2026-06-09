@@ -41,6 +41,7 @@ model = dict(
         clip_score_conv_kernel=7,
 
         encoder_hw=72,
+        score_base_hw=18,
         window_size=9,
         shift_size=4,
     ),
@@ -88,7 +89,7 @@ val_dataloader = dict(
 
 eval_cfg = dict(
     ignore_index=255,
-    prob_thd=0.2,
+    prob_thd=0.0,
     bg_idx=0,
     use_score_map=True,
 )

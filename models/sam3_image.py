@@ -43,7 +43,7 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_hidden_dim: int = 256,
         encoder_refiner_score_embed_dim: int = 32,
         encoder_refiner_conv_kernel: int = 7,
-        encoder_refiner_encoder_hw: int = 72,
+        encoder_refiner_score_base_hw: int = 18,
         encoder_refiner_window_size: int = 9,
         encoder_refiner_shift_size: int = 4,
         encoder_refiner_use_checkpoint: bool = True,
@@ -118,7 +118,7 @@ class Sam3Image(torch.nn.Module):
             prompt_template=str(openclip_prompt_template),
             normalize_label_for_clip=bool(normalize_label_for_clip),
             score_conv_kernel=int(encoder_refiner_conv_kernel),
-            encoder_hw=int(encoder_refiner_encoder_hw),
+            score_base_hw=int(encoder_refiner_score_base_hw),
             use_checkpoint=bool(encoder_refiner_use_checkpoint),
         )
 
@@ -563,10 +563,10 @@ class Sam3Image(torch.nn.Module):
             refined_e,
             class_query_tokens,
             dynamic_clip_text,
-            clip_score_embed,
-            clip_score_maps,
+            clip_score_embeds,
+            clip_score_maps_18,
         ) = self.encoder_refiner(
-            e=e,
+            encoder_features=e,
             clip_image_feat_map=clip_image_feat_map,
             class_names=class_names,
             sam_image_last=sam_image_last,
@@ -638,8 +638,8 @@ class Sam3Image(torch.nn.Module):
                 OUTPUT_KEYS.refined_encoder_features: refined_e.detach().contiguous(),
                 OUTPUT_KEYS.class_query_tokens: class_query_tokens.detach().contiguous(),
                 OUTPUT_KEYS.dynamic_clip_text_features: dynamic_clip_text.detach().contiguous(),
-                OUTPUT_KEYS.clip_score_embed: clip_score_embed.detach().contiguous(),
-                OUTPUT_KEYS.clip_score_maps: clip_score_maps.detach().contiguous(),
+                OUTPUT_KEYS.clip_score_embed: clip_score_embeds["scale_72"].detach().contiguous(),
+                OUTPUT_KEYS.clip_score_maps: clip_score_maps_18.detach().contiguous(),
                 OUTPUT_KEYS.clip_mid_features: [
                     feat.detach().contiguous() for feat in clip_mid_features
                 ],
