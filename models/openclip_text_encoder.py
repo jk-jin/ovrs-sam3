@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 
 class OpenCLIPTextEncoder(nn.Module):
@@ -64,6 +65,8 @@ class OpenCLIPTextEncoder(nn.Module):
             attn_mask.detach().clone() if attn_mask is not None else torch.empty(0),
             persistent=False,
         )
+
+        self._prompt_feature_cache: Dict[tuple, torch.Tensor] = {}
 
     def _get_attn_mask(
         self,
@@ -213,6 +216,117 @@ class OpenCLIPTextEncoder(nn.Module):
             normalize=normalize,
             detach_output=detach_output,
         )
+
+    # ------------------------------------------------------------------
+    # Class prompt encoding (high-level, with cache)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_class_name(name: str) -> str:
+        name = str(name).strip()
+        name = name.replace("_", " ").replace("-", " ")
+        return " ".join(name.split())
+
+    @classmethod
+    def _build_prompt_texts(
+        cls,
+        class_names: List[str],
+        prompt_template: str,
+        normalize_label: bool = True,
+    ) -> List[str]:
+        if "{}" not in str(prompt_template):
+            raise ValueError(
+                f"prompt_template must contain '{{}}', got {prompt_template!r}"
+            )
+        texts = []
+        for name in class_names:
+            label = cls._normalize_class_name(name) if normalize_label else str(name)
+            texts.append(str(prompt_template).format(label))
+        return texts
+
+    def clear_prompt_cache(self) -> None:
+        self._prompt_feature_cache.clear()
+
+    def _make_prompt_cache_key(
+        self,
+        texts: List[str],
+        device: torch.device,
+        normalize: bool,
+    ) -> tuple:
+        return (tuple(texts), str(device), bool(normalize))
+
+    def encode_class_prompts(
+        self,
+        class_names: List[str],
+        prompt_template: str,
+        device: torch.device,
+        normalize_label: bool = True,
+        normalize: bool = True,
+        use_cache: bool = False,
+        detach_output: bool = False,
+        use_checkpoint: bool = False,
+    ) -> torch.Tensor:
+        """
+        Encode class names with a prompt template.
+
+        Args:
+            class_names:    list of class names, length C
+            prompt_template: "a remote sensing image of {}."
+            device:         target device
+            normalize_label: replace '_' and '-' with spaces
+            normalize:      L2-normalize projected features
+            use_cache:      reuse cached features when True
+            detach_output:  detach returned features
+            use_checkpoint: wrap transformer forward in activation checkpoint
+
+        Returns:
+            base_clip_text: [C, D_clip]
+        """
+        if len(class_names) == 0:
+            raise ValueError("class_names is empty.")
+
+        texts = self._build_prompt_texts(
+            class_names=class_names,
+            prompt_template=prompt_template,
+            normalize_label=normalize_label,
+        )
+
+        cache_key = self._make_prompt_cache_key(
+            texts=texts, device=device, normalize=normalize,
+        )
+
+        if use_cache and cache_key in self._prompt_feature_cache:
+            return self._prompt_feature_cache[cache_key].to(device=device)
+
+        tokenized = self.tokenizer(texts, context_length=self.context_length).to(device)
+
+        def _encode_from_tokens(tokens: torch.Tensor) -> torch.Tensor:
+            input_embeds = self.token_embedding(tokens)
+            return self.encode_embeds(
+                input_embeds=input_embeds,
+                tokenized=tokens,
+                normalize=normalize,
+                detach_output=False,
+            )
+
+        if use_cache:
+            with torch.no_grad():
+                base_text = _encode_from_tokens(tokenized)
+            base_text = base_text.detach().contiguous()
+            self._prompt_feature_cache[cache_key] = base_text
+            return base_text.to(device=device)
+
+        if use_checkpoint:
+            base_text = checkpoint(
+                _encode_from_tokens, tokenized, use_reentrant=False,
+            )
+        else:
+            base_text = _encode_from_tokens(tokenized)
+
+        if detach_output:
+            base_text = base_text.detach()
+
+        return base_text
 
     def encode_prompt_templates(
         self,

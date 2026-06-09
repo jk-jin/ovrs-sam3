@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import math
-from typing import Optional, Sequence, Tuple, Union
+from typing import List, Optional, Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class OpenCLIPImageEncoder(nn.Module):
@@ -71,6 +72,23 @@ class OpenCLIPImageEncoder(nn.Module):
         self.visual.eval()
         for param in self.visual.parameters():
             param.requires_grad_(False)
+
+        self.register_buffer(
+            "image_mean",
+            torch.tensor(
+                [0.48145466, 0.4578275, 0.40821073],
+                dtype=torch.float32,
+            ).view(1, 3, 1, 1),
+            persistent=False,
+        )
+        self.register_buffer(
+            "image_std",
+            torch.tensor(
+                [0.26862954, 0.26130258, 0.27577711],
+                dtype=torch.float32,
+            ).view(1, 3, 1, 1),
+            persistent=False,
+        )
 
     @staticmethod
     def _infer_native_feature_dim(visual: nn.Module) -> int:
@@ -378,6 +396,65 @@ class OpenCLIPImageEncoder(nn.Module):
             "mid_features": [x.contiguous() for x in mid_features],
             "mid_layer_indices": self.intermediate_layers,
         }
+
+    # ------------------------------------------------------------------
+    # Raw image preprocessing
+    # ------------------------------------------------------------------
+
+    def preprocess_raw_images(
+        self,
+        raw_images: List[torch.Tensor],
+        device: torch.device,
+    ) -> torch.Tensor:
+        """
+        Resize and normalize raw images to CLIP native format.
+
+        Args:
+            raw_images: list of [3, H, W] tensors
+            device:     target device
+
+        Returns:
+            images: [B, 3, H_clip, W_clip], OpenCLIP-normalized
+        """
+        if len(raw_images) == 0:
+            raise ValueError("raw_images is empty.")
+
+        native_h, native_w = self.get_native_image_size()
+
+        processed = []
+        for i, x in enumerate(raw_images):
+            if not isinstance(x, torch.Tensor) or x.ndim != 3 or x.shape[0] != 3:
+                raise ValueError(
+                    f"raw_images[{i}] must be [3, H, W], got "
+                    f"{None if not isinstance(x, torch.Tensor) else tuple(x.shape)}"
+                )
+            x = x.to(device=device, dtype=torch.float32).unsqueeze(0)
+            x = F.interpolate(
+                x, size=(native_h, native_w),
+                mode="bilinear", align_corners=False,
+            )
+            processed.append(x.squeeze(0))
+
+        batch = torch.stack(processed, dim=0)
+        return (batch - self.image_mean) / self.image_std
+
+    def encode_raw_images(
+        self,
+        raw_images: List[torch.Tensor],
+        device: torch.device,
+    ) -> dict:
+        """
+        Full raw-image-to-dense-CLIP-features pipeline.
+
+        Returns:
+            {
+                "feat_map":          [B, D_clip, Hc, Wc],
+                "mid_features":      List[[B, D_native, Hc, Wc]],
+                "mid_layer_indices": tuple[int, ...],
+            }
+        """
+        images = self.preprocess_raw_images(raw_images=raw_images, device=device)
+        return self.encode_image_with_intermediate(images)
 
     def forward(self, images: torch.Tensor) -> dict:
         return self.encode_image_with_intermediate(images)

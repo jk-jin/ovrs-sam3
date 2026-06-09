@@ -71,17 +71,6 @@ class Sam3Image(torch.nn.Module):
         self.clip_image_encoder = clip_image_encoder
         self.clip_text_encoder = clip_text_encoder
 
-        self.register_buffer(
-            "openclip_image_mean",
-            torch.tensor([0.48145466, 0.4578275, 0.40821073], dtype=torch.float32).view(1, 3, 1, 1),
-            persistent=False,
-        )
-        self.register_buffer(
-            "openclip_image_std",
-            torch.tensor([0.26862954, 0.26130258, 0.27577711], dtype=torch.float32).view(1, 3, 1, 1),
-            persistent=False,
-        )
-
         self.task_mode = normalize_task_mode(task_mode)
         if self.task_mode != TASK_MODE_SEMANTIC:
             raise NotImplementedError("Sam3Image currently only supports semantic task mode.")
@@ -240,54 +229,6 @@ class Sam3Image(torch.nn.Module):
             return output_dim
         raise AttributeError("clip_image_encoder must expose a positive integer `output_dim`.")
 
-    def _get_openclip_patch_size(self) -> Tuple[int, int]:
-        visual = self.clip_image_encoder.visual
-        patch_size = getattr(visual, "patch_size", None)
-        if isinstance(patch_size, int):
-            return (patch_size, patch_size)
-        if isinstance(patch_size, (tuple, list)) and len(patch_size) == 2:
-            return (int(patch_size[0]), int(patch_size[1]))
-
-        conv1 = getattr(visual, "conv1", None)
-        kernel_size = getattr(conv1, "kernel_size", None) if conv1 is not None else None
-        if isinstance(kernel_size, int):
-            return (kernel_size, kernel_size)
-        if isinstance(kernel_size, tuple) and len(kernel_size) == 2:
-            return (int(kernel_size[0]), int(kernel_size[1]))
-
-        raise AttributeError("Cannot infer OpenCLIP patch size.")
-
-    @staticmethod
-    def _round_up_to_multiple(value: int, multiple: int) -> int:
-        return int(value) if multiple <= 1 else ((int(value) + multiple - 1) // multiple) * multiple
-
-    @staticmethod
-    def _pad_chw_image(x: torch.Tensor, out_h: int, out_w: int) -> torch.Tensor:
-        pad_h = max(0, int(out_h) - int(x.shape[-2]))
-        pad_w = max(0, int(out_w) - int(x.shape[-1]))
-        return x if pad_h == 0 and pad_w == 0 else F.pad(x, (0, pad_w, 0, pad_h), value=0.0)
-
-    def _prepare_openclip_image_batch(self, raw_images: List[torch.Tensor], device: torch.device) -> torch.Tensor:
-        if len(raw_images) == 0:
-            raise ValueError("raw_images is empty.")
-
-        native_h, native_w = self.clip_image_encoder.get_native_image_size()
-
-        processed = []
-        for i, x in enumerate(raw_images):
-            if not isinstance(x, torch.Tensor) or x.ndim != 3 or x.shape[0] != 3:
-                raise ValueError(
-                    f"raw_images[{i}] must be a tensor with shape [3, H, W], got "
-                    f"{None if not isinstance(x, torch.Tensor) else tuple(x.shape)}"
-                )
-            x = x.to(device=device, dtype=torch.float32)
-            x = x.unsqueeze(0)
-            x = F.interpolate(x, size=(native_h, native_w), mode="bilinear", align_corners=False)
-            processed.append(x.squeeze(0))
-
-        batch = torch.stack(processed, dim=0)
-        return (batch - self.openclip_image_mean) / self.openclip_image_std
-
     def _build_clip_image_cache(
         self,
         input: BatchedDatapoint,
@@ -298,9 +239,11 @@ class Sam3Image(torch.nn.Module):
         if input.raw_images is None:
             raise ValueError("clip_image_encoder is enabled, but BatchedDatapoint.raw_images is None.")
 
-        clip_img_batch = self._prepare_openclip_image_batch(raw_images=input.raw_images, device=device)
         with torch.no_grad():
-            clip_out = self.clip_image_encoder(clip_img_batch)
+            clip_out = self.clip_image_encoder.encode_raw_images(
+                raw_images=input.raw_images,
+                device=device,
+            )
 
         if not isinstance(clip_out, dict):
             raise TypeError(

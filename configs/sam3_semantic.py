@@ -51,7 +51,7 @@ model = dict(
             "core.encoder_refiner",
         ],
         frozen_modules=[],
-        openclip_text_finetune="frozen",
+        openclip_text_finetune="attention",
     ),
 
     adapter_cfg=dict(),

@@ -1,34 +1,21 @@
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import List
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.checkpoint import checkpoint
 
 
 class SingleTokenClipPromptEncoder(nn.Module):
     """
-    DenseCLIP-style CLIP text token builder.
+    CLIP text / class token / image fusion module.
 
-    Flow:
-        class_names + template
-        → OpenCLIP text encoder
-        → base_clip_text: [C, D_clip]
+    Text encoding (class names → base_clip_text) is delegated to
+    OpenCLIPTextEncoder.encode_class_prompts().
 
-        base_clip_text (repeated Q times)
-        + class_query_tokens (projected to D_clip)
-        → channel concat
-        → Linear → D_clip
-        + projected_class_tokens (residual)
-        → cross-attention to clip_image_feat_map
-        + repeated_base_text (residual)
+    This module only handles post-encoding fusion:
+        base_clip_text + class_query_tokens + clip_image_feat_map
         → dynamic_clip_text: [B, C, Q, D_clip]
-
-    Important:
-        - Do NOT insert dynamic tokens into CLIP text encoder input.
-        - Only static class prompts go through the CLIP text encoder.
     """
 
     def __init__(
@@ -55,8 +42,6 @@ class SingleTokenClipPromptEncoder(nn.Module):
             )
 
         self.clip_output_dim = int(clip_text_encoder.output_dim)
-        self._context_length = int(clip_text_encoder.context_length)
-        self._tokenizer = clip_text_encoder.tokenizer
 
         if self.clip_output_dim % int(num_attention_heads) != 0:
             raise ValueError(
@@ -70,8 +55,7 @@ class SingleTokenClipPromptEncoder(nn.Module):
         )
 
         self.text_class_fusion = nn.Linear(
-            self.clip_output_dim * 2,
-            self.clip_output_dim,
+            self.clip_output_dim * 2, self.clip_output_dim,
         )
         self.fusion_norm = nn.LayerNorm(self.clip_output_dim)
 
@@ -84,90 +68,22 @@ class SingleTokenClipPromptEncoder(nn.Module):
             batch_first=True,
         )
 
-        self._base_text_cache_key: Optional[Tuple[Tuple[str, ...], str]] = None
-        self._base_text_cache: Optional[torch.Tensor] = None
-
     # ------------------------------------------------------------------
-    # Helpers
+    # Cache management
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _normalize_class_name(name: str) -> str:
-        name = str(name).strip()
-        name = name.replace("_", " ").replace("-", " ")
-        return " ".join(name.split())
-
-    def _build_prompt_texts(self, class_names: List[str]) -> List[str]:
-        texts = []
-        for name in class_names:
-            label = self._normalize_class_name(name) if self.normalize_label else str(name)
-            texts.append(self.prompt_template.format(label))
-        return texts
 
     def _has_trainable_clip_text_params(self) -> bool:
         return any(p.requires_grad for p in self.clip_text_encoder.parameters())
 
-    def _should_use_text_cache(self) -> bool:
-        return (not self.training) or (not self._has_trainable_clip_text_params())
-
     def clear_text_cache(self) -> None:
-        self._base_text_cache_key = None
-        self._base_text_cache = None
+        if hasattr(self.clip_text_encoder, "clear_prompt_cache"):
+            self.clip_text_encoder.clear_prompt_cache()
 
-    def _cache_key(self, class_names: List[str], device: torch.device):
-        return (tuple(self._build_prompt_texts(class_names)), str(device))
-
-    # ------------------------------------------------------------------
-    # Base text encoding
-    # ------------------------------------------------------------------
-
-    def _encode_base_text_features(
-        self,
-        class_names: List[str],
-        device: torch.device,
-    ) -> torch.Tensor:
-        texts = self._build_prompt_texts(class_names)
-        tokenized = self._tokenizer(
-            texts,
-            context_length=self._context_length,
-        ).to(device)
-
-        def _encode(tokens):
-            return self.clip_text_encoder.encode_tokenized(
-                tokenized=tokens,
-                normalize=True,
-                detach_output=False,
-            )
-
-        if (
-            self.training
-            and self.use_checkpoint
-            and self._has_trainable_clip_text_params()
-        ):
-            return checkpoint(
-                _encode, tokenized, use_reentrant=False,
-            )
-
-        return _encode(tokenized)
-
-    def _get_base_text_features(
-        self,
-        class_names: List[str],
-        device: torch.device,
-    ) -> torch.Tensor:
-        if not self._should_use_text_cache():
-            return self._encode_base_text_features(class_names, device)
-
-        key = self._cache_key(class_names, device)
-        if self._base_text_cache is not None and self._base_text_cache_key == key:
-            return self._base_text_cache.to(device=device)
-
-        with torch.no_grad():
-            base_text = self._encode_base_text_features(class_names, device)
-
-        self._base_text_cache_key = key
-        self._base_text_cache = base_text.detach().contiguous()
-        return self._base_text_cache.to(device=device)
+    def train(self, mode: bool = True):
+        super().train(mode)
+        if mode and self._has_trainable_clip_text_params():
+            self.clear_text_cache()
+        return self
 
     # ------------------------------------------------------------------
     # Fusion
@@ -195,7 +111,7 @@ class SingleTokenClipPromptEncoder(nn.Module):
         )
 
         repeated_base_text = base_text[None, :, None, :].expand(
-            B, C, Q, self.clip_output_dim
+            B, C, Q, self.clip_output_dim,
         )
 
         x = torch.cat([repeated_base_text, projected_class_tokens], dim=-1)
@@ -244,10 +160,7 @@ class SingleTokenClipPromptEncoder(nn.Module):
         )
 
         attn_out, _ = self.clip_image_attn(
-            query=query,
-            key=visual,
-            value=visual,
-            need_weights=False,
+            query=query, key=visual, value=visual, need_weights=False,
         )
         attn_out = attn_out.reshape(B, C, Q, D_clip)
 
@@ -283,9 +196,20 @@ class SingleTokenClipPromptEncoder(nn.Module):
                 f"class_names length mismatch: expected {C}, got {len(class_names)}"
             )
 
-        base_text = self._get_base_text_features(
+        trainable_text = self._has_trainable_clip_text_params()
+        use_text_cache = (not self.training) or (not trainable_text)
+
+        base_text = self.clip_text_encoder.encode_class_prompts(
             class_names=class_names,
+            prompt_template=self.prompt_template,
             device=class_query_tokens.device,
+            normalize_label=self.normalize_label,
+            normalize=True,
+            use_cache=use_text_cache,
+            detach_output=use_text_cache,
+            use_checkpoint=(
+                self.training and self.use_checkpoint and trainable_text
+            ),
         )
 
         fused = self._fuse_text_and_class_tokens(
