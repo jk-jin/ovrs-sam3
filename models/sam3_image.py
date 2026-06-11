@@ -47,6 +47,7 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_window_size: int = 9,
         encoder_refiner_shift_size: int = 4,
         encoder_refiner_use_checkpoint: bool = True,
+        encoder_refiner_early_prompt_attention: bool = False,
         task_mode: str = TASK_MODE_SEMANTIC,
         **kwargs,
     ):
@@ -120,6 +121,10 @@ class Sam3Image(torch.nn.Module):
             score_conv_kernel=int(encoder_refiner_conv_kernel),
             score_base_hw=int(encoder_refiner_score_base_hw),
             use_checkpoint=bool(encoder_refiner_use_checkpoint),
+        )
+
+        self.encoder_refiner_early_prompt_attention = bool(
+            encoder_refiner_early_prompt_attention
         )
 
         self.prompt_chunk_size = None
@@ -300,6 +305,32 @@ class Sam3Image(torch.nn.Module):
             "clip_mid_layer_indices": tuple(int(x) for x in clip_mid_layer_indices),
         }
 
+    def _maybe_apply_early_prompt_attention(
+        self,
+        encoder_out: Dict[str, torch.Tensor],
+        prompt: torch.Tensor,
+        prompt_mask: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        if not self.encoder_refiner_early_prompt_attention:
+            return encoder_out
+
+        if self.segmentation_head is None:
+            raise RuntimeError("segmentation_head is required for early prompt attention.")
+
+        if not hasattr(self.segmentation_head, "apply_prompt_attention"):
+            raise RuntimeError(
+                "segmentation_head must expose apply_prompt_attention() "
+                "when encoder_refiner_early_prompt_attention=True."
+            )
+
+        out = dict(encoder_out)
+        out["encoder_hidden_states"] = self.segmentation_head.apply_prompt_attention(
+            encoder_hidden_states=encoder_out["encoder_hidden_states"],
+            prompt=prompt,
+            prompt_mask=prompt_mask,
+        )
+        return out
+
     def build_encoder_refiner_cache(
         self,
         input: BatchedDatapoint,
@@ -390,14 +421,20 @@ class Sam3Image(torch.nn.Module):
             prompt = raw_outputs["prompt"]
             prompt_mask = raw_outputs["prompt_mask"]
 
-            encoder_feature_chunk = self._extract_encoder_last_feature(
+            encoder_out_for_refiner = self._maybe_apply_early_prompt_attention(
                 encoder_out=encoder_out,
+                prompt=prompt,
+                prompt_mask=prompt_mask,
+            )
+
+            encoder_feature_chunk = self._extract_encoder_last_feature(
+                encoder_out=encoder_out_for_refiner,
                 batch_size=batch_size,
                 num_chunk_classes=num_chunk_classes,
             )
 
             encoder_feature_chunks.append(encoder_feature_chunk)
-            encoder_out_chunks.append(encoder_out)
+            encoder_out_chunks.append(encoder_out_for_refiner)
             chunk_prompts.append(prompt)
             chunk_prompt_masks.append(prompt_mask)
             merged_class_ids.extend(chunk_class_ids)
@@ -601,6 +638,8 @@ class Sam3Image(torch.nn.Module):
                 encoder_hidden_states=refined_hidden_states,
                 prompt=chunk_prompts[chunk_idx],
                 prompt_mask=chunk_prompt_masks[chunk_idx],
+                # Skip prompt attention if already applied early in cache build.
+                apply_prompt_attention=not self.encoder_refiner_early_prompt_attention,
             )
 
             chunk_logits = seg_outputs["semantic_seg"]

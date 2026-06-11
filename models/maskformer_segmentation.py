@@ -269,6 +269,31 @@ class UniversalSegmentationHead(SegmentationHead):
             self.pixel_decoder.out_dim, self.d_model, kernel_size=1
         )
 
+    def apply_prompt_attention(
+        self,
+        encoder_hidden_states: torch.Tensor,
+        prompt: Optional[torch.Tensor],
+        prompt_mask: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        if self.cross_attend_prompt is None:
+            return encoder_hidden_states
+
+        if prompt is None:
+            raise ValueError("prompt must be provided when cross_attend_prompt is enabled.")
+
+        if prompt_mask is None:
+            raise ValueError("prompt_mask must be provided when cross_attend_prompt is enabled.")
+
+        tgt2 = self.cross_attn_norm(encoder_hidden_states)
+        tgt2 = self.cross_attend_prompt(
+            query=tgt2,
+            key=prompt,
+            value=prompt,
+            key_padding_mask=prompt_mask,
+        )[0]
+
+        return tgt2 + encoder_hidden_states
+
     def forward(
         self,
         backbone_feats: List[torch.Tensor],
@@ -277,20 +302,18 @@ class UniversalSegmentationHead(SegmentationHead):
         encoder_hidden_states: Optional[torch.Tensor] = None,
         prompt: Optional[torch.Tensor] = None,
         prompt_mask: Optional[torch.Tensor] = None,
+        apply_prompt_attention: bool = True,
         **kwargs,
     ) -> Dict[str, Optional[torch.Tensor]]:
         assert encoder_hidden_states is not None
         bs = encoder_hidden_states.shape[1]
 
-        if self.cross_attend_prompt is not None:
-            tgt2 = self.cross_attn_norm(encoder_hidden_states)
-            tgt2 = self.cross_attend_prompt(
-                query=tgt2,
-                key=prompt,
-                value=prompt,
-                key_padding_mask=prompt_mask,
-            )[0]
-            encoder_hidden_states = tgt2 + encoder_hidden_states
+        if apply_prompt_attention:
+            encoder_hidden_states = self.apply_prompt_attention(
+                encoder_hidden_states=encoder_hidden_states,
+                prompt=prompt,
+                prompt_mask=prompt_mask,
+            )
 
         presence_logit = None
         if self.presence_head is not None:

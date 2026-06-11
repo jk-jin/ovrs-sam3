@@ -699,11 +699,12 @@ class EncoderRefinerLayer(nn.Module):
     """
     One refiner layer:
 
-        1. ClassTokenScoreClassAttention at 72×72
-        2. MultiScaleImageScoreWindowAttention (36×36 + 18×18)
+        1. ClassTokenScoreClassAttention at 72x72
+        2. MultiScaleImageScoreWindowAttention (36x36 + 18x18)
         3. FFN
+        4. LayerNorm
 
-    Layer-level residual: output = ffn_output + layer_identity
+    No layer-level residual; global residual is applied after all layers.
     """
 
     def __init__(
@@ -739,6 +740,14 @@ class EncoderRefinerLayer(nn.Module):
         self.ffn_fc1 = nn.Linear(hidden_dim, hidden_dim * 4)
         self.ffn_fc2 = nn.Linear(hidden_dim * 4, hidden_dim)
         self.ffn_dropout = nn.Dropout(float(dropout))
+
+        self.output_norm = nn.LayerNorm(hidden_dim)
+
+    def _output_layer_norm(self, encoder_features: torch.Tensor) -> torch.Tensor:
+        # encoder_features: [B, C, D, H, W]
+        return self.output_norm(
+            encoder_features.permute(0, 1, 3, 4, 2)
+        ).permute(0, 1, 4, 2, 3).contiguous()
 
     def _ffn(self, encoder_features: torch.Tensor) -> torch.Tensor:
         batch_size, num_classes, hidden_dim, height, width = encoder_features.shape
@@ -789,8 +798,6 @@ class EncoderRefinerLayer(nn.Module):
         Returns:
             encoder_features_72: [B, C, D, 72, 72]
         """
-        layer_identity = encoder_features_72
-
         class_attended_features_72 = self.class_attn(
             encoder_features=encoder_features_72,
             class_query_tokens=class_query_tokens,
@@ -813,4 +820,4 @@ class EncoderRefinerLayer(nn.Module):
         spatial_fused_features_72 = class_attended_features_72 + spatial_update_72
         output_features_72 = self._ffn(spatial_fused_features_72)
 
-        return output_features_72 + layer_identity
+        return self._output_layer_norm(output_features_72)

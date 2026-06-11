@@ -47,6 +47,7 @@ class EncoderRefinerConfig:
     shift_size: int = 4
 
     use_checkpoint: bool = True
+    early_prompt_attention: bool = False
 
 
 @dataclass

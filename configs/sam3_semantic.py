@@ -44,6 +44,9 @@ model = dict(
         score_base_hw=18,
         window_size=9,
         shift_size=4,
+
+        use_checkpoint=True,
+        early_prompt_attention=True,
     ),
 
     freeze_cfg=dict(
