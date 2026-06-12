@@ -84,7 +84,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
         self.layers = nn.ModuleList([
             EncoderRefinerLayer(
                 hidden_dim=self.hidden_dim,
-                clip_dim=self.clip_dim,
                 score_embed_dim=int(score_embed_dim),
                 num_heads=int(num_heads),
                 window_size=int(window_size),
@@ -102,6 +101,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         self,
         encoder_features: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
+        sam_text_mean: torch.Tensor,
         class_names: List[str],
         sam_image_last: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor], torch.Tensor]:
@@ -119,6 +119,12 @@ class ClassConditionedEncoderRefiner(nn.Module):
             raise ValueError(
                 f"ClassConditionedEncoderRefiner expects 72x72 encoder features, "
                 f"got {(height, width)}."
+            )
+
+        if tuple(sam_text_mean.shape) != (batch_size, num_classes, hidden_dim):
+            raise ValueError(
+                f"sam_text_mean must be [{batch_size}, {num_classes}, {hidden_dim}], "
+                f"got {tuple(sam_text_mean.shape)}."
             )
 
         class_query_tokens = self.query_extractor(encoder_features)
@@ -166,9 +172,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 refined_encoder_features_72 = checkpoint(
                     layer,
                     refined_encoder_features_72,
-                    class_query_tokens,
+                    sam_text_mean,
                     sam_image_last,
-                    clip_image_feat_map,
                     clip_score_embed_18,
                     clip_score_embed_36,
                     clip_score_embed_72,
@@ -177,9 +182,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
             else:
                 refined_encoder_features_72 = layer(
                     encoder_features_72=refined_encoder_features_72,
-                    class_query_tokens=class_query_tokens,
+                    sam_text_mean=sam_text_mean,
                     sam_image_last_72=sam_image_last,
-                    clip_image_feat_map=clip_image_feat_map,
                     clip_score_embed_18=clip_score_embed_18,
                     clip_score_embed_36=clip_score_embed_36,
                     clip_score_embed_72=clip_score_embed_72,

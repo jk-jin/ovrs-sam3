@@ -46,7 +46,7 @@ model = dict(
         shift_size=4,
 
         use_checkpoint=True,
-        early_prompt_attention=True,
+        early_prompt_attention=False,
     ),
 
     freeze_cfg=dict(
