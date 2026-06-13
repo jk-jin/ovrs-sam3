@@ -159,8 +159,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     f"clip_score_embeds[{key!r}] shape mismatch: "
                     f"expected {expected_shape}, got {tuple(score_embed.shape)}."
                 )
-
-        initial_encoder_features_72 = encoder_features
         refined_encoder_features_72 = encoder_features
 
         clip_score_embed_18 = clip_score_embeds["scale_18"]
@@ -188,8 +186,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     clip_score_embed_36=clip_score_embed_36,
                     clip_score_embed_72=clip_score_embed_72,
                 )
-
-        refined_encoder_features_72 = refined_encoder_features_72 + initial_encoder_features_72
 
         return (
             refined_encoder_features_72,
