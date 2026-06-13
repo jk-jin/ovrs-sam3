@@ -7,6 +7,53 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def _make_group_norm(num_channels: int) -> nn.GroupNorm:
+    num_groups = min(8, num_channels)
+    if num_channels % num_groups != 0:
+        num_groups = 1
+    return nn.GroupNorm(num_groups, num_channels)
+
+
+def _conv_norm_gelu(
+    in_channels: int,
+    out_channels: int,
+    kernel_size: int,
+    stride: int = 1,
+    padding: int | None = None,
+) -> nn.Sequential:
+    if padding is None:
+        padding = kernel_size // 2
+    return nn.Sequential(
+        nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            bias=False,
+        ),
+        _make_group_norm(out_channels),
+        nn.GELU(),
+    )
+
+
+def _deconv_up_block(channels: int) -> nn.Sequential:
+    return nn.Sequential(
+        nn.ConvTranspose2d(
+            channels,
+            channels,
+            kernel_size=4,
+            stride=2,
+            padding=1,
+            bias=False,
+        ),
+        _make_group_norm(channels),
+        nn.GELU(),
+        _conv_norm_gelu(channels, channels, kernel_size=3),
+        _conv_norm_gelu(channels, channels, kernel_size=3),
+    )
+
+
 class ClipScoreEmbeddingBuilder(nn.Module):
     """
     Build 3-scale CLIP score embeddings from dynamic CLIP text and image feature map.
@@ -18,15 +65,15 @@ class ClipScoreEmbeddingBuilder(nn.Module):
     Flow:
         clip_image_feat_map → bilinear to 18×18
         → text-image dot product → score_maps_18: [B, C, Q, 18, 18]
-        → Conv2d(Q → D_score, 7×7)          → score_embed_18: [B, C, D_score, 18, 18]
-        → ConvTranspose2d ×1 (learnable 2×)  → score_embed_36: [B, C, D_score, 36, 36]
-        → ConvTranspose2d ×1 (learnable 2×)  → score_embed_72: [B, C, D_score, 72, 72]
+        → enhanced 3-stage conv: Q → 64 → 128 → 256
+        → enhanced 18→36 deconv up block
+        → enhanced 36→72 deconv up block
     """
 
     def __init__(
         self,
         clip_output_dim: int = 768,
-        score_embed_dim: int = 128,
+        score_embed_dim: int = 256,
         num_query_tokens: int = 32,
         conv_kernel: int = 7,
         base_hw: int = 18,
@@ -37,49 +84,34 @@ class ClipScoreEmbeddingBuilder(nn.Module):
         self.num_query_tokens = int(num_query_tokens)
         self.base_hw = int(base_hw)
 
-        padding = int(conv_kernel) // 2
-        num_groups = min(8, self.score_embed_dim)
-        if self.score_embed_dim % num_groups != 0:
-            num_groups = 1
+        if self.score_embed_dim != 256:
+            raise ValueError(
+                "Current design requires score_embed_dim=256."
+            )
+
+        score_hidden_dim_1 = self.score_embed_dim // 4
+        score_hidden_dim_2 = self.score_embed_dim // 2
 
         self.score_conv_18 = nn.Sequential(
-            nn.Conv2d(
+            _conv_norm_gelu(
                 self.num_query_tokens,
-                self.score_embed_dim,
+                score_hidden_dim_1,
                 kernel_size=int(conv_kernel),
-                stride=1,
-                padding=padding,
-                bias=False,
             ),
-            nn.GroupNorm(num_groups, self.score_embed_dim),
-            nn.GELU(),
+            _conv_norm_gelu(
+                score_hidden_dim_1,
+                score_hidden_dim_2,
+                kernel_size=3,
+            ),
+            _conv_norm_gelu(
+                score_hidden_dim_2,
+                self.score_embed_dim,
+                kernel_size=3,
+            ),
         )
 
-        self.score_up_18_to_36 = nn.Sequential(
-            nn.ConvTranspose2d(
-                self.score_embed_dim,
-                self.score_embed_dim,
-                kernel_size=4,
-                stride=2,
-                padding=1,
-                bias=False,
-            ),
-            nn.GroupNorm(num_groups, self.score_embed_dim),
-            nn.GELU(),
-        )
-
-        self.score_up_36_to_72 = nn.Sequential(
-            nn.ConvTranspose2d(
-                self.score_embed_dim,
-                self.score_embed_dim,
-                kernel_size=4,
-                stride=2,
-                padding=1,
-                bias=False,
-            ),
-            nn.GroupNorm(num_groups, self.score_embed_dim),
-            nn.GELU(),
-        )
+        self.score_up_18_to_36 = _deconv_up_block(self.score_embed_dim)
+        self.score_up_36_to_72 = _deconv_up_block(self.score_embed_dim)
 
     def forward(
         self,

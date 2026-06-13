@@ -295,6 +295,12 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 f"got score_base_hw={cfg.score_base_hw}, encoder_hw={cfg.encoder_hw}."
             )
 
+        if cfg.clip_score_embed_dim != cfg.hidden_dim:
+            raise ValueError(
+                "Current design requires encoder_refiner_cfg.clip_score_embed_dim "
+                f"to equal hidden_dim={cfg.hidden_dim}, got {cfg.clip_score_embed_dim}."
+            )
+
         return cfg
 
     @staticmethod
