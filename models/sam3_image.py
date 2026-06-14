@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from .data_misc import BatchedDatapoint, FindStage
 from .encoder_refiner import ClassConditionedEncoderRefiner
 from .geometry_encoders import Prompt
+from .mask_query_refiner import SemanticMaskQueryRefiner
 from .task_modes import OUTPUT_KEYS, TASK_MODE_SEMANTIC, normalize_task_mode
 from .vl_combiner import SAM3VLBackbone
 
@@ -48,6 +49,15 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_shift_size: int = 4,
         encoder_refiner_use_checkpoint: bool = True,
         encoder_refiner_early_prompt_attention: bool = False,
+        mask_query_num_queries: int = 32,
+        mask_query_num_heads: int = 8,
+        mask_query_dropout: float = 0.1,
+        mask_query_attn_downsample: int = 4,
+        mask_query_gate_floor: float = 0.05,
+        mask_query_bias_scale: float = 2.0,
+        mask_query_pool_temperature: float = 1.0,
+        mask_query_logit_scale_init: float = 5.0,
+        mask_query_logit_scale_max: float = 50.0,
         task_mode: str = TASK_MODE_SEMANTIC,
         **kwargs,
     ):
@@ -125,6 +135,19 @@ class Sam3Image(torch.nn.Module):
 
         self.encoder_refiner_early_prompt_attention = bool(
             encoder_refiner_early_prompt_attention
+        )
+
+        self.mask_query_refiner = SemanticMaskQueryRefiner(
+            hidden_dim=int(encoder_refiner_hidden_dim),
+            num_queries=int(mask_query_num_queries),
+            num_heads=int(mask_query_num_heads),
+            dropout=float(mask_query_dropout),
+            attn_downsample=int(mask_query_attn_downsample),
+            mask_gate_floor=float(mask_query_gate_floor),
+            mask_bias_scale=float(mask_query_bias_scale),
+            query_pool_temperature=float(mask_query_pool_temperature),
+            logit_scale_init=float(mask_query_logit_scale_init),
+            logit_scale_max=float(mask_query_logit_scale_max),
         )
 
         self.prompt_chunk_size = None
@@ -705,21 +728,60 @@ class Sam3Image(torch.nn.Module):
                 prompt_mask=chunk_prompt_masks[chunk_idx],
                 # Skip prompt attention if already applied early in cache build.
                 apply_prompt_attention=not self.encoder_refiner_early_prompt_attention,
+                return_pixel_embed=True,
             )
 
-            chunk_logits = seg_outputs["semantic_seg"]
+            chunk_logits_init = seg_outputs["semantic_seg"]
+            pixel_embed = seg_outputs.get("pixel_embed", None)
+
+            if pixel_embed is None:
+                raise RuntimeError("segmentation_head did not return pixel_embed.")
+
             # semantic_seg: [B*C_chunk, 1, H, W] → [B, C_chunk, H, W]
-            if chunk_logits.dim() == 4 and chunk_logits.shape[0] == B * C_chunk:
-                chunk_logits = chunk_logits.reshape(B, C_chunk, *chunk_logits.shape[-2:])
-            elif chunk_logits.dim() == 4 and chunk_logits.shape[0] == B and chunk_logits.shape[1] == C_chunk:
+            if chunk_logits_init.dim() == 4 and chunk_logits_init.shape[0] == B * C_chunk:
+                chunk_logits_init = chunk_logits_init.reshape(
+                    B,
+                    C_chunk,
+                    *chunk_logits_init.shape[-2:],
+                )
+            elif (
+                chunk_logits_init.dim() == 4
+                and chunk_logits_init.shape[0] == B
+                and chunk_logits_init.shape[1] == C_chunk
+            ):
                 pass
-            elif chunk_logits.dim() == 4 and chunk_logits.shape[1] == 1:
-                chunk_logits = chunk_logits.squeeze(1)
+            elif chunk_logits_init.dim() == 4 and chunk_logits_init.shape[1] == 1:
+                chunk_logits_init = chunk_logits_init.squeeze(1)
             else:
                 raise ValueError(
-                    f"Unexpected semantic_seg shape: {tuple(chunk_logits.shape)}, "
+                    f"Unexpected semantic_seg shape: {tuple(chunk_logits_init.shape)}, "
                     f"expected [B*C_chunk, 1, H, W] or [B, C_chunk, H, W]."
                 )
+
+            if pixel_embed.dim() != 4:
+                raise ValueError(
+                    f"pixel_embed must be 4D [B*C_chunk, D, H, W], "
+                    f"got {tuple(pixel_embed.shape)}."
+                )
+
+            if pixel_embed.shape[0] != B * C_chunk:
+                raise ValueError(
+                    f"pixel_embed batch mismatch: expected {B * C_chunk}, "
+                    f"got {pixel_embed.shape[0]}."
+                )
+
+            pixel_embed = pixel_embed.reshape(
+                B,
+                C_chunk,
+                pixel_embed.shape[1],
+                pixel_embed.shape[2],
+                pixel_embed.shape[3],
+            ).contiguous()
+
+            chunk_logits = self.mask_query_refiner(
+                pixel_embed=pixel_embed,
+                init_logits=chunk_logits_init,
+            )
 
             final_logits_chunks.append(chunk_logits)
             chunk_start += C_chunk

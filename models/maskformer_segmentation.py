@@ -303,6 +303,7 @@ class UniversalSegmentationHead(SegmentationHead):
         prompt: Optional[torch.Tensor] = None,
         prompt_mask: Optional[torch.Tensor] = None,
         apply_prompt_attention: bool = True,
+        return_pixel_embed: bool = False,
         **kwargs,
     ) -> Dict[str, Optional[torch.Tensor]]:
         assert encoder_hidden_states is not None
@@ -343,8 +344,13 @@ class UniversalSegmentationHead(SegmentationHead):
         else:
             mask_pred = self.mask_predictor(obj_queries[-1], instance_embeds)
 
-        return {
+        out = {
             "pred_masks": mask_pred,
             "semantic_seg": self.semantic_seg_head(pixel_embed),
             "presence_logit": presence_logit,
         }
+
+        if return_pixel_embed:
+            out["pixel_embed"] = pixel_embed
+
+        return out

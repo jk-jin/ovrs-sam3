@@ -49,10 +49,30 @@ model = dict(
         early_prompt_attention=False,
     ),
 
+    mask_query_refiner_cfg=dict(
+        num_queries=32,
+        num_heads=8,
+        dropout=0.1,
+
+        # Final mask 288×288 时，这里会得到 72×72 attention map。
+        attn_downsample=4,
+
+        # 更激进地压低低置信度初始 mask 区域。
+        mask_gate_floor=0.05,
+        mask_bias_scale=2.0,
+
+        # 训练和推理都用 logsumexp，不用 hard max。
+        query_pool_temperature=1.0,
+
+        logit_scale_init=5.0,
+        logit_scale_max=50.0,
+    ),
+
     freeze_cfg=dict(
         train_adapters_only=True,
         trainable_modules=[
             "core.encoder_refiner",
+            "core.mask_query_refiner",
         ],
         frozen_modules=[],
         openclip_text_finetune="attention",
@@ -107,6 +127,11 @@ optim_wrapper = dict(
             norm_decay_mult=0.0,
             custom_keys={
                 "core.encoder_refiner": dict(
+                    lr_mult=4.0,
+                    decay_mult=1.0,
+                ),
+
+                "core.mask_query_refiner": dict(
                     lr_mult=4.0,
                     decay_mult=1.0,
                 ),
