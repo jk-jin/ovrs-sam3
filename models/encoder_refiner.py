@@ -50,6 +50,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         score_conv_kernel: int = 7,
         score_base_hw: int = 18,
         use_checkpoint: bool = True,
+        clip_mid_dim: int | None = None,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -79,6 +80,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
             num_query_tokens=self.num_query_tokens,
             conv_kernel=int(score_conv_kernel),
             base_hw=int(score_base_hw),
+            clip_mid_dim=clip_mid_dim,
         )
 
         self.layers = nn.ModuleList([
@@ -104,6 +106,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         sam_text_mean: torch.Tensor,
         class_names: List[str],
         sam_image_last: torch.Tensor,
+        clip_mid_features: List[torch.Tensor] | None = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor], torch.Tensor]:
         """
         Returns:
@@ -138,6 +141,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         clip_score_embeds, clip_score_maps_18 = self.score_builder(
             dynamic_clip_text=dynamic_clip_text,
             clip_image_feat_map=clip_image_feat_map,
+            clip_mid_features=clip_mid_features,
         )
 
         # Validate score embedding shapes.
