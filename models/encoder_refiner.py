@@ -9,18 +9,23 @@ from torch.utils.checkpoint import checkpoint
 from .clip_prompt_encoder import SingleTokenClipPromptEncoder
 from .clip_score_embedding import ClipScoreEmbeddingBuilder
 from .encoder_query_extractor import EncoderQueryExtractor
-from .encoder_refiner_attention import EncoderRefinerLayer
+from .encoder_refiner_attention import (
+    BoundaryRefinementWindowAttention,
+    EncoderRefinerLayer,
+)
 
 
 class ClassConditionedEncoderRefiner(nn.Module):
     """
-    Multi-layer encoder feature refiner with multi-scale spatial window attention.
+    Multi-layer encoder feature refiner with multi-scale spatial window attention
+    and a final boundary refinement attention layer.
 
     All sub-modules are created eagerly in __init__ so that parameters are
     visible to apply_freeze_cfg and the optimizer before the first forward.
 
     Architecture:
-        fusion_layers × EncoderRefinerLayer (serial multi-scale: 18→36→72)
+        4 × EncoderRefinerLayer (serial multi-scale: 18→36→72)
+        → BoundaryRefinementWindowAttention (refined + original encoder features)
 
     Inputs (forward):
         encoder_features:   [B, C, D, H, W]
@@ -95,6 +100,14 @@ class ClassConditionedEncoderRefiner(nn.Module):
             )
             for _ in range(int(fusion_layers))
         ])
+
+        self.boundary_refiner = BoundaryRefinementWindowAttention(
+            hidden_dim=self.hidden_dim,
+            num_heads=int(num_heads),
+            window_size=int(window_size),
+            shift_size=int(shift_size),
+            dropout=float(dropout),
+        )
 
     # ------------------------------------------------------------------
     # Forward
@@ -189,6 +202,21 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     clip_score_embed_36=clip_score_embed_36,
                     clip_score_embed_72=clip_score_embed_72,
                 )
+
+        # Boundary refinement after all main refiner layers.
+        # Uses original encoder_features as spatial boundary reference.
+        if self.use_checkpoint and self.training:
+            refined_encoder_features_72 = checkpoint(
+                self.boundary_refiner,
+                refined_encoder_features_72,
+                encoder_features,
+                use_reentrant=False,
+            )
+        else:
+            refined_encoder_features_72 = self.boundary_refiner(
+                refined_encoder_features_72=refined_encoder_features_72,
+                original_encoder_features_72=encoder_features,
+            )
 
         return (
             refined_encoder_features_72,
