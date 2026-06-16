@@ -53,6 +53,8 @@ model = dict(
         train_adapters_only=True,
         trainable_modules=[
             "core.encoder_refiner",
+            "core.segmentation_head.pixel_decoder",
+            "core.segmentation_head.semantic_seg_head",
         ],
         frozen_modules=[],
         openclip_text_finetune="attention",
@@ -111,8 +113,17 @@ optim_wrapper = dict(
                     decay_mult=1.0,
                 ),
 
+                "core.segmentation_head.pixel_decoder": dict(
+                    lr_mult=0.5,
+                    decay_mult=1.0,
+                ),
+
+                "core.segmentation_head.semantic_seg_head": dict(
+                    lr_mult=2.0,
+                    decay_mult=1.0,
+                ),
+
                 # 1e-4 × 0.02 = 2e-6
-                # Align with RSKT-Seg CLIP attention effective lr.
                 "core.clip_text_encoder": dict(
                     lr_mult=0.02,
                     decay_mult=0.0,
@@ -142,7 +153,7 @@ train_cfg = dict(
     eval_interval=20000,
     log_window_size=20,
     use_amp=True,
-    grad_clip_norm=0.01,
+    grad_clip_norm=0.05,
     monitor="semantic.miou",
     monitor_mode="max",
     max_keep_ckpts=20,

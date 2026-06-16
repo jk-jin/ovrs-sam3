@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Optional
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -69,6 +72,41 @@ class BilinearConvUpsample2d(nn.Module):
             align_corners=False,
         )
         return self.conv(x)
+
+
+# ---------------------------------------------------------------------------
+# WindowAttentionPack
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class WindowAttentionPack:
+    """Intermediate state for a single-scale window attention call.
+
+    Carries projected q/k/v in multi-head layout, the residual windows
+    for the output norm, the shift attention mask, and all metadata needed
+    by finish_windows to reconstruct the original [B, C, D, H, W] tensor.
+    """
+
+    q: torch.Tensor
+    k: torch.Tensor
+    v: torch.Tensor
+    residual_windows: torch.Tensor
+    attn_mask: Optional[torch.Tensor]
+
+    batch_size: int
+    num_classes: int
+    hidden_dim: int
+    height: int
+    width: int
+
+    batch_class: int
+    orig_h: int
+    orig_w: int
+    pad_h: int
+    pad_w: int
+
+    num_windows: int
 
 
 # ---------------------------------------------------------------------------
@@ -299,21 +337,17 @@ class ImageScoreWindowAttention(nn.Module):
 
         return attn_mask.to(dtype=dtype)
 
-    def forward(
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def prepare_windows(
         self,
         encoder_features: torch.Tensor,
         sam_image_features: torch.Tensor,
         clip_score_embed: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Args:
-            encoder_features:   [B, C, D, H, W]
-            sam_image_features: [B, D, H, W]
-            clip_score_embed:   [B, C, D_score, H, W]
-
-        Returns:
-            encoder_features: [B, C, D, H, W]
-        """
+    ) -> WindowAttentionPack:
+        """Validate, pad, shift, partition, project q/k/v → WindowAttentionPack."""
         B, C, D, H, W = encoder_features.shape
 
         if tuple(sam_image_features.shape) != (B, D, H, W):
@@ -345,12 +379,22 @@ class ImageScoreWindowAttention(nn.Module):
 
         pad_h, pad_w = e_flat.shape[-2], e_flat.shape[-1]
 
-        shift = self.shift_size
-
-        if shift > 0:
-            e_flat = torch.roll(e_flat, shifts=(-shift, -shift), dims=(-2, -1))
-            score_flat = torch.roll(score_flat, shifts=(-shift, -shift), dims=(-2, -1))
-            sam_flat = torch.roll(sam_flat, shifts=(-shift, -shift), dims=(-2, -1))
+        if self.shift_size > 0:
+            e_flat = torch.roll(
+                e_flat,
+                shifts=(-self.shift_size, -self.shift_size),
+                dims=(-2, -1),
+            )
+            score_flat = torch.roll(
+                score_flat,
+                shifts=(-self.shift_size, -self.shift_size),
+                dims=(-2, -1),
+            )
+            sam_flat = torch.roll(
+                sam_flat,
+                shifts=(-self.shift_size, -self.shift_size),
+                dims=(-2, -1),
+            )
 
         e_windows = self._window_partition(e_flat)
         score_windows = self._window_partition(score_flat)
@@ -379,6 +423,41 @@ class ImageScoreWindowAttention(nn.Module):
         k = k.reshape(num_win, N, self.num_heads, head_dim).permute(0, 2, 1, 3)
         v = v.reshape(num_win, N, self.num_heads, head_dim).permute(0, 2, 1, 3)
 
+        return WindowAttentionPack(
+            q=q,
+            k=k,
+            v=v,
+            residual_windows=e_windows,
+            attn_mask=attn_mask,
+            batch_size=B,
+            num_classes=C,
+            hidden_dim=D,
+            height=H,
+            width=W,
+            batch_class=bc,
+            orig_h=orig_h,
+            orig_w=orig_w,
+            pad_h=pad_h,
+            pad_w=pad_w,
+            num_windows=num_win,
+        )
+
+    def attention_core(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        attn_mask: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        """Raw multi-head attention on already-projected q/k/v.
+
+        q/k/v: [num_windows, num_heads, window_area, head_dim]
+        attn_mask: [num_windows, window_area, window_area] or None
+
+        Returns: [num_windows, window_area, hidden_dim]
+        """
+        head_dim = self.hidden_dim // self.num_heads
+
         attn = torch.matmul(q, k.transpose(-2, -1)) * (head_dim ** -0.5)
 
         if attn_mask is not None:
@@ -388,17 +467,71 @@ class ImageScoreWindowAttention(nn.Module):
         attn = self.dropout(attn)
 
         out = torch.matmul(attn, v)
-        out = out.permute(0, 2, 1, 3).reshape(num_win, N, D)
-        out = self.out_proj(out)
-        out = self.norm(e_windows + self.dropout(out))
+        num_win = q.shape[0]
+        N = q.shape[2]
+        out = out.permute(0, 2, 1, 3).reshape(num_win, N, self.hidden_dim)
 
-        out = self._window_reverse(out, bc, pad_h, pad_w)
+        return out
 
-        if shift > 0:
-            out = torch.roll(out, shifts=(shift, shift), dims=(-2, -1))
+    def finish_windows(
+        self,
+        out_windows: torch.Tensor,
+        pack: WindowAttentionPack,
+    ) -> torch.Tensor:
+        """out_proj, residual + norm, window reverse, unshift, unpad → [B, C, D, H, W]."""
+        out = self.out_proj(out_windows)
+        out = self.norm(pack.residual_windows + self.dropout(out))
 
-        out = out[:, :, :orig_h, :orig_w]
-        return out.reshape(B, C, D, H, W).contiguous()
+        out = self._window_reverse(
+            out,
+            pack.batch_class,
+            pack.pad_h,
+            pack.pad_w,
+        )
+
+        if self.shift_size > 0:
+            out = torch.roll(
+                out,
+                shifts=(self.shift_size, self.shift_size),
+                dims=(-2, -1),
+            )
+
+        out = out[:, :, :pack.orig_h, :pack.orig_w]
+        return out.reshape(
+            pack.batch_size,
+            pack.num_classes,
+            pack.hidden_dim,
+            pack.height,
+            pack.width,
+        ).contiguous()
+
+    def forward(
+        self,
+        encoder_features: torch.Tensor,
+        sam_image_features: torch.Tensor,
+        clip_score_embed: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Args:
+            encoder_features:   [B, C, D, H, W]
+            sam_image_features: [B, D, H, W]
+            clip_score_embed:   [B, C, D_score, H, W]
+
+        Returns:
+            encoder_features: [B, C, D, H, W]
+        """
+        pack = self.prepare_windows(
+            encoder_features=encoder_features,
+            sam_image_features=sam_image_features,
+            clip_score_embed=clip_score_embed,
+        )
+        out = self.attention_core(
+            q=pack.q,
+            k=pack.k,
+            v=pack.v,
+            attn_mask=pack.attn_mask,
+        )
+        return self.finish_windows(out, pack)
 
 
 # ---------------------------------------------------------------------------
@@ -524,6 +657,99 @@ class MultiScaleImageScoreWindowAttention(nn.Module):
         features_72_flat = self.up_36_from_18_to_72(features_36_flat, target_hw=target_hw)
         return unflatten_batch_class(features_72_flat, batch_size, num_classes)
 
+    # ------------------------------------------------------------------
+    # Packed two-scale helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _cat_optional_attn_masks(
+        mask_36: Optional[torch.Tensor],
+        mask_18: Optional[torch.Tensor],
+        pack_36: WindowAttentionPack,
+        pack_18: WindowAttentionPack,
+    ) -> Optional[torch.Tensor]:
+        """Concatenate two optional attention masks along the window-batch dim."""
+        if mask_36 is None and mask_18 is None:
+            return None
+
+        window_area = pack_36.q.shape[2]
+        device = pack_36.q.device
+        dtype = pack_36.q.dtype
+
+        if mask_36 is None:
+            mask_36 = torch.zeros(
+                pack_36.num_windows,
+                window_area,
+                window_area,
+                device=device,
+                dtype=dtype,
+            )
+        if mask_18 is None:
+            mask_18 = torch.zeros(
+                pack_18.num_windows,
+                window_area,
+                window_area,
+                device=device,
+                dtype=dtype,
+            )
+
+        return torch.cat([mask_36, mask_18], dim=0)
+
+    def _run_packed_two_scale_stage(
+        self,
+        attn_36: ImageScoreWindowAttention,
+        attn_18: ImageScoreWindowAttention,
+        features_36: torch.Tensor,
+        sam_image_36: torch.Tensor,
+        score_36: torch.Tensor,
+        features_18: torch.Tensor,
+        sam_image_18: torch.Tensor,
+        score_18: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Prepare 36 and 18 windows independently, then pack into one attention core.
+
+        Each scale uses its own attn parameters (q/k/v proj, out_proj, norm).
+        Only the parameter-free attention core is shared across the packed batch.
+        """
+        pack_36 = attn_36.prepare_windows(
+            encoder_features=features_36,
+            sam_image_features=sam_image_36,
+            clip_score_embed=score_36,
+        )
+        pack_18 = attn_18.prepare_windows(
+            encoder_features=features_18,
+            sam_image_features=sam_image_18,
+            clip_score_embed=score_18,
+        )
+
+        q = torch.cat([pack_36.q, pack_18.q], dim=0)
+        k = torch.cat([pack_36.k, pack_18.k], dim=0)
+        v = torch.cat([pack_36.v, pack_18.v], dim=0)
+
+        attn_mask = self._cat_optional_attn_masks(
+            mask_36=pack_36.attn_mask,
+            mask_18=pack_18.attn_mask,
+            pack_36=pack_36,
+            pack_18=pack_18,
+        )
+
+        out = attn_36.attention_core(
+            q=q,
+            k=k,
+            v=v,
+            attn_mask=attn_mask,
+        )
+
+        out_36, out_18 = out.split(
+            [pack_36.num_windows, pack_18.num_windows],
+            dim=0,
+        )
+
+        features_36 = attn_36.finish_windows(out_36, pack_36)
+        features_18 = attn_18.finish_windows(out_18, pack_18)
+
+        return features_36, features_18
+
     def forward(
         self,
         encoder_features_72: torch.Tensor,
@@ -567,26 +793,28 @@ class MultiScaleImageScoreWindowAttention(nn.Module):
         clip_score_embed_36 = clip_score_embeds["scale_36"]
         clip_score_embed_18 = clip_score_embeds["scale_18"]
 
-        features_36 = self.attn_36_regular(
-            encoder_features=features_36,
-            sam_image_features=sam_image_last_36,
-            clip_score_embed=clip_score_embed_36,
-        )
-        features_36 = self.attn_36_shifted(
-            encoder_features=features_36,
-            sam_image_features=sam_image_last_36,
-            clip_score_embed=clip_score_embed_36,
+        # Regular stage — 36 and 18 packed into one attention core.
+        features_36, features_18 = self._run_packed_two_scale_stage(
+            attn_36=self.attn_36_regular,
+            attn_18=self.attn_18_regular,
+            features_36=features_36,
+            sam_image_36=sam_image_last_36,
+            score_36=clip_score_embed_36,
+            features_18=features_18,
+            sam_image_18=sam_image_last_18,
+            score_18=clip_score_embed_18,
         )
 
-        features_18 = self.attn_18_regular(
-            encoder_features=features_18,
-            sam_image_features=sam_image_last_18,
-            clip_score_embed=clip_score_embed_18,
-        )
-        features_18 = self.attn_18_shifted(
-            encoder_features=features_18,
-            sam_image_features=sam_image_last_18,
-            clip_score_embed=clip_score_embed_18,
+        # Shifted stage — 36 and 18 packed into one attention core.
+        features_36, features_18 = self._run_packed_two_scale_stage(
+            attn_36=self.attn_36_shifted,
+            attn_18=self.attn_18_shifted,
+            features_36=features_36,
+            sam_image_36=sam_image_last_36,
+            score_36=clip_score_embed_36,
+            features_18=features_18,
+            sam_image_18=sam_image_last_18,
+            score_18=clip_score_embed_18,
         )
 
         features_36_to_72 = self._upsample_36_to_72(

@@ -756,7 +756,29 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             core.backbone.eval()
             core.transformer.eval()
             core.geometry_encoder.eval()
+
+            # Keep the whole segmentation head in eval mode.
+            # Then selectively enable train mode for trainable submodules
+            # (pixel_decoder / semantic_seg_head) without touching
+            # cross_attend_prompt, instance_seg_head, or mask_predictor.
             core.segmentation_head.eval()
+
+            if not cfg.eval_mode:
+                pixel_decoder = getattr(
+                    core.segmentation_head, "pixel_decoder", None
+                )
+                if pixel_decoder is not None and any(
+                    p.requires_grad for p in pixel_decoder.parameters()
+                ):
+                    pixel_decoder.train()
+
+                semantic_seg_head = getattr(
+                    core.segmentation_head, "semantic_seg_head", None
+                )
+                if semantic_seg_head is not None and any(
+                    p.requires_grad for p in semantic_seg_head.parameters()
+                ):
+                    semantic_seg_head.train()
 
             # OpenCLIP image encoder — always frozen, always eval.
             clip_image_encoder = getattr(core, "clip_image_encoder", None)
@@ -786,8 +808,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 # dropout / layernorm statistics.
                 clip_text_encoder.eval()
 
-            # Encoder refiner is the only module that should be in
-            # train mode during training.
+            # Encoder refiner (and optionally seg head submodules)
+            # should be in train mode during training.
             if not cfg.eval_mode:
                 core.encoder_refiner.train()
 
