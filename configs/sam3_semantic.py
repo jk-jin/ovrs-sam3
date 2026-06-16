@@ -37,7 +37,7 @@ model = dict(
 
         hidden_dim=256,
 
-        clip_score_embed_dim=256,
+        clip_score_embed_dim=128,
         clip_score_conv_kernel=7,
 
         encoder_hw=72,
