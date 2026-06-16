@@ -18,6 +18,7 @@ from .config_dataclasses import (
     EncoderRefinerConfig,
     FreezeConfig,
     LoggerHookConfig,
+    MaskQueryRefinerConfig,
     OpenCLIPConfig,
     SegmentorBuildConfig,
     SemanticCriterionConfig,
@@ -178,6 +179,14 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         return cls._coerce_config(obj, EncoderRefinerConfig, "encoder_refiner_cfg")
 
     @classmethod
+    def _coerce_mask_query_refiner_cfg(cls, obj) -> MaskQueryRefinerConfig:
+        return cls._coerce_config(
+            obj,
+            MaskQueryRefinerConfig,
+            "mask_query_refiner_cfg",
+        )
+
+    @classmethod
     def _coerce_criterion_cfg(cls, obj) -> SemanticCriterionConfig:
         return cls._coerce_config(obj, SemanticCriterionConfig, "criterion_cfg")
 
@@ -191,6 +200,9 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         cfg.freeze_cfg = cls._coerce_freeze_cfg(cfg.freeze_cfg)
         cfg.openclip_cfg = cls._coerce_openclip_cfg(cfg.openclip_cfg)
         cfg.encoder_refiner_cfg = cls._coerce_encoder_refiner_cfg(cfg.encoder_refiner_cfg)
+        cfg.mask_query_refiner_cfg = cls._coerce_mask_query_refiner_cfg(
+            cfg.mask_query_refiner_cfg
+        )
         cfg.criterion_cfg = cls._coerce_criterion_cfg(cfg.criterion_cfg)
         cfg.adapter_cfg = cls._coerce_adapter_cfg(cfg.adapter_cfg)
         return cfg
@@ -201,6 +213,9 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         cfg = cls._normalize_build_cfg(cfg)
         cfg.openclip_cfg = cls.validate_openclip_cfg(cfg.openclip_cfg)
         cfg.encoder_refiner_cfg = cls.validate_encoder_refiner_cfg(cfg.encoder_refiner_cfg)
+        cfg.mask_query_refiner_cfg = cls.validate_mask_query_refiner_cfg(
+            cfg.mask_query_refiner_cfg
+        )
         return cfg
 
     @staticmethod
@@ -299,6 +314,55 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             raise ValueError(
                 "Current design requires encoder_refiner_cfg.clip_score_embed_dim "
                 f"to equal hidden_dim={cfg.hidden_dim}, got {cfg.clip_score_embed_dim}."
+            )
+
+        return cfg
+
+    @classmethod
+    def validate_mask_query_refiner_cfg(
+        cls,
+        cfg: MaskQueryRefinerConfig,
+    ) -> MaskQueryRefinerConfig:
+        cfg = cls._coerce_mask_query_refiner_cfg(cfg)
+
+        if cfg.num_queries <= 0:
+            raise ValueError(
+                f"mask_query_refiner_cfg.num_queries must be positive, got {cfg.num_queries}."
+            )
+
+        if cfg.num_heads <= 0:
+            raise ValueError(
+                f"mask_query_refiner_cfg.num_heads must be positive, got {cfg.num_heads}."
+            )
+
+        if cfg.attn_downsample <= 0:
+            raise ValueError(
+                "mask_query_refiner_cfg.attn_downsample must be positive."
+            )
+
+        if not 0.0 < cfg.mask_gate_floor <= 1.0:
+            raise ValueError(
+                "mask_query_refiner_cfg.mask_gate_floor must be in (0, 1]."
+            )
+
+        if cfg.mask_bias_scale < 0.0:
+            raise ValueError(
+                "mask_query_refiner_cfg.mask_bias_scale must be non-negative."
+            )
+
+        if cfg.query_pool_temperature <= 0.0:
+            raise ValueError(
+                "mask_query_refiner_cfg.query_pool_temperature must be positive."
+            )
+
+        if cfg.logit_scale_init <= 0.0:
+            raise ValueError(
+                "mask_query_refiner_cfg.logit_scale_init must be positive."
+            )
+
+        if cfg.logit_scale_max <= 0.0:
+            raise ValueError(
+                "mask_query_refiner_cfg.logit_scale_max must be positive."
             )
 
         return cfg
@@ -672,6 +736,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         input_geometry_encoder = cls._create_geometry_encoder()
 
         refiner_cfg = cfg.encoder_refiner_cfg
+        mask_query_cfg = cfg.mask_query_refiner_cfg
 
         model = Sam3Image(
             backbone=backbone,
@@ -702,6 +767,15 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             encoder_refiner_early_prompt_attention=bool(
                 refiner_cfg.early_prompt_attention
             ),
+            mask_query_num_queries=int(mask_query_cfg.num_queries),
+            mask_query_num_heads=int(mask_query_cfg.num_heads),
+            mask_query_dropout=float(mask_query_cfg.dropout),
+            mask_query_attn_downsample=int(mask_query_cfg.attn_downsample),
+            mask_query_gate_floor=float(mask_query_cfg.mask_gate_floor),
+            mask_query_bias_scale=float(mask_query_cfg.mask_bias_scale),
+            mask_query_pool_temperature=float(mask_query_cfg.query_pool_temperature),
+            mask_query_logit_scale_init=float(mask_query_cfg.logit_scale_init),
+            mask_query_logit_scale_max=float(mask_query_cfg.logit_scale_max),
             task_mode=TASK_MODE_SEMANTIC,
         )
 
@@ -762,15 +836,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             core.backbone.eval()
             core.transformer.eval()
             core.geometry_encoder.eval()
-
-            # segmentation_head: train/eval depends on whether it has trainable params.
-            if cfg.eval_mode:
-                core.segmentation_head.eval()
-            else:
-                if any(p.requires_grad for p in core.segmentation_head.parameters()):
-                    core.segmentation_head.train()
-                else:
-                    core.segmentation_head.eval()
+            core.segmentation_head.eval()
 
             # OpenCLIP image encoder — always frozen, always eval.
             clip_image_encoder = getattr(core, "clip_image_encoder", None)
@@ -800,10 +866,11 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 # dropout / layernorm statistics.
                 clip_text_encoder.eval()
 
-            # Encoder refiner and segmentation head submodules
-            # are the modules that should be in train mode during training.
+            # Encoder refiner is the only module that should be in
+            # train mode during training.
             if not cfg.eval_mode:
                 core.encoder_refiner.train()
+                core.mask_query_refiner.train()
 
         model.core.prompt_chunk_size = (
             None if cfg.prompt_chunk_size is None else int(cfg.prompt_chunk_size)

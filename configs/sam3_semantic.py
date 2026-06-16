@@ -49,18 +49,30 @@ model = dict(
         early_prompt_attention=False,
     ),
 
+    mask_query_refiner_cfg=dict(
+        num_queries=32,
+        num_heads=8,
+        dropout=0.1,
+
+        # Final mask 288×288 时，这里会得到 72×72 attention map。
+        attn_downsample=4,
+
+        # 更激进地压低低置信度初始 mask 区域。
+        mask_gate_floor=0.05,
+        mask_bias_scale=2.0,
+
+        # 训练和推理都用 logsumexp，不用 hard max。
+        query_pool_temperature=1.0,
+
+        logit_scale_init=5.0,
+        logit_scale_max=50.0,
+    ),
+
     freeze_cfg=dict(
         train_adapters_only=True,
         trainable_modules=[
             "core.encoder_refiner",
-
-            # Fine-tune SAM3 segmentation head semantic path.
-            "core.segmentation_head.pixel_decoder",
-            "core.segmentation_head.semantic_seg_head",
-
-            # Prompt cross-attention affects encoder_hidden_states before pixel decoding.
-            "core.segmentation_head.cross_attend_prompt",
-            "core.segmentation_head.cross_attn_norm",
+            "core.mask_query_refiner",
         ],
         frozen_modules=[],
         openclip_text_finetune="attention",
@@ -82,7 +94,7 @@ model = dict(
         # valid pixels keep full supervision;
         # ignore pixels get weaker suppression to avoid over-penalizing unlabeled regions.
         bce_valid_pixel_weight=1.0,
-        bce_ignore_pixel_weight=0.1,
+        bce_ignore_pixel_weight=0.05,
 
         eps=1e-6,
     ),
@@ -119,30 +131,13 @@ optim_wrapper = dict(
                     decay_mult=1.0,
                 ),
 
-                # SAM3 pixel decoder is pretrained; fine-tune conservatively.
-                "core.segmentation_head.pixel_decoder": dict(
-                    lr_mult=0.5,
+                "core.mask_query_refiner": dict(
+                    lr_mult=4.0,
                     decay_mult=1.0,
                 ),
 
-                # Semantic 1×1 head directly produces per-class logits.
-                "core.segmentation_head.semantic_seg_head": dict(
-                    lr_mult=2.0,
-                    decay_mult=1.0,
-                ),
-
-                # Prompt cross-attention is pretrained; fine-tune with small lr.
-                "core.segmentation_head.cross_attend_prompt": dict(
-                    lr_mult=0.5,
-                    decay_mult=1.0,
-                ),
-                "core.segmentation_head.cross_attn_norm": dict(
-                    lr_mult=0.5,
-                    decay_mult=0.0,
-                ),
-
-                # 1e-4 × 0.02 = 2e-6.
-                # Keep RSKT-style conservative CLIP text attention finetuning.
+                # 1e-4 × 0.02 = 2e-6
+                # Align with RSKT-Seg CLIP attention effective lr.
                 "core.clip_text_encoder": dict(
                     lr_mult=0.02,
                     decay_mult=0.0,
@@ -172,7 +167,7 @@ train_cfg = dict(
     eval_interval=20000,
     log_window_size=20,
     use_amp=True,
-    grad_clip_norm=0.05,
+    grad_clip_norm=0.01,
     monitor="semantic.miou",
     monitor_mode="max",
     max_keep_ckpts=20,

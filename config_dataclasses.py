@@ -51,6 +51,23 @@ class EncoderRefinerConfig:
 
 
 @dataclass
+class MaskQueryRefinerConfig:
+    num_queries: int = 32
+    num_heads: int = 8
+    dropout: float = 0.1
+
+    attn_downsample: int = 4
+
+    mask_gate_floor: float = 0.05
+    mask_bias_scale: float = 2.0
+
+    query_pool_temperature: float = 1.0
+
+    logit_scale_init: float = 5.0
+    logit_scale_max: float = 50.0
+
+
+@dataclass
 class SemanticCriterionConfig:
     ignore_index: int = 255
 
@@ -91,6 +108,9 @@ class SegmentorBuildConfig:
     freeze_cfg: FreezeConfig = field(default_factory=FreezeConfig)
     openclip_cfg: OpenCLIPConfig = field(default_factory=OpenCLIPConfig)
     encoder_refiner_cfg: EncoderRefinerConfig = field(default_factory=EncoderRefinerConfig)
+    mask_query_refiner_cfg: MaskQueryRefinerConfig = field(
+        default_factory=MaskQueryRefinerConfig
+    )
     criterion_cfg: SemanticCriterionConfig = field(
         default_factory=SemanticCriterionConfig
     )
