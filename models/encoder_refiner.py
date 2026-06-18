@@ -55,21 +55,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
         self.clip_dim = int(clip_dim)
-        self.score_embed_dim = int(score_embed_dim)
         self.num_query_tokens = int(num_query_tokens)
         self.use_checkpoint = bool(use_checkpoint)
-
-        # Centralized input normalization before all refiner attention layers.
-        self.sam_image_input_norm = nn.LayerNorm(self.hidden_dim)
-        self.sam_image_input_scale = nn.Parameter(torch.tensor(1.0))
-
-        self.clip_score_input_norm_18 = nn.LayerNorm(self.score_embed_dim)
-        self.clip_score_input_norm_36 = nn.LayerNorm(self.score_embed_dim)
-        self.clip_score_input_norm_72 = nn.LayerNorm(self.score_embed_dim)
-
-        self.clip_score_input_scale_18 = nn.Parameter(torch.tensor(2.0))
-        self.clip_score_input_scale_36 = nn.Parameter(torch.tensor(2.0))
-        self.clip_score_input_scale_72 = nn.Parameter(torch.tensor(2.0))
 
         self.query_extractor = EncoderQueryExtractor(
             hidden_dim=self.hidden_dim,
@@ -107,67 +94,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
             )
             for _ in range(int(fusion_layers))
         ])
-
-    # ------------------------------------------------------------------
-    # Centralized input normalization
-    # ------------------------------------------------------------------
-
-    def _normalize_sam_image_last(
-        self,
-        sam_image_last: torch.Tensor,
-    ) -> torch.Tensor:
-        """Normalize SAM image feature before all refiner attention layers.
-
-        LayerNorm over the channel dim: [B, D, H, W] → [B, H, W, D] → norm → back.
-        """
-        if sam_image_last.ndim != 4:
-            raise ValueError(
-                f"sam_image_last must be [B, D, H, W], got {tuple(sam_image_last.shape)}."
-            )
-        if int(sam_image_last.shape[1]) != int(self.hidden_dim):
-            raise ValueError(
-                f"sam_image_last channel mismatch: "
-                f"expected {self.hidden_dim}, got {sam_image_last.shape[1]}."
-            )
-
-        x = sam_image_last.permute(0, 2, 3, 1).contiguous()
-        x = self.sam_image_input_norm(x)
-        x = x.permute(0, 3, 1, 2).contiguous()
-
-        return self.sam_image_input_scale * x
-
-    def _normalize_clip_score_embed(
-        self,
-        score_embed: torch.Tensor,
-        norm: nn.LayerNorm,
-        scale: torch.Tensor,
-        expected_hw: tuple[int, int],
-        name: str,
-    ) -> torch.Tensor:
-        """Normalize CLIP score embedding before all refiner attention layers.
-
-        LayerNorm over the score_embed_dim: [B, C, D_score, H, W] → permute → norm → back.
-        """
-        if score_embed.ndim != 5:
-            raise ValueError(
-                f"{name} must be [B, C, D_score, H, W], got {tuple(score_embed.shape)}."
-            )
-        if int(score_embed.shape[2]) != int(norm.normalized_shape[0]):
-            raise ValueError(
-                f"{name} channel mismatch: "
-                f"expected {norm.normalized_shape[0]}, got {score_embed.shape[2]}."
-            )
-        if tuple(score_embed.shape[-2:]) != tuple(expected_hw):
-            raise ValueError(
-                f"{name} spatial size mismatch: "
-                f"expected {expected_hw}, got {tuple(score_embed.shape[-2:])}."
-            )
-
-        x = score_embed.permute(0, 1, 3, 4, 2).contiguous()
-        x = norm(x)
-        x = x.permute(0, 1, 4, 2, 3).contiguous()
-
-        return scale * x
 
     # ------------------------------------------------------------------
     # Forward
@@ -237,41 +163,11 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     f"clip_score_embeds[{key!r}] shape mismatch: "
                     f"expected {expected_shape}, got {tuple(score_embed.shape)}."
                 )
-        # ------------------------------------------------------------------
-        # Centralized input normalization before all refiner attention layers.
-        # ------------------------------------------------------------------
-
-        sam_image_last = self._normalize_sam_image_last(sam_image_last)
-
-        clip_score_embed_18 = self._normalize_clip_score_embed(
-            score_embed=clip_score_embeds["scale_18"],
-            norm=self.clip_score_input_norm_18,
-            scale=self.clip_score_input_scale_18,
-            expected_hw=(18, 18),
-            name="clip_score_embeds['scale_18']",
-        )
-        clip_score_embed_36 = self._normalize_clip_score_embed(
-            score_embed=clip_score_embeds["scale_36"],
-            norm=self.clip_score_input_norm_36,
-            scale=self.clip_score_input_scale_36,
-            expected_hw=(36, 36),
-            name="clip_score_embeds['scale_36']",
-        )
-        clip_score_embed_72 = self._normalize_clip_score_embed(
-            score_embed=clip_score_embeds["scale_72"],
-            norm=self.clip_score_input_norm_72,
-            scale=self.clip_score_input_scale_72,
-            expected_hw=(72, 72),
-            name="clip_score_embeds['scale_72']",
-        )
-
-        clip_score_embeds = {
-            "scale_18": clip_score_embed_18,
-            "scale_36": clip_score_embed_36,
-            "scale_72": clip_score_embed_72,
-        }
-
         refined_encoder_features_72 = encoder_features
+
+        clip_score_embed_18 = clip_score_embeds["scale_18"]
+        clip_score_embed_36 = clip_score_embeds["scale_36"]
+        clip_score_embed_72 = clip_score_embeds["scale_72"]
 
         for layer in self.layers:
             if self.use_checkpoint and self.training:

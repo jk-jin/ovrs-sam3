@@ -285,12 +285,12 @@ class ClipScoreEmbeddingBuilder(nn.Module):
             self.guided_up_18_to_36 = GuidedScoreUpsample(
                 score_dim=self.score_embed_dim,
                 guide_dim=self.score_embed_dim,
-                init_scale=0.05,
+                init_scale=0.0,
             )
             self.guided_up_36_to_72 = GuidedScoreUpsample(
                 score_dim=self.score_embed_dim,
                 guide_dim=self.score_embed_dim,
-                init_scale=0.05,
+                init_scale=0.0,
             )
         else:
             self.mid_proj_18 = None
