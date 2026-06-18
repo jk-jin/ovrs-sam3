@@ -109,7 +109,6 @@ class Sam3Image(torch.nn.Module):
             clip_text_encoder=self.clip_text_encoder,
             hidden_dim=int(encoder_refiner_hidden_dim),
             clip_dim=self.clip_align_dim,
-            clip_mid_dim=self.clip_image_native_dim,
             score_embed_dim=int(encoder_refiner_score_embed_dim),
             num_heads=int(encoder_refiner_num_heads),
             window_size=int(encoder_refiner_window_size),
@@ -673,7 +672,6 @@ class Sam3Image(torch.nn.Module):
             sam_text_mean=sam_text_mean,
             class_names=class_names,
             sam_image_last=sam_image_last_72,
-            clip_mid_features=clip_mid_features,
         )
 
         # For each chunk, write refined_encoder_features_72 back and call segmentation_head.

@@ -114,12 +114,12 @@ optim_wrapper = dict(
                 ),
 
                 "core.segmentation_head.pixel_decoder": dict(
-                    lr_mult=0.05,
+                    lr_mult=0.5,
                     decay_mult=1.0,
                 ),
 
                 "core.segmentation_head.semantic_seg_head": dict(
-                    lr_mult=0.5,
+                    lr_mult=2.0,
                     decay_mult=1.0,
                 ),
 
@@ -153,7 +153,7 @@ train_cfg = dict(
     eval_interval=20000,
     log_window_size=20,
     use_amp=True,
-    grad_clip_norm=0.02,
+    grad_clip_norm=0.05,
     monitor="semantic.miou",
     monitor_mode="max",
     max_keep_ckpts=20,
