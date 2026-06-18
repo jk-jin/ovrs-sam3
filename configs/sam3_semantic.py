@@ -23,14 +23,30 @@ model = dict(
         default_output="feat_map",
         image_intermediate_layers=[7, 15],
 
-        prompt_template="a remote sensing image of {}.",
+        prompt_templates=[
+            "a remote sensing image of {}.",
+            "a satellite image of {}.",
+            "an aerial image of {}.",
+            "a high-resolution remote sensing image of {}.",
+            "a top-down view of {}.",
+            "an overhead view of {}.",
+            "a cropped remote sensing image of {}.",
+            "a remote sensing scene containing {}.",
+            "a satellite scene containing {}.",
+            "an aerial scene containing {}.",
+            "a region of {} in a remote sensing image.",
+            "a land-cover area of {}.",
+            "a land-use region of {}.",
+            "a geographic area covered by {}.",
+            "a segmentation mask of {} in a remote sensing image.",
+            "the {} area in an overhead image.",
+        ],
         normalize_label_for_clip=True,
     ),
 
     encoder_refiner_cfg=dict(
         enabled=True,
 
-        num_query_tokens=32,
         fusion_layers=4,
         num_heads=8,
         dropout=0.1,

@@ -131,8 +131,6 @@ class SemanticSegAdapter(nn.Module):
         for key in (
             OUTPUT_KEYS.encoder_features,
             OUTPUT_KEYS.refined_encoder_features,
-            OUTPUT_KEYS.class_query_tokens,
-            OUTPUT_KEYS.dynamic_clip_text_features,
             OUTPUT_KEYS.clip_score_maps,
             OUTPUT_KEYS.clip_score_embed,
             OUTPUT_KEYS.clip_mid_features,

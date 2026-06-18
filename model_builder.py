@@ -237,10 +237,20 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         _ = cls._resolve_openclip_pretrained(openclip_cfg.pretrained)
 
-        if "{}" not in openclip_cfg.prompt_template:
+        templates = list(openclip_cfg.prompt_templates)
+
+        if len(templates) != 16:
             raise ValueError(
-                "openclip_cfg.prompt_template must contain '{}' placeholder."
+                f"openclip_cfg.prompt_templates must contain exactly 16 templates, "
+                f"got {len(templates)}."
             )
+
+        for i, tpl in enumerate(templates):
+            if "{}" not in str(tpl):
+                raise ValueError(
+                    f"openclip_cfg.prompt_templates[{i}] must contain '{{}}', "
+                    f"got {tpl!r}."
+                )
         return openclip_cfg
 
     @classmethod
@@ -261,11 +271,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         if cfg.num_heads <= 0:
             raise ValueError(
                 f"encoder_refiner_cfg.num_heads must be positive, got {cfg.num_heads}."
-            )
-
-        if cfg.num_query_tokens <= 0:
-            raise ValueError(
-                f"encoder_refiner_cfg.num_query_tokens must be positive, got {cfg.num_query_tokens}."
             )
 
         if cfg.window_size <= 0:
@@ -680,9 +685,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             matcher=None,
             clip_image_encoder=clip_image_encoder,
             clip_text_encoder=clip_text_encoder,
-            openclip_prompt_template=str(cfg.openclip_cfg.prompt_template),
+            openclip_prompt_templates=list(cfg.openclip_cfg.prompt_templates),
             normalize_label_for_clip=bool(cfg.openclip_cfg.normalize_label_for_clip),
-            encoder_refiner_num_query_tokens=int(refiner_cfg.num_query_tokens),
             encoder_refiner_fusion_layers=int(refiner_cfg.fusion_layers),
             encoder_refiner_num_heads=int(refiner_cfg.num_heads),
             encoder_refiner_dropout=float(refiner_cfg.dropout),
