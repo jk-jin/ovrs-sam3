@@ -23,24 +23,7 @@ class OpenCLIPConfig:
 
     image_intermediate_layers: list[int] = field(default_factory=lambda: [7, 15])
 
-    prompt_templates: list[str] = field(default_factory=lambda: [
-        "a remote sensing image of {}.",
-        "a satellite image of {}.",
-        "an aerial image of {}.",
-        "a high-resolution remote sensing image of {}.",
-        "a top-down view of {}.",
-        "an overhead view of {}.",
-        "a cropped remote sensing image of {}.",
-        "a remote sensing scene containing {}.",
-        "a satellite scene containing {}.",
-        "an aerial scene containing {}.",
-        "a region of {} in a remote sensing image.",
-        "a land-cover area of {}.",
-        "a land-use region of {}.",
-        "a geographic area covered by {}.",
-        "a segmentation mask of {} in a remote sensing image.",
-        "the {} area in an overhead image.",
-    ])
+    prompt_template: str = "a remote sensing image of {}."
     normalize_label_for_clip: bool = True
 
 
@@ -48,6 +31,7 @@ class OpenCLIPConfig:
 class EncoderRefinerConfig:
     enabled: bool = True
 
+    num_query_tokens: int = 32
     fusion_layers: int = 4
     num_heads: int = 8
     dropout: float = 0.1

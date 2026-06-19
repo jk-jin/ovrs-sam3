@@ -227,6 +227,23 @@ class OpenCLIPTextEncoder(nn.Module):
         name = name.replace("_", " ").replace("-", " ")
         return " ".join(name.split())
 
+    @classmethod
+    def _build_prompt_texts(
+        cls,
+        class_names: List[str],
+        prompt_template: str,
+        normalize_label: bool = True,
+    ) -> List[str]:
+        if "{}" not in str(prompt_template):
+            raise ValueError(
+                f"prompt_template must contain '{{}}', got {prompt_template!r}"
+            )
+        texts = []
+        for name in class_names:
+            label = cls._normalize_class_name(name) if normalize_label else str(name)
+            texts.append(str(prompt_template).format(label))
+        return texts
+
     def clear_prompt_cache(self) -> None:
         self._prompt_feature_cache.clear()
 
@@ -238,11 +255,11 @@ class OpenCLIPTextEncoder(nn.Module):
     ) -> tuple:
         return (tuple(texts), str(device), bool(normalize))
 
-    def encode_prompt_templates(
+    def encode_class_prompts(
         self,
         class_names: List[str],
-        templates: List[str],
-        device: Optional[torch.device] = None,
+        prompt_template: str,
+        device: torch.device,
         normalize_label: bool = True,
         normalize: bool = True,
         use_cache: bool = False,
@@ -250,11 +267,11 @@ class OpenCLIPTextEncoder(nn.Module):
         use_checkpoint: bool = False,
     ) -> torch.Tensor:
         """
-        Encode C classes each with T prompt templates.
+        Encode class names with a prompt template.
 
         Args:
             class_names:    list of class names, length C
-            templates:      list of prompt templates, length T (default 16)
+            prompt_template: "a remote sensing image of {}."
             device:         target device
             normalize_label: replace '_' and '-' with spaces
             normalize:      L2-normalize projected features
@@ -263,44 +280,25 @@ class OpenCLIPTextEncoder(nn.Module):
             use_checkpoint: wrap transformer forward in activation checkpoint
 
         Returns:
-            text_features: [C, T, D_clip]
-
-        C = class count, T = template count, D_clip = CLIP alignment dim.
+            base_clip_text: [C, D_clip]
         """
         if len(class_names) == 0:
             raise ValueError("class_names is empty.")
-        if len(templates) == 0:
-            raise ValueError("templates is empty.")
 
-        for i, tpl in enumerate(templates):
-            if "{}" not in tpl:
-                raise ValueError(
-                    f"templates[{i}] must contain '{{}}', got {tpl!r}."
-                )
-
-        flat_texts: List[str] = []
-        for name in class_names:
-            label = self._normalize_class_name(name) if normalize_label else str(name)
-            for tpl in templates:
-                flat_texts.append(tpl.format(label))
-
-        num_classes = len(class_names)
-        num_templates = len(templates)
+        texts = self._build_prompt_texts(
+            class_names=class_names,
+            prompt_template=prompt_template,
+            normalize_label=normalize_label,
+        )
 
         cache_key = self._make_prompt_cache_key(
-            texts=flat_texts, device=torch.device(device) if device is not None else torch.device("cpu"),
-            normalize=normalize,
+            texts=texts, device=device, normalize=normalize,
         )
 
         if use_cache and cache_key in self._prompt_feature_cache:
-            pooled = self._prompt_feature_cache[cache_key]
-            if device is not None:
-                pooled = pooled.to(device=device)
-            return pooled.view(num_classes, num_templates, self.output_dim)
+            return self._prompt_feature_cache[cache_key].to(device=device)
 
-        tokenized = self.tokenizer(flat_texts, context_length=self.context_length)
-        if device is not None:
-            tokenized = tokenized.to(device)
+        tokenized = self.tokenizer(texts, context_length=self.context_length).to(device)
 
         def _encode_from_tokens(tokens: torch.Tensor) -> torch.Tensor:
             input_embeds = self.token_embedding(tokens)
@@ -313,21 +311,76 @@ class OpenCLIPTextEncoder(nn.Module):
 
         if use_cache:
             with torch.no_grad():
-                pooled = _encode_from_tokens(tokenized)
-            pooled = pooled.detach().contiguous()
-            self._prompt_feature_cache[cache_key] = pooled
+                base_text = _encode_from_tokens(tokenized)
+            base_text = base_text.detach().contiguous()
+            self._prompt_feature_cache[cache_key] = base_text
+            return base_text.to(device=device)
+
+        if use_checkpoint:
+            base_text = checkpoint(
+                _encode_from_tokens, tokenized, use_reentrant=False,
+            )
         else:
-            if use_checkpoint:
-                pooled = checkpoint(
-                    _encode_from_tokens, tokenized, use_reentrant=False,
-                )
-            else:
-                pooled = _encode_from_tokens(tokenized)
+            base_text = _encode_from_tokens(tokenized)
 
         if detach_output:
-            pooled = pooled.detach()
+            base_text = base_text.detach()
 
-        return pooled.view(num_classes, num_templates, self.output_dim)
+        return base_text
+
+    def encode_prompt_templates(
+        self,
+        class_names: List[str],
+        templates: List[str],
+        device: Optional[torch.device] = None,
+        normalize_label: bool = True,
+        normalize: bool = False,
+    ) -> torch.Tensor:
+        """
+        Args:
+            class_names: 类别名列表，长度为 C
+            templates: prompt 模板列表，长度为 K
+            normalize_label: 是否把类别名里的 '_'、'-' 替换成空格
+            normalize: 是否对投影后的文本向量做 L2 normalize
+
+        Returns:
+            pooled: [C, K, output_dim]
+
+        符号说明：
+            C 表示类别数。
+            K 表示每个类别使用的模板数量。
+            output_dim 表示 OpenCLIP 图文对齐空间维度。
+        """
+        if len(class_names) == 0:
+            raise ValueError("class_names is empty.")
+        if len(templates) == 0:
+            raise ValueError("templates is empty.")
+
+        def normalize_name(x: str) -> str:
+            x = x.strip()
+            if normalize_label:
+                x = x.replace("_", " ").replace("-", " ")
+                x = " ".join(x.split())
+            return x
+
+        flat_texts = []
+        for name in class_names:
+            name = normalize_name(name)
+            for tpl in templates:
+                flat_texts.append(tpl.format(name))
+
+        _, pooled, _ = self.encode_text(
+            text=flat_texts,
+            device=device,
+            output_mode="pooled",
+            normalize=normalize,
+        )
+
+        num_classes = len(class_names)
+        num_templates = len(templates)
+
+        pooled = pooled.view(num_classes, num_templates, self.output_dim)
+        return pooled
 
     def forward(
         self,
