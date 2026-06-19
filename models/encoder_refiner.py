@@ -4,33 +4,35 @@ from typing import List, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 from .clip_prompt_encoder import SingleTokenClipPromptEncoder
-from .clip_score_embedding import ClipScoreEmbeddingBuilder
+from .clip_score_embedding import ClipScoreEmbeddingBuilder18
 from .encoder_query_extractor import EncoderQueryExtractor
-from .encoder_refiner_attention import EncoderRefinerLayer
+from .encoder_refiner_blocks import (
+    FeatureDownsampler72To18,
+    LowResRefinerLayer18,
+    safe_group_norm,
+)
+from .guided_refiner_upsampler import GuidedRefinerUpsampler
 
 
-class ClassConditionedEncoderRefiner(nn.Module):
+class LowResGuidedEncoderRefiner(nn.Module):
     """
-    Multi-layer encoder feature refiner with multi-scale spatial window attention.
+    Low-resolution (18×18) encoder feature refiner with guided upsampling.
 
-    All sub-modules are created eagerly in __init__ so that parameters are
-    visible to apply_freeze_cfg and the optimizer before the first forward.
+    Flow:
+        encoder_features_72 [B, C, D, 72, 72]
+        → FeatureDownsampler72To18 → encoder_features_18 [B, C, D, 18, 18]
 
-    Inputs (forward):
-        encoder_features:   [B, C, D, H, W]
-        clip_image_feat_map: [B, D_clip, Hc, Wc]
-        class_names:        list of C strings
-        sam_image_last:     [B, D, H, W]
+        → EncoderQueryExtractor → class_query_tokens [B, C, Q, D]
+        → SingleTokenClipPromptEncoder → dynamic_clip_text [B, C, Q, D_clip]
+        → ClipScoreEmbeddingBuilder18 → clip_score_embed_18, clip_score_maps_18
 
-    Output (forward):
-        refined_encoder_features: [B, C, D, 72, 72]
-        class_query_tokens:       [B, C, Q, D]
-        dynamic_clip_text:        [B, C, Q, D_clip]
-        clip_score_embeds:        {"scale_18": ..., "scale_36": ..., "scale_72": ...}
-        clip_score_maps_18:       [B, C, Q, 18, 18]
+        → N × LowResRefinerLayer18 (class attention + clip-guided window attention)
+        → GuidedRefinerUpsampler (18→36→72, guided by sam_image + CLIP mid layers)
+        → refined_encoder_features_72 [B, C, D, 72, 72]
     """
 
     def __init__(
@@ -38,7 +40,9 @@ class ClassConditionedEncoderRefiner(nn.Module):
         clip_text_encoder,
         hidden_dim: int = 256,
         clip_dim: int = 768,
+        clip_native_dim: int = 1024,
         score_embed_dim: int = 128,
+        guidance_embed_dim: int = 128,
         num_heads: int = 8,
         window_size: int = 9,
         shift_size: int = 4,
@@ -48,7 +52,11 @@ class ClassConditionedEncoderRefiner(nn.Module):
         prompt_template: str = "a remote sensing image of {}.",
         normalize_label_for_clip: bool = True,
         score_conv_kernel: int = 7,
-        score_base_hw: int = 18,
+        encoder_hw: int = 72,
+        refiner_hw: int = 18,
+        upsample_mid_hw: int = 36,
+        upsample_clip_layer_36: int = 15,
+        upsample_clip_layer_72: int = 7,
         use_checkpoint: bool = True,
     ):
         super().__init__()
@@ -56,7 +64,13 @@ class ClassConditionedEncoderRefiner(nn.Module):
         self.clip_dim = int(clip_dim)
         self.num_query_tokens = int(num_query_tokens)
         self.use_checkpoint = bool(use_checkpoint)
+        self.refiner_hw = int(refiner_hw)
+        self.guidance_embed_dim = int(guidance_embed_dim)
 
+        # Downsample: 72×72 → 18×18
+        self.downsample_72_to_18 = FeatureDownsampler72To18(hidden_dim=self.hidden_dim)
+
+        # Query extractor (operates on 18×18 features)
         self.query_extractor = EncoderQueryExtractor(
             hidden_dim=self.hidden_dim,
             num_query_tokens=self.num_query_tokens,
@@ -64,6 +78,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
             dropout=float(dropout),
         )
 
+        # CLIP text prompt encoder
         self.clip_prompt_encoder = SingleTokenClipPromptEncoder(
             clip_text_encoder=clip_text_encoder,
             prompt_template=str(prompt_template),
@@ -73,18 +88,28 @@ class ClassConditionedEncoderRefiner(nn.Module):
             num_attention_heads=int(num_heads),
         )
 
-        self.score_builder = ClipScoreEmbeddingBuilder(
+        # CLIP score embedding builder (18×18 only)
+        self.score_builder = ClipScoreEmbeddingBuilder18(
             clip_output_dim=int(clip_dim),
             score_embed_dim=int(score_embed_dim),
             num_query_tokens=self.num_query_tokens,
             conv_kernel=int(score_conv_kernel),
-            base_hw=int(score_base_hw),
+            base_hw=self.refiner_hw,
         )
 
+        # CLIP final projection for 18×18 guidance
+        self.clip_final_proj_18 = nn.Sequential(
+            nn.Conv2d(self.clip_dim, self.guidance_embed_dim, kernel_size=1, bias=False),
+            safe_group_norm(self.guidance_embed_dim),
+            nn.GELU(),
+        )
+
+        # Refiner layers (all at 18×18)
         self.layers = nn.ModuleList([
-            EncoderRefinerLayer(
+            LowResRefinerLayer18(
                 hidden_dim=self.hidden_dim,
                 score_embed_dim=int(score_embed_dim),
+                guidance_embed_dim=self.guidance_embed_dim,
                 num_heads=int(num_heads),
                 window_size=int(window_size),
                 shift_size=int(shift_size),
@@ -93,104 +118,132 @@ class ClassConditionedEncoderRefiner(nn.Module):
             for _ in range(int(fusion_layers))
         ])
 
+        # Guided upsampler: 18→36→72
+        self.upsampler = GuidedRefinerUpsampler(
+            hidden_dim=self.hidden_dim,
+            clip_native_dim=int(clip_native_dim),
+            guidance_embed_dim=self.guidance_embed_dim,
+            num_heads=int(num_heads),
+            window_size=int(window_size),
+            shift_size=int(shift_size),
+            dropout=float(dropout),
+            upsample_clip_layer_36=int(upsample_clip_layer_36),
+            upsample_clip_layer_72=int(upsample_clip_layer_72),
+        )
+
     # ------------------------------------------------------------------
     # Forward
     # ------------------------------------------------------------------
 
     def forward(
         self,
-        encoder_features: torch.Tensor,
+        encoder_features_72: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
+        clip_mid_features: list[torch.Tensor],
+        clip_mid_layer_indices: tuple[int, ...],
         sam_text_mean: torch.Tensor,
         class_names: List[str],
-        sam_image_last: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor], torch.Tensor]:
+        sam_image_last_72: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Returns:
             refined_encoder_features_72: [B, C, D, 72, 72]
             class_query_tokens:          [B, C, Q, D]
             dynamic_clip_text:           [B, C, Q, D_clip]
-            clip_score_embeds:           dict of 3-scale score embeddings
+            clip_score_embed_18:         [B, C, D_score, 18, 18]
             clip_score_maps_18:          [B, C, Q, 18, 18]
         """
-        batch_size, num_classes, hidden_dim, height, width = encoder_features.shape
+        B, C, D, H, W = encoder_features_72.shape
 
-        if (height, width) != (72, 72):
+        if (H, W) != (72, 72):
             raise ValueError(
-                f"ClassConditionedEncoderRefiner expects 72x72 encoder features, "
-                f"got {(height, width)}."
+                f"LowResGuidedEncoderRefiner expects 72×72 encoder features, "
+                f"got {(H, W)}."
             )
-
-        if tuple(sam_text_mean.shape) != (batch_size, num_classes, hidden_dim):
+        if tuple(sam_text_mean.shape) != (B, C, D):
             raise ValueError(
-                f"sam_text_mean must be [{batch_size}, {num_classes}, {hidden_dim}], "
+                f"sam_text_mean must be [{B}, {C}, {D}], "
                 f"got {tuple(sam_text_mean.shape)}."
             )
+        if len(class_names) != C:
+            raise ValueError(
+                f"class_names length mismatch: expected {C}, got {len(class_names)}."
+            )
+        if clip_image_feat_map.ndim != 4:
+            raise ValueError(
+                f"clip_image_feat_map must be 4D, got {clip_image_feat_map.ndim}D."
+            )
+        if len(clip_mid_features) != len(clip_mid_layer_indices):
+            raise ValueError(
+                f"clip_mid_features and clip_mid_layer_indices must have same length, "
+                f"got {len(clip_mid_features)} vs {len(clip_mid_layer_indices)}."
+            )
+        if tuple(sam_image_last_72.shape) != (B, D, 72, 72):
+            raise ValueError(
+                f"sam_image_last_72 must be [{B}, {D}, 72, 72], "
+                f"got {tuple(sam_image_last_72.shape)}."
+            )
 
-        class_query_tokens = self.query_extractor(encoder_features)
+        # Downsample 72 → 18
+        encoder_features_18 = self.downsample_72_to_18(encoder_features_72)
 
+        # Extract class query tokens from 18×18 features
+        class_query_tokens = self.query_extractor(encoder_features_18)
+
+        # Build dynamic CLIP text
         dynamic_clip_text = self.clip_prompt_encoder(
             class_query_tokens=class_query_tokens,
             class_names=class_names,
             clip_image_feat_map=clip_image_feat_map,
         )
 
-        clip_score_embeds, clip_score_maps_18 = self.score_builder(
+        # Build 18×18 CLIP score embedding
+        clip_score_embed_18, clip_score_maps_18 = self.score_builder(
             dynamic_clip_text=dynamic_clip_text,
             clip_image_feat_map=clip_image_feat_map,
         )
 
-        # Validate score embedding shapes.
-        for key, expected_hw in {
-            "scale_18": (18, 18),
-            "scale_36": (36, 36),
-            "scale_72": (72, 72),
-        }.items():
-            score_embed = clip_score_embeds[key]
-            expected_shape = (
-                batch_size,
-                num_classes,
-                self.score_builder.score_embed_dim,
-                expected_hw[0],
-                expected_hw[1],
-            )
-            if tuple(score_embed.shape) != expected_shape:
-                raise ValueError(
-                    f"clip_score_embeds[{key!r}] shape mismatch: "
-                    f"expected {expected_shape}, got {tuple(score_embed.shape)}."
-                )
-        refined_encoder_features_72 = encoder_features
+        # Pre-compute CLIP final guidance for 18×18 refiner layers
+        clip_final_18 = F.interpolate(
+            clip_image_feat_map,
+            size=(self.refiner_hw, self.refiner_hw),
+            mode="bilinear",
+            align_corners=False,
+        )
+        clip_final_guidance_18 = self.clip_final_proj_18(clip_final_18)
 
-        clip_score_embed_18 = clip_score_embeds["scale_18"]
-        clip_score_embed_36 = clip_score_embeds["scale_36"]
-        clip_score_embed_72 = clip_score_embeds["scale_72"]
-
+        # Run low-res refiner layers
+        x = encoder_features_18
         for layer in self.layers:
             if self.use_checkpoint and self.training:
-                refined_encoder_features_72 = checkpoint(
+                x = checkpoint(
                     layer,
-                    refined_encoder_features_72,
+                    x,
                     sam_text_mean,
-                    sam_image_last,
                     clip_score_embed_18,
-                    clip_score_embed_36,
-                    clip_score_embed_72,
+                    clip_final_guidance_18,
                     use_reentrant=False,
                 )
             else:
-                refined_encoder_features_72 = layer(
-                    encoder_features_72=refined_encoder_features_72,
+                x = layer(
+                    encoder_features_18=x,
                     sam_text_mean=sam_text_mean,
-                    sam_image_last_72=sam_image_last,
                     clip_score_embed_18=clip_score_embed_18,
-                    clip_score_embed_36=clip_score_embed_36,
-                    clip_score_embed_72=clip_score_embed_72,
+                    clip_final_guidance_18=clip_final_guidance_18,
                 )
+
+        # Guided upsample: 18 → 36 → 72
+        refined_encoder_features_72 = self.upsampler(
+            refined_features_18=x,
+            sam_image_last_72=sam_image_last_72,
+            clip_mid_features=clip_mid_features,
+            clip_mid_layer_indices=clip_mid_layer_indices,
+        )
 
         return (
             refined_encoder_features_72,
             class_query_tokens,
             dynamic_clip_text,
-            clip_score_embeds,
+            clip_score_embed_18,
             clip_score_maps_18,
         )

@@ -23,10 +23,12 @@ class ModelOutputKeys:
     # Encoder feature refiner outputs
     encoder_features: str = "encoder_features"
     refined_encoder_features: str = "refined_encoder_features"
+    refined_encoder_features_18: str = "refined_encoder_features_18"
+    refined_encoder_features_36: str = "refined_encoder_features_36"
     class_query_tokens: str = "class_query_tokens"
     dynamic_clip_text_features: str = "dynamic_clip_text_features"
     clip_score_maps: str = "clip_score_maps"
-    clip_score_embed: str = "clip_score_embed"
+    clip_score_embed_18: str = "clip_score_embed_18"
     clip_mid_features: str = "clip_mid_features"
 
 

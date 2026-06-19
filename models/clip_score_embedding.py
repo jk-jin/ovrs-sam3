@@ -7,20 +7,18 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class ClipScoreEmbeddingBuilder(nn.Module):
+class ClipScoreEmbeddingBuilder18(nn.Module):
     """
-    Build 3-scale CLIP score embeddings from dynamic CLIP text and image feature map.
+    Build 18×18 CLIP score embedding from dynamic CLIP text and image feature map.
 
     Input:
-        dynamic_clip_text: [B, C, Q, D_clip]
+        dynamic_clip_text:  [B, C, Q, D_clip]
         clip_image_feat_map: [B, D_clip, Hc, Wc]  (Hc=Wc=16 for ViT-L/14)
 
     Flow:
         clip_image_feat_map → bilinear to 18×18
         → text-image dot product → score_maps_18: [B, C, Q, 18, 18]
-        → Conv2d(Q → D_score, 7×7)          → score_embed_18: [B, C, D_score, 18, 18]
-        → ConvTranspose2d ×1 (learnable 2×)  → score_embed_36: [B, C, D_score, 36, 36]
-        → ConvTranspose2d ×1 (learnable 2×)  → score_embed_72: [B, C, D_score, 72, 72]
+        → Conv2d(Q → D_score, 7×7) → score_embed_18: [B, C, D_score, 18, 18]
     """
 
     def __init__(
@@ -42,7 +40,7 @@ class ClipScoreEmbeddingBuilder(nn.Module):
         if self.score_embed_dim % num_groups != 0:
             num_groups = 1
 
-        self.score_conv_18 = nn.Sequential(
+        self.score_conv = nn.Sequential(
             nn.Conv2d(
                 self.num_query_tokens,
                 self.score_embed_dim,
@@ -55,50 +53,19 @@ class ClipScoreEmbeddingBuilder(nn.Module):
             nn.GELU(),
         )
 
-        self.score_up_18_to_36 = nn.Sequential(
-            nn.ConvTranspose2d(
-                self.score_embed_dim,
-                self.score_embed_dim,
-                kernel_size=4,
-                stride=2,
-                padding=1,
-                bias=False,
-            ),
-            nn.GroupNorm(num_groups, self.score_embed_dim),
-            nn.GELU(),
-        )
-
-        self.score_up_36_to_72 = nn.Sequential(
-            nn.ConvTranspose2d(
-                self.score_embed_dim,
-                self.score_embed_dim,
-                kernel_size=4,
-                stride=2,
-                padding=1,
-                bias=False,
-            ),
-            nn.GroupNorm(num_groups, self.score_embed_dim),
-            nn.GELU(),
-        )
-
     def forward(
         self,
         dynamic_clip_text: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
-    ) -> Tuple[dict[str, torch.Tensor], torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             dynamic_clip_text:  [B, C, Q, D_clip]
             clip_image_feat_map: [B, D_clip, Hc, Wc]
 
         Returns:
-            clip_score_embeds:
-                {
-                    "scale_18": [B, C, D_score, 18, 18],
-                    "scale_36": [B, C, D_score, 36, 36],
-                    "scale_72": [B, C, D_score, 72, 72],
-                }
-            clip_score_maps_18: [B, C, Q, 18, 18]
+            clip_score_embed_18: [B, C, D_score, 18, 18]
+            clip_score_maps_18:  [B, C, Q, 18, 18]
         """
         batch_size, num_classes, num_queries, clip_dim = dynamic_clip_text.shape
         image_batch_size, image_clip_dim, _, _ = clip_image_feat_map.shape
@@ -162,7 +129,7 @@ class ClipScoreEmbeddingBuilder(nn.Module):
             self.base_hw,
         ) * 20.0
 
-        score_embed_18_flat = self.score_conv_18(
+        score_embed_flat = self.score_conv(
             score_maps_18.reshape(
                 batch_size * num_classes,
                 num_queries,
@@ -171,10 +138,7 @@ class ClipScoreEmbeddingBuilder(nn.Module):
             )
         )
 
-        score_embed_36_flat = self.score_up_18_to_36(score_embed_18_flat)
-        score_embed_72_flat = self.score_up_36_to_72(score_embed_36_flat)
-
-        clip_score_embed_18 = score_embed_18_flat.reshape(
+        clip_score_embed_18 = score_embed_flat.reshape(
             batch_size,
             num_classes,
             self.score_embed_dim,
@@ -182,24 +146,4 @@ class ClipScoreEmbeddingBuilder(nn.Module):
             self.base_hw,
         ).contiguous()
 
-        clip_score_embed_36 = score_embed_36_flat.reshape(
-            batch_size,
-            num_classes,
-            self.score_embed_dim,
-            self.base_hw * 2,
-            self.base_hw * 2,
-        ).contiguous()
-
-        clip_score_embed_72 = score_embed_72_flat.reshape(
-            batch_size,
-            num_classes,
-            self.score_embed_dim,
-            self.base_hw * 4,
-            self.base_hw * 4,
-        ).contiguous()
-
-        return {
-            "scale_18": clip_score_embed_18,
-            "scale_36": clip_score_embed_36,
-            "scale_72": clip_score_embed_72,
-        }, score_maps_18.contiguous()
+        return clip_score_embed_18, score_maps_18.contiguous()

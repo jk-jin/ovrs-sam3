@@ -30,23 +30,34 @@ model = dict(
     encoder_refiner_cfg=dict(
         enabled=True,
 
+        # low-res refiner
         num_query_tokens=32,
         fusion_layers=4,
         num_heads=8,
         dropout=0.1,
-
         hidden_dim=256,
 
+        # resolution
+        encoder_hw=72,
+        refiner_hw=18,
+        upsample_mid_hw=36,
+
+        # clip score at 18×18
         clip_score_embed_dim=128,
         clip_score_conv_kernel=7,
 
-        encoder_hw=72,
-        score_base_hw=18,
+        # projected guidance feature dim used in q/k concat
+        guidance_embed_dim=128,
+
+        # window attention
         window_size=9,
         shift_size=4,
 
+        # CLIP mid layers used by guided upsampler
+        upsample_clip_layer_36=15,
+        upsample_clip_layer_72=7,
+
         use_checkpoint=True,
-        early_prompt_attention=False,
     ),
 
     freeze_cfg=dict(

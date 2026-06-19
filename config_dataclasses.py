@@ -38,16 +38,27 @@ class EncoderRefinerConfig:
 
     hidden_dim: int = 256
 
+    # resolution
+    encoder_hw: int = 72
+    refiner_hw: int = 18
+    upsample_mid_hw: int = 36
+
+    # clip score at 18×18
     clip_score_embed_dim: int = 32
     clip_score_conv_kernel: int = 7
 
-    encoder_hw: int = 72
-    score_base_hw: int = 18
+    # projected guidance feature dim used in q/k concat
+    guidance_embed_dim: int = 128
+
+    # window attention
     window_size: int = 9
     shift_size: int = 4
 
+    # CLIP mid layers used by guided upsampler
+    upsample_clip_layer_36: int = 15
+    upsample_clip_layer_72: int = 7
+
     use_checkpoint: bool = True
-    early_prompt_attention: bool = False
 
 
 @dataclass
