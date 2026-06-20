@@ -9,7 +9,7 @@ class EncoderQueryExtractor(nn.Module):
     Extract per-class query tokens from encoder visual features.
 
     Input:
-        e: [B, C, D, H, W]  — encoder visual features at any spatial resolution
+        e: [B, C, D, H, W]  — encoder last-layer visual features
 
     Output:
         class_query_tokens: [B, C, Q, D]

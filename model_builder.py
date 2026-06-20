@@ -201,21 +201,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         cfg = cls._normalize_build_cfg(cfg)
         cfg.openclip_cfg = cls.validate_openclip_cfg(cfg.openclip_cfg)
         cfg.encoder_refiner_cfg = cls.validate_encoder_refiner_cfg(cfg.encoder_refiner_cfg)
-
-        # Cross-validate: CLIP intermediate layers must include upsampler requirements.
-        required_mid_layers = {
-            int(cfg.encoder_refiner_cfg.upsample_clip_layer_36),
-            int(cfg.encoder_refiner_cfg.upsample_clip_layer_72),
-        }
-        available_mid_layers = set(int(x) for x in cfg.openclip_cfg.image_intermediate_layers)
-        missing = required_mid_layers - available_mid_layers
-        if missing:
-            raise ValueError(
-                f"openclip_cfg.image_intermediate_layers must include "
-                f"{sorted(required_mid_layers)} for guided upsampler, "
-                f"missing {sorted(missing)}."
-            )
-
         return cfg
 
     @staticmethod
@@ -294,55 +279,20 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         if cfg.encoder_hw != 72:
             raise ValueError(
-                "Current guided refiner requires encoder_refiner_cfg.encoder_hw=72, "
+                "Current multi-scale refiner requires encoder_refiner_cfg.encoder_hw=72, "
                 f"got {cfg.encoder_hw}."
             )
 
-        if cfg.refiner_hw != 18:
+        if cfg.score_base_hw != 18:
             raise ValueError(
-                "Current guided refiner requires encoder_refiner_cfg.refiner_hw=18, "
-                f"got {cfg.refiner_hw}."
+                "Current multi-scale refiner requires encoder_refiner_cfg.score_base_hw=18 "
+                f"because score embeddings are expected at 18/36/72, got {cfg.score_base_hw}."
             )
 
-        if cfg.upsample_mid_hw != 36:
+        if cfg.score_base_hw * 4 != cfg.encoder_hw:
             raise ValueError(
-                "Current guided upsampler requires encoder_refiner_cfg.upsample_mid_hw=36, "
-                f"got {cfg.upsample_mid_hw}."
-            )
-
-        if cfg.refiner_hw * 4 != cfg.encoder_hw:
-            raise ValueError(
-                "Current guided refiner requires refiner_hw * 4 == encoder_hw, "
-                f"got refiner_hw={cfg.refiner_hw}, encoder_hw={cfg.encoder_hw}."
-            )
-
-        if cfg.refiner_hw * 2 != cfg.upsample_mid_hw:
-            raise ValueError(
-                "Current guided upsampler requires refiner_hw * 2 == upsample_mid_hw, "
-                f"got refiner_hw={cfg.refiner_hw}, upsample_mid_hw={cfg.upsample_mid_hw}."
-            )
-
-        if cfg.upsample_mid_hw * 2 != cfg.encoder_hw:
-            raise ValueError(
-                "Current guided upsampler requires upsample_mid_hw * 2 == encoder_hw, "
-                f"got upsample_mid_hw={cfg.upsample_mid_hw}, encoder_hw={cfg.encoder_hw}."
-            )
-
-        if cfg.window_size != 9:
-            raise ValueError(
-                "Current design expects window_size=9, "
-                f"got {cfg.window_size}."
-            )
-
-        if cfg.shift_size != 4:
-            raise ValueError(
-                "Current design expects shift_size=4, "
-                f"got {cfg.shift_size}."
-            )
-
-        if cfg.guidance_embed_dim <= 0:
-            raise ValueError(
-                f"encoder_refiner_cfg.guidance_embed_dim must be positive, got {cfg.guidance_embed_dim}."
+                "Current score pyramid requires score_base_hw * 4 == encoder_hw, "
+                f"got score_base_hw={cfg.score_base_hw}, encoder_hw={cfg.encoder_hw}."
             )
 
         return cfg
@@ -739,14 +689,13 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             encoder_refiner_hidden_dim=int(refiner_cfg.hidden_dim),
             encoder_refiner_score_embed_dim=int(refiner_cfg.clip_score_embed_dim),
             encoder_refiner_conv_kernel=int(refiner_cfg.clip_score_conv_kernel),
-            encoder_refiner_refiner_hw=int(refiner_cfg.refiner_hw),
-            encoder_refiner_upsample_mid_hw=int(refiner_cfg.upsample_mid_hw),
-            encoder_refiner_guidance_embed_dim=int(refiner_cfg.guidance_embed_dim),
+            encoder_refiner_score_base_hw=int(refiner_cfg.score_base_hw),
             encoder_refiner_window_size=int(refiner_cfg.window_size),
             encoder_refiner_shift_size=int(refiner_cfg.shift_size),
-            encoder_refiner_upsample_clip_layer_36=int(refiner_cfg.upsample_clip_layer_36),
-            encoder_refiner_upsample_clip_layer_72=int(refiner_cfg.upsample_clip_layer_72),
             encoder_refiner_use_checkpoint=bool(refiner_cfg.use_checkpoint),
+            encoder_refiner_early_prompt_attention=bool(
+                refiner_cfg.early_prompt_attention
+            ),
             task_mode=TASK_MODE_SEMANTIC,
         )
 
