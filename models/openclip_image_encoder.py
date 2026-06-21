@@ -365,6 +365,9 @@ class OpenCLIPImageEncoder(nn.Module):
         dense_tokens = self._apply_visual_ln_post_and_projection(patch_tokens)
         return dense_tokens, (int(grid_h), int(grid_w)), mid_features
 
+    def has_trainable_visual_params(self) -> bool:
+        return any(p.requires_grad for p in self.visual.parameters())
+
     def encode_image_with_intermediate(self, images: torch.Tensor) -> dict:
         """
         Returns:
@@ -376,13 +379,21 @@ class OpenCLIPImageEncoder(nn.Module):
         """
         self.visual.eval()
 
-        with torch.no_grad():
+        if self.has_trainable_visual_params():
             dense_tokens, (grid_h, grid_w), mid_features = (
                 self._forward_full_vit_dense_tokens(
                     images,
                     return_intermediate=True,
                 )
             )
+        else:
+            with torch.no_grad():
+                dense_tokens, (grid_h, grid_w), mid_features = (
+                    self._forward_full_vit_dense_tokens(
+                        images,
+                        return_intermediate=True,
+                    )
+                )
 
         feat_map = dense_tokens.reshape(
             images.shape[0],

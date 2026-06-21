@@ -20,13 +20,22 @@ class ModelOutputKeys:
     final_score_map: str = "final_score_map"
     final_pred: str = "final_pred"
 
+    # Template score builder outputs
+    template_score_maps_18: str = "template_score_maps_18"
+    lowres_score_embed: str = "lowres_score_embed"
+
+    # Low-res score refiner outputs
+    refined_score_embed_18: str = "refined_score_embed_18"
+
+    # Guidance upsampler outputs
+    clip_guidance_36: str = "clip_guidance_36"
+    clip_guidance_72: str = "clip_guidance_72"
+
     # Encoder feature refiner outputs
-    encoder_features: str = "encoder_features"
-    refined_encoder_features: str = "refined_encoder_features"
-    class_query_tokens: str = "class_query_tokens"
-    dynamic_clip_text_features: str = "dynamic_clip_text_features"
-    clip_score_maps: str = "clip_score_maps"
-    clip_score_embed: str = "clip_score_embed"
+    encoder_features_72: str = "encoder_features_72"
+    refined_encoder_features_72: str = "refined_encoder_features_72"
+
+    # CLIP intermediate features
     clip_mid_features: str = "clip_mid_features"
 
 

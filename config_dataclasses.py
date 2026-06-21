@@ -10,8 +10,11 @@ class FreezeConfig:
     trainable_modules: list[str] = field(default_factory=list)
     frozen_modules: list[str] = field(default_factory=list)
 
-    # "frozen" or "attention"
+    # "frozen", "attention", "full"
     openclip_text_finetune: str = "frozen"
+
+    # "frozen", "attention", "full"
+    openclip_image_finetune: str = "frozen"
 
 
 @dataclass
@@ -23,26 +26,60 @@ class OpenCLIPConfig:
 
     image_intermediate_layers: list[int] = field(default_factory=lambda: [7, 15])
 
-    prompt_template: str = "a remote sensing image of {}."
+    prompt_templates: list[str] = field(default_factory=lambda: [
+        "a remote sensing image of {}.",
+        "a satellite image of {}.",
+        "an aerial image of {}.",
+        "an overhead image of {}.",
+        "a high resolution satellite image of {}.",
+        "a high resolution aerial image of {}.",
+        "a top down view of {}.",
+        "a bird's eye view of {}.",
+        "a remote sensing scene containing {}.",
+        "a satellite scene containing {}.",
+        "an aerial scene containing {}.",
+        "an overhead scene containing {}.",
+        "a remote sensing image showing {}.",
+        "a satellite image showing {}.",
+        "an aerial image showing {}.",
+        "an overhead image showing {}.",
+        "a segmented region of {} in a remote sensing image.",
+        "a semantic segmentation mask of {} in a satellite image.",
+        "a land cover region of {}.",
+        "a land use region of {}.",
+        "a large area of {} in an aerial image.",
+        "a small area of {} in a satellite image.",
+        "dense {} in a remote sensing image.",
+        "sparse {} in a remote sensing image.",
+        "the boundary of {} in a satellite image.",
+        "the texture of {} in an aerial image.",
+        "the shape of {} from an overhead view.",
+        "the pattern of {} in a remote sensing scene.",
+        "{} in urban remote sensing imagery.",
+        "{} in rural remote sensing imagery.",
+        "{} on the ground surface from above.",
+        "{} visible from satellite imagery.",
+    ])
+
     normalize_label_for_clip: bool = True
 
 
 @dataclass
-class EncoderRefinerConfig:
+class TemplateGuidedRefinerConfig:
     enabled: bool = True
 
-    num_query_tokens: int = 32
-    fusion_layers: int = 4
+    hidden_dim: int = 256
+    num_prompt_templates: int = 32
+
+    lowres_hw: int = 18
+    lowres_layers: int = 4
+
+    highres_hw: int = 72
+    highres_layers: int = 2
+
     num_heads: int = 8
     dropout: float = 0.1
 
-    hidden_dim: int = 256
-
-    clip_score_embed_dim: int = 32
-    clip_score_conv_kernel: int = 7
-
-    encoder_hw: int = 72
-    score_base_hw: int = 18
     window_size: int = 9
     shift_size: int = 4
 
@@ -57,13 +94,8 @@ class SemanticCriterionConfig:
     final_bce_weight: float = 1.0
     final_dice_weight: float = 0.0
 
-    # 0.0 = absent classes not supervised for mask BCE.
-    # Set to 0.01 / 0.05 for mild absent-class suppression.
     bce_absent_class_weight: float = 0.0
 
-    # Pixel-level BCE weights.
-    # valid pixels: label_map != ignore_index
-    # ignore pixels: label_map == ignore_index
     bce_valid_pixel_weight: float = 1.0
     bce_ignore_pixel_weight: float = 1.0
 
@@ -90,7 +122,9 @@ class SegmentorBuildConfig:
 
     freeze_cfg: FreezeConfig = field(default_factory=FreezeConfig)
     openclip_cfg: OpenCLIPConfig = field(default_factory=OpenCLIPConfig)
-    encoder_refiner_cfg: EncoderRefinerConfig = field(default_factory=EncoderRefinerConfig)
+    template_guided_refiner_cfg: TemplateGuidedRefinerConfig = field(
+        default_factory=TemplateGuidedRefinerConfig
+    )
     criterion_cfg: SemanticCriterionConfig = field(
         default_factory=SemanticCriterionConfig
     )

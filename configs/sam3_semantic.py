@@ -23,25 +23,59 @@ model = dict(
         default_output="feat_map",
         image_intermediate_layers=[7, 15],
 
-        prompt_template="a remote sensing image of {}.",
+        prompt_templates=[
+            "a remote sensing image of {}.",
+            "a satellite image of {}.",
+            "an aerial image of {}.",
+            "an overhead image of {}.",
+            "a high resolution satellite image of {}.",
+            "a high resolution aerial image of {}.",
+            "a top down view of {}.",
+            "a bird's eye view of {}.",
+            "a remote sensing scene containing {}.",
+            "a satellite scene containing {}.",
+            "an aerial scene containing {}.",
+            "an overhead scene containing {}.",
+            "a remote sensing image showing {}.",
+            "a satellite image showing {}.",
+            "an aerial image showing {}.",
+            "an overhead image showing {}.",
+            "a segmented region of {} in a remote sensing image.",
+            "a semantic segmentation mask of {} in a satellite image.",
+            "a land cover region of {}.",
+            "a land use region of {}.",
+            "a large area of {} in an aerial image.",
+            "a small area of {} in a satellite image.",
+            "dense {} in a remote sensing image.",
+            "sparse {} in a remote sensing image.",
+            "the boundary of {} in a satellite image.",
+            "the texture of {} in an aerial image.",
+            "the shape of {} from an overhead view.",
+            "the pattern of {} in a remote sensing scene.",
+            "{} in urban remote sensing imagery.",
+            "{} in rural remote sensing imagery.",
+            "{} on the ground surface from above.",
+            "{} visible from satellite imagery.",
+        ],
+
         normalize_label_for_clip=True,
     ),
 
-    encoder_refiner_cfg=dict(
+    template_guided_refiner_cfg=dict(
         enabled=True,
 
-        num_query_tokens=32,
-        fusion_layers=4,
+        hidden_dim=256,
+        num_prompt_templates=32,
+
+        lowres_hw=18,
+        lowres_layers=4,
+
+        highres_hw=72,
+        highres_layers=2,
+
         num_heads=8,
         dropout=0.1,
 
-        hidden_dim=256,
-
-        clip_score_embed_dim=128,
-        clip_score_conv_kernel=7,
-
-        encoder_hw=72,
-        score_base_hw=18,
         window_size=9,
         shift_size=4,
 
@@ -52,10 +86,11 @@ model = dict(
     freeze_cfg=dict(
         train_adapters_only=True,
         trainable_modules=[
-            "core.encoder_refiner",
+            "core.template_guided_refiner",
         ],
         frozen_modules=[],
-        openclip_text_finetune="attention",
+        openclip_text_finetune="frozen",
+        openclip_image_finetune="frozen",
     ),
 
     adapter_cfg=dict(),
@@ -66,13 +101,8 @@ model = dict(
         final_bce_weight=1.0,
         final_dice_weight=0.0,
 
-        # 0.0 = absent classes not supervised for mask BCE.
-        # Set to 0.01 / 0.05 for mild absent-class suppression.
         bce_absent_class_weight=0.0,
 
-        # BCE pixel weights:
-        # valid pixels keep full supervision;
-        # ignore pixels get weaker suppression to avoid over-penalizing unlabeled regions.
         bce_valid_pixel_weight=1.0,
         bce_ignore_pixel_weight=0.05,
 
@@ -106,15 +136,18 @@ optim_wrapper = dict(
         paramwise_cfg=dict(
             norm_decay_mult=0.0,
             custom_keys={
-                "core.encoder_refiner": dict(
+                "core.template_guided_refiner": dict(
                     lr_mult=4.0,
                     decay_mult=1.0,
                 ),
 
-                # 1e-4 × 0.02 = 2e-6
-                # Align with RSKT-Seg CLIP attention effective lr.
+                # RSKT-Seg: CLIP_MULTIPLIER = 0.01
                 "core.clip_text_encoder": dict(
-                    lr_mult=0.02,
+                    lr_mult=0.01,
+                    decay_mult=0.0,
+                ),
+                "core.clip_image_encoder": dict(
+                    lr_mult=0.01,
                     decay_mult=0.0,
                 ),
             },

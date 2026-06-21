@@ -218,7 +218,7 @@ class OpenCLIPTextEncoder(nn.Module):
         )
 
     # ------------------------------------------------------------------
-    # Class prompt encoding (high-level, with cache)
+    # Template prompt encoding (multi-template, encode_embeds path)
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -226,23 +226,6 @@ class OpenCLIPTextEncoder(nn.Module):
         name = str(name).strip()
         name = name.replace("_", " ").replace("-", " ")
         return " ".join(name.split())
-
-    @classmethod
-    def _build_prompt_texts(
-        cls,
-        class_names: List[str],
-        prompt_template: str,
-        normalize_label: bool = True,
-    ) -> List[str]:
-        if "{}" not in str(prompt_template):
-            raise ValueError(
-                f"prompt_template must contain '{{}}', got {prompt_template!r}"
-            )
-        texts = []
-        for name in class_names:
-            label = cls._normalize_class_name(name) if normalize_label else str(name)
-            texts.append(str(prompt_template).format(label))
-        return texts
 
     def clear_prompt_cache(self) -> None:
         self._prompt_feature_cache.clear()
@@ -255,10 +238,13 @@ class OpenCLIPTextEncoder(nn.Module):
     ) -> tuple:
         return (tuple(texts), str(device), bool(normalize))
 
-    def encode_class_prompts(
+    def has_trainable_params(self) -> bool:
+        return any(p.requires_grad for p in self.parameters())
+
+    def encode_template_prompts(
         self,
         class_names: List[str],
-        prompt_template: str,
+        prompt_templates: List[str],
         device: torch.device,
         normalize_label: bool = True,
         normalize: bool = True,
@@ -267,38 +253,54 @@ class OpenCLIPTextEncoder(nn.Module):
         use_checkpoint: bool = False,
     ) -> torch.Tensor:
         """
-        Encode class names with a prompt template.
+        Encode class names with multiple prompt templates.
+
+        Uses encode_embeds() path (no torch.no_grad) to allow gradient
+        flow back to CLIP text attention q/v when finetuning.
 
         Args:
-            class_names:    list of class names, length C
-            prompt_template: "a remote sensing image of {}."
-            device:         target device
-            normalize_label: replace '_' and '-' with spaces
-            normalize:      L2-normalize projected features
-            use_cache:      reuse cached features when True
-            detach_output:  detach returned features
-            use_checkpoint: wrap transformer forward in activation checkpoint
+            class_names:      list of class names, length C
+            prompt_templates: list of prompt templates, length K
+            device:           target device
+            normalize_label:  replace '_' and '-' with spaces
+            normalize:        L2-normalize projected features
+            use_cache:        reuse cached features when True.
+                              Should be False when text encoder has trainable params.
+            detach_output:    detach returned features.
+                              Should be False when text encoder has trainable params.
+            use_checkpoint:   wrap transformer forward in activation checkpoint
 
         Returns:
-            base_clip_text: [C, D_clip]
+            template_text_features: [C, K, D_clip]
         """
         if len(class_names) == 0:
             raise ValueError("class_names is empty.")
+        if len(prompt_templates) == 0:
+            raise ValueError("prompt_templates is empty.")
 
-        texts = self._build_prompt_texts(
-            class_names=class_names,
-            prompt_template=prompt_template,
-            normalize_label=normalize_label,
-        )
+        C = len(class_names)
+        K = len(prompt_templates)
+
+        # Build flat list of C*K texts.
+        flat_texts: List[str] = []
+        for name in class_names:
+            label = self._normalize_class_name(name) if normalize_label else str(name)
+            for tpl in prompt_templates:
+                if "{}" not in tpl:
+                    raise ValueError(
+                        f"prompt template must contain '{{}}', got {tpl!r}"
+                    )
+                flat_texts.append(tpl.format(label))
 
         cache_key = self._make_prompt_cache_key(
-            texts=texts, device=device, normalize=normalize,
+            texts=flat_texts, device=device, normalize=normalize,
         )
 
         if use_cache and cache_key in self._prompt_feature_cache:
-            return self._prompt_feature_cache[cache_key].to(device=device)
+            cached = self._prompt_feature_cache[cache_key].to(device=device)
+            return cached.view(C, K, self.output_dim)
 
-        tokenized = self.tokenizer(texts, context_length=self.context_length).to(device)
+        tokenized = self.tokenizer(flat_texts, context_length=self.context_length).to(device)
 
         def _encode_from_tokens(tokens: torch.Tensor) -> torch.Tensor:
             input_embeds = self.token_embedding(tokens)
@@ -311,76 +313,22 @@ class OpenCLIPTextEncoder(nn.Module):
 
         if use_cache:
             with torch.no_grad():
-                base_text = _encode_from_tokens(tokenized)
-            base_text = base_text.detach().contiguous()
-            self._prompt_feature_cache[cache_key] = base_text
-            return base_text.to(device=device)
+                flat_features = _encode_from_tokens(tokenized)
+            flat_features = flat_features.detach().contiguous()
+            self._prompt_feature_cache[cache_key] = flat_features
+            return flat_features.to(device=device).view(C, K, self.output_dim)
 
         if use_checkpoint:
-            base_text = checkpoint(
+            flat_features = checkpoint(
                 _encode_from_tokens, tokenized, use_reentrant=False,
             )
         else:
-            base_text = _encode_from_tokens(tokenized)
+            flat_features = _encode_from_tokens(tokenized)
 
         if detach_output:
-            base_text = base_text.detach()
+            flat_features = flat_features.detach()
 
-        return base_text
-
-    def encode_prompt_templates(
-        self,
-        class_names: List[str],
-        templates: List[str],
-        device: Optional[torch.device] = None,
-        normalize_label: bool = True,
-        normalize: bool = False,
-    ) -> torch.Tensor:
-        """
-        Args:
-            class_names: 类别名列表，长度为 C
-            templates: prompt 模板列表，长度为 K
-            normalize_label: 是否把类别名里的 '_'、'-' 替换成空格
-            normalize: 是否对投影后的文本向量做 L2 normalize
-
-        Returns:
-            pooled: [C, K, output_dim]
-
-        符号说明：
-            C 表示类别数。
-            K 表示每个类别使用的模板数量。
-            output_dim 表示 OpenCLIP 图文对齐空间维度。
-        """
-        if len(class_names) == 0:
-            raise ValueError("class_names is empty.")
-        if len(templates) == 0:
-            raise ValueError("templates is empty.")
-
-        def normalize_name(x: str) -> str:
-            x = x.strip()
-            if normalize_label:
-                x = x.replace("_", " ").replace("-", " ")
-                x = " ".join(x.split())
-            return x
-
-        flat_texts = []
-        for name in class_names:
-            name = normalize_name(name)
-            for tpl in templates:
-                flat_texts.append(tpl.format(name))
-
-        _, pooled, _ = self.encode_text(
-            text=flat_texts,
-            device=device,
-            output_mode="pooled",
-            normalize=normalize,
-        )
-
-        num_classes = len(class_names)
-        num_templates = len(templates)
-
-        pooled = pooled.view(num_classes, num_templates, self.output_dim)
-        return pooled
+        return flat_features.view(C, K, self.output_dim)
 
     def forward(
         self,

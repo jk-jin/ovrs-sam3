@@ -15,12 +15,12 @@ from iopath.common.file_io import g_pathmgr
 from .config_dataclasses import (
     AdapterConfig,
     CheckpointManagerConfig,
-    EncoderRefinerConfig,
     FreezeConfig,
     LoggerHookConfig,
     OpenCLIPConfig,
     SegmentorBuildConfig,
     SemanticCriterionConfig,
+    TemplateGuidedRefinerConfig,
     TrainerConfig,
     VisualizerConfig,
 )
@@ -174,8 +174,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         return cls._coerce_config(obj, OpenCLIPConfig, "openclip_cfg")
 
     @classmethod
-    def _coerce_encoder_refiner_cfg(cls, obj) -> EncoderRefinerConfig:
-        return cls._coerce_config(obj, EncoderRefinerConfig, "encoder_refiner_cfg")
+    def _coerce_template_guided_refiner_cfg(cls, obj) -> TemplateGuidedRefinerConfig:
+        return cls._coerce_config(obj, TemplateGuidedRefinerConfig, "template_guided_refiner_cfg")
 
     @classmethod
     def _coerce_criterion_cfg(cls, obj) -> SemanticCriterionConfig:
@@ -190,7 +190,9 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         cfg.task_mode = normalize_task_mode(cfg.task_mode)
         cfg.freeze_cfg = cls._coerce_freeze_cfg(cfg.freeze_cfg)
         cfg.openclip_cfg = cls._coerce_openclip_cfg(cfg.openclip_cfg)
-        cfg.encoder_refiner_cfg = cls._coerce_encoder_refiner_cfg(cfg.encoder_refiner_cfg)
+        cfg.template_guided_refiner_cfg = cls._coerce_template_guided_refiner_cfg(
+            cfg.template_guided_refiner_cfg
+        )
         cfg.criterion_cfg = cls._coerce_criterion_cfg(cfg.criterion_cfg)
         cfg.adapter_cfg = cls._coerce_adapter_cfg(cfg.adapter_cfg)
         return cfg
@@ -200,7 +202,9 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         cfg = SegmentorBuildConfig(**kwargs)
         cfg = cls._normalize_build_cfg(cfg)
         cfg.openclip_cfg = cls.validate_openclip_cfg(cfg.openclip_cfg)
-        cfg.encoder_refiner_cfg = cls.validate_encoder_refiner_cfg(cfg.encoder_refiner_cfg)
+        cfg.template_guided_refiner_cfg = cls.validate_template_guided_refiner_cfg(
+            cfg.template_guided_refiner_cfg
+        )
         return cfg
 
     @staticmethod
@@ -237,65 +241,80 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         _ = cls._resolve_openclip_pretrained(openclip_cfg.pretrained)
 
-        if "{}" not in openclip_cfg.prompt_template:
+        for i, tpl in enumerate(openclip_cfg.prompt_templates):
+            if "{}" not in tpl:
+                raise ValueError(
+                    f"openclip_cfg.prompt_templates[{i}] must contain '{{}}' placeholder."
+                )
+
+        if len(openclip_cfg.prompt_templates) != 32:
             raise ValueError(
-                "openclip_cfg.prompt_template must contain '{}' placeholder."
+                f"openclip_cfg.prompt_templates must contain exactly 32 templates, "
+                f"got {len(openclip_cfg.prompt_templates)}."
             )
+
         return openclip_cfg
 
     @classmethod
-    def validate_encoder_refiner_cfg(cls, cfg: EncoderRefinerConfig) -> EncoderRefinerConfig:
-        cfg = cls._coerce_encoder_refiner_cfg(cfg)
+    def validate_template_guided_refiner_cfg(
+        cls, cfg: TemplateGuidedRefinerConfig
+    ) -> TemplateGuidedRefinerConfig:
+        cfg = cls._coerce_template_guided_refiner_cfg(cfg)
 
         if not cfg.enabled:
             raise ValueError(
-                "encoder_refiner_cfg.enabled=False is not supported by the current "
-                "semantic training path."
+                "template_guided_refiner_cfg.enabled=False is not supported."
             )
 
-        if cfg.fusion_layers <= 0:
+        if cfg.lowres_layers <= 0:
             raise ValueError(
-                f"encoder_refiner_cfg.fusion_layers must be positive, got {cfg.fusion_layers}."
+                f"template_guided_refiner_cfg.lowres_layers must be positive, "
+                f"got {cfg.lowres_layers}."
+            )
+
+        if cfg.highres_layers <= 0:
+            raise ValueError(
+                f"template_guided_refiner_cfg.highres_layers must be positive, "
+                f"got {cfg.highres_layers}."
             )
 
         if cfg.num_heads <= 0:
             raise ValueError(
-                f"encoder_refiner_cfg.num_heads must be positive, got {cfg.num_heads}."
+                f"template_guided_refiner_cfg.num_heads must be positive, "
+                f"got {cfg.num_heads}."
             )
 
-        if cfg.num_query_tokens <= 0:
+        if cfg.num_prompt_templates != 32:
             raise ValueError(
-                f"encoder_refiner_cfg.num_query_tokens must be positive, got {cfg.num_query_tokens}."
+                f"template_guided_refiner_cfg.num_prompt_templates must be 32, "
+                f"got {cfg.num_prompt_templates}."
             )
 
         if cfg.window_size <= 0:
             raise ValueError(
-                "encoder_refiner_cfg.window_size must be positive."
+                "template_guided_refiner_cfg.window_size must be positive."
             )
         if not 0 <= cfg.shift_size < cfg.window_size:
             raise ValueError(
-                "encoder_refiner_cfg.shift_size must satisfy 0 <= shift_size < window_size."
+                "template_guided_refiner_cfg.shift_size must satisfy "
+                "0 <= shift_size < window_size."
             )
 
-        if cfg.encoder_hw != 72:
+        if cfg.lowres_hw != 18:
             raise ValueError(
-                "Current multi-scale refiner requires encoder_refiner_cfg.encoder_hw=72, "
-                f"got {cfg.encoder_hw}."
+                "template_guided_refiner_cfg.lowres_hw must be 18, "
+                f"got {cfg.lowres_hw}."
             )
 
-        if cfg.score_base_hw != 18:
+        if cfg.highres_hw != 72:
             raise ValueError(
-                "Current multi-scale refiner requires encoder_refiner_cfg.score_base_hw=18 "
-                f"because score embeddings are expected at 18/36/72, got {cfg.score_base_hw}."
-            )
-
-        if cfg.score_base_hw * 4 != cfg.encoder_hw:
-            raise ValueError(
-                "Current score pyramid requires score_base_hw * 4 == encoder_hw, "
-                f"got score_base_hw={cfg.score_base_hw}, encoder_hw={cfg.encoder_hw}."
+                "template_guided_refiner_cfg.highres_hw must be 72, "
+                f"got {cfg.highres_hw}."
             )
 
         return cfg
+
+    # ---- Standard SAM3 component constructors ----
 
     @staticmethod
     def _create_position_encoding(precompute_resolution=None):
@@ -472,6 +491,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             add_post_encode_proj=True,
         )
 
+    # ---- OpenCLIP encoders ----
+
     @classmethod
     def _create_openclip_encoders(
         cls,
@@ -521,6 +542,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         return text_encoder, image_encoder
 
+    # ---- Checkpoint loading ----
+
     @staticmethod
     def _load_checkpoint(model, checkpoint_path: str):
         with g_pathmgr.open(checkpoint_path, "rb") as f:
@@ -548,6 +571,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         model_id = "facebook/sam3"
         _ = hf_hub_download(repo_id=model_id, filename="config.json")
         return hf_hub_download(repo_id=model_id, filename="sam3.pt")
+
+    # ---- Freeze / finetune logic ----
 
     @classmethod
     def apply_freeze_cfg(cls, model: nn.Module, freeze_cfg: FreezeConfig) -> None:
@@ -606,41 +631,39 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         param._qv_only_grad_mask_registered = True
 
     @classmethod
-    def set_openclip_text_finetune_attention(cls, clip_text_encoder: nn.Module) -> None:
-        """RSKT-like partial finetuning of CLIP text encoder.
+    def set_openclip_attention_finetune(cls, module: nn.Module) -> None:
+        """RSKT-Seg style partial finetuning of a CLIP encoder.
 
         Freezes all parameters, then selectively unfreezes:
         - positional embeddings
-        - text transformer attention q/v projections only (k stays frozen)
+        - attention q_proj and v_proj only (k stays frozen)
 
         For fused qkv projections (in_proj_weight / in_proj_bias), a gradient
         mask hook zeros out k gradients while keeping q/v trainable.
         """
-        cls.set_requires_grad(clip_text_encoder, False)
+        cls.set_requires_grad(module, False)
 
-        for name, param in clip_text_encoder.named_parameters():
+        for name, param in module.named_parameters():
             lname = name.lower()
             train = False
 
             # Position-related params trainable.
-            if "positional_embedding" in lname or "position" in lname:
+            if "positional_embedding" in lname or "position" in lname or "pos_embed" in lname:
                 train = True
 
-            # Text transformer attention q/v trainable.
-            elif "transformer" in lname and "attn" in lname:
+            # Attention q/v trainable.
+            elif "attn" in lname:
                 if "q_proj" in lname or "v_proj" in lname:
                     train = True
-
-                # OpenCLIP / PyTorch MultiheadAttention often uses fused qkv.
                 elif "in_proj_weight" in lname or "in_proj_bias" in lname:
                     train = True
 
-            if train:
-                param.requires_grad_(True)
+            param.requires_grad_(train)
 
-            # Register gradient mask AFTER enabling grad so the hook is allowed.
             if train and ("in_proj_weight" in lname or "in_proj_bias" in lname):
                 cls._register_qv_only_grad_mask(param)
+
+    # ---- Main build methods ----
 
     @classmethod
     def build_semantic_core_model(cls, cfg: SegmentorBuildConfig) -> nn.Module:
@@ -665,7 +688,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         segmentation_head = cls._create_segmentation_head(compile_mode=compile_mode)
         input_geometry_encoder = cls._create_geometry_encoder()
 
-        refiner_cfg = cfg.encoder_refiner_cfg
+        refiner_cfg = cfg.template_guided_refiner_cfg
 
         model = Sam3Image(
             backbone=backbone,
@@ -680,20 +703,20 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             matcher=None,
             clip_image_encoder=clip_image_encoder,
             clip_text_encoder=clip_text_encoder,
-            openclip_prompt_template=str(cfg.openclip_cfg.prompt_template),
+            openclip_prompt_templates=list(cfg.openclip_cfg.prompt_templates),
             normalize_label_for_clip=bool(cfg.openclip_cfg.normalize_label_for_clip),
-            encoder_refiner_num_query_tokens=int(refiner_cfg.num_query_tokens),
-            encoder_refiner_fusion_layers=int(refiner_cfg.fusion_layers),
-            encoder_refiner_num_heads=int(refiner_cfg.num_heads),
-            encoder_refiner_dropout=float(refiner_cfg.dropout),
-            encoder_refiner_hidden_dim=int(refiner_cfg.hidden_dim),
-            encoder_refiner_score_embed_dim=int(refiner_cfg.clip_score_embed_dim),
-            encoder_refiner_conv_kernel=int(refiner_cfg.clip_score_conv_kernel),
-            encoder_refiner_score_base_hw=int(refiner_cfg.score_base_hw),
-            encoder_refiner_window_size=int(refiner_cfg.window_size),
-            encoder_refiner_shift_size=int(refiner_cfg.shift_size),
-            encoder_refiner_use_checkpoint=bool(refiner_cfg.use_checkpoint),
-            encoder_refiner_early_prompt_attention=bool(
+            template_guided_refiner_hidden_dim=int(refiner_cfg.hidden_dim),
+            template_guided_refiner_num_prompt_templates=int(refiner_cfg.num_prompt_templates),
+            template_guided_refiner_lowres_hw=int(refiner_cfg.lowres_hw),
+            template_guided_refiner_lowres_layers=int(refiner_cfg.lowres_layers),
+            template_guided_refiner_highres_hw=int(refiner_cfg.highres_hw),
+            template_guided_refiner_highres_layers=int(refiner_cfg.highres_layers),
+            template_guided_refiner_num_heads=int(refiner_cfg.num_heads),
+            template_guided_refiner_dropout=float(refiner_cfg.dropout),
+            template_guided_refiner_window_size=int(refiner_cfg.window_size),
+            template_guided_refiner_shift_size=int(refiner_cfg.shift_size),
+            template_guided_refiner_use_checkpoint=bool(refiner_cfg.use_checkpoint),
+            template_guided_refiner_early_prompt_attention=bool(
                 refiner_cfg.early_prompt_attention
             ),
             task_mode=TASK_MODE_SEMANTIC,
@@ -758,12 +781,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             core.geometry_encoder.eval()
             core.segmentation_head.eval()
 
-            # OpenCLIP image encoder — always frozen, always eval.
-            clip_image_encoder = getattr(core, "clip_image_encoder", None)
-            if clip_image_encoder is not None:
-                cls.set_requires_grad(clip_image_encoder, False)
-                clip_image_encoder.eval()
-
             # OpenCLIP text encoder.
             clip_text_encoder = getattr(core, "clip_text_encoder", None)
             if clip_text_encoder is not None:
@@ -772,24 +789,55 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 ).lower()
 
                 if text_ft == "attention":
-                    cls.set_openclip_text_finetune_attention(clip_text_encoder)
+                    cls.set_openclip_attention_finetune(clip_text_encoder)
                 elif text_ft == "frozen":
                     cls.set_requires_grad(clip_text_encoder, False)
+                elif text_ft == "full":
+                    cls.set_requires_grad(clip_text_encoder, True)
                 else:
                     raise ValueError(
                         "freeze_cfg.openclip_text_finetune must be "
-                        f"'frozen' or 'attention', got {text_ft!r}."
+                        f"'frozen', 'attention', or 'full', got {text_ft!r}."
                     )
 
                 # CLIP text encoder stays in eval mode regardless of
-                # finetune mode — we only train q/v weights, not
+                # finetune mode — we only train weights, not
                 # dropout / layernorm statistics.
                 clip_text_encoder.eval()
 
-            # Encoder refiner is the only module that should be in
-            # train mode during training.
+            # OpenCLIP image encoder.
+            clip_image_encoder = getattr(core, "clip_image_encoder", None)
+            if clip_image_encoder is not None:
+                image_ft = str(
+                    getattr(cfg.freeze_cfg, "openclip_image_finetune", "frozen")
+                ).lower()
+
+                if image_ft == "attention":
+                    cls.set_openclip_attention_finetune(clip_image_encoder)
+                elif image_ft == "frozen":
+                    cls.set_requires_grad(clip_image_encoder, False)
+                elif image_ft == "full":
+                    cls.set_requires_grad(clip_image_encoder, True)
+                else:
+                    raise ValueError(
+                        "freeze_cfg.openclip_image_finetune must be "
+                        f"'frozen', 'attention', or 'full', got {image_ft!r}."
+                    )
+
+                # CLIP image encoder stays in eval mode.
+                clip_image_encoder.eval()
+
+            # Template-guided refiner is the only module that should
+            # be in train mode during training.
             if not cfg.eval_mode:
-                core.encoder_refiner.train()
+                core.template_guided_refiner.train()
+
+            # Double-ensure CLIP encoders stay in eval mode after
+            # template_guided_refiner.train().
+            if clip_text_encoder is not None:
+                clip_text_encoder.eval()
+            if clip_image_encoder is not None:
+                clip_image_encoder.eval()
 
         model.core.prompt_chunk_size = (
             None if cfg.prompt_chunk_size is None else int(cfg.prompt_chunk_size)

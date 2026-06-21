@@ -41,29 +41,29 @@ class SAM3Segmentor(nn.Module):
             force=force,
         )
 
-    def build_encoder_refiner_cache(
+    def build_template_guided_refiner_cache(
         self,
         batch: BatchedDatapoint,
     ) -> Dict[str, Any]:
-        return self.core.build_encoder_refiner_cache(batch)
+        return self.core.build_template_guided_refiner_cache(batch)
 
-    def run_encoder_refiner_from_cache(
+    def run_template_guided_refiner_from_cache(
         self,
-        encoder_refiner_cache: Dict[str, Any],
+        template_guided_refiner_cache: Dict[str, Any],
         batch: BatchedDatapoint,
         return_debug: bool = False,
     ) -> Dict[str, torch.Tensor]:
-        return self.core.run_encoder_refiner_from_cache(
-            encoder_refiner_cache=encoder_refiner_cache,
+        return self.core.run_template_guided_refiner_from_cache(
+            template_guided_refiner_cache=template_guided_refiner_cache,
             batch=batch,
             return_debug=return_debug,
         )
 
     def forward(self, batch: BatchedDatapoint) -> dict[str, torch.Tensor]:
-        encoder_refiner_cache = self.build_encoder_refiner_cache(batch)
+        refiner_cache = self.build_template_guided_refiner_cache(batch)
 
-        final_raw_outputs = self.run_encoder_refiner_from_cache(
-            encoder_refiner_cache=encoder_refiner_cache,
+        final_raw_outputs = self.run_template_guided_refiner_from_cache(
+            template_guided_refiner_cache=refiner_cache,
             batch=batch,
         )
 
