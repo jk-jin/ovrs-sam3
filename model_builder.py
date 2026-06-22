@@ -279,19 +279,19 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         if cfg.encoder_hw != 72:
             raise ValueError(
-                "Current multi-scale refiner requires encoder_refiner_cfg.encoder_hw=72, "
+                "encoder_refiner_cfg.encoder_hw must be 72, "
                 f"got {cfg.encoder_hw}."
             )
 
         if cfg.score_base_hw != 18:
             raise ValueError(
-                "Current multi-scale refiner requires encoder_refiner_cfg.score_base_hw=18 "
-                f"because score embeddings are expected at 18/36/72, got {cfg.score_base_hw}."
+                "encoder_refiner_cfg.score_base_hw must be 18, "
+                f"got {cfg.score_base_hw}."
             )
 
         if cfg.score_base_hw * 4 != cfg.encoder_hw:
             raise ValueError(
-                "Current score pyramid requires score_base_hw * 4 == encoder_hw, "
+                "encoder_refiner_cfg requires score_base_hw * 4 == encoder_hw, "
                 f"got score_base_hw={cfg.score_base_hw}, encoder_hw={cfg.encoder_hw}."
             )
 
@@ -693,6 +693,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             encoder_refiner_window_size=int(refiner_cfg.window_size),
             encoder_refiner_shift_size=int(refiner_cfg.shift_size),
             encoder_refiner_use_checkpoint=bool(refiner_cfg.use_checkpoint),
+            encoder_refiner_spatial_fusion_conv_kernel=int(refiner_cfg.spatial_fusion_conv_kernel),
             encoder_refiner_early_prompt_attention=bool(
                 refiner_cfg.early_prompt_attention
             ),

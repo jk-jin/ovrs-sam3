@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .data_misc import BatchedDatapoint, FindStage
-from .encoder_refiner import ClassConditionedEncoderRefiner
+from .encoder_refiner import TextScoreGuidedEncoderRefiner
 from .geometry_encoders import Prompt
 from .task_modes import OUTPUT_KEYS, TASK_MODE_SEMANTIC, normalize_task_mode
 from .vl_combiner import SAM3VLBackbone
@@ -46,6 +46,7 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_score_base_hw: int = 18,
         encoder_refiner_window_size: int = 9,
         encoder_refiner_shift_size: int = 4,
+        encoder_refiner_spatial_fusion_conv_kernel: int = 7,
         encoder_refiner_use_checkpoint: bool = True,
         encoder_refiner_early_prompt_attention: bool = False,
         task_mode: str = TASK_MODE_SEMANTIC,
@@ -105,7 +106,7 @@ class Sam3Image(torch.nn.Module):
                 "OpenCLIP image/text encoders are required by the encoder refiner."
             )
 
-        self.encoder_refiner = ClassConditionedEncoderRefiner(
+        self.encoder_refiner = TextScoreGuidedEncoderRefiner(
             clip_text_encoder=self.clip_text_encoder,
             hidden_dim=int(encoder_refiner_hidden_dim),
             clip_dim=self.clip_align_dim,
@@ -120,6 +121,7 @@ class Sam3Image(torch.nn.Module):
             normalize_label_for_clip=bool(normalize_label_for_clip),
             score_conv_kernel=int(encoder_refiner_conv_kernel),
             score_base_hw=int(encoder_refiner_score_base_hw),
+            spatial_fusion_conv_kernel=int(encoder_refiner_spatial_fusion_conv_kernel),
             use_checkpoint=bool(encoder_refiner_use_checkpoint),
         )
 
@@ -664,8 +666,8 @@ class Sam3Image(torch.nn.Module):
             refined_encoder_features_72,
             class_query_tokens,
             dynamic_clip_text,
-            clip_score_embeds,
-            clip_score_maps_18,
+            score_embed_18,
+            score_maps_18,
         ) = self.encoder_refiner(
             encoder_features=encoder_features_72,
             clip_image_feat_map=clip_image_feat_map,
@@ -742,8 +744,8 @@ class Sam3Image(torch.nn.Module):
                 OUTPUT_KEYS.refined_encoder_features: refined_encoder_features_72.detach().contiguous(),
                 OUTPUT_KEYS.class_query_tokens: class_query_tokens.detach().contiguous(),
                 OUTPUT_KEYS.dynamic_clip_text_features: dynamic_clip_text.detach().contiguous(),
-                OUTPUT_KEYS.clip_score_embed: clip_score_embeds["scale_72"].detach().contiguous(),
-                OUTPUT_KEYS.clip_score_maps: clip_score_maps_18.detach().contiguous(),
+                OUTPUT_KEYS.clip_score_embed: score_embed_18.detach().contiguous(),
+                OUTPUT_KEYS.clip_score_maps: score_maps_18.detach().contiguous(),
                 OUTPUT_KEYS.clip_mid_features: [
                     feat.detach().contiguous() for feat in clip_mid_features
                 ],

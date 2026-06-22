@@ -7,14 +7,15 @@ import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 
 from .clip_prompt_encoder import SingleTokenClipPromptEncoder
-from .clip_score_embedding import ClipScoreEmbeddingBuilder
+from .clip_score_prior import ClipScorePriorBuilder
 from .encoder_query_extractor import EncoderQueryExtractor
-from .encoder_refiner_attention import EncoderRefinerLayer
+from .encoder_refiner_blocks import TextScoreEncoderRefinerLayer
 
 
-class ClassConditionedEncoderRefiner(nn.Module):
+class TextScoreGuidedEncoderRefiner(nn.Module):
     """
-    Multi-layer encoder feature refiner with multi-scale spatial window attention.
+    Multi-layer encoder feature refiner with text-conditioned class attention
+    and low-res score-guided spatial refiner.
 
     All sub-modules are created eagerly in __init__ so that parameters are
     visible to apply_freeze_cfg and the optimizer before the first forward.
@@ -26,11 +27,11 @@ class ClassConditionedEncoderRefiner(nn.Module):
         sam_image_last:     [B, D, H, W]
 
     Output (forward):
-        refined_encoder_features: [B, C, D, 72, 72]
-        class_query_tokens:       [B, C, Q, D]
-        dynamic_clip_text:        [B, C, Q, D_clip]
-        clip_score_embeds:        {"scale_18": ..., "scale_36": ..., "scale_72": ...}
-        clip_score_maps_18:       [B, C, Q, 18, 18]
+        refined_encoder_features_72: [B, C, D, 72, 72]
+        class_query_tokens:          [B, C, Q, D]
+        dynamic_clip_text:           [B, C, Q, D_clip]
+        score_embed_18:              [B, C, D_score, 18, 18]
+        score_maps_18:               [B, C, Q, 18, 18]
     """
 
     def __init__(
@@ -49,6 +50,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         normalize_label_for_clip: bool = True,
         score_conv_kernel: int = 7,
         score_base_hw: int = 18,
+        spatial_fusion_conv_kernel: int = 7,
         use_checkpoint: bool = True,
     ):
         super().__init__()
@@ -73,7 +75,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
             num_attention_heads=int(num_heads),
         )
 
-        self.score_builder = ClipScoreEmbeddingBuilder(
+        self.score_prior_builder = ClipScorePriorBuilder(
             clip_output_dim=int(clip_dim),
             score_embed_dim=int(score_embed_dim),
             num_query_tokens=self.num_query_tokens,
@@ -82,13 +84,14 @@ class ClassConditionedEncoderRefiner(nn.Module):
         )
 
         self.layers = nn.ModuleList([
-            EncoderRefinerLayer(
+            TextScoreEncoderRefinerLayer(
                 hidden_dim=self.hidden_dim,
                 score_embed_dim=int(score_embed_dim),
                 num_heads=int(num_heads),
                 window_size=int(window_size),
                 shift_size=int(shift_size),
                 dropout=float(dropout),
+                spatial_fusion_kernel=int(spatial_fusion_conv_kernel),
             )
             for _ in range(int(fusion_layers))
         ])
@@ -104,20 +107,20 @@ class ClassConditionedEncoderRefiner(nn.Module):
         sam_text_mean: torch.Tensor,
         class_names: List[str],
         sam_image_last: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor], torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Returns:
             refined_encoder_features_72: [B, C, D, 72, 72]
             class_query_tokens:          [B, C, Q, D]
             dynamic_clip_text:           [B, C, Q, D_clip]
-            clip_score_embeds:           dict of 3-scale score embeddings
-            clip_score_maps_18:          [B, C, Q, 18, 18]
+            score_embed_18:              [B, C, D_score, 18, 18]
+            score_maps_18:               [B, C, Q, 18, 18]
         """
         batch_size, num_classes, hidden_dim, height, width = encoder_features.shape
 
         if (height, width) != (72, 72):
             raise ValueError(
-                f"ClassConditionedEncoderRefiner expects 72x72 encoder features, "
+                f"TextScoreGuidedEncoderRefiner expects 72x72 encoder features, "
                 f"got {(height, width)}."
             )
 
@@ -135,35 +138,26 @@ class ClassConditionedEncoderRefiner(nn.Module):
             clip_image_feat_map=clip_image_feat_map,
         )
 
-        clip_score_embeds, clip_score_maps_18 = self.score_builder(
+        score_embed_18, score_maps_18 = self.score_prior_builder(
             dynamic_clip_text=dynamic_clip_text,
             clip_image_feat_map=clip_image_feat_map,
         )
 
-        # Validate score embedding shapes.
-        for key, expected_hw in {
-            "scale_18": (18, 18),
-            "scale_36": (36, 36),
-            "scale_72": (72, 72),
-        }.items():
-            score_embed = clip_score_embeds[key]
-            expected_shape = (
-                batch_size,
-                num_classes,
-                self.score_builder.score_embed_dim,
-                expected_hw[0],
-                expected_hw[1],
+        # Validate score_embed_18 shape
+        expected_score_shape = (
+            batch_size,
+            num_classes,
+            self.score_prior_builder.score_embed_dim,
+            18,
+            18,
+        )
+        if tuple(score_embed_18.shape) != expected_score_shape:
+            raise ValueError(
+                f"score_embed_18 shape mismatch: "
+                f"expected {expected_score_shape}, got {tuple(score_embed_18.shape)}."
             )
-            if tuple(score_embed.shape) != expected_shape:
-                raise ValueError(
-                    f"clip_score_embeds[{key!r}] shape mismatch: "
-                    f"expected {expected_shape}, got {tuple(score_embed.shape)}."
-                )
-        refined_encoder_features_72 = encoder_features
 
-        clip_score_embed_18 = clip_score_embeds["scale_18"]
-        clip_score_embed_36 = clip_score_embeds["scale_36"]
-        clip_score_embed_72 = clip_score_embeds["scale_72"]
+        refined_encoder_features_72 = encoder_features
 
         for layer in self.layers:
             if self.use_checkpoint and self.training:
@@ -172,9 +166,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     refined_encoder_features_72,
                     sam_text_mean,
                     sam_image_last,
-                    clip_score_embed_18,
-                    clip_score_embed_36,
-                    clip_score_embed_72,
+                    score_embed_18,
                     use_reentrant=False,
                 )
             else:
@@ -182,15 +174,13 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     encoder_features_72=refined_encoder_features_72,
                     sam_text_mean=sam_text_mean,
                     sam_image_last_72=sam_image_last,
-                    clip_score_embed_18=clip_score_embed_18,
-                    clip_score_embed_36=clip_score_embed_36,
-                    clip_score_embed_72=clip_score_embed_72,
+                    score_embed_18=score_embed_18,
                 )
 
         return (
             refined_encoder_features_72,
             class_query_tokens,
             dynamic_clip_text,
-            clip_score_embeds,
-            clip_score_maps_18,
+            score_embed_18,
+            score_maps_18,
         )
