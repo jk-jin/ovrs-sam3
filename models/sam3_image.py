@@ -7,11 +7,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .data_misc import BatchedDatapoint, FindStage
+from .encoder_refiner import ClassConditionedEncoderRefiner
 from .geometry_encoders import Prompt
 from .task_modes import OUTPUT_KEYS, TASK_MODE_SEMANTIC, normalize_task_mode
-from .template_guided_refiner import TemplateScoreGuidedRefiner
 from .vl_combiner import SAM3VLBackbone
-
 
 class Sam3Image(torch.nn.Module):
     def __init__(
@@ -35,20 +34,20 @@ class Sam3Image(torch.nn.Module):
         num_interactive_steps_val: int = 0,
         clip_image_encoder=None,
         clip_text_encoder=None,
-        openclip_prompt_templates: Optional[List[str]] = None,
+        openclip_prompt_template: str = "a remote sensing image of {}.",
         normalize_label_for_clip: bool = True,
-        template_guided_refiner_hidden_dim: int = 256,
-        template_guided_refiner_num_prompt_templates: int = 32,
-        template_guided_refiner_lowres_hw: int = 18,
-        template_guided_refiner_lowres_layers: int = 4,
-        template_guided_refiner_highres_hw: int = 72,
-        template_guided_refiner_highres_layers: int = 2,
-        template_guided_refiner_num_heads: int = 8,
-        template_guided_refiner_dropout: float = 0.1,
-        template_guided_refiner_window_size: int = 9,
-        template_guided_refiner_shift_size: int = 4,
-        template_guided_refiner_use_checkpoint: bool = True,
-        template_guided_refiner_early_prompt_attention: bool = False,
+        encoder_refiner_num_query_tokens: int = 32,
+        encoder_refiner_fusion_layers: int = 4,
+        encoder_refiner_num_heads: int = 8,
+        encoder_refiner_dropout: float = 0.1,
+        encoder_refiner_hidden_dim: int = 256,
+        encoder_refiner_score_embed_dim: int = 32,
+        encoder_refiner_conv_kernel: int = 7,
+        encoder_refiner_score_base_hw: int = 18,
+        encoder_refiner_window_size: int = 9,
+        encoder_refiner_shift_size: int = 4,
+        encoder_refiner_use_checkpoint: bool = True,
+        encoder_refiner_early_prompt_attention: bool = False,
         task_mode: str = TASK_MODE_SEMANTIC,
         **kwargs,
     ):
@@ -103,33 +102,29 @@ class Sam3Image(torch.nn.Module):
 
         if self.clip_align_dim is None:
             raise RuntimeError(
-                "OpenCLIP image/text encoders are required by the template guided refiner."
+                "OpenCLIP image/text encoders are required by the encoder refiner."
             )
 
-        prompt_templates = openclip_prompt_templates
-        if prompt_templates is None or len(prompt_templates) == 0:
-            prompt_templates = ["a remote sensing image of {}."]
-
-        self.template_guided_refiner = TemplateScoreGuidedRefiner(
+        self.encoder_refiner = ClassConditionedEncoderRefiner(
             clip_text_encoder=self.clip_text_encoder,
-            clip_image_native_dim=self.clip_image_native_dim,
-            prompt_templates=list(prompt_templates),
+            hidden_dim=int(encoder_refiner_hidden_dim),
+            clip_dim=self.clip_align_dim,
+            score_embed_dim=int(encoder_refiner_score_embed_dim),
+            num_heads=int(encoder_refiner_num_heads),
+            window_size=int(encoder_refiner_window_size),
+            shift_size=int(encoder_refiner_shift_size),
+            fusion_layers=int(encoder_refiner_fusion_layers),
+            dropout=float(encoder_refiner_dropout),
+            num_query_tokens=int(encoder_refiner_num_query_tokens),
+            prompt_template=str(openclip_prompt_template),
             normalize_label_for_clip=bool(normalize_label_for_clip),
-            hidden_dim=int(template_guided_refiner_hidden_dim),
-            num_prompt_templates=int(template_guided_refiner_num_prompt_templates),
-            lowres_hw=int(template_guided_refiner_lowres_hw),
-            lowres_layers=int(template_guided_refiner_lowres_layers),
-            highres_hw=int(template_guided_refiner_highres_hw),
-            highres_layers=int(template_guided_refiner_highres_layers),
-            num_heads=int(template_guided_refiner_num_heads),
-            dropout=float(template_guided_refiner_dropout),
-            window_size=int(template_guided_refiner_window_size),
-            shift_size=int(template_guided_refiner_shift_size),
-            use_checkpoint=bool(template_guided_refiner_use_checkpoint),
+            score_conv_kernel=int(encoder_refiner_conv_kernel),
+            score_base_hw=int(encoder_refiner_score_base_hw),
+            use_checkpoint=bool(encoder_refiner_use_checkpoint),
         )
 
-        self.template_guided_refiner_early_prompt_attention = bool(
-            template_guided_refiner_early_prompt_attention
+        self.encoder_refiner_early_prompt_attention = bool(
+            encoder_refiner_early_prompt_attention
         )
 
         self.prompt_chunk_size = None
@@ -239,14 +234,6 @@ class Sam3Image(torch.nn.Module):
             return output_dim
         raise AttributeError("clip_image_encoder must expose a positive integer `output_dim`.")
 
-    # ---- CLIP image cache (supports trainable image encoder) ----
-
-    def _clip_image_encoder_has_trainable_params(self) -> bool:
-        return (
-            self.clip_image_encoder is not None
-            and any(p.requires_grad for p in self.clip_image_encoder.parameters())
-        )
-
     def _build_clip_image_cache(
         self,
         input: BatchedDatapoint,
@@ -257,19 +244,11 @@ class Sam3Image(torch.nn.Module):
         if input.raw_images is None:
             raise ValueError("clip_image_encoder is enabled, but BatchedDatapoint.raw_images is None.")
 
-        trainable_clip_image = self._clip_image_encoder_has_trainable_params()
-
-        if trainable_clip_image:
+        with torch.no_grad():
             clip_out = self.clip_image_encoder.encode_raw_images(
                 raw_images=input.raw_images,
                 device=device,
             )
-        else:
-            with torch.no_grad():
-                clip_out = self.clip_image_encoder.encode_raw_images(
-                    raw_images=input.raw_images,
-                    device=device,
-                )
 
         if not isinstance(clip_out, dict):
             raise TypeError(
@@ -277,58 +256,54 @@ class Sam3Image(torch.nn.Module):
                 "'feat_map', 'mid_features', and 'mid_layer_indices'."
             )
 
-        clip_final_map = clip_out["feat_map"]
-        clip_mid_features_raw = clip_out["mid_features"]
+        clip_feat_map = clip_out["feat_map"]
+        clip_mid_features = clip_out["mid_features"]
         clip_mid_layer_indices = clip_out["mid_layer_indices"]
 
-        if not isinstance(clip_final_map, torch.Tensor) or clip_final_map.ndim != 4:
-            raise ValueError("clip_out['feat_map'] must be [B, D_clip, Hc, Wc].")
-
-        if not isinstance(clip_mid_features_raw, list):
-            raise TypeError("clip_out['mid_features'] must be a list of tensors.")
-
-        if len(clip_mid_features_raw) != 2:
+        if not isinstance(clip_feat_map, torch.Tensor) or clip_feat_map.ndim != 4:
             raise ValueError(
-                f"Expected exactly 2 CLIP middle features, got {len(clip_mid_features_raw)}."
+                "clip_out['feat_map'] must be [B, D_clip, Hc, Wc]."
             )
 
+        if not isinstance(clip_mid_features, list):
+            raise TypeError("clip_out['mid_features'] must be a list of tensors.")
+
+        if len(clip_mid_features) != 2:
+            raise ValueError(
+                f"Expected exactly 2 CLIP middle features, got {len(clip_mid_features)}."
+            )
+
+        clip_feat_map = clip_feat_map.detach().contiguous()
         clip_grid_hw = (
-            int(clip_final_map.shape[-2]),
-            int(clip_final_map.shape[-1]),
+            int(clip_feat_map.shape[-2]),
+            int(clip_feat_map.shape[-1]),
         )
 
-        if trainable_clip_image:
-            clip_final_map = clip_final_map.contiguous()
-            clip_mid_features = [x.contiguous() for x in clip_mid_features_raw]
-        else:
-            clip_final_map = clip_final_map.detach().contiguous()
-            clip_mid_features = [x.detach().contiguous() for x in clip_mid_features_raw]
-
-        # Validate mid feature shapes.
+        clean_mid_features = []
         for i, feat in enumerate(clip_mid_features):
             if not isinstance(feat, torch.Tensor) or feat.ndim != 4:
                 raise ValueError(
                     f"clip_mid_features[{i}] must be [B, D, Hc, Wc], "
                     f"got {None if not isinstance(feat, torch.Tensor) else tuple(feat.shape)}."
                 )
-            if int(feat.shape[0]) != int(clip_final_map.shape[0]):
+            if int(feat.shape[0]) != int(clip_feat_map.shape[0]):
                 raise ValueError(
                     f"clip_mid_features[{i}] batch mismatch: "
-                    f"{feat.shape[0]} vs {clip_final_map.shape[0]}."
+                    f"{feat.shape[0]} vs {clip_feat_map.shape[0]}."
                 )
             if tuple(feat.shape[-2:]) != clip_grid_hw:
                 raise ValueError(
                     f"clip_mid_features[{i}] spatial size mismatch: "
                     f"{tuple(feat.shape[-2:])} vs {clip_grid_hw}."
                 )
+            clean_mid_features.append(feat.detach().contiguous())
 
         return {
-            "clip_final_map": clip_final_map,
-            "clip_mid_features": clip_mid_features,
+            "clip_image_feat_map_native": clip_feat_map,
+            "clip_image_grid_hw": clip_grid_hw,
+            OUTPUT_KEYS.clip_mid_features: clean_mid_features,
             "clip_mid_layer_indices": tuple(int(x) for x in clip_mid_layer_indices),
         }
-
-    # ---- Early prompt attention (optional) ----
 
     def _maybe_apply_early_prompt_attention(
         self,
@@ -336,7 +311,7 @@ class Sam3Image(torch.nn.Module):
         prompt: torch.Tensor,
         prompt_mask: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
-        if not self.template_guided_refiner_early_prompt_attention:
+        if not self.encoder_refiner_early_prompt_attention:
             return encoder_out
 
         if self.segmentation_head is None:
@@ -345,7 +320,7 @@ class Sam3Image(torch.nn.Module):
         if not hasattr(self.segmentation_head, "apply_prompt_attention"):
             raise RuntimeError(
                 "segmentation_head must expose apply_prompt_attention() "
-                "when template_guided_refiner_early_prompt_attention=True."
+                "when encoder_refiner_early_prompt_attention=True."
             )
 
         out = dict(encoder_out)
@@ -356,9 +331,7 @@ class Sam3Image(torch.nn.Module):
         )
         return out
 
-    # ---- Cache builder for template-guided refiner ----
-
-    def build_template_guided_refiner_cache(
+    def build_encoder_refiner_cache(
         self,
         input: BatchedDatapoint,
     ) -> Dict[str, Any]:
@@ -385,7 +358,7 @@ class Sam3Image(torch.nn.Module):
             image_backbone_out = self.backbone.forward_image(input.img_batch)
         image_backbone_out = self._detach_tree(image_backbone_out)
 
-        # Save backbone_fpn for later use in segmentation_head and refiner.
+        # Save backbone_fpn for later use in segmentation_head.
         backbone_fpn = [
             feat.detach().contiguous()
             for feat in image_backbone_out["backbone_fpn"]
@@ -490,7 +463,7 @@ class Sam3Image(torch.nn.Module):
         if tuple(encoder_features_72.shape[:2]) != (batch_size, num_classes):
             raise ValueError(
                 "Merged encoder features shape mismatch: expected "
-                f"{(batch_size, num_classes)}, got {tuple(encoder_features_72.shape[:2])}."
+                f"{(batch_size, num_classes)}, got {tuple(e.shape[:2])}."
             )
 
         return {
@@ -499,16 +472,14 @@ class Sam3Image(torch.nn.Module):
             "chunk_prompts": chunk_prompts,
             "chunk_prompt_masks": chunk_prompt_masks,
             "backbone_fpn": backbone_fpn,
-            "clip_final_map": clip_image_cache["clip_final_map"],
-            "clip_mid_features": clip_image_cache["clip_mid_features"],
-            "clip_mid_layer_indices": clip_image_cache["clip_mid_layer_indices"],
+            "clip_image_feat_map": clip_image_cache["clip_image_feat_map_native"],
             "sam_text_mean": torch.cat(sam_text_mean_chunks, dim=1),
+            OUTPUT_KEYS.clip_mid_features: clip_image_cache[OUTPUT_KEYS.clip_mid_features],
+            "clip_mid_layer_indices": clip_image_cache["clip_mid_layer_indices"],
             "class_names": class_texts,
             "class_ids": merged_class_ids,
             "chunk_class_counts": chunk_class_counts,
         }
-
-    # ---- SAM3 text/encoder feature extraction ----
 
     @staticmethod
     def _extract_sam_text_mean(
@@ -570,7 +541,12 @@ class Sam3Image(torch.nn.Module):
         batch_size: int,
         num_chunk_classes: int,
     ) -> torch.Tensor:
-        """Extract last-layer visual tokens from encoder_hidden_states."""
+        """
+        Extract last-layer visual tokens from encoder_hidden_states
+        and reshape to [B, C_chunk, D, H, W].
+
+        Takes the highest-res image tokens only (first spatial_shapes level).
+        """
         encoder_hidden_states = encoder_out["encoder_hidden_states"]
         spatial_shapes = encoder_out["spatial_shapes"]
 
@@ -598,7 +574,18 @@ class Sam3Image(torch.nn.Module):
         batch_size: int,
         num_chunk_classes: int,
     ) -> torch.Tensor:
-        """Write refined encoder features back into encoder_hidden_states visual token region."""
+        """
+        Write refined encoder features back into encoder_hidden_states visual token region.
+
+        Args:
+            encoder_out: original encoder output dict
+            refined_encoder_features_chunk: [B, C_chunk, D, H, W]
+            batch_size: B
+            num_chunk_classes: C_chunk
+
+        Returns:
+            new encoder_hidden_states with visual tokens replaced
+        """
         encoder_hidden_states = encoder_out["encoder_hidden_states"].clone()
         spatial_shapes = encoder_out["spatial_shapes"]
 
@@ -653,9 +640,7 @@ class Sam3Image(torch.nn.Module):
             input_points_mask=torch.zeros((num_pairs, 0), dtype=torch.bool, device=device),
         )
 
-    # ---- Template-guided refiner forward ----
-
-    def run_template_guided_refiner(
+    def run_encoder_refiner(
         self,
         encoder_features_72: torch.Tensor,
         encoder_out_chunks: List[Dict],
@@ -663,38 +648,40 @@ class Sam3Image(torch.nn.Module):
         chunk_prompt_masks: List[torch.Tensor],
         chunk_class_counts: List[int],
         backbone_fpn: List[torch.Tensor],
-        clip_final_map: torch.Tensor,
-        clip_mid_features: List[torch.Tensor],
-        clip_mid_layer_indices: tuple[int, ...],
+        clip_image_feat_map: torch.Tensor,
         sam_text_mean: torch.Tensor,
         class_names: List[str],
+        clip_mid_features: List[torch.Tensor],
         return_debug: bool = False,
     ) -> Dict[str, torch.Tensor]:
         B, C, D, H, W = encoder_features_72.shape
 
-        # Run the template-guided refiner.
-        refiner_outputs = self.template_guided_refiner(
-            encoder_features_72=encoder_features_72,
+        # Use the last FPN feature as sam_image_last for window attention guide.
+        sam_image_last_72 = backbone_fpn[-1].detach()
+
+        # Run the encoder refiner.
+        (
+            refined_encoder_features_72,
+            class_query_tokens,
+            dynamic_clip_text,
+            clip_score_embeds,
+            clip_score_maps_18,
+        ) = self.encoder_refiner(
+            encoder_features=encoder_features_72,
+            clip_image_feat_map=clip_image_feat_map,
             sam_text_mean=sam_text_mean,
             class_names=class_names,
-            clip_final_map=clip_final_map,
-            clip_mid_features=clip_mid_features,
-            clip_mid_layer_indices=clip_mid_layer_indices,
-            sam_fpn_features=backbone_fpn,
+            sam_image_last=sam_image_last_72,
         )
 
-        refined_encoder_features_72 = refiner_outputs["refined_encoder_features_72"]
-
-        # For each chunk, write refined features back and call segmentation_head.
+        # For each chunk, write refined_encoder_features_72 back and call segmentation_head.
         final_logits_chunks: list[torch.Tensor] = []
         chunk_start = 0
 
         for chunk_idx, encoder_out in enumerate(encoder_out_chunks):
             C_chunk = chunk_class_counts[chunk_idx]
 
-            refined_encoder_features_chunk = refined_encoder_features_72[
-                :, chunk_start:chunk_start + C_chunk
-            ]
+            refined_encoder_features_chunk = refined_encoder_features_72[:, chunk_start:chunk_start + C_chunk]
 
             refined_hidden_states = self._write_refined_encoder_features_to_encoder_hidden_states(
                 encoder_out=encoder_out,
@@ -716,26 +703,22 @@ class Sam3Image(torch.nn.Module):
                 encoder_hidden_states=refined_hidden_states,
                 prompt=chunk_prompts[chunk_idx],
                 prompt_mask=chunk_prompt_masks[chunk_idx],
-                apply_prompt_attention=not self.template_guided_refiner_early_prompt_attention,
+                # Skip prompt attention if already applied early in cache build.
+                apply_prompt_attention=not self.encoder_refiner_early_prompt_attention,
             )
 
             chunk_logits = seg_outputs["semantic_seg"]
-            # semantic_seg: [B*C_chunk, 1, H, W] or [B, C_chunk, H, W]
+            # semantic_seg: [B*C_chunk, 1, H, W] → [B, C_chunk, H, W]
             if chunk_logits.dim() == 4 and chunk_logits.shape[0] == B * C_chunk:
                 chunk_logits = chunk_logits.reshape(B, C_chunk, *chunk_logits.shape[-2:])
             elif chunk_logits.dim() == 4 and chunk_logits.shape[0] == B and chunk_logits.shape[1] == C_chunk:
                 pass
-            elif chunk_logits.dim() == 4 and chunk_logits.shape[0] == B and chunk_logits.shape[1] == 1:
-                # [B, 1, H, W] with C_chunk == 1 — keep as is, don't squeeze.
-                if C_chunk != 1:
-                    raise ValueError(
-                        f"semantic_seg is [B, 1, H, W] but C_chunk={C_chunk}, "
-                        f"expected C_chunk=1."
-                    )
+            elif chunk_logits.dim() == 4 and chunk_logits.shape[1] == 1:
+                chunk_logits = chunk_logits.squeeze(1)
             else:
                 raise ValueError(
                     f"Unexpected semantic_seg shape: {tuple(chunk_logits.shape)}, "
-                    f"expected [{B*C_chunk}, 1, H, W] or [{B}, {C_chunk}, H, W]."
+                    f"expected [B*C_chunk, 1, H, W] or [B, C_chunk, H, W]."
                 )
 
             final_logits_chunks.append(chunk_logits)
@@ -755,13 +738,12 @@ class Sam3Image(torch.nn.Module):
 
         if return_debug:
             result.update({
-                OUTPUT_KEYS.encoder_features_72: encoder_features_72.detach().contiguous(),
-                OUTPUT_KEYS.refined_encoder_features_72: refined_encoder_features_72.detach().contiguous(),
-                OUTPUT_KEYS.template_score_maps_18: refiner_outputs["template_score_maps_18"].detach().contiguous(),
-                OUTPUT_KEYS.lowres_score_embed: refiner_outputs["lowres_score_embed"].detach().contiguous(),
-                OUTPUT_KEYS.refined_score_embed_18: refiner_outputs["refined_score_embed_18"].detach().contiguous(),
-                OUTPUT_KEYS.clip_guidance_36: refiner_outputs["clip_guidance_36"].detach().contiguous(),
-                OUTPUT_KEYS.clip_guidance_72: refiner_outputs["clip_guidance_72"].detach().contiguous(),
+                OUTPUT_KEYS.encoder_features: encoder_features_72.detach().contiguous(),
+                OUTPUT_KEYS.refined_encoder_features: refined_encoder_features_72.detach().contiguous(),
+                OUTPUT_KEYS.class_query_tokens: class_query_tokens.detach().contiguous(),
+                OUTPUT_KEYS.dynamic_clip_text_features: dynamic_clip_text.detach().contiguous(),
+                OUTPUT_KEYS.clip_score_embed: clip_score_embeds["scale_72"].detach().contiguous(),
+                OUTPUT_KEYS.clip_score_maps: clip_score_maps_18.detach().contiguous(),
                 OUTPUT_KEYS.clip_mid_features: [
                     feat.detach().contiguous() for feat in clip_mid_features
                 ],
@@ -769,52 +751,48 @@ class Sam3Image(torch.nn.Module):
 
         return result
 
-    def run_template_guided_refiner_from_cache(
+    def run_encoder_refiner_from_cache(
         self,
-        template_guided_refiner_cache: Dict[str, Any],
+        encoder_refiner_cache: Dict[str, Any],
         batch: BatchedDatapoint,
         return_debug: bool = False,
     ) -> Dict[str, torch.Tensor]:
         if batch is None:
             raise ValueError("batch must be provided.")
 
-        encoder_features_72 = template_guided_refiner_cache["encoder_features_72"]
-        encoder_out_chunks = template_guided_refiner_cache["encoder_out_chunks"]
-        chunk_prompts = template_guided_refiner_cache["chunk_prompts"]
-        chunk_prompt_masks = template_guided_refiner_cache["chunk_prompt_masks"]
-        chunk_class_counts = template_guided_refiner_cache["chunk_class_counts"]
-        backbone_fpn = template_guided_refiner_cache["backbone_fpn"]
-        clip_final_map = template_guided_refiner_cache["clip_final_map"]
-        clip_mid_features = template_guided_refiner_cache["clip_mid_features"]
-        clip_mid_layer_indices = template_guided_refiner_cache["clip_mid_layer_indices"]
-        sam_text_mean = template_guided_refiner_cache["sam_text_mean"]
+        encoder_features_72 = encoder_refiner_cache["encoder_features_72"]
+        encoder_out_chunks = encoder_refiner_cache["encoder_out_chunks"]
+        chunk_prompts = encoder_refiner_cache["chunk_prompts"]
+        chunk_prompt_masks = encoder_refiner_cache["chunk_prompt_masks"]
+        chunk_class_counts = encoder_refiner_cache["chunk_class_counts"]
+        backbone_fpn = encoder_refiner_cache["backbone_fpn"]
+        clip_image_feat_map = encoder_refiner_cache["clip_image_feat_map"]
+        sam_text_mean = encoder_refiner_cache["sam_text_mean"]
+        clip_mid_features = encoder_refiner_cache[OUTPUT_KEYS.clip_mid_features]
 
         class_names = list(batch.find_text_batch)
         if len(class_names) == 0:
             raise ValueError("batch.find_text_batch is empty.")
 
-        cached_class_names = list(template_guided_refiner_cache["class_names"])
+        cached_class_names = list(encoder_refiner_cache["class_names"])
         if cached_class_names != class_names:
             raise ValueError(
                 "Cached class_names do not match batch.find_text_batch."
             )
 
-        return self.run_template_guided_refiner(
+        return self.run_encoder_refiner(
             encoder_features_72=encoder_features_72,
             encoder_out_chunks=encoder_out_chunks,
             chunk_prompts=chunk_prompts,
             chunk_prompt_masks=chunk_prompt_masks,
             chunk_class_counts=chunk_class_counts,
             backbone_fpn=backbone_fpn,
-            clip_final_map=clip_final_map,
-            clip_mid_features=clip_mid_features,
-            clip_mid_layer_indices=clip_mid_layer_indices,
+            clip_image_feat_map=clip_image_feat_map,
             sam_text_mean=sam_text_mean,
             class_names=class_names,
+            clip_mid_features=clip_mid_features,
             return_debug=return_debug,
         )
-
-    # ---- SAM3 encoder path (unchanged) ----
 
     def _get_img_feats(self, backbone_out, img_ids):
         vis_feats = backbone_out["backbone_fpn"][-self.num_feature_levels:]
@@ -931,8 +909,8 @@ class Sam3Image(torch.nn.Module):
         }
 
     def forward(self, input: BatchedDatapoint) -> Dict[str, torch.Tensor]:
-        refiner_cache = self.build_template_guided_refiner_cache(input)
-        return self.run_template_guided_refiner_from_cache(
-            template_guided_refiner_cache=refiner_cache,
+        encoder_refiner_cache = self.build_encoder_refiner_cache(input)
+        return self.run_encoder_refiner_from_cache(
+            encoder_refiner_cache=encoder_refiner_cache,
             batch=input,
         )
