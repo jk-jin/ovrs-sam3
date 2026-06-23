@@ -45,7 +45,6 @@ model = dict(
         window_size=9,
         shift_size=4,
 
-        spatial_fusion_conv_kernel=7,
         use_checkpoint=True,
         early_prompt_attention=False,
     ),

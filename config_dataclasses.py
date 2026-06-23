@@ -46,8 +46,6 @@ class EncoderRefinerConfig:
     window_size: int = 9
     shift_size: int = 4
 
-    spatial_fusion_conv_kernel: int = 7
-
     use_checkpoint: bool = True
     early_prompt_attention: bool = False
 
