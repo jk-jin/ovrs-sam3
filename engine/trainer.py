@@ -69,6 +69,13 @@ class Trainer:
         if self.val_dataloader is not None and hasattr(self.val_dataloader, "__len__"):
             self.val_iters_per_epoch = len(self.val_dataloader)
 
+        val_max_iters = self._get_val_max_iters()
+        if (
+            self.val_iters_per_epoch is not None
+            and val_max_iters is not None
+        ):
+            self.val_iters_per_epoch = min(self.val_iters_per_epoch, val_max_iters)
+
         self.log_state: Dict[str, object] = {}
         self._log_getters = []
 
@@ -82,6 +89,15 @@ class Trainer:
 
         self._train_iterator = None
         self._data_cycle = 0
+
+    def _get_val_max_iters(self) -> Optional[int]:
+        value = getattr(self.cfg, "val_max_iters", None)
+        if value is None:
+            return None
+        value = int(value)
+        if value <= 0:
+            return None
+        return value
 
     def maybe_resume_latest(self):
         if not self.cfg.auto_resume:
@@ -498,7 +514,12 @@ class Trainer:
 
         end = time.perf_counter()
 
+        val_max_iters = self._get_val_max_iters()
+
         for it, batch in enumerate(self.val_dataloader, start=1):
+            if val_max_iters is not None and it > val_max_iters:
+                break
+
             data_time = time.perf_counter() - end
 
             batch = self._move_to_device(batch)

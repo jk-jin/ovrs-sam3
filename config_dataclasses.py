@@ -111,6 +111,10 @@ class TrainerConfig:
     save_interval: int = 1000
     eval_interval: int = 1000
 
+    # Maximum number of validation batches per validation call.
+    # None or <=0 means full validation.
+    val_max_iters: Optional[int] = None
+
     monitor: str = "semantic.miou"
     monitor_mode: str = "max"
     max_keep_ckpts: int = 5

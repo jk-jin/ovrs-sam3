@@ -70,12 +70,22 @@ eval_cfg = dict(
     use_score_map=True,
 )
 
+visualization = dict(
+    enabled=False,
+)
+
 # Sweep schedule.
 # Do not use the full 1000-step warmup for short sweep trials.
 train_cfg = dict(
     max_iters=2000,
     save_interval=1000,
     eval_interval=1000,
+
+    # Fast cross-dataset validation during sweeps.
+    # batch_size=1, so this means 100 LoveDA val images.
+    # Set to None or 0 for full LoveDA validation.
+    val_max_iters=100,
+
     log_window_size=20,
     use_amp=True,
     grad_clip_norm=0.01,
