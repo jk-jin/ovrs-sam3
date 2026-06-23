@@ -139,7 +139,7 @@ param_scheduler = [
         type="LinearLR",
         start_factor=0.1,
         total_iters=1000,
-        end=0,
+        end=1000,
     ),
     dict(
         type="CosineAnnealingLR",

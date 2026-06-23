@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import random
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -126,6 +128,80 @@ def apply_cfg_options(cfg, cfg_options):
         _set_by_dot_path(cfg, key, value)
 
     return cfg
+
+
+def _get_by_dot_path(cfg, key: str):
+    parts = key.split(".")
+    if not parts or any(p == "" for p in parts):
+        raise ValueError(f"Invalid dot path: {key!r}")
+
+    obj = cfg
+    for part in parts:
+        if isinstance(obj, dict):
+            if part not in obj:
+                raise KeyError(f"Unknown config path {key!r}, missing {part!r}")
+            obj = obj[part]
+        else:
+            if not hasattr(obj, part):
+                raise KeyError(f"Unknown config path {key!r}, missing {part!r}")
+            obj = getattr(obj, part)
+    return obj
+
+
+def _sanitize_path_token(text: object, max_len: int = 80) -> str:
+    text = str(text).strip()
+    text = text.replace("/", "-").replace("\\", "-")
+    text = re.sub(r"[^A-Za-z0-9_.=-]+", "-", text)
+    text = text.strip("-_.")
+    if not text:
+        text = "empty"
+    if len(text) > max_len:
+        text = text[:max_len].rstrip("-_.")
+    return text
+
+
+def _short_key_name(key: str) -> str:
+    return key.split(".")[-1]
+
+
+def build_work_dir_suffix_from_cfg(cfg, keys: list[str]) -> str:
+    if not keys:
+        raise ValueError("--work-dir-suffix-keys requires at least one key.")
+
+    parts = []
+    for key in keys:
+        value = _get_by_dot_path(cfg, key)
+        short_key = _sanitize_path_token(_short_key_name(key), max_len=48)
+        value_token = _sanitize_path_token(value, max_len=48)
+        parts.append(f"{short_key}-{value_token}")
+
+    return "__".join(parts)
+
+
+def build_cfg_options_hash(cfg_options) -> str:
+    if not cfg_options:
+        return "noopts"
+    text = "\n".join(str(x) for x in cfg_options)
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
+
+
+def maybe_append_work_dir_suffix(
+    work_dir: str | None,
+    cfg,
+    suffix_keys: list[str] | None,
+    cfg_options,
+    append_hash: bool = False,
+) -> str | None:
+    if work_dir is None:
+        return None
+    if not suffix_keys:
+        return work_dir
+
+    suffix = build_work_dir_suffix_from_cfg(cfg, suffix_keys)
+    if append_hash:
+        suffix = f"{suffix}__{build_cfg_options_hash(cfg_options)}"
+
+    return str(Path(work_dir) / suffix)
 
 
 def _to_builtin(obj):
@@ -256,6 +332,25 @@ def main():
         action="store_true",
         help="Print merged config after --cfg-options and exit before building model.",
     )
+    parser.add_argument(
+        "--work-dir-suffix-keys",
+        nargs="+",
+        default=None,
+        help=(
+            "Append a deterministic subdirectory to --work-dir using values from "
+            "the merged config. Example: "
+            "--work-dir-suffix-keys model.freeze_cfg.openclip_text_finetune "
+            "model.freeze_cfg.openclip_image_finetune"
+        ),
+    )
+    parser.add_argument(
+        "--work-dir-suffix-hash",
+        action="store_true",
+        help=(
+            "Append an 8-char hash of all --cfg-options to the generated work-dir "
+            "suffix to avoid collisions."
+        ),
+    )
     args = parser.parse_args()
 
     if args.resume_from is not None and args.load_model_from is not None:
@@ -268,6 +363,14 @@ def main():
     if args.print_config:
         print_config_as_json(cfg)
         return
+
+    work_dir_override = maybe_append_work_dir_suffix(
+        work_dir=args.work_dir,
+        cfg=cfg,
+        suffix_keys=args.work_dir_suffix_keys,
+        cfg_options=args.cfg_options,
+        append_hash=bool(args.work_dir_suffix_hash),
+    )
 
     seed = args.seed if args.seed is not None else int(cfg.get("seed", 42))
     set_seed(seed)
@@ -285,10 +388,11 @@ def main():
         checkpoint_manager,
     ) = build_train_runtime_components(
         cfg,
-        work_dir_override=args.work_dir,
+        work_dir_override=work_dir_override,
         auto_resume=args.auto_resume,
     )
 
+    print(f"Resolved work_dir: {work_dir}")
     Path(work_dir).mkdir(parents=True, exist_ok=True)
 
     if args.eval_only:
