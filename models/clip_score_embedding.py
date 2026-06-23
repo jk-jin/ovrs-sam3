@@ -129,37 +129,10 @@ class ClipScoreEmbeddingBuilder(nn.Module):
         text_norm = F.normalize(dynamic_clip_text, dim=-1)
         image_norm = F.normalize(clip_image_feat_18, dim=1)
 
-        text_flat = text_norm.reshape(
-            batch_size * num_classes * num_queries,
-            clip_dim,
-        )
-
-        image_expanded = (
-            image_norm[:, None, None]
-            .expand(
-                batch_size,
-                num_classes,
-                num_queries,
-                image_clip_dim,
-                self.base_hw,
-                self.base_hw,
-            )
-            .reshape(
-                batch_size * num_classes * num_queries,
-                image_clip_dim,
-                self.base_hw * self.base_hw,
-            )
-        )
-
-        score_maps_18 = torch.bmm(
-            text_flat.unsqueeze(1),
-            image_expanded,
-        ).reshape(
-            batch_size,
-            num_classes,
-            num_queries,
-            self.base_hw,
-            self.base_hw,
+        score_maps_18 = torch.einsum(
+            "bcqd,bdhw->bcqhw",
+            text_norm,
+            image_norm,
         ) * 20.0
 
         score_embed_18_flat = self.score_conv_18(

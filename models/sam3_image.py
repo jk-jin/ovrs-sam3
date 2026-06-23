@@ -268,11 +268,6 @@ class Sam3Image(torch.nn.Module):
         if not isinstance(clip_mid_features, list):
             raise TypeError("clip_out['mid_features'] must be a list of tensors.")
 
-        if len(clip_mid_features) != 2:
-            raise ValueError(
-                f"Expected exactly 2 CLIP middle features, got {len(clip_mid_features)}."
-            )
-
         clip_feat_map = clip_feat_map.detach().contiguous()
         clip_grid_hw = (
             int(clip_feat_map.shape[-2]),
@@ -463,7 +458,8 @@ class Sam3Image(torch.nn.Module):
         if tuple(encoder_features_72.shape[:2]) != (batch_size, num_classes):
             raise ValueError(
                 "Merged encoder features shape mismatch: expected "
-                f"{(batch_size, num_classes)}, got {tuple(e.shape[:2])}."
+                f"{(batch_size, num_classes)}, "
+                f"got {tuple(encoder_features_72.shape[:2])}."
             )
 
         return {

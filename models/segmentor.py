@@ -24,6 +24,30 @@ class SAM3Segmentor(nn.Module):
 
     def train(self, mode: bool = True):
         super().train(mode)
+
+        core = self.core
+
+        # Frozen SAM3 modules must stay in eval mode even during training.
+        core.backbone.eval()
+        core.transformer.eval()
+        core.geometry_encoder.eval()
+        core.segmentation_head.eval()
+
+        # OpenCLIP image encoder is always frozen.
+        if getattr(core, "clip_image_encoder", None) is not None:
+            core.clip_image_encoder.eval()
+
+        # OpenCLIP text encoder stays eval even when q/v parameters are trainable.
+        # We only train selected weights, not dropout behavior.
+        if getattr(core, "clip_text_encoder", None) is not None:
+            core.clip_text_encoder.eval()
+
+        # Encoder refiner is the trainable module.
+        if mode:
+            core.encoder_refiner.train()
+        else:
+            core.encoder_refiner.eval()
+
         return self
 
     def clear_text_cache(self) -> None:
@@ -67,9 +91,11 @@ class SAM3Segmentor(nn.Module):
             batch=batch,
         )
 
+        output_mode = "final" if self.training else "infer"
+
         return self.adapter(
             raw_outputs=final_raw_outputs,
             batch=batch,
             expected_num_classes=None,
-            output_mode="infer",
+            output_mode=output_mode,
         )

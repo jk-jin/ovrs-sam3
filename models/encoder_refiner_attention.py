@@ -282,13 +282,14 @@ class ImageScoreWindowAttention(nn.Module):
                 img_mask[:, h, w] = cnt
                 cnt += 1
 
-        img_mask = torch.roll(img_mask, shifts=(-shift, -shift), dims=(1, 2))
-
+        # Do NOT roll img_mask here.
+        # The feature map is rolled before partition, but the region mask must stay
+        # in the original coordinate system, following Swin/GSNet shifted-window logic.
         mask_windows = self._window_partition(img_mask.unsqueeze(0))
         mask_windows = mask_windows.squeeze(-1)
 
         attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, float("-inf"))
+        attn_mask = attn_mask.masked_fill(attn_mask != 0, -100.0)
         attn_mask = attn_mask.masked_fill(attn_mask == 0, 0.0)
 
         win_per_img = attn_mask.shape[0]
@@ -315,6 +316,12 @@ class ImageScoreWindowAttention(nn.Module):
             encoder_features: [B, C, D, H, W]
         """
         B, C, D, H, W = encoder_features.shape
+
+        if H % self.window_size != 0 or W % self.window_size != 0:
+            raise ValueError(
+                f"ImageScoreWindowAttention expects H/W divisible by window_size, "
+                f"got H={H}, W={W}, window_size={self.window_size}."
+            )
 
         if tuple(sam_image_features.shape) != (B, D, H, W):
             raise ValueError(
