@@ -33,7 +33,8 @@ class SAM3Segmentor(nn.Module):
         core.geometry_encoder.eval()
         core.segmentation_head.eval()
 
-        # OpenCLIP image encoder is always frozen.
+        # OpenCLIP image encoder stays eval even when partially trainable:
+        # we train selected weights, not dropout / patch-dropout behavior.
         if getattr(core, "clip_image_encoder", None) is not None:
             core.clip_image_encoder.eval()
 

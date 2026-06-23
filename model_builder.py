@@ -608,42 +608,120 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         param.register_hook(hook)
         param._qv_only_grad_mask_registered = True
 
-    @classmethod
-    def set_openclip_text_finetune_attention(cls, clip_text_encoder: nn.Module) -> None:
-        """RSKT-like partial finetuning of CLIP text encoder.
+    @staticmethod
+    def _normalize_finetune_mode(mode: str, name: str) -> str:
+        mode = str(mode or "frozen").lower()
+        valid = {"frozen", "attention", "transformer", "full"}
+        if mode not in valid:
+            raise ValueError(
+                f"{name} must be one of {sorted(valid)}, got {mode!r}."
+            )
+        return mode
 
-        Freezes all parameters, then selectively unfreezes:
-        - positional embeddings
-        - text transformer attention q/v projections only (k stays frozen)
+    @classmethod
+    def _apply_attention_finetune(
+        cls,
+        module: nn.Module,
+        attn_scope: str,
+    ) -> None:
+        """Unfreeze attention q/v + positional embeddings within *module*.
 
         For fused qkv projections (in_proj_weight / in_proj_bias), a gradient
         mask hook zeros out k gradients while keeping q/v trainable.
-        """
-        cls.set_requires_grad(clip_text_encoder, False)
 
-        for name, param in clip_text_encoder.named_parameters():
+        *attn_scope* is the parent attribute name that contains attention layers
+        (e.g. "transformer").
+        """
+        for name, param in module.named_parameters():
             lname = name.lower()
             train = False
 
-            # Position-related params trainable.
             if "positional_embedding" in lname or "position" in lname:
                 train = True
 
-            # Text transformer attention q/v trainable.
-            elif "transformer" in lname and "attn" in lname:
+            elif attn_scope in lname and "attn" in lname:
                 if "q_proj" in lname or "v_proj" in lname:
                     train = True
-
-                # OpenCLIP / PyTorch MultiheadAttention often uses fused qkv.
                 elif "in_proj_weight" in lname or "in_proj_bias" in lname:
                     train = True
 
             if train:
                 param.requires_grad_(True)
 
-            # Register gradient mask AFTER enabling grad so the hook is allowed.
             if train and ("in_proj_weight" in lname or "in_proj_bias" in lname):
                 cls._register_qv_only_grad_mask(param)
+
+    @classmethod
+    def set_openclip_text_finetune(
+        cls,
+        clip_text_encoder: nn.Module,
+        mode: str,
+    ) -> None:
+        mode = cls._normalize_finetune_mode(mode, "freeze_cfg.openclip_text_finetune")
+
+        cls.set_requires_grad(clip_text_encoder, False)
+
+        if mode == "frozen":
+            return
+
+        if mode == "full":
+            cls.set_requires_grad(clip_text_encoder, True)
+            return
+
+        if mode == "transformer":
+            transformer = getattr(clip_text_encoder, "transformer", None)
+            if transformer is not None:
+                cls.set_requires_grad(transformer, True)
+            # Also unfreeze positional embedding (lives outside transformer in
+            # OpenCLIP's top-level module).
+            for name, param in clip_text_encoder.named_parameters():
+                if "positional_embedding" in name.lower() or "position" in name.lower():
+                    param.requires_grad_(True)
+            return
+
+        # mode == "attention"
+        cls._apply_attention_finetune(clip_text_encoder, attn_scope="transformer")
+
+    # Backward-compatible wrapper kept so other paths don't break.
+    @classmethod
+    def set_openclip_text_finetune_attention(cls, clip_text_encoder: nn.Module) -> None:
+        cls.set_openclip_text_finetune(clip_text_encoder, mode="attention")
+
+    @classmethod
+    def set_openclip_image_finetune(
+        cls,
+        clip_image_encoder: nn.Module,
+        mode: str,
+    ) -> None:
+        mode = cls._normalize_finetune_mode(mode, "freeze_cfg.openclip_image_finetune")
+
+        cls.set_requires_grad(clip_image_encoder, False)
+
+        # Tell OpenCLIPImageEncoder whether it should build an autograd graph.
+        if hasattr(clip_image_encoder, "set_enable_grad"):
+            clip_image_encoder.set_enable_grad(mode != "frozen")
+
+        if mode == "frozen":
+            return
+
+        visual = getattr(clip_image_encoder, "visual", clip_image_encoder)
+
+        if mode == "full":
+            cls.set_requires_grad(visual, True)
+            return
+
+        if mode == "transformer":
+            transformer = getattr(visual, "transformer", None)
+            if transformer is not None:
+                cls.set_requires_grad(transformer, True)
+            # Also unfreeze visual positional embedding.
+            for name, param in visual.named_parameters():
+                if "positional_embedding" in name.lower() or "position" in name.lower():
+                    param.requires_grad_(True)
+            return
+
+        # mode == "attention"
+        cls._apply_attention_finetune(visual, attn_scope="transformer")
 
     @classmethod
     def build_semantic_core_model(cls, cfg: SegmentorBuildConfig) -> nn.Module:
@@ -761,10 +839,15 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             core.geometry_encoder.eval()
             core.segmentation_head.eval()
 
-            # OpenCLIP image encoder — always frozen, always eval.
+            # OpenCLIP image encoder.
             clip_image_encoder = getattr(core, "clip_image_encoder", None)
             if clip_image_encoder is not None:
-                cls.set_requires_grad(clip_image_encoder, False)
+                image_ft = str(
+                    getattr(cfg.freeze_cfg, "openclip_image_finetune", "frozen")
+                ).lower()
+                cls.set_openclip_image_finetune(clip_image_encoder, mode=image_ft)
+                # Keep eval mode even when partially trainable:
+                # we train selected weights, not dropout / patch-dropout behavior.
                 clip_image_encoder.eval()
 
             # OpenCLIP text encoder.
@@ -773,20 +856,9 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 text_ft = str(
                     getattr(cfg.freeze_cfg, "openclip_text_finetune", "frozen")
                 ).lower()
-
-                if text_ft == "attention":
-                    cls.set_openclip_text_finetune_attention(clip_text_encoder)
-                elif text_ft == "frozen":
-                    cls.set_requires_grad(clip_text_encoder, False)
-                else:
-                    raise ValueError(
-                        "freeze_cfg.openclip_text_finetune must be "
-                        f"'frozen' or 'attention', got {text_ft!r}."
-                    )
-
-                # CLIP text encoder stays in eval mode regardless of
-                # finetune mode — we only train q/v weights, not
-                # dropout / layernorm statistics.
+                cls.set_openclip_text_finetune(clip_text_encoder, mode=text_ft)
+                # Keep eval mode even when partially trainable:
+                # we train selected weights, not dropout behavior.
                 clip_text_encoder.eval()
 
             # Encoder refiner is the only module that should be in

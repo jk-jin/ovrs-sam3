@@ -55,7 +55,20 @@ model = dict(
             "core.encoder_refiner",
         ],
         frozen_modules=[],
+
+        # Text side:
+        #   frozen      = freeze OpenCLIP text encoder
+        #   attention   = train text attention q/v + positional embedding
+        #   transformer = train all text transformer params
+        #   full        = train all OpenCLIP text encoder params
         openclip_text_finetune="attention",
+
+        # Image side:
+        #   frozen      = freeze OpenCLIP image encoder
+        #   attention   = train visual attention q/v + visual positional embedding
+        #   transformer = train all visual transformer params
+        #   full        = train all OpenCLIP visual params
+        openclip_image_finetune="frozen",
     ),
 
     adapter_cfg=dict(),
@@ -106,17 +119,16 @@ optim_wrapper = dict(
         paramwise_cfg=dict(
             norm_decay_mult=0.0,
             custom_keys={
-                "core.encoder_refiner": dict(
-                    lr_mult=4.0,
-                    decay_mult=1.0,
-                ),
+                "core.encoder_refiner": dict(lr_mult=4.0, decay_mult=1.0),
 
+                # OpenCLIP text q/v or full text fine-tune.
                 # 1e-4 × 0.02 = 2e-6
-                # Align with RSKT-Seg CLIP attention effective lr.
-                "core.clip_text_encoder": dict(
-                    lr_mult=0.02,
-                    decay_mult=0.0,
-                ),
+                "core.clip_text_encoder": dict(lr_mult=0.02, decay_mult=0.0),
+
+                # OpenCLIP image q/v or full image fine-tune.
+                # Conservative default; can be swept later.
+                # 1e-4 × 0.01 = 1e-6
+                "core.clip_image_encoder": dict(lr_mult=0.01, decay_mult=0.0),
             },
         ),
     )

@@ -69,6 +69,8 @@ class OpenCLIPImageEncoder(nn.Module):
                     f"visual transformer has {self.num_visual_blocks} blocks."
                 )
 
+        self.enable_grad = False
+
         self.visual.eval()
         for param in self.visual.parameters():
             param.requires_grad_(False)
@@ -130,6 +132,12 @@ class OpenCLIPImageEncoder(nn.Module):
             return int(proj.shape[1])
 
         raise TypeError(f"Unsupported visual.proj type: {type(proj)}")
+
+    def set_enable_grad(self, enable: bool) -> None:
+        self.enable_grad = bool(enable)
+
+    def has_trainable_params(self) -> bool:
+        return any(p.requires_grad for p in self.visual.parameters())
 
     @staticmethod
     def _to_2tuple(x: Union[int, Sequence[int]]) -> Tuple[int, int]:
@@ -376,7 +384,9 @@ class OpenCLIPImageEncoder(nn.Module):
         """
         self.visual.eval()
 
-        with torch.no_grad():
+        grad_enabled = bool(self.enable_grad and self.has_trainable_params())
+
+        with torch.set_grad_enabled(grad_enabled):
             dense_tokens, (grid_h, grid_w), mid_features = (
                 self._forward_full_vit_dense_tokens(
                     images,
@@ -391,9 +401,13 @@ class OpenCLIPImageEncoder(nn.Module):
             self.output_dim,
         ).permute(0, 3, 1, 2).contiguous()
 
+        # mid_features are not used in the training path; always detach to
+        # avoid retaining an unnecessary compute graph.
+        mid_features_out = [x.detach().contiguous() for x in mid_features]
+
         return {
             "feat_map": feat_map,
-            "mid_features": [x.contiguous() for x in mid_features],
+            "mid_features": mid_features_out,
             "mid_layer_indices": self.intermediate_layers,
         }
 

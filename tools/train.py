@@ -317,7 +317,12 @@ def main():
         else:
             trainer.global_iter = int(args.eval_iter)
 
-        trainer.val()
+        trainer.hook_manager.call("before_run", trainer)
+        try:
+            trainer.val()
+        finally:
+            trainer.hook_manager.call("after_run", trainer)
+
         return
 
     print("Building train_dataloader...")

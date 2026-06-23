@@ -10,8 +10,11 @@ class FreezeConfig:
     trainable_modules: list[str] = field(default_factory=list)
     frozen_modules: list[str] = field(default_factory=list)
 
-    # "frozen" or "attention"
+    # "frozen" | "attention" | "transformer" | "full"
     openclip_text_finetune: str = "frozen"
+
+    # "frozen" | "attention" | "transformer" | "full"
+    openclip_image_finetune: str = "frozen"
 
 
 @dataclass
@@ -142,7 +145,7 @@ class MetricsJsonlHookConfig:
     enabled: bool = True
     filename: str = "metrics.jsonl"
     train_interval: int = 20
-    val_interval: int = 1
+    val_interval: int = 1  # reserved; currently only after_val is recorded, not after_val_iter
     priority: int = 80
 
 
@@ -155,7 +158,7 @@ class WandbHookConfig:
     tags: list[str] = field(default_factory=list)
     mode: str = "online"
     train_interval: int = 20
-    log_val_iter: bool = False
+    log_val_iter: bool = False  # reserved; per-batch val logging is skipped when False
     priority: int = 90
 
 @dataclass

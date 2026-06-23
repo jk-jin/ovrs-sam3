@@ -244,11 +244,10 @@ class Sam3Image(torch.nn.Module):
         if input.raw_images is None:
             raise ValueError("clip_image_encoder is enabled, but BatchedDatapoint.raw_images is None.")
 
-        with torch.no_grad():
-            clip_out = self.clip_image_encoder.encode_raw_images(
-                raw_images=input.raw_images,
-                device=device,
-            )
+        clip_out = self.clip_image_encoder.encode_raw_images(
+            raw_images=input.raw_images,
+            device=device,
+        )
 
         if not isinstance(clip_out, dict):
             raise TypeError(
@@ -268,7 +267,15 @@ class Sam3Image(torch.nn.Module):
         if not isinstance(clip_mid_features, list):
             raise TypeError("clip_out['mid_features'] must be a list of tensors.")
 
-        clip_feat_map = clip_feat_map.detach().contiguous()
+        image_encoder_trainable = (
+            hasattr(self.clip_image_encoder, "has_trainable_params")
+            and self.clip_image_encoder.has_trainable_params()
+        )
+
+        if image_encoder_trainable:
+            clip_feat_map = clip_feat_map.contiguous()
+        else:
+            clip_feat_map = clip_feat_map.detach().contiguous()
         clip_grid_hw = (
             int(clip_feat_map.shape[-2]),
             int(clip_feat_map.shape[-1]),
