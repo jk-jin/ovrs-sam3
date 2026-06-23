@@ -34,6 +34,7 @@ class Trainer:
         cfg: Optional[TrainerConfig] = None,
         hooks: Optional[Sequence[Hook]] = None,
         visualizer: Optional[VisualizationManager] = None,
+        raw_cfg_for_logging=None,
     ):
         self.model = model
         self.optimizer = optimizer
@@ -42,6 +43,7 @@ class Trainer:
         self.val_dataloader = val_dataloader
         self.lr_scheduler = lr_scheduler
         self.cfg = cfg or TrainerConfig()
+        self.raw_cfg_for_logging = raw_cfg_for_logging
 
         self.device = torch.device(self.cfg.device)
         self.scaler = GradScaler(

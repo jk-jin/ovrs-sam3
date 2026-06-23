@@ -18,17 +18,20 @@ from .config_dataclasses import (
     EncoderRefinerConfig,
     FreezeConfig,
     LoggerHookConfig,
+    MetricsJsonlHookConfig,
     OpenCLIPConfig,
     SegmentorBuildConfig,
     SemanticCriterionConfig,
     TrainerConfig,
     VisualizerConfig,
+    WandbHookConfig,
 )
 from .losses.semantic_criterion import (
     HybridCriterion,
     SemanticCriterion,
 )
 from .engine.checkpoint import CheckpointManager
+from .engine.experiment_hooks import MetricsJsonlHook, WandbHook
 from .engine.hooks import LoggerHook
 from .engine.visualization import VisualizationManager
 from .models.adapters.semantic_adapter import (
@@ -860,7 +863,43 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         logger_cfg = LoggerHookConfig(
             **cls._require_dict(default_hooks["logger"], "default_hooks.logger")
         )
-        return [LoggerHook(logger_cfg)]
+        hooks = [LoggerHook(logger_cfg)]
+
+        tracking_cfg = cfg.get("experiment_tracking", None)
+        if tracking_cfg is None:
+            tracking_cfg = {}
+
+        metrics_cfg_raw = tracking_cfg.get("metrics_jsonl", None)
+        if metrics_cfg_raw is None:
+            metrics_cfg_raw = {}
+        metrics_cfg = MetricsJsonlHookConfig(**dict(metrics_cfg_raw))
+        if metrics_cfg.enabled:
+            hooks.append(MetricsJsonlHook(
+                enabled=metrics_cfg.enabled,
+                filename=metrics_cfg.filename,
+                train_interval=metrics_cfg.train_interval,
+                val_interval=metrics_cfg.val_interval,
+                priority=metrics_cfg.priority,
+            ))
+
+        wandb_cfg_raw = tracking_cfg.get("wandb", None)
+        if wandb_cfg_raw is None:
+            wandb_cfg_raw = {}
+        wandb_cfg = WandbHookConfig(**dict(wandb_cfg_raw))
+        if wandb_cfg.enabled:
+            hooks.append(WandbHook(
+                enabled=wandb_cfg.enabled,
+                project=wandb_cfg.project,
+                name=wandb_cfg.name,
+                group=wandb_cfg.group,
+                tags=wandb_cfg.tags,
+                mode=wandb_cfg.mode,
+                train_interval=wandb_cfg.train_interval,
+                log_val_iter=wandb_cfg.log_val_iter,
+                priority=wandb_cfg.priority,
+            ))
+
+        return hooks
 
     @classmethod
     def build_visualizer_from_cfg(

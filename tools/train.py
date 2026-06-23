@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import ast
+import json
 import random
 import sys
 from pathlib import Path
@@ -61,6 +63,81 @@ def _to_dotdict(obj: Any):
     if isinstance(obj, list):
         return [_to_dotdict(x) for x in obj]
     return obj
+
+
+def _parse_cfg_value(raw: str):
+    text = str(raw).strip()
+
+    lowered = text.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered in ("none", "null"):
+        return None
+
+    try:
+        return ast.literal_eval(text)
+    except Exception:
+        return text
+
+
+def _set_by_dot_path(cfg, key: str, value):
+    parts = key.split(".")
+    if not parts or any(p == "" for p in parts):
+        raise ValueError(f"Invalid cfg option key: {key!r}")
+
+    obj = cfg
+    for part in parts[:-1]:
+        if isinstance(obj, dict):
+            if part not in obj:
+                raise KeyError(f"Unknown config path: {key!r}, missing {part!r}")
+            obj = obj[part]
+        else:
+            if not hasattr(obj, part):
+                raise KeyError(f"Unknown config path: {key!r}, missing {part!r}")
+            obj = getattr(obj, part)
+
+    last = parts[-1]
+    if isinstance(obj, dict):
+        if last not in obj:
+            raise KeyError(f"Unknown config key: {key!r}, missing {last!r}")
+        obj[last] = value
+    else:
+        if not hasattr(obj, last):
+            raise KeyError(f"Unknown config key: {key!r}, missing {last!r}")
+        setattr(obj, last, value)
+
+
+def apply_cfg_options(cfg, cfg_options):
+    if not cfg_options:
+        return cfg
+
+    for item in cfg_options:
+        if "=" not in item:
+            raise ValueError(
+                f"Invalid --cfg-options item {item!r}. Expected key=value."
+            )
+        key, raw_value = item.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise ValueError(f"Invalid empty config key in item {item!r}.")
+        value = _parse_cfg_value(raw_value)
+        _set_by_dot_path(cfg, key, value)
+
+    return cfg
+
+
+def _to_builtin(obj):
+    if isinstance(obj, dict):
+        return {str(k): _to_builtin(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_builtin(v) for v in obj]
+    return obj
+
+
+def print_config_as_json(cfg) -> None:
+    print(json.dumps(_to_builtin(cfg), indent=2, ensure_ascii=False))
 
 
 def build_log_getters(cfg) -> List[object]:
@@ -165,6 +242,20 @@ def main():
         default=0,
         help="iter id used in eval-only outputs/logging",
     )
+    parser.add_argument(
+        "--cfg-options",
+        nargs="+",
+        default=None,
+        help=(
+            "Override config options, e.g. "
+            "train_cfg.max_iters=1000 model.criterion_cfg.final_dice_weight=0.3"
+        ),
+    )
+    parser.add_argument(
+        "--print-config",
+        action="store_true",
+        help="Print merged config after --cfg-options and exit before building model.",
+    )
     args = parser.parse_args()
 
     if args.resume_from is not None and args.load_model_from is not None:
@@ -172,6 +263,11 @@ def main():
 
     cfg = Config.fromfile(args.config)
     cfg = _to_dotdict(cfg)
+    cfg = apply_cfg_options(cfg, args.cfg_options)
+
+    if args.print_config:
+        print_config_as_json(cfg)
+        return
 
     seed = args.seed if args.seed is not None else int(cfg.get("seed", 42))
     set_seed(seed)
@@ -213,6 +309,7 @@ def main():
             hooks=hooks,
             checkpoint_manager=checkpoint_manager,
             visualizer=visualizer,
+            raw_cfg_for_logging=_to_builtin(cfg),
         )
 
         if args.resume_from:
@@ -243,6 +340,7 @@ def main():
         hooks=hooks,
         checkpoint_manager=checkpoint_manager,
         visualizer=visualizer,
+        raw_cfg_for_logging=_to_builtin(cfg),
     )
 
     for getter in build_log_getters(cfg):

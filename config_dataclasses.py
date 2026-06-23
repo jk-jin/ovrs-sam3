@@ -136,6 +136,28 @@ class LoggerHookConfig:
     print_per_class_metrics: bool = True
     priority: int = 70
 
+
+@dataclass
+class MetricsJsonlHookConfig:
+    enabled: bool = True
+    filename: str = "metrics.jsonl"
+    train_interval: int = 20
+    val_interval: int = 1
+    priority: int = 80
+
+
+@dataclass
+class WandbHookConfig:
+    enabled: bool = False
+    project: str = "ovrs-sam3"
+    name: Optional[str] = None
+    group: Optional[str] = None
+    tags: list[str] = field(default_factory=list)
+    mode: str = "online"
+    train_interval: int = 20
+    log_val_iter: bool = False
+    priority: int = 90
+
 @dataclass
 class VisualizerConfig:
     enabled: bool = False
