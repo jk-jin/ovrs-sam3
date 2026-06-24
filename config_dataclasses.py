@@ -34,6 +34,9 @@ class OpenCLIPConfig:
 class EncoderRefinerConfig:
     enabled: bool = True
 
+    # Ablation control
+    ablation_variant: str = "baseline"
+
     num_query_tokens: int = 32
     fusion_layers: int = 4
     num_heads: int = 8
@@ -41,8 +44,29 @@ class EncoderRefinerConfig:
 
     hidden_dim: int = 256
 
-    clip_score_embed_dim: int = 32
+    clip_score_embed_dim: int = 128
     clip_score_conv_kernel: int = 7
+
+    # Experiment 1: score embed text source
+    score_embed_source: str = "learned_query"
+    fixed_score_templates: list[str] = field(default_factory=list)
+
+    # Experiment 2: score embed upsample fuse CLIP mid features
+    score_upsample_fuse_clip_mid: bool = False
+    score_mid_proj_dim: int = 64
+    clip_mid_native_dim: int = 1024
+    clip_mid_layer_for_36: int = 15
+    clip_mid_layer_for_72: int = 7
+
+    # Experiment 3: window attention scales
+    window_attention_scales: list[int] = field(default_factory=lambda: [36, 18])
+
+    # Experiment 4: class attention q/k context
+    class_attention_context: str = "sam_text_score"
+
+    # Experiment 5: spatial upsample fuse SAM3 FPN
+    spatial_upsample_fuse_sam_fpn: bool = False
+    sam_fpn_fuse_proj_dim: int = 64
 
     encoder_hw: int = 72
     score_base_hw: int = 18
@@ -121,6 +145,9 @@ class TrainerConfig:
 
     device: str = "cuda"
     auto_resume: bool = False
+
+    # When False, skip ALL checkpoint writes (periodic, best, final, resume).
+    save_checkpoints: bool = True
 
     tta_cfg: Optional[Dict] = None
     eval_cfg: Optional[Dict] = None

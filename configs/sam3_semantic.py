@@ -30,6 +30,8 @@ model = dict(
     encoder_refiner_cfg=dict(
         enabled=True,
 
+        ablation_variant="baseline",
+
         num_query_tokens=32,
         fusion_layers=4,
         num_heads=8,
@@ -39,6 +41,63 @@ model = dict(
 
         clip_score_embed_dim=128,
         clip_score_conv_kernel=7,
+
+        # Experiment 1: score embed text source
+        score_embed_source="learned_query",
+        fixed_score_templates=[
+            "a satellite image of {}.",
+            "an aerial image of {}.",
+            "a remote sensing image of {}.",
+            "a high resolution satellite view of {}.",
+            "a top-down aerial view of {}.",
+            "an overhead view of {}.",
+            "a geospatial image showing {}.",
+            "a satellite scene containing {}.",
+
+            "a remote sensing segmentation region of {}.",
+            "a land cover area of {}.",
+            "a land use region of {}.",
+            "a mapped region corresponding to {}.",
+            "a visible object region of {} from above.",
+            "a distinct terrain region of {}.",
+            "a spatial area labeled as {}.",
+            "a geographic region occupied by {}.",
+
+            "the texture pattern of {} in a satellite image.",
+            "the color and texture of {} from an aerial view.",
+            "the shape of {} seen from above.",
+            "the boundary of {} in remote sensing imagery.",
+            "the dense spatial pattern of {}.",
+            "the sparse spatial pattern of {}.",
+            "the large scale appearance of {}.",
+            "the small scale appearance of {}.",
+
+            "urban remote sensing imagery of {}.",
+            "rural remote sensing imagery of {}.",
+            "a natural landscape region of {}.",
+            "a man-made structure region of {}.",
+            "a transportation related area of {}.",
+            "a vegetation or land surface region of {}.",
+            "a water or impervious surface context containing {}.",
+            "a complex aerial scene with {}.",
+        ],
+
+        # Experiment 2: score embed upsample fuse CLIP mid features
+        score_upsample_fuse_clip_mid=False,
+        score_mid_proj_dim=64,
+        clip_mid_native_dim=1024,
+        clip_mid_layer_for_36=15,
+        clip_mid_layer_for_72=7,
+
+        # Experiment 3: window attention scales
+        window_attention_scales=[36, 18],
+
+        # Experiment 4: class attention q/k context
+        class_attention_context="sam_text_score",
+
+        # Experiment 5: spatial upsample fuse SAM3 FPN
+        spatial_upsample_fuse_sam_fpn=False,
+        sam_fpn_fuse_proj_dim=64,
 
         encoder_hw=72,
         score_base_hw=18,
@@ -61,7 +120,7 @@ model = dict(
         #   attention   = train text attention q/v + positional embedding
         #   transformer = train all text transformer params
         #   full        = train all OpenCLIP text encoder params
-        openclip_text_finetune="attention",
+        openclip_text_finetune="frozen",
 
         # Image side:
         #   frozen      = freeze OpenCLIP image encoder
@@ -87,7 +146,7 @@ model = dict(
         # valid pixels keep full supervision;
         # ignore pixels get weaker suppression to avoid over-penalizing unlabeled regions.
         bce_valid_pixel_weight=1.0,
-        bce_ignore_pixel_weight=0.05,
+        bce_ignore_pixel_weight=0.01,
 
         eps=1e-6,
     ),
@@ -180,6 +239,10 @@ experiment_tracking = dict(
         train_interval=20,
         log_val_iter=False,
         priority=90,
+
+        # Required for W&B sweep auto naming via --cfg-options.
+        name_from_config_keys=[],
+        name_prefix=None,
     ),
 )
 

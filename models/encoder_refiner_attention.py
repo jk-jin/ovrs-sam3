@@ -80,10 +80,11 @@ class ClassTokenScoreClassAttention(nn.Module):
     """
     Inter-class attention at each spatial position.
 
-    q/k = concat(encoder_features, sam_text_mean, clip_score_embed)
-    v   = encoder_features
-
-    Attention happens across C classes at every spatial position.
+    q/k context is controlled by class_attention_context:
+        "sam_text_score": concat(encoder_features, sam_text_mean, clip_score_embed)
+        "sam_text":       concat(encoder_features, sam_text_mean)
+        "score_embed":    concat(encoder_features, clip_score_embed)
+    v = encoder_features (always)
     """
 
     def __init__(
@@ -92,21 +93,36 @@ class ClassTokenScoreClassAttention(nn.Module):
         score_embed_dim: int = 128,
         num_heads: int = 8,
         dropout: float = 0.1,
+        class_attention_context: str = "sam_text_score",
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
         self.score_embed_dim = int(score_embed_dim)
         self.num_heads = int(num_heads)
+        self.class_attention_context = str(class_attention_context)
+
+        if self.class_attention_context not in {"sam_text_score", "sam_text", "score_embed"}:
+            raise ValueError(
+                f"class_attention_context must be one of "
+                f"{{'sam_text_score', 'sam_text', 'score_embed'}}, "
+                f"got {self.class_attention_context!r}."
+            )
 
         if self.hidden_dim % self.num_heads != 0:
             raise ValueError(
                 f"hidden_dim={hidden_dim} not divisible by num_heads={num_heads}"
             )
 
-        qk_in_dim = self.hidden_dim * 2 + self.score_embed_dim
+        qk_in_dim = self.hidden_dim
+        if self.class_attention_context in {"sam_text", "sam_text_score"}:
+            qk_in_dim += self.hidden_dim
+        if self.class_attention_context in {"score_embed", "sam_text_score"}:
+            qk_in_dim += self.score_embed_dim
 
-        self.q_proj = nn.Linear(qk_in_dim, self.hidden_dim)
-        self.k_proj = nn.Linear(qk_in_dim, self.hidden_dim)
+        self.qk_in_dim = qk_in_dim
+
+        self.q_proj = nn.Linear(self.qk_in_dim, self.hidden_dim)
+        self.k_proj = nn.Linear(self.qk_in_dim, self.hidden_dim)
         self.v_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.out_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
 
@@ -149,19 +165,25 @@ class ClassTokenScoreClassAttention(nn.Module):
 
         e_flat = encoder_features.permute(0, 3, 4, 1, 2).reshape(B * N, C, D)
 
-        sam_text_broadcast = (
-            sam_text_mean.to(device=e_flat.device, dtype=e_flat.dtype)[:, None]
-            .expand(B, N, C, D)
-            .reshape(B * N, C, D)
-        )
+        parts = [e_flat]
 
-        score_flat = (
-            clip_score_embed
-            .permute(0, 3, 4, 1, 2)
-            .reshape(B * N, C, self.score_embed_dim)
-        )
+        if self.class_attention_context in {"sam_text", "sam_text_score"}:
+            sam_text_broadcast = (
+                sam_text_mean.to(device=e_flat.device, dtype=e_flat.dtype)[:, None]
+                .expand(B, N, C, D)
+                .reshape(B * N, C, D)
+            )
+            parts.append(sam_text_broadcast)
 
-        qk_input = torch.cat([e_flat, sam_text_broadcast, score_flat], dim=-1)
+        if self.class_attention_context in {"score_embed", "sam_text_score"}:
+            score_flat = (
+                clip_score_embed
+                .permute(0, 3, 4, 1, 2)
+                .reshape(B * N, C, self.score_embed_dim)
+            )
+            parts.append(score_flat)
+
+        qk_input = torch.cat(parts, dim=-1)
 
         q = self.q_proj(qk_input)
         k = self.k_proj(qk_input)
@@ -417,9 +439,12 @@ class MultiScaleImageScoreWindowAttention(nn.Module):
     """
     Multi-scale intra-class window attention.
 
-    Downsamples 72×72 features to 36×36 and 18×18,
-    runs regular + shifted window attention at each scale,
+    Downsamples 72×72 features to 36×36 and/or 18×18,
+    runs regular + shifted window attention at each selected scale,
     upsamples the attention results to 72×72 and fuses via norm + sum.
+
+    Configurable scales: window_attention_scales in {[36,18], [36], [18]}.
+    Optional SAM FPN fusion on upsample: spatial_upsample_fuse_sam_fpn.
     """
 
     def __init__(
@@ -430,46 +455,68 @@ class MultiScaleImageScoreWindowAttention(nn.Module):
         window_size: int = 9,
         shift_size: int = 4,
         dropout: float = 0.1,
+        window_attention_scales: list[int] | None = None,
+        spatial_upsample_fuse_sam_fpn: bool = False,
+        sam_fpn_fuse_proj_dim: int = 64,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
 
+        if window_attention_scales is None:
+            window_attention_scales = [36, 18]
+        self.window_attention_scales = list(window_attention_scales)
+
+        valid_scales = ([36, 18], [36], [18])
+        if self.window_attention_scales not in valid_scales:
+            raise ValueError(
+                f"window_attention_scales must be one of {valid_scales}, "
+                f"got {self.window_attention_scales}."
+            )
+
+        self.use_36 = 36 in self.window_attention_scales
+        self.use_18 = 18 in self.window_attention_scales
+
+        self.spatial_upsample_fuse_sam_fpn = bool(spatial_upsample_fuse_sam_fpn)
+        self.sam_fpn_fuse_proj_dim = int(sam_fpn_fuse_proj_dim)
+
         self.down_72_to_36 = ConvDownsample2d(self.hidden_dim)
         self.down_36_to_18 = ConvDownsample2d(self.hidden_dim)
 
-        self.attn_36_regular = ImageScoreWindowAttention(
-            hidden_dim=hidden_dim,
-            score_embed_dim=score_embed_dim,
-            num_heads=num_heads,
-            window_size=window_size,
-            shift_size=0,
-            dropout=dropout,
-        )
-        self.attn_36_shifted = ImageScoreWindowAttention(
-            hidden_dim=hidden_dim,
-            score_embed_dim=score_embed_dim,
-            num_heads=num_heads,
-            window_size=window_size,
-            shift_size=shift_size,
-            dropout=dropout,
-        )
+        if self.use_36:
+            self.attn_36_regular = ImageScoreWindowAttention(
+                hidden_dim=hidden_dim,
+                score_embed_dim=score_embed_dim,
+                num_heads=num_heads,
+                window_size=window_size,
+                shift_size=0,
+                dropout=dropout,
+            )
+            self.attn_36_shifted = ImageScoreWindowAttention(
+                hidden_dim=hidden_dim,
+                score_embed_dim=score_embed_dim,
+                num_heads=num_heads,
+                window_size=window_size,
+                shift_size=shift_size,
+                dropout=dropout,
+            )
 
-        self.attn_18_regular = ImageScoreWindowAttention(
-            hidden_dim=hidden_dim,
-            score_embed_dim=score_embed_dim,
-            num_heads=num_heads,
-            window_size=window_size,
-            shift_size=0,
-            dropout=dropout,
-        )
-        self.attn_18_shifted = ImageScoreWindowAttention(
-            hidden_dim=hidden_dim,
-            score_embed_dim=score_embed_dim,
-            num_heads=num_heads,
-            window_size=window_size,
-            shift_size=shift_size,
-            dropout=dropout,
-        )
+        if self.use_18:
+            self.attn_18_regular = ImageScoreWindowAttention(
+                hidden_dim=hidden_dim,
+                score_embed_dim=score_embed_dim,
+                num_heads=num_heads,
+                window_size=window_size,
+                shift_size=0,
+                dropout=dropout,
+            )
+            self.attn_18_shifted = ImageScoreWindowAttention(
+                hidden_dim=hidden_dim,
+                score_embed_dim=score_embed_dim,
+                num_heads=num_heads,
+                window_size=window_size,
+                shift_size=shift_size,
+                dropout=dropout,
+            )
 
         self.up_36_to_72 = BilinearConvUpsample2d(self.hidden_dim)
         self.up_18_to_36 = BilinearConvUpsample2d(self.hidden_dim)
@@ -479,29 +526,87 @@ class MultiScaleImageScoreWindowAttention(nn.Module):
         self.norm_18_to_72 = nn.LayerNorm(self.hidden_dim)
         self.fused_norm = nn.LayerNorm(self.hidden_dim)
 
+        # SAM FPN fusion modules (Experiment 5)
+        if self.spatial_upsample_fuse_sam_fpn:
+            fpn_groups = min(8, self.sam_fpn_fuse_proj_dim)
+            if self.sam_fpn_fuse_proj_dim % fpn_groups != 0:
+                fpn_groups = 1
+
+            self.sam_fpn_36_proj = nn.Sequential(
+                nn.Conv2d(self.hidden_dim, self.sam_fpn_fuse_proj_dim, kernel_size=1, bias=False),
+                nn.GroupNorm(fpn_groups, self.sam_fpn_fuse_proj_dim),
+                nn.GELU(),
+            )
+            self.sam_fpn_72_proj = nn.Sequential(
+                nn.Conv2d(self.hidden_dim, self.sam_fpn_fuse_proj_dim, kernel_size=1, bias=False),
+                nn.GroupNorm(fpn_groups, self.sam_fpn_fuse_proj_dim),
+                nn.GELU(),
+            )
+
+            fuse_groups = min(8, self.hidden_dim)
+            if self.hidden_dim % fuse_groups != 0:
+                fuse_groups = 1
+
+            if self.use_36:
+                self.fuse_36_to_72_with_fpn = nn.Sequential(
+                    nn.Conv2d(self.hidden_dim + self.sam_fpn_fuse_proj_dim,
+                              self.hidden_dim, kernel_size=3, padding=1, bias=False),
+                    nn.GroupNorm(fuse_groups, self.hidden_dim),
+                    nn.GELU(),
+                )
+            if self.use_18:
+                self.fuse_18_to_36_with_fpn = nn.Sequential(
+                    nn.Conv2d(self.hidden_dim + self.sam_fpn_fuse_proj_dim,
+                              self.hidden_dim, kernel_size=3, padding=1, bias=False),
+                    nn.GroupNorm(fuse_groups, self.hidden_dim),
+                    nn.GELU(),
+                )
+                self.fuse_18_to_72_with_fpn = nn.Sequential(
+                    nn.Conv2d(self.hidden_dim + self.sam_fpn_fuse_proj_dim,
+                              self.hidden_dim, kernel_size=3, padding=1, bias=False),
+                    nn.GroupNorm(fuse_groups, self.hidden_dim),
+                    nn.GELU(),
+                )
+
     def _downsample_encoder_features(
         self,
         encoder_features_72: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         features_72_flat, batch_size, num_classes = flatten_batch_class(
             encoder_features_72,
         )
 
-        features_36_flat = self.down_72_to_36(features_72_flat)
-        features_18_flat = self.down_36_to_18(features_36_flat)
+        features_36 = None
+        features_18 = None
 
-        features_36 = unflatten_batch_class(
-            features_36_flat,
-            batch_size,
-            num_classes,
-        )
-        features_18 = unflatten_batch_class(
-            features_18_flat,
-            batch_size,
-            num_classes,
-        )
+        if self.use_36 or self.use_18:
+            features_36_flat = self.down_72_to_36(features_72_flat)
+            features_36 = unflatten_batch_class(
+                features_36_flat, batch_size, num_classes,
+            )
+
+        if self.use_18:
+            features_18_flat = self.down_36_to_18(features_36_flat)
+            features_18 = unflatten_batch_class(
+                features_18_flat, batch_size, num_classes,
+            )
 
         return features_36, features_18
+
+    @staticmethod
+    def _interp_bcdhw(
+        features: torch.Tensor,
+        target_hw: tuple[int, int],
+    ) -> torch.Tensor:
+        """Pure bilinear upsample without conv (used by FPN fusion path)."""
+        flat, batch_size, num_classes = flatten_batch_class(features)
+        out = F.interpolate(
+            flat,
+            size=target_hw,
+            mode="bilinear",
+            align_corners=False,
+        )
+        return unflatten_batch_class(out, batch_size, num_classes)
 
     @staticmethod
     def _norm_bcdhw(
@@ -530,6 +635,37 @@ class MultiScaleImageScoreWindowAttention(nn.Module):
         features_36_flat = self.up_18_to_36(features_18_flat, target_hw=(36, 36))
         features_72_flat = self.up_36_from_18_to_72(features_36_flat, target_hw=target_hw)
         return unflatten_batch_class(features_72_flat, batch_size, num_classes)
+
+    def _apply_fpn_fusion_36_to_72(
+        self,
+        features_36_to_72: torch.Tensor,
+        sam_fpn_72: torch.Tensor,
+        fuse_module: nn.Module,
+    ) -> torch.Tensor:
+        """Fuse upsampled 36→72 features with SAM FPN 72×72 features."""
+        B, C, D, H, W = features_36_to_72.shape
+        fpn_proj = self.sam_fpn_72_proj(sam_fpn_72)
+        fpn_proj_bc = fpn_proj[:, None].expand(B, C, self.sam_fpn_fuse_proj_dim, H, W)
+
+        concat = torch.cat([features_36_to_72, fpn_proj_bc], dim=2)
+        concat_flat = concat.reshape(B * C, D + self.sam_fpn_fuse_proj_dim, H, W)
+        fused_flat = fuse_module(concat_flat)
+        return fused_flat.reshape(B, C, D, H, W).contiguous()
+
+    def _apply_fpn_fusion_18_to_36(
+        self,
+        features_18_to_36: torch.Tensor,
+        sam_fpn_36: torch.Tensor,
+    ) -> torch.Tensor:
+        """Fuse upsampled 18→36 features with SAM FPN 36×36 features."""
+        B, C, D, H, W = features_18_to_36.shape
+        fpn_proj = self.sam_fpn_36_proj(sam_fpn_36)
+        fpn_proj_bc = fpn_proj[:, None].expand(B, C, self.sam_fpn_fuse_proj_dim, H, W)
+
+        concat = torch.cat([features_18_to_36, fpn_proj_bc], dim=2)
+        concat_flat = concat.reshape(B * C, D + self.sam_fpn_fuse_proj_dim, H, W)
+        fused_flat = self.fuse_18_to_36_with_fpn(concat_flat)
+        return fused_flat.reshape(B, C, D, H, W).contiguous()
 
     def forward(
         self,
@@ -564,60 +700,100 @@ class MultiScaleImageScoreWindowAttention(nn.Module):
             mode="bilinear",
             align_corners=False,
         )
-        sam_image_last_18 = F.interpolate(
-            sam_image_last_72,
-            size=(18, 18),
-            mode="bilinear",
-            align_corners=False,
-        )
 
         clip_score_embed_36 = clip_score_embeds["scale_36"]
         clip_score_embed_18 = clip_score_embeds["scale_18"]
 
-        features_36 = self.attn_36_regular(
-            encoder_features=features_36,
-            sam_image_features=sam_image_last_36,
-            clip_score_embed=clip_score_embed_36,
-        )
-        features_36 = self.attn_36_shifted(
-            encoder_features=features_36,
-            sam_image_features=sam_image_last_36,
-            clip_score_embed=clip_score_embed_36,
-        )
+        spatial_parts_72: list[torch.Tensor] = []
 
-        features_18 = self.attn_18_regular(
-            encoder_features=features_18,
-            sam_image_features=sam_image_last_18,
-            clip_score_embed=clip_score_embed_18,
-        )
-        features_18 = self.attn_18_shifted(
-            encoder_features=features_18,
-            sam_image_features=sam_image_last_18,
-            clip_score_embed=clip_score_embed_18,
-        )
+        # --- 36 branch ---
+        if self.use_36:
+            features_36 = self.attn_36_regular(
+                encoder_features=features_36,
+                sam_image_features=sam_image_last_36,
+                clip_score_embed=clip_score_embed_36,
+            )
+            features_36 = self.attn_36_shifted(
+                encoder_features=features_36,
+                sam_image_features=sam_image_last_36,
+                clip_score_embed=clip_score_embed_36,
+            )
 
-        features_36_to_72 = self._upsample_36_to_72(
-            features_36,
-            target_hw=(72, 72),
-        )
-        features_18_to_72 = self._upsample_18_to_72(
-            features_18,
-            target_hw=(72, 72),
-        )
+            if self.spatial_upsample_fuse_sam_fpn:
+                features_36_to_72 = self._interp_bcdhw(features_36, target_hw=(72, 72))
+                features_36_to_72 = self._apply_fpn_fusion_36_to_72(
+                    features_36_to_72,
+                    sam_image_last_72,
+                    self.fuse_36_to_72_with_fpn,
+                )
+            else:
+                features_36_to_72 = self._upsample_36_to_72(
+                    features_36, target_hw=(72, 72),
+                )
 
-        features_36_to_72 = self._norm_bcdhw(
-            features_36_to_72,
-            self.norm_36_to_72,
-        )
-        features_18_to_72 = self._norm_bcdhw(
-            features_18_to_72,
-            self.norm_18_to_72,
-        )
+            features_36_to_72 = self._norm_bcdhw(
+                features_36_to_72, self.norm_36_to_72,
+            )
+            spatial_parts_72.append(features_36_to_72)
 
-        spatial_features_72 = features_36_to_72 + features_18_to_72
+        # --- 18 branch ---
+        if self.use_18:
+            sam_image_last_18 = F.interpolate(
+                sam_image_last_72,
+                size=(18, 18),
+                mode="bilinear",
+                align_corners=False,
+            )
+
+            features_18 = self.attn_18_regular(
+                encoder_features=features_18,
+                sam_image_features=sam_image_last_18,
+                clip_score_embed=clip_score_embed_18,
+            )
+            features_18 = self.attn_18_shifted(
+                encoder_features=features_18,
+                sam_image_features=sam_image_last_18,
+                clip_score_embed=clip_score_embed_18,
+            )
+
+            if self.spatial_upsample_fuse_sam_fpn:
+                # 18 → 36: interpolate only, then concat projected SAM FPN, then conv.
+                features_18_to_36 = self._interp_bcdhw(features_18, target_hw=(36, 36))
+                features_18_to_36 = self._apply_fpn_fusion_18_to_36(
+                    features_18_to_36,
+                    sam_image_last_36,
+                )
+
+                # 36 → 72: interpolate only, then concat projected SAM FPN, then conv.
+                features_18_to_72 = self._interp_bcdhw(features_18_to_36, target_hw=(72, 72))
+                features_18_to_72 = self._apply_fpn_fusion_36_to_72(
+                    features_18_to_72,
+                    sam_image_last_72,
+                    self.fuse_18_to_72_with_fpn,
+                )
+            else:
+                features_18_to_72 = self._upsample_18_to_72(
+                    features_18, target_hw=(72, 72),
+                )
+
+            features_18_to_72 = self._norm_bcdhw(
+                features_18_to_72, self.norm_18_to_72,
+            )
+            spatial_parts_72.append(features_18_to_72)
+
+        if len(spatial_parts_72) == 0:
+            raise ValueError(
+                "No spatial attention branches selected. "
+                "window_attention_scales must contain at least one of {36, 18}."
+            )
+
+        if len(spatial_parts_72) == 1:
+            spatial_features_72 = spatial_parts_72[0]
+        else:
+            spatial_features_72 = spatial_parts_72[0] + spatial_parts_72[1]
+
         spatial_features_72 = self._norm_bcdhw(
-            spatial_features_72,
-            self.fused_norm,
+            spatial_features_72, self.fused_norm,
         )
 
         return spatial_features_72
@@ -633,11 +809,11 @@ class EncoderRefinerLayer(nn.Module):
     One refiner layer:
 
         1. ClassTokenScoreClassAttention at 72x72
-        2. MultiScaleImageScoreWindowAttention (36x36 + 18x18)
+        2. MultiScaleImageScoreWindowAttention (configurable scales)
         3. FFN
         4. LayerNorm
 
-    No layer-level residual; global residual is applied after all layers.
+    No layer-level residual and no global residual.
     """
 
     def __init__(
@@ -648,6 +824,10 @@ class EncoderRefinerLayer(nn.Module):
         window_size: int = 9,
         shift_size: int = 4,
         dropout: float = 0.1,
+        class_attention_context: str = "sam_text_score",
+        window_attention_scales: list[int] | None = None,
+        spatial_upsample_fuse_sam_fpn: bool = False,
+        sam_fpn_fuse_proj_dim: int = 64,
     ):
         super().__init__()
 
@@ -656,6 +836,7 @@ class EncoderRefinerLayer(nn.Module):
             score_embed_dim=score_embed_dim,
             num_heads=num_heads,
             dropout=dropout,
+            class_attention_context=class_attention_context,
         )
 
         self.multiscale_spatial_attn = MultiScaleImageScoreWindowAttention(
@@ -665,6 +846,9 @@ class EncoderRefinerLayer(nn.Module):
             window_size=window_size,
             shift_size=shift_size,
             dropout=dropout,
+            window_attention_scales=window_attention_scales,
+            spatial_upsample_fuse_sam_fpn=spatial_upsample_fuse_sam_fpn,
+            sam_fpn_fuse_proj_dim=sam_fpn_fuse_proj_dim,
         )
 
         self.ffn_norm = nn.LayerNorm(hidden_dim)

@@ -382,6 +382,91 @@ class OpenCLIPTextEncoder(nn.Module):
         pooled = pooled.view(num_classes, num_templates, self.output_dim)
         return pooled
 
+    def encode_prompt_templates_trainable(
+        self,
+        class_names: List[str],
+        templates: List[str],
+        device: torch.device,
+        normalize_label: bool = True,
+        normalize: bool = True,
+        use_cache: bool = False,
+        detach_output: bool = False,
+    ) -> torch.Tensor:
+        """
+        Encode class names with multiple prompt templates using the trainable
+        encode_embeds path (no torch.no_grad), so CLIP text attention q/v
+        gradients can flow back.
+
+        Args:
+            class_names:     list of class names, length C
+            templates:       list of prompt templates, length K
+            device:          target device
+            normalize_label: replace '_' and '-' with spaces
+            normalize:       L2-normalize projected features
+            use_cache:       reuse cached features when True
+            detach_output:   detach returned features
+
+        Returns:
+            pooled: [C, K, D_clip]
+        """
+        if len(class_names) == 0:
+            raise ValueError("class_names is empty.")
+        if len(templates) == 0:
+            raise ValueError("templates is empty.")
+
+        def normalize_name(x: str) -> str:
+            x = x.strip()
+            if normalize_label:
+                x = x.replace("_", " ").replace("-", " ")
+                x = " ".join(x.split())
+            return x
+
+        flat_texts = []
+        for name in class_names:
+            name = normalize_name(name)
+            for tpl in templates:
+                flat_texts.append(tpl.format(name))
+
+        cache_key = (
+            tuple(flat_texts),
+            str(device),
+            bool(normalize),
+            "trainable_templates",
+        )
+
+        if use_cache and cache_key in self._prompt_feature_cache:
+            return self._prompt_feature_cache[cache_key].to(device=device)
+
+        tokenized = self.tokenizer(flat_texts, context_length=self.context_length).to(device)
+
+        def _encode_from_tokens(tokens: torch.Tensor) -> torch.Tensor:
+            input_embeds = self.token_embedding(tokens)
+            return self.encode_embeds(
+                input_embeds=input_embeds,
+                tokenized=tokens,
+                normalize=normalize,
+                detach_output=False,
+            )
+
+        if use_cache:
+            with torch.no_grad():
+                pooled = _encode_from_tokens(tokenized)
+            pooled = pooled.detach().contiguous()
+        else:
+            pooled = _encode_from_tokens(tokenized)
+
+        if detach_output:
+            pooled = pooled.detach()
+
+        num_classes = len(class_names)
+        num_templates = len(templates)
+        pooled = pooled.view(num_classes, num_templates, self.output_dim)
+
+        if use_cache:
+            self._prompt_feature_cache[cache_key] = pooled.detach().contiguous()
+
+        return pooled
+
     def forward(
         self,
         text: Union[List[str], Tuple[torch.Tensor, torch.Tensor, dict]],

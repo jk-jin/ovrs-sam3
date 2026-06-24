@@ -1,0 +1,69 @@
+program: tools/train.py
+name: ablation_isaid_loveda_val500_4k_v1
+method: grid
+
+metric:
+  name: val/semantic.miou
+  goal: maximize
+
+parameters:
+  # Single-factor ablation against current baseline.
+  model.encoder_refiner_cfg.ablation_variant:
+    values:
+      - baseline
+      - score_fixed_templates_32
+      - score_upsample_clip_mid
+      - window_scale_36
+      - window_scale_18
+      - class_context_sam_text
+      - class_context_score_embed
+      - spatial_upsample_sam_fpn
+      - score_dim_64
+      - score_dim_256
+
+  # W&B logging.
+  experiment_tracking.wandb.enabled:
+    value: true
+
+  experiment_tracking.wandb.project:
+    value: ovrs-sam3
+
+  experiment_tracking.wandb.group:
+    value: ablation_isaid_loveda_val500_4k_v1
+
+  experiment_tracking.wandb.name_prefix:
+    value: ablation
+
+  experiment_tracking.wandb.name_from_config_keys:
+    value:
+      - model.encoder_refiner_cfg.ablation_variant
+
+  experiment_tracking.wandb.tags:
+    value:
+      - ablation
+      - isaid_train
+      - loveda_val500
+      - 4k_steps
+      - no_ckpt
+
+  # Explicit even though configs/sam3_isaid_train_loveda_val.py already sets it.
+  train_cfg.save_checkpoints:
+    value: false
+
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - configs/sam3_isaid_train_loveda_val.py
+
+  - --work-dir
+  - work_dirs/sweeps/ablation_isaid_loveda_val500_4k_v1
+
+  - --work-dir-suffix-keys
+  - model.encoder_refiner_cfg.ablation_variant
+
+  - --seed
+  - "42"
+
+  - --cfg-options
+  - ${args_no_hyphens}

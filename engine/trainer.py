@@ -613,7 +613,8 @@ class Trainer:
                 and self.global_iter % self.cfg.eval_interval == 0
             )
             should_save = (
-                self.cfg.save_interval > 0
+                getattr(self.cfg, "save_checkpoints", True)
+                and self.cfg.save_interval > 0
                 and self.global_iter % self.cfg.save_interval == 0
             )
 
@@ -639,9 +640,14 @@ class Trainer:
 
         final_train_stats = self._average_stats(train_stats_window)
 
+        save_enabled = getattr(self.cfg, "save_checkpoints", True)
+
         need_final_save = (
-            self.cfg.save_interval <= 0
-            or self.global_iter % self.cfg.save_interval != 0
+            save_enabled
+            and (
+                self.cfg.save_interval <= 0
+                or self.global_iter % self.cfg.save_interval != 0
+            )
         )
 
         final_ckpt_path = None

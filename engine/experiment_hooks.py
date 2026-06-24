@@ -167,9 +167,34 @@ def _compact_key_name(key: str) -> str:
         "clip_score_conv_kernel": "k",
         "openclip_text_finetune": "text",
         "openclip_image_finetune": "image",
+        "ablation_variant": "abl",
+        "window_attention_scales": "win",
+        "class_attention_context": "ctx",
+        "score_embed_source": "score_src",
+        "score_upsample_fuse_clip_mid": "clipmid",
+        "spatial_upsample_fuse_sam_fpn": "samfpn",
     }
     short = _short_key_name(key)
     return mapping.get(short, short)
+
+
+def _compact_value_name(value) -> str:
+    mapping = {
+        "baseline": "base",
+        "score_fixed_templates_32": "tpl32",
+        "score_upsample_clip_mid": "clipmid",
+        "window_scale_36": "win36",
+        "window_scale_18": "win18",
+        "class_context_sam_text": "cls_sam",
+        "class_context_score_embed": "cls_score",
+        "spatial_upsample_sam_fpn": "samfpn",
+        "score_dim_64": "d64",
+        "score_dim_256": "d256",
+        "frozen": "frz",
+        "attention": "attn",
+    }
+    text = str(value)
+    return mapping.get(text, text)
 
 
 def _sanitize_run_name_token(x) -> str:
@@ -192,7 +217,7 @@ def _build_auto_run_name(raw_cfg: dict, keys: list[str], prefix: Optional[str] =
         if value is None:
             continue
         k = _compact_key_name(key)
-        v = _sanitize_run_name_token(value)
+        v = _sanitize_run_name_token(_compact_value_name(value))
         parts.append(f"{k}{v}")
 
     if not parts:

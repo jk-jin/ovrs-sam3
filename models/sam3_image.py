@@ -49,6 +49,18 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_use_checkpoint: bool = True,
         encoder_refiner_early_prompt_attention: bool = False,
         task_mode: str = TASK_MODE_SEMANTIC,
+        # Ablation config
+        encoder_refiner_score_embed_source: str = "learned_query",
+        encoder_refiner_fixed_score_templates: list[str] | None = None,
+        encoder_refiner_score_upsample_fuse_clip_mid: bool = False,
+        encoder_refiner_score_mid_proj_dim: int = 64,
+        encoder_refiner_clip_mid_native_dim: int = 1024,
+        encoder_refiner_clip_mid_layer_for_36: int = 15,
+        encoder_refiner_clip_mid_layer_for_72: int = 7,
+        encoder_refiner_window_attention_scales: list[int] | None = None,
+        encoder_refiner_class_attention_context: str = "sam_text_score",
+        encoder_refiner_spatial_upsample_fuse_sam_fpn: bool = False,
+        encoder_refiner_sam_fpn_fuse_proj_dim: int = 64,
         **kwargs,
     ):
         super().__init__()
@@ -121,6 +133,26 @@ class Sam3Image(torch.nn.Module):
             score_conv_kernel=int(encoder_refiner_conv_kernel),
             score_base_hw=int(encoder_refiner_score_base_hw),
             use_checkpoint=bool(encoder_refiner_use_checkpoint),
+            # Ablation config
+            score_embed_source=str(encoder_refiner_score_embed_source),
+            fixed_score_templates=(
+                list(encoder_refiner_fixed_score_templates)
+                if encoder_refiner_fixed_score_templates is not None
+                else None
+            ),
+            score_upsample_fuse_clip_mid=bool(encoder_refiner_score_upsample_fuse_clip_mid),
+            score_mid_proj_dim=int(encoder_refiner_score_mid_proj_dim),
+            clip_mid_native_dim=int(encoder_refiner_clip_mid_native_dim),
+            clip_mid_layer_for_36=int(encoder_refiner_clip_mid_layer_for_36),
+            clip_mid_layer_for_72=int(encoder_refiner_clip_mid_layer_for_72),
+            window_attention_scales=(
+                list(encoder_refiner_window_attention_scales)
+                if encoder_refiner_window_attention_scales is not None
+                else None
+            ),
+            class_attention_context=str(encoder_refiner_class_attention_context),
+            spatial_upsample_fuse_sam_fpn=bool(encoder_refiner_spatial_upsample_fuse_sam_fpn),
+            sam_fpn_fuse_proj_dim=int(encoder_refiner_sam_fpn_fuse_proj_dim),
         )
 
         self.encoder_refiner_early_prompt_attention = bool(
@@ -655,6 +687,7 @@ class Sam3Image(torch.nn.Module):
         sam_text_mean: torch.Tensor,
         class_names: List[str],
         clip_mid_features: List[torch.Tensor],
+        clip_mid_layer_indices: list[int] | None = None,
         return_debug: bool = False,
     ) -> Dict[str, torch.Tensor]:
         B, C, D, H, W = encoder_features_72.shape
@@ -675,6 +708,8 @@ class Sam3Image(torch.nn.Module):
             sam_text_mean=sam_text_mean,
             class_names=class_names,
             sam_image_last=sam_image_last_72,
+            clip_mid_features=clip_mid_features,
+            clip_mid_layer_indices=clip_mid_layer_indices,
         )
 
         # For each chunk, write refined_encoder_features_72 back and call segmentation_head.
@@ -740,17 +775,19 @@ class Sam3Image(torch.nn.Module):
         }
 
         if return_debug:
-            result.update({
+            debug_dict = {
                 OUTPUT_KEYS.encoder_features: encoder_features_72.detach().contiguous(),
                 OUTPUT_KEYS.refined_encoder_features: refined_encoder_features_72.detach().contiguous(),
-                OUTPUT_KEYS.class_query_tokens: class_query_tokens.detach().contiguous(),
                 OUTPUT_KEYS.dynamic_clip_text_features: dynamic_clip_text.detach().contiguous(),
                 OUTPUT_KEYS.clip_score_embed: clip_score_embeds["scale_72"].detach().contiguous(),
                 OUTPUT_KEYS.clip_score_maps: clip_score_maps_18.detach().contiguous(),
                 OUTPUT_KEYS.clip_mid_features: [
                     feat.detach().contiguous() for feat in clip_mid_features
                 ],
-            })
+            }
+            if class_query_tokens is not None:
+                debug_dict[OUTPUT_KEYS.class_query_tokens] = class_query_tokens.detach().contiguous()
+            result.update(debug_dict)
 
         return result
 
@@ -772,6 +809,7 @@ class Sam3Image(torch.nn.Module):
         clip_image_feat_map = encoder_refiner_cache["clip_image_feat_map"]
         sam_text_mean = encoder_refiner_cache["sam_text_mean"]
         clip_mid_features = encoder_refiner_cache[OUTPUT_KEYS.clip_mid_features]
+        clip_mid_layer_indices = list(encoder_refiner_cache.get("clip_mid_layer_indices", []))
 
         class_names = list(batch.find_text_batch)
         if len(class_names) == 0:
@@ -794,6 +832,7 @@ class Sam3Image(torch.nn.Module):
             sam_text_mean=sam_text_mean,
             class_names=class_names,
             clip_mid_features=clip_mid_features,
+            clip_mid_layer_indices=clip_mid_layer_indices,
             return_debug=return_debug,
         )
 

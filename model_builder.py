@@ -298,6 +298,116 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 f"got score_base_hw={cfg.score_base_hw}, encoder_hw={cfg.encoder_hw}."
             )
 
+        # --- New field validation ---
+        if cfg.score_embed_source not in {"learned_query", "fixed_templates"}:
+            raise ValueError(
+                f"encoder_refiner_cfg.score_embed_source must be 'learned_query' or "
+                f"'fixed_templates', got {cfg.score_embed_source!r}."
+            )
+
+        if cfg.class_attention_context not in {"sam_text_score", "sam_text", "score_embed"}:
+            raise ValueError(
+                f"encoder_refiner_cfg.class_attention_context must be one of "
+                f"{{'sam_text_score', 'sam_text', 'score_embed'}}, "
+                f"got {cfg.class_attention_context!r}."
+            )
+
+        valid_scales = ([36, 18], [36], [18])
+        if cfg.window_attention_scales not in valid_scales:
+            raise ValueError(
+                f"encoder_refiner_cfg.window_attention_scales must be one of {valid_scales}, "
+                f"got {cfg.window_attention_scales}."
+            )
+
+        if cfg.clip_score_embed_dim <= 0:
+            raise ValueError(
+                f"encoder_refiner_cfg.clip_score_embed_dim must be > 0, "
+                f"got {cfg.clip_score_embed_dim}."
+            )
+
+        if cfg.score_mid_proj_dim <= 0:
+            raise ValueError(
+                f"encoder_refiner_cfg.score_mid_proj_dim must be > 0, "
+                f"got {cfg.score_mid_proj_dim}."
+            )
+
+        if cfg.sam_fpn_fuse_proj_dim <= 0:
+            raise ValueError(
+                f"encoder_refiner_cfg.sam_fpn_fuse_proj_dim must be > 0, "
+                f"got {cfg.sam_fpn_fuse_proj_dim}."
+            )
+
+        if cfg.score_embed_source == "fixed_templates":
+            templates = cfg.fixed_score_templates
+            if not isinstance(templates, list) or len(templates) != 32:
+                raise ValueError(
+                    f"score_embed_source='fixed_templates' requires exactly 32 "
+                    f"fixed_score_templates, got {len(templates) if isinstance(templates, list) else 'not a list'}."
+                )
+            for i, tpl in enumerate(templates):
+                if not isinstance(tpl, str) or tpl.count("{}") != 1:
+                    raise ValueError(
+                        f"fixed_score_templates[{i}] must be a string with exactly one "
+                        f"'{{}}', got {tpl!r}."
+                    )
+
+        return cfg
+
+    @staticmethod
+    def apply_encoder_refiner_ablation_variant(cfg: EncoderRefinerConfig) -> EncoderRefinerConfig:
+        """Resolve ablation_variant preset into atomic config fields.
+
+        When ablation_variant is a named preset (not "custom"), reset all atomic
+        fields to baseline, then apply the single-variable change for that preset.
+        """
+        variant = str(cfg.ablation_variant or "baseline").lower()
+
+        allowed = [
+            "baseline", "custom",
+            "score_fixed_templates_32", "score_upsample_clip_mid",
+            "window_scale_36", "window_scale_18",
+            "class_context_sam_text", "class_context_score_embed",
+            "spatial_upsample_sam_fpn",
+            "score_dim_64", "score_dim_256",
+        ]
+        if variant not in allowed:
+            raise ValueError(
+                f"encoder_refiner_cfg.ablation_variant must be one of {allowed}, "
+                f"got {variant!r}."
+            )
+
+        if variant == "custom":
+            return cfg
+
+        # Reset to baseline defaults for all atomic fields.
+        cfg.score_embed_source = "learned_query"
+        cfg.score_upsample_fuse_clip_mid = False
+        cfg.window_attention_scales = [36, 18]
+        cfg.class_attention_context = "sam_text_score"
+        cfg.spatial_upsample_fuse_sam_fpn = False
+        cfg.clip_score_embed_dim = 128
+
+        if variant == "baseline":
+            return cfg
+        elif variant == "score_fixed_templates_32":
+            cfg.score_embed_source = "fixed_templates"
+        elif variant == "score_upsample_clip_mid":
+            cfg.score_upsample_fuse_clip_mid = True
+        elif variant == "window_scale_36":
+            cfg.window_attention_scales = [36]
+        elif variant == "window_scale_18":
+            cfg.window_attention_scales = [18]
+        elif variant == "class_context_sam_text":
+            cfg.class_attention_context = "sam_text"
+        elif variant == "class_context_score_embed":
+            cfg.class_attention_context = "score_embed"
+        elif variant == "spatial_upsample_sam_fpn":
+            cfg.spatial_upsample_fuse_sam_fpn = True
+        elif variant == "score_dim_64":
+            cfg.clip_score_embed_dim = 64
+        elif variant == "score_dim_256":
+            cfg.clip_score_embed_dim = 256
+
         return cfg
 
     @staticmethod
@@ -747,6 +857,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         input_geometry_encoder = cls._create_geometry_encoder()
 
         refiner_cfg = cfg.encoder_refiner_cfg
+        refiner_cfg = cls.apply_encoder_refiner_ablation_variant(refiner_cfg)
+        refiner_cfg = cls.validate_encoder_refiner_cfg(refiner_cfg)
 
         model = Sam3Image(
             backbone=backbone,
@@ -778,6 +890,18 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 refiner_cfg.early_prompt_attention
             ),
             task_mode=TASK_MODE_SEMANTIC,
+            # Ablation config
+            encoder_refiner_score_embed_source=str(refiner_cfg.score_embed_source),
+            encoder_refiner_fixed_score_templates=list(refiner_cfg.fixed_score_templates),
+            encoder_refiner_score_upsample_fuse_clip_mid=bool(refiner_cfg.score_upsample_fuse_clip_mid),
+            encoder_refiner_score_mid_proj_dim=int(refiner_cfg.score_mid_proj_dim),
+            encoder_refiner_clip_mid_native_dim=int(refiner_cfg.clip_mid_native_dim),
+            encoder_refiner_clip_mid_layer_for_36=int(refiner_cfg.clip_mid_layer_for_36),
+            encoder_refiner_clip_mid_layer_for_72=int(refiner_cfg.clip_mid_layer_for_72),
+            encoder_refiner_window_attention_scales=list(refiner_cfg.window_attention_scales),
+            encoder_refiner_class_attention_context=str(refiner_cfg.class_attention_context),
+            encoder_refiner_spatial_upsample_fuse_sam_fpn=bool(refiner_cfg.spatial_upsample_fuse_sam_fpn),
+            encoder_refiner_sam_fpn_fuse_proj_dim=int(refiner_cfg.sam_fpn_fuse_proj_dim),
         )
 
         checkpoint_path = cfg.checkpoint_path

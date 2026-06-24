@@ -8,10 +8,12 @@ _base_ = [
 # This config only replaces val_dataloader with LoveDA val split:
 #   val: LoveDA
 #
-# It also uses a short sweep schedule:
-#   max_iters = 2000
-#   warmup    = 200
+# Ablation experiment schedule:
+#   max_iters = 4000
+#   warmup    = 400
 #   eval      = every 1000 iters
+#   val_max   = 500 images
+#   No checkpoint saving (save_checkpoints=False).
 
 loveda_classes = [
     "background",
@@ -77,12 +79,12 @@ visualization = dict(
 # Sweep schedule.
 # Do not use the full 1000-step warmup for short sweep trials.
 train_cfg = dict(
-    max_iters=2000,
+    max_iters=4000,
     save_interval=1000,
     eval_interval=1000,
 
     # Fast cross-dataset validation during sweeps.
-    # batch_size=1, so this means 100 LoveDA val images.
+    # batch_size=1, so this means 500 LoveDA val images.
     # Set to None or 0 for full LoveDA validation.
     val_max_iters=500,
 
@@ -94,18 +96,21 @@ train_cfg = dict(
     max_keep_ckpts=20,
     auto_resume=False,
     device="cuda",
+
+    # No checkpoint saving for ablation experiments.
+    save_checkpoints=False,
 )
 
 param_scheduler = [
     dict(
         type="LinearLR",
         start_factor=0.1,
-        total_iters=200,
-        end=200,
+        total_iters=400,
+        end=400,
     ),
     dict(
         type="CosineAnnealingLR",
-        T_max=1800,
+        T_max=3600,
         eta_min=1e-6,
     ),
 ]

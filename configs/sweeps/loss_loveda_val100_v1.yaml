@@ -1,5 +1,5 @@
 program: tools/train.py
-name: loss_loveda_val100_v1
+name: loss_loveda_val500_v1
 method: grid
 
 metric:
@@ -45,7 +45,7 @@ parameters:
     value: ovrs-sam3
 
   experiment_tracking.wandb.group:
-    value: loss_loveda_val100_v1
+    value: loss_loveda_val500_v1
 
   experiment_tracking.wandb.name_prefix:
     value: loss
@@ -57,8 +57,13 @@ parameters:
       - model.criterion_cfg.bce_valid_pixel_weight
       - model.criterion_cfg.bce_ignore_pixel_weight
 
-  train_cfg.save_interval:
-    value: 0
+  # No checkpoint saving.
+  train_cfg.save_checkpoints:
+    value: false
+
+  # Force val_max_iters=100 for this sweep (overrides the 500 in base config).
+  train_cfg.val_max_iters:
+    value: 100
 
 command:
   - ${env}
@@ -67,7 +72,7 @@ command:
   - configs/sam3_isaid_train_loveda_val.py
 
   - --work-dir
-  - work_dirs/sweeps/loss_loveda_val100_v1
+  - work_dirs/sweeps/loss_loveda_val500_v1
 
   - --work-dir-suffix-keys
   - model.criterion_cfg.final_bce_weight
