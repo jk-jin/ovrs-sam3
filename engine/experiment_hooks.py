@@ -138,6 +138,69 @@ class MetricsJsonlHook(Hook):
         })
 
 
+def _get_by_dot_path(obj: dict, key: str):
+    parts = key.split(".")
+    cur = obj
+    for part in parts:
+        if isinstance(cur, dict):
+            if part not in cur:
+                return None
+            cur = cur[part]
+        else:
+            return None
+    return cur
+
+
+def _short_key_name(key: str) -> str:
+    return key.split(".")[-1]
+
+
+def _compact_key_name(key: str) -> str:
+    mapping = {
+        "final_bce_weight": "bce",
+        "final_dice_weight": "dice",
+        "bce_valid_pixel_weight": "valid",
+        "bce_ignore_pixel_weight": "ignore",
+        "bce_absent_class_weight": "abs",
+        "num_query_tokens": "q",
+        "clip_score_embed_dim": "score_dim",
+        "clip_score_conv_kernel": "k",
+        "openclip_text_finetune": "text",
+        "openclip_image_finetune": "image",
+    }
+    short = _short_key_name(key)
+    return mapping.get(short, short)
+
+
+def _sanitize_run_name_token(x) -> str:
+    text = str(x)
+    text = text.replace("/", "-").replace("\\", "-")
+    text = text.replace(" ", "")
+    return text
+
+
+def _build_auto_run_name(raw_cfg: dict, keys: list[str], prefix: Optional[str] = None) -> Optional[str]:
+    if not keys:
+        return None
+
+    parts = []
+    if prefix:
+        parts.append(_sanitize_run_name_token(prefix))
+
+    for key in keys:
+        value = _get_by_dot_path(raw_cfg, key)
+        if value is None:
+            continue
+        k = _compact_key_name(key)
+        v = _sanitize_run_name_token(value)
+        parts.append(f"{k}{v}")
+
+    if not parts:
+        return None
+
+    return "_".join(parts)
+
+
 class WandbHook(Hook):
     def __init__(
         self,
@@ -150,6 +213,8 @@ class WandbHook(Hook):
         train_interval: int = 20,
         log_val_iter: bool = False,
         priority: int = 90,
+        name_from_config_keys: Optional[list[str]] = None,
+        name_prefix: Optional[str] = None,
     ):
         self.enabled = bool(enabled)
         self.project = str(project)
@@ -160,6 +225,8 @@ class WandbHook(Hook):
         self.train_interval = int(train_interval)
         self.log_val_iter = bool(log_val_iter)
         self.priority = int(priority)
+        self.name_from_config_keys = list(name_from_config_keys or [])
+        self.name_prefix = name_prefix
         self._wandb = None
         self._run = None
 
@@ -182,9 +249,17 @@ class WandbHook(Hook):
         if raw_cfg is not None:
             config = _jsonable(raw_cfg) or {}
 
+        run_name = self.name
+        if run_name is None:
+            run_name = _build_auto_run_name(
+                raw_cfg=config,
+                keys=self.name_from_config_keys,
+                prefix=self.name_prefix,
+            )
+
         self._run = wandb.init(
             project=self.project,
-            name=self.name,
+            name=run_name,
             group=self.group,
             tags=self.tags,
             mode=self.mode,

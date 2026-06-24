@@ -165,6 +165,9 @@ class WandbHookConfig:
     log_val_iter: bool = False  # reserved; per-batch val logging is skipped when False
     priority: int = 90
 
+    name_from_config_keys: list[str] = field(default_factory=list)
+    name_prefix: Optional[str] = None
+
 @dataclass
 class VisualizerConfig:
     enabled: bool = False

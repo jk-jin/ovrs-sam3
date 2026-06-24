@@ -26,6 +26,14 @@ parameters:
   experiment_tracking.wandb.group:
     value: openclip_finetune_loveda_val_v1
 
+  experiment_tracking.wandb.name_prefix:
+    value: clip
+
+  experiment_tracking.wandb.name_from_config_keys:
+    value:
+      - model.freeze_cfg.openclip_text_finetune
+      - model.freeze_cfg.openclip_image_finetune
+
   train_cfg.save_interval:
     value: 0
 

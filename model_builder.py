@@ -969,6 +969,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 train_interval=wandb_cfg.train_interval,
                 log_val_iter=wandb_cfg.log_val_iter,
                 priority=wandb_cfg.priority,
+                name_from_config_keys=wandb_cfg.name_from_config_keys,
+                name_prefix=wandb_cfg.name_prefix,
             ))
 
         return hooks
