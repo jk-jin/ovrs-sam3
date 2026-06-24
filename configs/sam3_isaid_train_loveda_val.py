@@ -84,7 +84,7 @@ train_cfg = dict(
     # Fast cross-dataset validation during sweeps.
     # batch_size=1, so this means 100 LoveDA val images.
     # Set to None or 0 for full LoveDA validation.
-    val_max_iters=100,
+    val_max_iters=500,
 
     log_window_size=20,
     use_amp=True,

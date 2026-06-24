@@ -157,10 +157,14 @@ class CheckpointManager:
 
     def _prune_old_checkpoints(self) -> None:
         ckpts = sorted(self.save_dir.glob("iter_*.pth"))
-        if len(ckpts) <= self.cfg.max_keep:
-            return
 
-        to_remove = ckpts[:-self.cfg.max_keep]
+        if self.cfg.max_keep <= 0:
+            to_remove = ckpts
+        else:
+            if len(ckpts) <= self.cfg.max_keep:
+                return
+            to_remove = ckpts[:-self.cfg.max_keep]
+
         for p in to_remove:
             try:
                 p.unlink()
