@@ -1,5 +1,5 @@
 program: tools/train.py
-name: loss_loveda_val100_v1
+name: exp_isaid_loveda_loss_v1
 method: grid
 
 metric:
@@ -7,7 +7,7 @@ metric:
   goal: maximize
 
 parameters:
-  # Fixed: OpenCLIP text/image both frozen.
+  # Final design: OpenCLIP text/image both frozen.
   model.freeze_cfg.openclip_text_finetune:
     value: frozen
 
@@ -45,7 +45,7 @@ parameters:
     value: ovrs-sam3
 
   experiment_tracking.wandb.group:
-    value: loss_loveda_val100_v1
+    value: exp_isaid_loveda_loss_v1
 
   experiment_tracking.wandb.name_prefix:
     value: loss
@@ -57,17 +57,17 @@ parameters:
       - model.criterion_cfg.bce_valid_pixel_weight
       - model.criterion_cfg.bce_ignore_pixel_weight
 
-  train_cfg.save_interval:
-    value: 0
+  visualization.enabled:
+    value: false
 
 command:
   - ${env}
   - ${interpreter}
   - ${program}
-  - configs/sam3_isaid_train_loveda_val.py
+  - configs/ovrs_sam3_isaid_loveda_exp.py
 
   - --work-dir
-  - work_dirs/sweeps/loss_loveda_val100_v1
+  - work_dirs/sweeps/exp_isaid_loveda_loss_v1
 
   - --work-dir-suffix-keys
   - model.criterion_cfg.final_bce_weight

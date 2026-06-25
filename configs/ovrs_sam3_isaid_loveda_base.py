@@ -6,6 +6,12 @@ _base_ = [
     "./datasets/isaid.py",
 ]
 
+# -------------------------------------------------------------------------
+# Final model: OVRS-SAM3 + frozen RemoteCLIP + 32 fixed templates
+# Train: iSAID
+# Val:   LoveDA
+# -------------------------------------------------------------------------
+
 model = dict(
     task_mode="semantic",
     bpe_path="assets/bpe_simple_vocab_16e6.txt.gz",
@@ -62,11 +68,9 @@ model = dict(
 
     encoder_refiner_cfg=dict(
         enabled=True,
-
         fusion_layers=4,
         num_heads=8,
         dropout=0.1,
-
         hidden_dim=256,
 
         clip_score_embed_dim=64,
@@ -87,19 +91,7 @@ model = dict(
             "core.encoder_refiner",
         ],
         frozen_modules=[],
-
-        # Text side:
-        #   frozen      = freeze OpenCLIP text encoder
-        #   attention   = train text attention q/v + positional embedding
-        #   transformer = train all text transformer params
-        #   full        = train all OpenCLIP text encoder params
         openclip_text_finetune="frozen",
-
-        # Image side:
-        #   frozen      = freeze OpenCLIP image encoder
-        #   attention   = train visual attention q/v + visual positional embedding
-        #   transformer = train all visual transformer params
-        #   full        = train all OpenCLIP visual params
         openclip_image_finetune="frozen",
     ),
 
@@ -107,40 +99,87 @@ model = dict(
 
     criterion_cfg=dict(
         ignore_index=255,
-
         final_bce_weight=1.0,
         final_dice_weight=0.0,
-
-        # 0.0 = absent classes not supervised for mask BCE.
-        # Set to 0.01 / 0.05 for mild absent-class suppression.
         bce_absent_class_weight=0.0,
-
-        # BCE pixel weights:
-        # valid pixels keep full supervision;
-        # ignore pixels get weaker suppression to avoid over-penalizing unlabeled regions.
         bce_valid_pixel_weight=1.0,
         bce_ignore_pixel_weight=0.05,
-
         eps=1e-6,
     ),
 )
+
+# -------------------------------------------------------------------------
+# Dataloaders
+# Train dataloader is inherited from configs/datasets/isaid.py.
+# Val dataloader is LoveDA val split.
+# -------------------------------------------------------------------------
 
 train_dataloader = dict(
     batch_size=2,
     num_workers=8,
 )
 
+loveda_classes = [
+    "background",
+    "building",
+    "road",
+    "water",
+    "barren",
+    "forest",
+    "agricultural",
+]
+
 val_dataloader = dict(
     batch_size=1,
-    num_workers=8,
+    num_workers=2,
+    shuffle=False,
+    pin_memory=True,
+    persistent_workers=True,
+    dataset=dict(
+        type="data.dataset.OVSemanticSegDataset",
+        img_dir="data/datasets/loveDA/img_dir/val",
+        ann_dir="data/datasets/loveDA/ann_dir/val",
+        classes=loveda_classes,
+        img_suffix=".png",
+        seg_suffix=".png",
+        ignore_index=255,
+        reduce_zero_label=True,
+        return_raw_image=True,
+        transforms=[
+            dict(type="ToTensor"),
+            dict(type="ConvertImageDtype", dtype="float32", scale=True),
+            dict(type="Resize", size=(1008, 1008), keep_ratio=False),
+            dict(
+                type="Normalize",
+                mean=[0.5, 0.5, 0.5],
+                std=[0.5, 0.5, 0.5],
+            ),
+        ],
+    ),
+    collate_fn=dict(
+        type="data.collate.OVSemanticCollator",
+        pad_size_divisor=14,
+        label_pad_value=255,
+    ),
 )
 
+# LoveDA labels after reduce_zero_label=True:
+#   original 0 no-data      -> 255 ignore
+#   original 1 background   -> 0
+#   original 2 building     -> 1
+#   ...
+# so bg_idx=0 is correct.
 eval_cfg = dict(
     ignore_index=255,
     prob_thd=0.0,
     bg_idx=0,
     use_score_map=True,
 )
+
+# -------------------------------------------------------------------------
+# Optimizer
+# Only encoder_refiner is trainable in the final design.
+# -------------------------------------------------------------------------
 
 optim_wrapper = dict(
     optimizer=dict(
@@ -157,34 +196,48 @@ optim_wrapper = dict(
     )
 )
 
+# -------------------------------------------------------------------------
+# Default schedule: short experiment-friendly defaults.
+# Full training overrides these in ovrs_sam3_isaid_loveda_full.py.
+# -------------------------------------------------------------------------
+
 param_scheduler = [
     dict(
         type="LinearLR",
         start_factor=0.1,
-        total_iters=1000,
-        end=1000,
+        total_iters=400,
+        end=400,
     ),
     dict(
         type="CosineAnnealingLR",
-        T_max=19000,
+        T_max=3600,
         eta_min=1e-6,
-    )
+    ),
 ]
 
 train_cfg = dict(
-    max_iters=20000,
+    max_iters=4000,
     save_interval=1000,
-    eval_interval=20000,
+    eval_interval=1000,
+    val_max_iters=500,
+
     log_window_size=20,
     use_amp=True,
     grad_clip_norm=0.01,
     monitor="semantic.miou",
     monitor_mode="max",
-    max_keep_ckpts=20,
+    max_keep_ckpts=5,
     auto_resume=False,
     device="cuda",
 )
 
+# Default: no local visualization in short experiments.
+visualization = dict(
+    enabled=False,
+)
+
+# Default: local metrics on, W&B off.
+# Exp/full configs override wandb.enabled=True.
 experiment_tracking = dict(
     metrics_jsonl=dict(
         enabled=True,
@@ -203,6 +256,8 @@ experiment_tracking = dict(
         train_interval=20,
         log_val_iter=False,
         priority=90,
+        name_from_config_keys=[],
+        name_prefix=None,
     ),
 )
 

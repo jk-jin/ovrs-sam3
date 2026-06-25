@@ -1,0 +1,59 @@
+program: tools/train.py
+name: full_isaid_loveda_final_v1
+method: grid
+
+metric:
+  name: val/semantic.miou
+  goal: maximize
+
+parameters:
+  experiment_tracking.wandb.enabled:
+    value: true
+
+  experiment_tracking.wandb.project:
+    value: ovrs-sam3
+
+  experiment_tracking.wandb.group:
+    value: full_isaid_loveda
+
+  experiment_tracking.wandb.name:
+    value: full_isaid_loveda_final_v1
+
+  experiment_tracking.wandb.tags:
+    value:
+      - full
+      - isaid-train
+      - loveda-val
+      - final-design
+      - fixed-32-templates
+      - score-dim-64
+
+  train_cfg.max_iters:
+    value: 20000
+
+  train_cfg.eval_interval:
+    value: 2000
+
+  train_cfg.save_interval:
+    value: 2000
+
+  train_cfg.val_max_iters:
+    value: 500
+
+  visualization.enabled:
+    value: true
+
+command:
+  - ${env}
+  - ${interpreter}
+  - ${program}
+  - configs/ovrs_sam3_isaid_loveda_full.py
+
+  - --work-dir
+  - work_dirs/full/isaid_loveda_final_v1
+
+  - --seed
+  - "42"
+
+  - --cfg-options
+  - ${args_no_hyphens}

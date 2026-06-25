@@ -1,5 +1,5 @@
 seed = 42
-work_dir = './work_dirs/sam3_semantic'
+work_dir = './work_dirs/ovrs_sam3'
 
 default_scope = 'sam3'
 log_level = 'INFO'

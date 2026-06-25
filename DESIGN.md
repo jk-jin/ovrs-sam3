@@ -2,11 +2,18 @@
 
 更新时间：2026-06-25（最终固定 32 模板 + CLIP/SAM 特征融合设计）
 目标分支：`master`
-主配置：`configs/sam3_semantic.py`
+主配置：
+- 基础配置：`configs/ovrs_sam3_isaid_loveda_base.py`
+- 实验短跑：`configs/ovrs_sam3_isaid_loveda_exp.py`
+- 完整训练：`configs/ovrs_sam3_isaid_loveda_full.py`
+
 训练入口：
 
 ```bash
-python tools/train.py configs/sam3_semantic.py
+# 实验短跑
+python tools/train.py configs/ovrs_sam3_isaid_loveda_exp.py
+# 完整训练
+python tools/train.py configs/ovrs_sam3_isaid_loveda_full.py
 ```
 
 ---
@@ -923,8 +930,11 @@ losses/
   semantic_criterion.py         ← loss
 
 configs/
-  sam3_semantic.py              ← 主配置
-  sam3_isaid_train_loveda_val.py ← iSAID 训练 + LoveDA 验证实验配置
+  ovrs_sam3_isaid_loveda_base.py  ← 基础配置（模型结构 + iSAID train + LoveDA val）
+  ovrs_sam3_isaid_loveda_exp.py   ← 实验短跑配置
+  ovrs_sam3_isaid_loveda_full.py  ← 完整训练配置
+  sam3_semantic.py                ← 废弃兼容 shim（→ base）
+  sam3_isaid_train_loveda_val.py  ← 废弃兼容 shim（→ exp）
 
 config_dataclasses.py           ← dataclass 配置定义
 model_builder.py                ← 模型构建、冻结策略、训练组件构建
@@ -982,7 +992,9 @@ openclip_image_finetune="frozen"
 
 ```bash
 python -m py_compile config_dataclasses.py
-python -m py_compile configs/sam3_semantic.py
+python -m py_compile configs/ovrs_sam3_isaid_loveda_base.py
+python -m py_compile configs/ovrs_sam3_isaid_loveda_exp.py
+python -m py_compile configs/ovrs_sam3_isaid_loveda_full.py
 python -m py_compile model_builder.py
 python -m py_compile models/openclip_text_encoder.py
 python -m py_compile models/openclip_image_encoder.py
@@ -1014,7 +1026,9 @@ grep -R "num_query_tokens" -n models config_dataclasses.py model_builder.py conf
 推荐打印最终配置：
 
 ```bash
-python tools/train.py configs/sam3_semantic.py --print-config
+python tools/train.py configs/ovrs_sam3_isaid_loveda_base.py --print-config
+python tools/train.py configs/ovrs_sam3_isaid_loveda_exp.py --print-config
+python tools/train.py configs/ovrs_sam3_isaid_loveda_full.py --print-config
 ```
 
 重点确认：
@@ -1098,7 +1112,7 @@ torch.einsum("ckd,bdhw->bckhw", text_norm, image_norm)
 `tools/train.py` 支持命令行覆盖配置：
 
 ```bash
-python tools/train.py configs/sam3_semantic.py \
+python tools/train.py configs/ovrs_sam3_isaid_loveda_exp.py \
   --cfg-options train_cfg.max_iters=1000 model.criterion_cfg.final_dice_weight=0.3
 ```
 
@@ -1109,7 +1123,7 @@ python tools/train.py configs/sam3_semantic.py \
 打印合并后的最终配置并退出：
 
 ```bash
-python tools/train.py configs/sam3_semantic.py --print-config
+python tools/train.py configs/ovrs_sam3_isaid_loveda_exp.py --print-config
 ```
 
 ### 17.3 metrics.jsonl
@@ -1191,7 +1205,9 @@ visualization=dict(
 已有实验配置：
 
 ```text
-configs/sam3_isaid_train_loveda_val.py
+configs/ovrs_sam3_isaid_loveda_exp.py   ← 实验短跑
+configs/ovrs_sam3_isaid_loveda_full.py  ← 完整训练
+configs/ovrs_sam3_isaid_loveda_base.py  ← 基础配置
 ```
 
 推荐用于快速验证最终结构：
@@ -1199,14 +1215,13 @@ configs/sam3_isaid_train_loveda_val.py
 ```text
 训练集：iSAID
 验证集：LoveDA
-训练步数：4000
-验证频率：每 1000 步
+训练步数：4000 (exp) / 20000 (full)
+验证频率：每 1000 步 (exp) / 每 2000 步 (full)
 每次验证：LoveDA 500 张
-可视化：关闭
-保存权重：实验阶段可关闭
+可视化：关闭 (exp) / 开启 (full)
 ```
 
-损失函数、冻结策略和模型结构默认继承 `sam3_semantic.py` 的最终设计。
+损失函数、冻结策略和模型结构默认继承 `ovrs_sam3_isaid_loveda_base.py` 的最终设计。
 
 ---
 
