@@ -15,7 +15,11 @@ def flatten_batch_class(
 ) -> tuple[torch.Tensor, int, int]:
     """[B, C, D, H, W] → [B*C, D, H, W]"""
     batch_size, num_classes, channels, height, width = features.shape
-    return features.reshape(batch_size * num_classes, channels, height, width), batch_size, num_classes
+    return (
+        features.reshape(batch_size * num_classes, channels, height, width),
+        batch_size,
+        num_classes,
+    )
 
 
 def unflatten_batch_class(
@@ -25,7 +29,9 @@ def unflatten_batch_class(
 ) -> torch.Tensor:
     """[B*C, D, H, W] → [B, C, D, H, W]"""
     _, channels, height, width = features.shape
-    return features.reshape(batch_size, num_classes, channels, height, width).contiguous()
+    return features.reshape(
+        batch_size, num_classes, channels, height, width
+    ).contiguous()
 
 
 def _safe_group_norm(num_channels: int) -> nn.GroupNorm:
@@ -35,130 +41,31 @@ def _safe_group_norm(num_channels: int) -> nn.GroupNorm:
     return nn.GroupNorm(num_groups, num_channels)
 
 
-class ConvDownsample2d(nn.Module):
-    def __init__(self, channels: int):
-        super().__init__()
-        self.layers = nn.Sequential(
-            nn.Conv2d(channels, channels, kernel_size=3, stride=2, padding=1, bias=False),
-            _safe_group_norm(channels),
-            nn.GELU(),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.layers(x)
-
-
-class BilinearConvUpsample2d(nn.Module):
-    def __init__(self, channels: int):
-        super().__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False),
-            _safe_group_norm(channels),
-            nn.GELU(),
-        )
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        target_hw: tuple[int, int],
-    ) -> torch.Tensor:
-        x = F.interpolate(
-            x,
-            size=target_hw,
-            mode="bilinear",
-            align_corners=False,
-        )
-        return self.conv(x)
-
-
-class FpnFuseUpsample2d(nn.Module):
-    """
-    上采样时融合 SAM3 FPN 特征。
-
-    FPN 特征先通过 1×1 卷积投影到 fpn_proj_dim (64)，再与 hidden_dim (256)
-    通道的 refiner 特征在通道维拼接，最后用 3×3 卷积融合。
-    fpn_proj_dim=64 的作用是避免直接拼接 256 通道 FPN 后让 FPN 主导上采样结果。
-    """
-
-    def __init__(
-        self,
-        hidden_dim: int,
-        fpn_proj_dim: int = 64,
-    ):
-        super().__init__()
-        self.hidden_dim = int(hidden_dim)
-        self.fpn_proj_dim = int(fpn_proj_dim)
-
-        self.fpn_proj = nn.Sequential(
-            nn.Conv2d(self.hidden_dim, self.fpn_proj_dim, kernel_size=1, bias=False),
-            _safe_group_norm(self.fpn_proj_dim),
-            nn.GELU(),
-        )
-        self.fuse = nn.Sequential(
-            nn.Conv2d(
-                self.hidden_dim + self.fpn_proj_dim,
-                self.hidden_dim,
-                kernel_size=3,
-                padding=1,
-                bias=False,
-            ),
-            _safe_group_norm(self.hidden_dim),
-            nn.GELU(),
-        )
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        sam_fpn: torch.Tensor,
-        batch_size: int,
-        num_classes: int,
-        target_hw: tuple[int, int],
-    ) -> torch.Tensor:
-        x = F.interpolate(
-            x,
-            size=target_hw,
-            mode="bilinear",
-            align_corners=False,
-        )
-
-        fpn = F.interpolate(
-            sam_fpn.to(device=x.device, dtype=x.dtype),
-            size=target_hw,
-            mode="bilinear",
-            align_corners=False,
-        )
-        fpn = self.fpn_proj(fpn)
-
-        fpn = (
-            fpn[:, None]
-            .expand(batch_size, num_classes, self.fpn_proj_dim, target_hw[0], target_hw[1])
-            .reshape(batch_size * num_classes, self.fpn_proj_dim, target_hw[0], target_hw[1])
-        )
-
-        return self.fuse(torch.cat([x, fpn], dim=1))
-
-
 # ---------------------------------------------------------------------------
-# ClassTokenScoreClassAttention
+# ClassScoreAttention
 # ---------------------------------------------------------------------------
 
 
-class ClassTokenScoreClassAttention(nn.Module):
+class ClassScoreAttention(nn.Module):
     """
-    Inter-class attention at each spatial position.
+    Inter-class attention at each spatial position with dual value updates.
 
-    q/k = concat(encoder_features, sam_text_mean, clip_score_embed)
-    v   = encoder_features
+    q/k = concat(feature, sam_text_mean, score_embed)  → 768 dims
+    v_feature = feature
+    v_score   = score_embed
 
     Attention happens across C classes at every spatial position.
+    Both feature and score_embed are updated via the same attention weights.
     """
 
     def __init__(
         self,
         hidden_dim: int = 256,
-        score_embed_dim: int = 128,
+        score_embed_dim: int = 256,
         num_heads: int = 8,
         dropout: float = 0.1,
+        feature_residual_scale: float = 1e-3,
+        score_residual_scale: float = 1e-3,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -170,108 +77,139 @@ class ClassTokenScoreClassAttention(nn.Module):
                 f"hidden_dim={hidden_dim} not divisible by num_heads={num_heads}"
             )
 
-        qk_in_dim = self.hidden_dim * 2 + self.score_embed_dim
+        qk_in_dim = self.hidden_dim * 2 + self.score_embed_dim  # 256+256+256=768
 
         self.q_proj = nn.Linear(qk_in_dim, self.hidden_dim)
         self.k_proj = nn.Linear(qk_in_dim, self.hidden_dim)
-        self.v_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
-        self.out_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
 
-        self.norm = nn.LayerNorm(self.hidden_dim)
+        self.v_feature_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.v_score_proj = nn.Linear(self.score_embed_dim, self.hidden_dim)
+
+        self.out_feature_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.out_score_proj = nn.Linear(self.hidden_dim, self.score_embed_dim)
+
+        self.feature_norm = nn.LayerNorm(self.hidden_dim)
+        self.score_norm = nn.LayerNorm(self.score_embed_dim)
+
         self.dropout = nn.Dropout(float(dropout))
+
+        self.feature_residual_scale = nn.Parameter(
+            torch.tensor(float(feature_residual_scale))
+        )
+        self.score_residual_scale = nn.Parameter(
+            torch.tensor(float(score_residual_scale))
+        )
 
     def forward(
         self,
-        encoder_features: torch.Tensor,
+        feature: torch.Tensor,
+        score_embed: torch.Tensor,
         sam_text_mean: torch.Tensor,
-        clip_score_embed: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            encoder_features: [B, C, D, H, W]
-            sam_text_mean:    [B, C, D]
-            clip_score_embed: [B, C, D_score, H, W]
+            feature:      [B, C, D, H, W]
+            score_embed:  [B, C, D_score, H, W]
+            sam_text_mean: [B, C, D]
 
         Returns:
-            encoder_features: [B, C, D, H, W]
+            feature:      [B, C, D, H, W]
+            score_embed:  [B, C, D_score, H, W]
         """
-        B, C, D, H, W = encoder_features.shape
+        B, C, D, H, W = feature.shape
+        D_score = self.score_embed_dim
 
-        if sam_text_mean.ndim != 3:
+        if tuple(score_embed.shape) != (B, C, D_score, H, W):
             raise ValueError(
-                f"sam_text_mean must be 3D [B, C, D], got {tuple(sam_text_mean.shape)}"
+                f"score_embed must be [{B}, {C}, {D_score}, {H}, {W}], "
+                f"got {tuple(score_embed.shape)}"
             )
         if tuple(sam_text_mean.shape) != (B, C, D):
             raise ValueError(
                 f"sam_text_mean must be [{B}, {C}, {D}], "
                 f"got {tuple(sam_text_mean.shape)}"
             )
-        if tuple(clip_score_embed.shape) != (B, C, self.score_embed_dim, H, W):
-            raise ValueError(
-                f"clip_score_embed must be [{B}, {C}, {self.score_embed_dim}, {H}, {W}], "
-                f"got {tuple(clip_score_embed.shape)}"
-            )
 
         N = H * W
 
-        e_flat = encoder_features.permute(0, 3, 4, 1, 2).reshape(B * N, C, D)
+        # Flatten spatial dims into batch for per-position attention.
+        # feature: [B, C, D, H, W] → [B*N, C, D]
+        f_flat = feature.permute(0, 3, 4, 1, 2).reshape(B * N, C, D)
 
-        sam_text_broadcast = (
-            sam_text_mean.to(device=e_flat.device, dtype=e_flat.dtype)[:, None]
+        # score_embed: [B, C, D_score, H, W] → [B*N, C, D_score]
+        s_flat = score_embed.permute(0, 3, 4, 1, 2).reshape(B * N, C, D_score)
+
+        # Broadcast sam_text_mean to each spatial position.
+        text_broadcast = (
+            sam_text_mean.to(device=f_flat.device, dtype=f_flat.dtype)[:, None]
             .expand(B, N, C, D)
             .reshape(B * N, C, D)
         )
 
-        score_flat = (
-            clip_score_embed
-            .permute(0, 3, 4, 1, 2)
-            .reshape(B * N, C, self.score_embed_dim)
-        )
-
-        qk_input = torch.cat([e_flat, sam_text_broadcast, score_flat], dim=-1)
+        # Build q/k from concat(feature, text_mean, score_embed).
+        qk_input = torch.cat([f_flat, text_broadcast, s_flat], dim=-1)  # [B*N, C, 768]
 
         q = self.q_proj(qk_input)
         k = self.k_proj(qk_input)
-        v = self.v_proj(e_flat)
+        v_feat = self.v_feature_proj(f_flat)
+        v_score = self.v_score_proj(s_flat)
 
         head_dim = D // self.num_heads
         q = q.reshape(B * N, C, self.num_heads, head_dim).permute(0, 2, 1, 3)
         k = k.reshape(B * N, C, self.num_heads, head_dim).permute(0, 2, 1, 3)
-        v = v.reshape(B * N, C, self.num_heads, head_dim).permute(0, 2, 1, 3)
+        v_feat = v_feat.reshape(B * N, C, self.num_heads, head_dim).permute(0, 2, 1, 3)
+        v_score = v_score.reshape(B * N, C, self.num_heads, head_dim).permute(0, 2, 1, 3)
 
         attn = torch.matmul(q, k.transpose(-2, -1)) * (head_dim ** -0.5)
         attn = F.softmax(attn, dim=-1)
         attn = self.dropout(attn)
 
-        out = torch.matmul(attn, v)
-        out = out.permute(0, 2, 1, 3).reshape(B * N, C, D)
-        out = self.out_proj(out)
-        out = self.norm(e_flat + self.dropout(out))
+        out_feat = torch.matmul(attn, v_feat)
+        out_feat = out_feat.permute(0, 2, 1, 3).reshape(B * N, C, D)
+        out_feat = self.out_feature_proj(out_feat)
+        out_feat = self.feature_norm(
+            f_flat + self.dropout(out_feat) * self.feature_residual_scale
+        )
 
-        return out.reshape(B, H, W, C, D).permute(0, 3, 4, 1, 2).contiguous()
+        out_score = torch.matmul(attn, v_score)
+        out_score = out_score.permute(0, 2, 1, 3).reshape(B * N, C, D)
+        out_score = self.out_score_proj(out_score)
+        out_score = self.score_norm(
+            s_flat + self.dropout(out_score) * self.score_residual_scale
+        )
+
+        feature_out = out_feat.reshape(B, H, W, C, D).permute(0, 3, 4, 1, 2).contiguous()
+        score_out = out_score.reshape(B, H, W, C, D_score).permute(0, 3, 4, 1, 2).contiguous()
+
+        return feature_out, score_out
 
 
 # ---------------------------------------------------------------------------
-# ImageScoreWindowAttention
+# WindowScoreAttention
 # ---------------------------------------------------------------------------
 
 
-class ImageScoreWindowAttention(nn.Module):
+class WindowScoreAttention(nn.Module):
     """
-    Intra-class window attention.
+    Intra-class window attention with relative position bias and dual value updates.
 
-    q/k = concat(encoder_features, sam_image_features, clip_score_embed)
-    v   = encoder_features
+    q/k = concat(feature, score_embed)  → 512 dims
+    v_feature = feature
+    v_score   = score_embed
+
+    Window size = 12, shift_size = 0 for regular, 6 for shifted.
     """
 
     def __init__(
         self,
         hidden_dim: int = 256,
-        score_embed_dim: int = 128,
+        score_embed_dim: int = 256,
         num_heads: int = 8,
-        window_size: int = 9,
+        window_size: int = 12,
         shift_size: int = 0,
         dropout: float = 0.1,
+        feature_residual_scale: float = 1e-3,
+        score_residual_scale: float = 1e-3,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -289,15 +227,54 @@ class ImageScoreWindowAttention(nn.Module):
                 f"shift_size={shift_size} must be in [0, window_size={window_size})"
             )
 
-        qk_in_dim = self.hidden_dim * 2 + self.score_embed_dim
+        qk_in_dim = self.hidden_dim + self.score_embed_dim  # 256+256=512
 
         self.q_proj = nn.Linear(qk_in_dim, self.hidden_dim)
         self.k_proj = nn.Linear(qk_in_dim, self.hidden_dim)
-        self.v_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
-        self.out_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
 
-        self.norm = nn.LayerNorm(self.hidden_dim)
+        self.v_feature_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.v_score_proj = nn.Linear(self.score_embed_dim, self.hidden_dim)
+
+        self.out_feature_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
+        self.out_score_proj = nn.Linear(self.hidden_dim, self.score_embed_dim)
+
+        self.feature_norm = nn.LayerNorm(self.hidden_dim)
+        self.score_norm = nn.LayerNorm(self.score_embed_dim)
+
         self.dropout = nn.Dropout(float(dropout))
+
+        self.feature_residual_scale = nn.Parameter(
+            torch.tensor(float(feature_residual_scale))
+        )
+        self.score_residual_scale = nn.Parameter(
+            torch.tensor(float(score_residual_scale))
+        )
+
+        # Relative position bias (GSNet / Swin style).
+        ws = self.window_size
+        self.relative_position_bias_table = nn.Parameter(
+            torch.zeros((2 * ws - 1) * (2 * ws - 1), num_heads)
+        )
+        nn.init.trunc_normal_(self.relative_position_bias_table, std=0.02)
+
+        coords_h = torch.arange(ws)
+        coords_w = torch.arange(ws)
+        coords = torch.stack(
+            torch.meshgrid(coords_h, coords_w, indexing="ij")
+        )  # [2, ws, ws]
+        coords_flatten = torch.flatten(coords, 1)          # [2, ws*ws]
+
+        relative_coords = (
+            coords_flatten[:, :, None] - coords_flatten[:, None, :]
+        )  # [2, ws*ws, ws*ws]
+        relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # [N, N, 2]
+
+        relative_coords[:, :, 0] += ws - 1
+        relative_coords[:, :, 1] += ws - 1
+        relative_coords[:, :, 0] *= 2 * ws - 1
+
+        relative_position_index = relative_coords.sum(-1)  # [N, N]
+        self.register_buffer("relative_position_index", relative_position_index)
 
     @staticmethod
     def _pad_to_window(x: torch.Tensor, window_size: int):
@@ -321,6 +298,21 @@ class ImageScoreWindowAttention(nn.Module):
         x = x.reshape(B, H // ws, W // ws, ws, ws, D)
         x = x.permute(0, 5, 1, 3, 2, 4).reshape(B, D, H, W)
         return x
+
+    def _get_relative_position_bias(self) -> torch.Tensor:
+        """
+        Returns:
+            relative_position_bias: [num_heads, N, N] where N = window_size * window_size
+        """
+        ws = self.window_size
+        N = ws * ws
+
+        relative_position_bias = self.relative_position_bias_table[
+            self.relative_position_index.reshape(-1)
+        ]
+        relative_position_bias = relative_position_bias.view(N, N, self.num_heads)
+        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()
+        return relative_position_bias  # [num_heads, N, N]
 
     def _build_shift_attn_mask(
         self,
@@ -349,9 +341,6 @@ class ImageScoreWindowAttention(nn.Module):
                 img_mask[:, h, w] = cnt
                 cnt += 1
 
-        # Do NOT roll img_mask here.
-        # The feature map is rolled before partition, but the region mask must stay
-        # in the original coordinate system, following Swin/GSNet shifted-window logic.
         mask_windows = self._window_partition(img_mask.unsqueeze(0))
         mask_windows = mask_windows.squeeze(-1)
 
@@ -369,91 +358,82 @@ class ImageScoreWindowAttention(nn.Module):
 
     def forward(
         self,
-        encoder_features: torch.Tensor,
-        sam_image_features: torch.Tensor,
-        clip_score_embed: torch.Tensor,
-    ) -> torch.Tensor:
+        feature: torch.Tensor,
+        score_embed: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            encoder_features:   [B, C, D, H, W]
-            sam_image_features: [B, D, H, W]
-            clip_score_embed:   [B, C, D_score, H, W]
+            feature:     [B, C, D, H, W]
+            score_embed: [B, C, D_score, H, W]
 
         Returns:
-            encoder_features: [B, C, D, H, W]
+            feature:     [B, C, D, H, W]
+            score_embed: [B, C, D_score, H, W]
         """
-        B, C, D, H, W = encoder_features.shape
+        B, C, D, H, W = feature.shape
+        D_score = self.score_embed_dim
 
         if H % self.window_size != 0 or W % self.window_size != 0:
             raise ValueError(
-                f"ImageScoreWindowAttention expects H/W divisible by window_size, "
-                f"got H={H}, W={W}, window_size={self.window_size}."
+                f"WindowScoreAttention expects H/W divisible by window_size={self.window_size}, "
+                f"got H={H}, W={W}."
             )
-
-        if tuple(sam_image_features.shape) != (B, D, H, W):
+        if tuple(score_embed.shape) != (B, C, D_score, H, W):
             raise ValueError(
-                f"sam_image_features must be [{B}, {D}, {H}, {W}], "
-                f"got {tuple(sam_image_features.shape)}"
-            )
-        if tuple(clip_score_embed.shape) != (B, C, self.score_embed_dim, H, W):
-            raise ValueError(
-                f"clip_score_embed must be "
-                f"[{B}, {C}, {self.score_embed_dim}, {H}, {W}], "
-                f"got {tuple(clip_score_embed.shape)}"
+                f"score_embed must be [{B}, {C}, {D_score}, {H}, {W}], "
+                f"got {tuple(score_embed.shape)}"
             )
 
         bc = B * C
+        ws = self.window_size
 
-        e_flat = encoder_features.reshape(bc, D, H, W)
-        score_flat = clip_score_embed.reshape(bc, self.score_embed_dim, H, W)
+        f_flat = feature.reshape(bc, D, H, W)
+        s_flat = score_embed.reshape(bc, D_score, H, W)
 
-        sam_flat = (
-            sam_image_features[:, None]
-            .expand(B, C, D, H, W)
-            .reshape(bc, D, H, W)
-        )
+        f_flat, orig_h, orig_w = self._pad_to_window(f_flat, ws)
+        s_flat, _, _ = self._pad_to_window(s_flat, ws)
 
-        e_flat, orig_h, orig_w = self._pad_to_window(e_flat, self.window_size)
-        score_flat, _, _ = self._pad_to_window(score_flat, self.window_size)
-        sam_flat, _, _ = self._pad_to_window(sam_flat, self.window_size)
-
-        pad_h, pad_w = e_flat.shape[-2], e_flat.shape[-1]
+        pad_h, pad_w = f_flat.shape[-2], f_flat.shape[-1]
 
         shift = self.shift_size
-
         if shift > 0:
-            e_flat = torch.roll(e_flat, shifts=(-shift, -shift), dims=(-2, -1))
-            score_flat = torch.roll(score_flat, shifts=(-shift, -shift), dims=(-2, -1))
-            sam_flat = torch.roll(sam_flat, shifts=(-shift, -shift), dims=(-2, -1))
+            f_flat = torch.roll(f_flat, shifts=(-shift, -shift), dims=(-2, -1))
+            s_flat = torch.roll(s_flat, shifts=(-shift, -shift), dims=(-2, -1))
 
-        e_windows = self._window_partition(e_flat)
-        score_windows = self._window_partition(score_flat)
-        sam_windows = self._window_partition(sam_flat)
+        f_windows = self._window_partition(f_flat)   # [num_win, ws*ws, D]
+        s_windows = self._window_partition(s_flat)   # [num_win, ws*ws, D_score]
 
         attn_mask = self._build_shift_attn_mask(
             padded_h=pad_h,
             padded_w=pad_w,
             bc=bc,
-            device=encoder_features.device,
-            dtype=encoder_features.dtype,
+            device=feature.device,
+            dtype=feature.dtype,
         )
 
-        qk_input = torch.cat(
-            [e_windows, sam_windows, score_windows], dim=-1,
-        )
+        # q/k from concat(feature, score_embed).
+        qk_input = torch.cat([f_windows, s_windows], dim=-1)  # [num_win, N, 512]
 
         q = self.q_proj(qk_input)
         k = self.k_proj(qk_input)
-        v = self.v_proj(e_windows)
+        v_feat = self.v_feature_proj(f_windows)
+        v_score = self.v_score_proj(s_windows)
 
         head_dim = D // self.num_heads
         num_win, N = q.shape[0], q.shape[1]
 
         q = q.reshape(num_win, N, self.num_heads, head_dim).permute(0, 2, 1, 3)
         k = k.reshape(num_win, N, self.num_heads, head_dim).permute(0, 2, 1, 3)
-        v = v.reshape(num_win, N, self.num_heads, head_dim).permute(0, 2, 1, 3)
+        v_feat = v_feat.reshape(num_win, N, self.num_heads, head_dim).permute(0, 2, 1, 3)
+        v_score = v_score.reshape(num_win, N, self.num_heads, head_dim).permute(0, 2, 1, 3)
 
         attn = torch.matmul(q, k.transpose(-2, -1)) * (head_dim ** -0.5)
+
+        # Add relative position bias.
+        rel_pos_bias = self._get_relative_position_bias().to(
+            device=attn.device, dtype=attn.dtype
+        )
+        attn = attn + rel_pos_bias.unsqueeze(0)
 
         if attn_mask is not None:
             attn = attn + attn_mask.unsqueeze(1)
@@ -461,260 +441,34 @@ class ImageScoreWindowAttention(nn.Module):
         attn = F.softmax(attn, dim=-1)
         attn = self.dropout(attn)
 
-        out = torch.matmul(attn, v)
-        out = out.permute(0, 2, 1, 3).reshape(num_win, N, D)
-        out = self.out_proj(out)
-        out = self.norm(e_windows + self.dropout(out))
+        out_feat = torch.matmul(attn, v_feat)
+        out_feat = out_feat.permute(0, 2, 1, 3).reshape(num_win, N, D)
+        out_feat = self.out_feature_proj(out_feat)
+        out_feat = self.feature_norm(
+            f_windows + self.dropout(out_feat) * self.feature_residual_scale
+        )
 
-        out = self._window_reverse(out, bc, pad_h, pad_w)
+        out_score = torch.matmul(attn, v_score)
+        out_score = out_score.permute(0, 2, 1, 3).reshape(num_win, N, D)
+        out_score = self.out_score_proj(out_score)
+        out_score = self.score_norm(
+            s_windows + self.dropout(out_score) * self.score_residual_scale
+        )
+
+        out_feat = self._window_reverse(out_feat, bc, pad_h, pad_w)
+        out_score = self._window_reverse(out_score, bc, pad_h, pad_w)
 
         if shift > 0:
-            out = torch.roll(out, shifts=(shift, shift), dims=(-2, -1))
+            out_feat = torch.roll(out_feat, shifts=(shift, shift), dims=(-2, -1))
+            out_score = torch.roll(out_score, shifts=(shift, shift), dims=(-2, -1))
 
-        out = out[:, :, :orig_h, :orig_w]
-        return out.reshape(B, C, D, H, W).contiguous()
+        out_feat = out_feat[:, :, :orig_h, :orig_w]
+        out_score = out_score[:, :, :orig_h, :orig_w]
 
+        feature_out = out_feat.reshape(B, C, D, H, W).contiguous()
+        score_out = out_score.reshape(B, C, D_score, H, W).contiguous()
 
-# ---------------------------------------------------------------------------
-# MultiScaleImageScoreWindowAttention
-# ---------------------------------------------------------------------------
-
-
-class MultiScaleImageScoreWindowAttention(nn.Module):
-    """
-    Multi-scale intra-class window attention.
-
-    Downsamples 72×72 features to 36×36 and 18×18,
-    runs regular + shifted window attention at each scale,
-    upsamples the attention results to 72×72 and fuses via norm + sum.
-    """
-
-    def __init__(
-        self,
-        hidden_dim: int = 256,
-        score_embed_dim: int = 128,
-        num_heads: int = 8,
-        window_size: int = 9,
-        shift_size: int = 4,
-        dropout: float = 0.1,
-    ):
-        super().__init__()
-        self.hidden_dim = int(hidden_dim)
-
-        self.down_72_to_36 = ConvDownsample2d(self.hidden_dim)
-        self.down_36_to_18 = ConvDownsample2d(self.hidden_dim)
-
-        self.attn_36_regular = ImageScoreWindowAttention(
-            hidden_dim=hidden_dim,
-            score_embed_dim=score_embed_dim,
-            num_heads=num_heads,
-            window_size=window_size,
-            shift_size=0,
-            dropout=dropout,
-        )
-        self.attn_36_shifted = ImageScoreWindowAttention(
-            hidden_dim=hidden_dim,
-            score_embed_dim=score_embed_dim,
-            num_heads=num_heads,
-            window_size=window_size,
-            shift_size=shift_size,
-            dropout=dropout,
-        )
-
-        self.attn_18_regular = ImageScoreWindowAttention(
-            hidden_dim=hidden_dim,
-            score_embed_dim=score_embed_dim,
-            num_heads=num_heads,
-            window_size=window_size,
-            shift_size=0,
-            dropout=dropout,
-        )
-        self.attn_18_shifted = ImageScoreWindowAttention(
-            hidden_dim=hidden_dim,
-            score_embed_dim=score_embed_dim,
-            num_heads=num_heads,
-            window_size=window_size,
-            shift_size=shift_size,
-            dropout=dropout,
-        )
-
-        self.up_36_to_72 = FpnFuseUpsample2d(self.hidden_dim, fpn_proj_dim=64)
-        self.up_18_to_36 = FpnFuseUpsample2d(self.hidden_dim, fpn_proj_dim=64)
-        self.up_36_from_18_to_72 = FpnFuseUpsample2d(self.hidden_dim, fpn_proj_dim=64)
-
-        self.norm_36_to_72 = nn.LayerNorm(self.hidden_dim)
-        self.norm_18_to_72 = nn.LayerNorm(self.hidden_dim)
-        self.fused_norm = nn.LayerNorm(self.hidden_dim)
-
-    def _downsample_encoder_features(
-        self,
-        encoder_features_72: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        features_72_flat, batch_size, num_classes = flatten_batch_class(
-            encoder_features_72,
-        )
-
-        features_36_flat = self.down_72_to_36(features_72_flat)
-        features_18_flat = self.down_36_to_18(features_36_flat)
-
-        features_36 = unflatten_batch_class(
-            features_36_flat,
-            batch_size,
-            num_classes,
-        )
-        features_18 = unflatten_batch_class(
-            features_18_flat,
-            batch_size,
-            num_classes,
-        )
-
-        return features_36, features_18
-
-    @staticmethod
-    def _norm_bcdhw(
-        x: torch.Tensor,
-        norm: nn.LayerNorm,
-    ) -> torch.Tensor:
-        return norm(
-            x.permute(0, 1, 3, 4, 2)
-        ).permute(0, 1, 4, 2, 3).contiguous()
-
-    def _upsample_36_to_72(
-        self,
-        features_36: torch.Tensor,
-        sam_fpn_72: torch.Tensor,
-        target_hw: tuple[int, int],
-    ) -> torch.Tensor:
-        features_36_flat, batch_size, num_classes = flatten_batch_class(features_36)
-        features_72_flat = self.up_36_to_72(
-            features_36_flat,
-            sam_fpn=sam_fpn_72,
-            batch_size=batch_size,
-            num_classes=num_classes,
-            target_hw=target_hw,
-        )
-        return unflatten_batch_class(features_72_flat, batch_size, num_classes)
-
-    def _upsample_18_to_72(
-        self,
-        features_18: torch.Tensor,
-        sam_fpn_36: torch.Tensor,
-        sam_fpn_72: torch.Tensor,
-        target_hw: tuple[int, int],
-    ) -> torch.Tensor:
-        features_18_flat, batch_size, num_classes = flatten_batch_class(features_18)
-
-        features_36_flat = self.up_18_to_36(
-            features_18_flat,
-            sam_fpn=sam_fpn_36,
-            batch_size=batch_size,
-            num_classes=num_classes,
-            target_hw=(36, 36),
-        )
-
-        features_72_flat = self.up_36_from_18_to_72(
-            features_36_flat,
-            sam_fpn=sam_fpn_72,
-            batch_size=batch_size,
-            num_classes=num_classes,
-            target_hw=target_hw,
-        )
-
-        return unflatten_batch_class(features_72_flat, batch_size, num_classes)
-
-    def forward(
-        self,
-        encoder_features_72: torch.Tensor,
-        sam_image_last_72: torch.Tensor,
-        clip_score_embeds: dict[str, torch.Tensor],
-    ) -> torch.Tensor:
-        """
-        Args:
-            encoder_features_72: [B, C, D, 72, 72]
-            sam_image_last_72:   [B, D, 72, 72]
-            clip_score_embeds:   {"scale_18": ..., "scale_36": ..., "scale_72": ...}
-
-        Returns:
-            spatial_features_72: [B, C, D, 72, 72]
-        """
-        batch_size, num_classes, hidden_dim, height, width = encoder_features_72.shape
-
-        if (height, width) != (72, 72):
-            raise ValueError(
-                f"MultiScaleImageScoreWindowAttention expects 72x72 input, "
-                f"got {(height, width)}."
-            )
-
-        features_36, features_18 = self._downsample_encoder_features(
-            encoder_features_72,
-        )
-
-        sam_image_last_36 = F.interpolate(
-            sam_image_last_72,
-            size=(36, 36),
-            mode="bilinear",
-            align_corners=False,
-        )
-        sam_image_last_18 = F.interpolate(
-            sam_image_last_72,
-            size=(18, 18),
-            mode="bilinear",
-            align_corners=False,
-        )
-
-        clip_score_embed_36 = clip_score_embeds["scale_36"]
-        clip_score_embed_18 = clip_score_embeds["scale_18"]
-
-        features_36 = self.attn_36_regular(
-            encoder_features=features_36,
-            sam_image_features=sam_image_last_36,
-            clip_score_embed=clip_score_embed_36,
-        )
-        features_36 = self.attn_36_shifted(
-            encoder_features=features_36,
-            sam_image_features=sam_image_last_36,
-            clip_score_embed=clip_score_embed_36,
-        )
-
-        features_18 = self.attn_18_regular(
-            encoder_features=features_18,
-            sam_image_features=sam_image_last_18,
-            clip_score_embed=clip_score_embed_18,
-        )
-        features_18 = self.attn_18_shifted(
-            encoder_features=features_18,
-            sam_image_features=sam_image_last_18,
-            clip_score_embed=clip_score_embed_18,
-        )
-
-        features_36_to_72 = self._upsample_36_to_72(
-            features_36,
-            sam_fpn_72=sam_image_last_72,
-            target_hw=(72, 72),
-        )
-        features_18_to_72 = self._upsample_18_to_72(
-            features_18,
-            sam_fpn_36=sam_image_last_36,
-            sam_fpn_72=sam_image_last_72,
-            target_hw=(72, 72),
-        )
-
-        features_36_to_72 = self._norm_bcdhw(
-            features_36_to_72,
-            self.norm_36_to_72,
-        )
-        features_18_to_72 = self._norm_bcdhw(
-            features_18_to_72,
-            self.norm_18_to_72,
-        )
-
-        spatial_features_72 = features_36_to_72 + features_18_to_72
-        spatial_features_72 = self._norm_bcdhw(
-            spatial_features_72,
-            self.fused_norm,
-        )
-
-        return spatial_features_72
+        return feature_out, score_out
 
 
 # ---------------------------------------------------------------------------
@@ -724,123 +478,152 @@ class MultiScaleImageScoreWindowAttention(nn.Module):
 
 class EncoderRefinerLayer(nn.Module):
     """
-    One refiner layer:
+    One refiner layer operating at 36×36.
 
-        1. ClassTokenScoreClassAttention at 72x72
-        2. MultiScaleImageScoreWindowAttention (36x36 + 18x18)
-        3. FFN
-        4. LayerNorm
-
-    Each layer applies class attention, multi-scale spatial window attention,
-    and FFN in sequence. No cross-layer residual is applied here.
+    Sequence:
+        1. ClassScoreAttention (inter-class, updates both feature and score)
+        2. WindowScoreAttention regular  (window_size=12, shift=0)
+        3. WindowScoreAttention shifted  (window_size=12, shift=6)
+        4. Per-token FFN on both feature and score
+        5. Output LayerNorm
     """
 
     def __init__(
         self,
         hidden_dim: int = 256,
-        score_embed_dim: int = 128,
+        score_embed_dim: int = 256,
         num_heads: int = 8,
-        window_size: int = 9,
-        shift_size: int = 4,
+        window_size: int = 12,
+        shift_size: int = 6,
         dropout: float = 0.1,
+        feature_residual_scale: float = 1e-3,
+        score_residual_scale: float = 1e-3,
     ):
         super().__init__()
 
-        self.class_attn = ClassTokenScoreClassAttention(
+        self.class_attn = ClassScoreAttention(
             hidden_dim=hidden_dim,
             score_embed_dim=score_embed_dim,
             num_heads=num_heads,
             dropout=dropout,
+            feature_residual_scale=feature_residual_scale,
+            score_residual_scale=score_residual_scale,
         )
 
-        self.multiscale_spatial_attn = MultiScaleImageScoreWindowAttention(
+        self.window_attn_regular = WindowScoreAttention(
+            hidden_dim=hidden_dim,
+            score_embed_dim=score_embed_dim,
+            num_heads=num_heads,
+            window_size=window_size,
+            shift_size=0,
+            dropout=dropout,
+            feature_residual_scale=feature_residual_scale,
+            score_residual_scale=score_residual_scale,
+        )
+
+        self.window_attn_shifted = WindowScoreAttention(
             hidden_dim=hidden_dim,
             score_embed_dim=score_embed_dim,
             num_heads=num_heads,
             window_size=window_size,
             shift_size=shift_size,
             dropout=dropout,
+            feature_residual_scale=feature_residual_scale,
+            score_residual_scale=score_residual_scale,
         )
 
-        self.ffn_norm = nn.LayerNorm(hidden_dim)
-        self.ffn_fc1 = nn.Linear(hidden_dim, hidden_dim * 4)
-        self.ffn_fc2 = nn.Linear(hidden_dim * 4, hidden_dim)
-        self.ffn_dropout = nn.Dropout(float(dropout))
+        # Per-token FFN for feature.
+        self.ffn_norm_feat = nn.LayerNorm(hidden_dim)
+        self.ffn_fc1_feat = nn.Linear(hidden_dim, hidden_dim * 4)
+        self.ffn_fc2_feat = nn.Linear(hidden_dim * 4, hidden_dim)
+        self.ffn_dropout_feat = nn.Dropout(float(dropout))
 
-        self.output_norm = nn.LayerNorm(hidden_dim)
+        # Per-token FFN for score.
+        self.ffn_norm_score = nn.LayerNorm(score_embed_dim)
+        self.ffn_fc1_score = nn.Linear(score_embed_dim, score_embed_dim * 4)
+        self.ffn_fc2_score = nn.Linear(score_embed_dim * 4, score_embed_dim)
+        self.ffn_dropout_score = nn.Dropout(float(dropout))
 
-    def _output_layer_norm(self, encoder_features: torch.Tensor) -> torch.Tensor:
-        # encoder_features: [B, C, D, H, W]
-        return self.output_norm(
-            encoder_features.permute(0, 1, 3, 4, 2)
+        self.output_norm_feat = nn.LayerNorm(hidden_dim)
+        self.output_norm_score = nn.LayerNorm(score_embed_dim)
+
+    def _apply_layer_norm_bcdhw(
+        self, x: torch.Tensor, norm: nn.LayerNorm
+    ) -> torch.Tensor:
+        """Apply LayerNorm on the channel dim of [B, C, D, H, W]."""
+        return norm(
+            x.permute(0, 1, 3, 4, 2)
         ).permute(0, 1, 4, 2, 3).contiguous()
 
-    def _ffn(self, encoder_features: torch.Tensor) -> torch.Tensor:
-        batch_size, num_classes, hidden_dim, height, width = encoder_features.shape
-
-        features_flat = encoder_features.permute(
-            0, 3, 4, 1, 2,
-        ).reshape(
-            batch_size * height * width,
-            num_classes,
-            hidden_dim,
+    def _ffn_feature(self, feature: torch.Tensor) -> torch.Tensor:
+        """Per-token FFN for feature: [B, C, D, H, W] → [B, C, D, H, W]"""
+        B, C, D, H, W = feature.shape
+        x = feature.permute(0, 3, 4, 1, 2).reshape(B * H * W, C, D)
+        residual = x
+        x = self.ffn_norm_feat(x)
+        x = self.ffn_fc2_feat(
+            self.ffn_dropout_feat(F.gelu(self.ffn_fc1_feat(x)))
         )
+        x = residual + self.ffn_dropout_feat(x)
+        return x.reshape(B, H, W, C, D).permute(0, 3, 4, 1, 2).contiguous()
 
-        residual = features_flat
-        features_flat = self.ffn_norm(features_flat)
-        features_flat = self.ffn_fc2(
-            self.ffn_dropout(F.gelu(self.ffn_fc1(features_flat)))
+    def _ffn_score(self, score: torch.Tensor) -> torch.Tensor:
+        """Per-token FFN for score: [B, C, D_score, H, W] → [B, C, D_score, H, W]"""
+        B, C, Ds, H, W = score.shape
+        x = score.permute(0, 3, 4, 1, 2).reshape(B * H * W, C, Ds)
+        residual = x
+        x = self.ffn_norm_score(x)
+        x = self.ffn_fc2_score(
+            self.ffn_dropout_score(F.gelu(self.ffn_fc1_score(x)))
         )
-        features_flat = residual + self.ffn_dropout(features_flat)
-
-        return features_flat.reshape(
-            batch_size,
-            height,
-            width,
-            num_classes,
-            hidden_dim,
-        ).permute(0, 3, 4, 1, 2).contiguous()
+        x = residual + self.ffn_dropout_score(x)
+        return x.reshape(B, H, W, C, Ds).permute(0, 3, 4, 1, 2).contiguous()
 
     def forward(
         self,
-        encoder_features_72: torch.Tensor,
+        feature_36: torch.Tensor,
+        score_embed_36: torch.Tensor,
         sam_text_mean: torch.Tensor,
-        sam_image_last_72: torch.Tensor,
-        clip_score_embed_18: torch.Tensor,
-        clip_score_embed_36: torch.Tensor,
-        clip_score_embed_72: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            encoder_features_72: [B, C, D, 72, 72]
-            sam_text_mean:       [B, C, D]
-            sam_image_last_72:   [B, D, 72, 72]
-            clip_score_embed_18: [B, C, D_score, 18, 18]
-            clip_score_embed_36: [B, C, D_score, 36, 36]
-            clip_score_embed_72: [B, C, D_score, 72, 72]
+            feature_36:      [B, C, 256, 36, 36]
+            score_embed_36:  [B, C, 256, 36, 36]
+            sam_text_mean:   [B, C, 256]
 
         Returns:
-            encoder_features_72: [B, C, D, 72, 72]
+            feature_36:      [B, C, 256, 36, 36]
+            score_embed_36:  [B, C, 256, 36, 36]
         """
-        class_attended_features_72 = self.class_attn(
-            encoder_features=encoder_features_72,
+        # Class attention.
+        feature_36, score_embed_36 = self.class_attn(
+            feature=feature_36,
+            score_embed=score_embed_36,
             sam_text_mean=sam_text_mean,
-            clip_score_embed=clip_score_embed_72,
         )
 
-        clip_score_embeds = {
-            "scale_18": clip_score_embed_18,
-            "scale_36": clip_score_embed_36,
-            "scale_72": clip_score_embed_72,
-        }
-
-        spatial_features_72 = self.multiscale_spatial_attn(
-            encoder_features_72=class_attended_features_72,
-            sam_image_last_72=sam_image_last_72,
-            clip_score_embeds=clip_score_embeds,
+        # Regular window attention.
+        feature_36, score_embed_36 = self.window_attn_regular(
+            feature=feature_36,
+            score_embed=score_embed_36,
         )
 
-        spatial_fused_features_72 = class_attended_features_72 + spatial_features_72
-        output_features_72 = self._ffn(spatial_fused_features_72)
+        # Shifted window attention.
+        feature_36, score_embed_36 = self.window_attn_shifted(
+            feature=feature_36,
+            score_embed=score_embed_36,
+        )
 
-        return self._output_layer_norm(output_features_72)
+        # FFN.
+        feature_36 = self._ffn_feature(feature_36)
+        score_embed_36 = self._ffn_score(score_embed_36)
+
+        # Output LayerNorm.
+        feature_36 = self._apply_layer_norm_bcdhw(
+            feature_36, self.output_norm_feat
+        )
+        score_embed_36 = self._apply_layer_norm_bcdhw(
+            score_embed_36, self.output_norm_score
+        )
+
+        return feature_36, score_embed_36

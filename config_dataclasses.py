@@ -23,6 +23,7 @@ class OpenCLIPConfig:
     model_name: str = "ViT-L-14"
     pretrained: Optional[str] = None
     default_output: str = "feat_map"
+    image_size: int = 504
 
     image_intermediate_layers: list[int] = field(default_factory=lambda: [7, 15])
 
@@ -73,13 +74,16 @@ class EncoderRefinerConfig:
 
     hidden_dim: int = 256
 
-    clip_score_embed_dim: int = 64
+    score_embed_dim: int = 256
+    clip_score_embed_dim: int = 192
+    sam_score_embed_dim: int = 64
     clip_score_conv_kernel: int = 7
 
+    refiner_hw: int = 36
     encoder_hw: int = 72
-    score_base_hw: int = 18
-    window_size: int = 9
-    shift_size: int = 4
+
+    window_size: int = 12
+    shift_size: int = 6
 
     use_checkpoint: bool = True
     early_prompt_attention: bool = False

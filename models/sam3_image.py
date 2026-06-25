@@ -40,11 +40,12 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_num_heads: int = 8,
         encoder_refiner_dropout: float = 0.1,
         encoder_refiner_hidden_dim: int = 256,
-        encoder_refiner_score_embed_dim: int = 32,
+        encoder_refiner_score_embed_dim: int = 256,
+        encoder_refiner_clip_score_embed_dim: int = 192,
+        encoder_refiner_sam_score_embed_dim: int = 64,
         encoder_refiner_conv_kernel: int = 7,
-        encoder_refiner_score_base_hw: int = 18,
-        encoder_refiner_window_size: int = 9,
-        encoder_refiner_shift_size: int = 4,
+        encoder_refiner_window_size: int = 12,
+        encoder_refiner_shift_size: int = 6,
         encoder_refiner_use_checkpoint: bool = True,
         encoder_refiner_early_prompt_attention: bool = False,
         task_mode: str = TASK_MODE_SEMANTIC,
@@ -108,8 +109,9 @@ class Sam3Image(torch.nn.Module):
             clip_text_encoder=self.clip_text_encoder,
             hidden_dim=int(encoder_refiner_hidden_dim),
             clip_dim=self.clip_align_dim,
-            clip_native_dim=self.clip_image_native_dim,
             score_embed_dim=int(encoder_refiner_score_embed_dim),
+            clip_score_embed_dim=int(encoder_refiner_clip_score_embed_dim),
+            sam_score_embed_dim=int(encoder_refiner_sam_score_embed_dim),
             num_heads=int(encoder_refiner_num_heads),
             window_size=int(encoder_refiner_window_size),
             shift_size=int(encoder_refiner_shift_size),
@@ -117,8 +119,7 @@ class Sam3Image(torch.nn.Module):
             dropout=float(encoder_refiner_dropout),
             prompt_templates=list(openclip_prompt_templates or []),
             normalize_label_for_clip=bool(normalize_label_for_clip),
-            score_conv_kernel=int(encoder_refiner_conv_kernel),
-            score_base_hw=int(encoder_refiner_score_base_hw),
+            clip_score_conv_kernel=int(encoder_refiner_conv_kernel),
             use_checkpoint=bool(encoder_refiner_use_checkpoint),
         )
 
@@ -642,6 +643,92 @@ class Sam3Image(torch.nn.Module):
             input_points_mask=torch.zeros((num_pairs, 0), dtype=torch.bool, device=device),
         )
 
+    def build_sam_score_embed_36(
+        self,
+        encoder_out_chunks: List[Dict],
+        chunk_prompts: List[torch.Tensor],
+        chunk_prompt_masks: List[torch.Tensor],
+        chunk_class_counts: List[int],
+        backbone_fpn: List[torch.Tensor],
+        batch_size: int,
+        num_classes: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """
+        Generate low-resolution SAM score embedding chunk by chunk.
+
+        Each chunk's high-resolution logits are immediately downsampled by
+        SamMaskScoreEmbedding and then released, avoiding a full
+        [B, C, H_mask, W_mask] allocation.
+
+        Returns:
+            sam_score_embed_36: [B, C, 64, 36, 36]
+        """
+        sam_score_chunks: list[torch.Tensor] = []
+
+        for chunk_idx, encoder_out in enumerate(encoder_out_chunks):
+            C_chunk = chunk_class_counts[chunk_idx]
+
+            chunk_find_input = self._build_prompt_expanded_find_stage(
+                batch_size=batch_size,
+                num_chunk_classes=C_chunk,
+                device=device,
+            )
+
+            with torch.no_grad():
+                seg_outputs = self.segmentation_head(
+                    backbone_feats=backbone_fpn,
+                    obj_queries=torch.empty(0, device=device),
+                    image_ids=chunk_find_input.img_ids,
+                    encoder_hidden_states=encoder_out["encoder_hidden_states"],
+                    prompt=chunk_prompts[chunk_idx],
+                    prompt_mask=chunk_prompt_masks[chunk_idx],
+                    apply_prompt_attention=not self.encoder_refiner_early_prompt_attention,
+                )
+
+                chunk_logits = seg_outputs["semantic_seg"]
+
+                if chunk_logits.dim() == 4 and chunk_logits.shape[0] == batch_size * C_chunk:
+                    chunk_logits = chunk_logits.reshape(
+                        batch_size, C_chunk, *chunk_logits.shape[-2:]
+                    )
+                elif (
+                    chunk_logits.dim() == 4
+                    and chunk_logits.shape[0] == batch_size
+                    and chunk_logits.shape[1] == C_chunk
+                ):
+                    pass
+                elif chunk_logits.dim() == 4 and chunk_logits.shape[1] == 1:
+                    chunk_logits = chunk_logits.squeeze(1)
+                    if chunk_logits.dim() == 3:
+                        chunk_logits = chunk_logits[:, None]
+                else:
+                    raise ValueError(
+                        f"Unexpected semantic_seg shape in SAM prior: "
+                        f"{tuple(chunk_logits.shape)}."
+                    )
+
+            # chunk_logits is detached so gradients don't flow back into SAM3.
+            # SamMaskScoreEmbedding remains trainable.
+            chunk_score = self.encoder_refiner.sam_score_embed(
+                sam_prior_logits=chunk_logits.detach()
+            )
+
+            sam_score_chunks.append(chunk_score)
+
+            del chunk_logits, seg_outputs
+
+        sam_score_embed_36 = torch.cat(sam_score_chunks, dim=1)
+
+        if tuple(sam_score_embed_36.shape[:2]) != (batch_size, num_classes):
+            raise ValueError(
+                f"sam_score_embed_36 batch/class mismatch: "
+                f"expected {(batch_size, num_classes)}, "
+                f"got {tuple(sam_score_embed_36.shape[:2])}."
+            )
+
+        return sam_score_embed_36.contiguous()
+
     def run_encoder_refiner(
         self,
         encoder_features_72: torch.Tensor,
@@ -659,37 +746,46 @@ class Sam3Image(torch.nn.Module):
     ) -> Dict[str, torch.Tensor]:
         B, C, D, H, W = encoder_features_72.shape
 
-        # Use the last FPN feature as sam_image_last for window attention guide.
-        sam_image_last_72 = backbone_fpn[-1].detach()
+        sam_fpn_72 = backbone_fpn[-1].detach()
 
-        # Run the encoder refiner.
-        (
-            refined_encoder_features_72,
-            template_clip_text,
-            clip_score_embeds,
-            clip_score_maps_18,
-        ) = self.encoder_refiner(
-            encoder_features=encoder_features_72,
-            clip_image_feat_map=clip_image_feat_map,
-            clip_mid_features=clip_mid_features,
-            clip_mid_layer_indices=clip_mid_layer_indices,
-            sam_text_mean=sam_text_mean,
-            class_names=class_names,
-            sam_image_last=sam_image_last_72,
+        # 1. Build SAM score embedding chunk by chunk (avoids full high-res allocation).
+        sam_score_embed_36 = self.build_sam_score_embed_36(
+            encoder_out_chunks=encoder_out_chunks,
+            chunk_prompts=chunk_prompts,
+            chunk_prompt_masks=chunk_prompt_masks,
+            chunk_class_counts=chunk_class_counts,
+            backbone_fpn=backbone_fpn,
+            batch_size=B,
+            num_classes=C,
+            device=encoder_features_72.device,
         )
 
-        # For each chunk, write refined_encoder_features_72 back and call segmentation_head.
+        # 2. Run encoder refiner (CLIP score + SAM score + refiner layers + upsample).
+        refiner_out = self.encoder_refiner(
+            encoder_features_72=encoder_features_72,
+            clip_image_feat_map=clip_image_feat_map,
+            sam_text_mean=sam_text_mean,
+            class_names=class_names,
+            sam_score_embed_36=sam_score_embed_36,
+            sam_fpn_72=sam_fpn_72,
+        )
+
+        refined_encoder_features_72 = refiner_out["refined_encoder_features_72"]
+
+        # 3. Write refined features back and get final logits from segmentation_head.
         final_logits_chunks: list[torch.Tensor] = []
         chunk_start = 0
 
         for chunk_idx, encoder_out in enumerate(encoder_out_chunks):
             C_chunk = chunk_class_counts[chunk_idx]
 
-            refined_encoder_features_chunk = refined_encoder_features_72[:, chunk_start:chunk_start + C_chunk]
+            refined_chunk = refined_encoder_features_72[
+                :, chunk_start:chunk_start + C_chunk
+            ]
 
             refined_hidden_states = self._write_refined_encoder_features_to_encoder_hidden_states(
                 encoder_out=encoder_out,
-                refined_encoder_features_chunk=refined_encoder_features_chunk,
+                refined_encoder_features_chunk=refined_chunk,
                 batch_size=B,
                 num_chunk_classes=C_chunk,
             )
@@ -707,14 +803,14 @@ class Sam3Image(torch.nn.Module):
                 encoder_hidden_states=refined_hidden_states,
                 prompt=chunk_prompts[chunk_idx],
                 prompt_mask=chunk_prompt_masks[chunk_idx],
-                # Skip prompt attention if already applied early in cache build.
                 apply_prompt_attention=not self.encoder_refiner_early_prompt_attention,
             )
 
             chunk_logits = seg_outputs["semantic_seg"]
-            # semantic_seg: [B*C_chunk, 1, H, W] → [B, C_chunk, H, W]
             if chunk_logits.dim() == 4 and chunk_logits.shape[0] == B * C_chunk:
-                chunk_logits = chunk_logits.reshape(B, C_chunk, *chunk_logits.shape[-2:])
+                chunk_logits = chunk_logits.reshape(
+                    B, C_chunk, *chunk_logits.shape[-2:]
+                )
             elif chunk_logits.dim() == 4 and chunk_logits.shape[0] == B and chunk_logits.shape[1] == C_chunk:
                 pass
             elif chunk_logits.dim() == 4 and chunk_logits.shape[1] == 1:
@@ -744,9 +840,12 @@ class Sam3Image(torch.nn.Module):
             result.update({
                 OUTPUT_KEYS.encoder_features: encoder_features_72.detach().contiguous(),
                 OUTPUT_KEYS.refined_encoder_features: refined_encoder_features_72.detach().contiguous(),
-                OUTPUT_KEYS.template_clip_text_features: template_clip_text.detach().contiguous(),
-                OUTPUT_KEYS.clip_score_embed: clip_score_embeds["scale_72"].detach().contiguous(),
-                OUTPUT_KEYS.clip_score_maps: clip_score_maps_18.detach().contiguous(),
+                OUTPUT_KEYS.refiner_features_36: refiner_out["refiner_features_36"].detach().contiguous(),
+                OUTPUT_KEYS.score_embed_36: refiner_out["score_embed_36"].detach().contiguous(),
+                OUTPUT_KEYS.clip_score_embed_36: refiner_out["clip_score_embed_36"].detach().contiguous(),
+                OUTPUT_KEYS.sam_score_embed_36: refiner_out["sam_score_embed_36"].detach().contiguous(),
+                OUTPUT_KEYS.clip_score_maps: refiner_out["clip_score_maps_36"].detach().contiguous(),
+                OUTPUT_KEYS.template_clip_text_features: refiner_out["template_clip_text"].detach().contiguous(),
                 OUTPUT_KEYS.clip_mid_features: [
                     feat.detach().contiguous() for feat in clip_mid_features
                 ],

@@ -285,16 +285,16 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 f"got {cfg.encoder_hw}."
             )
 
-        if cfg.score_base_hw != 18:
+        if cfg.refiner_hw != 36:
             raise ValueError(
-                "Current multi-scale refiner requires encoder_refiner_cfg.score_base_hw=18 "
-                f"because score embeddings are expected at 18/36/72, got {cfg.score_base_hw}."
+                "Current refiner requires encoder_refiner_cfg.refiner_hw=36, "
+                f"got {cfg.refiner_hw}."
             )
 
-        if cfg.score_base_hw * 4 != cfg.encoder_hw:
+        if cfg.refiner_hw * 2 != cfg.encoder_hw:
             raise ValueError(
-                "Current score pyramid requires score_base_hw * 4 == encoder_hw, "
-                f"got score_base_hw={cfg.score_base_hw}, encoder_hw={cfg.encoder_hw}."
+                "Current design requires refiner_hw * 2 == encoder_hw (36→72 upsampling), "
+                f"got refiner_hw={cfg.refiner_hw}, encoder_hw={cfg.encoder_hw}."
             )
 
         return cfg
@@ -519,6 +519,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             visual=clip_model.visual,
             default_output=openclip_cfg.default_output,
             intermediate_layers=list(openclip_cfg.image_intermediate_layers),
+            image_size=int(openclip_cfg.image_size),
         )
 
         return text_encoder, image_encoder
@@ -766,9 +767,10 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             encoder_refiner_num_heads=int(refiner_cfg.num_heads),
             encoder_refiner_dropout=float(refiner_cfg.dropout),
             encoder_refiner_hidden_dim=int(refiner_cfg.hidden_dim),
-            encoder_refiner_score_embed_dim=int(refiner_cfg.clip_score_embed_dim),
+            encoder_refiner_score_embed_dim=int(refiner_cfg.score_embed_dim),
+            encoder_refiner_clip_score_embed_dim=int(refiner_cfg.clip_score_embed_dim),
+            encoder_refiner_sam_score_embed_dim=int(refiner_cfg.sam_score_embed_dim),
             encoder_refiner_conv_kernel=int(refiner_cfg.clip_score_conv_kernel),
-            encoder_refiner_score_base_hw=int(refiner_cfg.score_base_hw),
             encoder_refiner_window_size=int(refiner_cfg.window_size),
             encoder_refiner_shift_size=int(refiner_cfg.shift_size),
             encoder_refiner_use_checkpoint=bool(refiner_cfg.use_checkpoint),

@@ -27,6 +27,7 @@ model = dict(
         model_name="ViT-L-14",
         pretrained="weights/RemoteCLIP-ViT-L-14.pt",
         default_output="feat_map",
+        image_size=504,
         image_intermediate_layers=[7, 15],
 
         prompt_templates=[
@@ -73,13 +74,16 @@ model = dict(
         dropout=0.1,
         hidden_dim=256,
 
-        clip_score_embed_dim=64,
+        score_embed_dim=256,
+        clip_score_embed_dim=192,
+        sam_score_embed_dim=64,
         clip_score_conv_kernel=7,
 
+        refiner_hw=36,
         encoder_hw=72,
-        score_base_hw=18,
-        window_size=9,
-        shift_size=4,
+
+        window_size=12,
+        shift_size=6,
 
         use_checkpoint=True,
         early_prompt_attention=False,
