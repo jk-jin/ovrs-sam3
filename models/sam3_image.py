@@ -34,9 +34,8 @@ class Sam3Image(torch.nn.Module):
         num_interactive_steps_val: int = 0,
         clip_image_encoder=None,
         clip_text_encoder=None,
-        openclip_prompt_template: str = "a remote sensing image of {}.",
+        openclip_prompt_templates: list[str] | None = None,
         normalize_label_for_clip: bool = True,
-        encoder_refiner_num_query_tokens: int = 32,
         encoder_refiner_fusion_layers: int = 4,
         encoder_refiner_num_heads: int = 8,
         encoder_refiner_dropout: float = 0.1,
@@ -109,14 +108,14 @@ class Sam3Image(torch.nn.Module):
             clip_text_encoder=self.clip_text_encoder,
             hidden_dim=int(encoder_refiner_hidden_dim),
             clip_dim=self.clip_align_dim,
+            clip_native_dim=self.clip_image_native_dim,
             score_embed_dim=int(encoder_refiner_score_embed_dim),
             num_heads=int(encoder_refiner_num_heads),
             window_size=int(encoder_refiner_window_size),
             shift_size=int(encoder_refiner_shift_size),
             fusion_layers=int(encoder_refiner_fusion_layers),
             dropout=float(encoder_refiner_dropout),
-            num_query_tokens=int(encoder_refiner_num_query_tokens),
-            prompt_template=str(openclip_prompt_template),
+            prompt_templates=list(openclip_prompt_templates or []),
             normalize_label_for_clip=bool(normalize_label_for_clip),
             score_conv_kernel=int(encoder_refiner_conv_kernel),
             score_base_hw=int(encoder_refiner_score_base_hw),
@@ -655,6 +654,7 @@ class Sam3Image(torch.nn.Module):
         sam_text_mean: torch.Tensor,
         class_names: List[str],
         clip_mid_features: List[torch.Tensor],
+        clip_mid_layer_indices: tuple[int, ...],
         return_debug: bool = False,
     ) -> Dict[str, torch.Tensor]:
         B, C, D, H, W = encoder_features_72.shape
@@ -665,13 +665,14 @@ class Sam3Image(torch.nn.Module):
         # Run the encoder refiner.
         (
             refined_encoder_features_72,
-            class_query_tokens,
-            dynamic_clip_text,
+            template_clip_text,
             clip_score_embeds,
             clip_score_maps_18,
         ) = self.encoder_refiner(
             encoder_features=encoder_features_72,
             clip_image_feat_map=clip_image_feat_map,
+            clip_mid_features=clip_mid_features,
+            clip_mid_layer_indices=clip_mid_layer_indices,
             sam_text_mean=sam_text_mean,
             class_names=class_names,
             sam_image_last=sam_image_last_72,
@@ -743,8 +744,7 @@ class Sam3Image(torch.nn.Module):
             result.update({
                 OUTPUT_KEYS.encoder_features: encoder_features_72.detach().contiguous(),
                 OUTPUT_KEYS.refined_encoder_features: refined_encoder_features_72.detach().contiguous(),
-                OUTPUT_KEYS.class_query_tokens: class_query_tokens.detach().contiguous(),
-                OUTPUT_KEYS.dynamic_clip_text_features: dynamic_clip_text.detach().contiguous(),
+                OUTPUT_KEYS.template_clip_text_features: template_clip_text.detach().contiguous(),
                 OUTPUT_KEYS.clip_score_embed: clip_score_embeds["scale_72"].detach().contiguous(),
                 OUTPUT_KEYS.clip_score_maps: clip_score_maps_18.detach().contiguous(),
                 OUTPUT_KEYS.clip_mid_features: [
@@ -772,6 +772,7 @@ class Sam3Image(torch.nn.Module):
         clip_image_feat_map = encoder_refiner_cache["clip_image_feat_map"]
         sam_text_mean = encoder_refiner_cache["sam_text_mean"]
         clip_mid_features = encoder_refiner_cache[OUTPUT_KEYS.clip_mid_features]
+        clip_mid_layer_indices = encoder_refiner_cache["clip_mid_layer_indices"]
 
         class_names = list(batch.find_text_batch)
         if len(class_names) == 0:
@@ -794,6 +795,7 @@ class Sam3Image(torch.nn.Module):
             sam_text_mean=sam_text_mean,
             class_names=class_names,
             clip_mid_features=clip_mid_features,
+            clip_mid_layer_indices=clip_mid_layer_indices,
             return_debug=return_debug,
         )
 

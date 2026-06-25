@@ -162,7 +162,6 @@ def _compact_key_name(key: str) -> str:
         "bce_valid_pixel_weight": "valid",
         "bce_ignore_pixel_weight": "ignore",
         "bce_absent_class_weight": "abs",
-        "num_query_tokens": "q",
         "clip_score_embed_dim": "score_dim",
         "clip_score_conv_kernel": "k",
         "openclip_text_finetune": "text",

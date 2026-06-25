@@ -71,6 +71,73 @@ class BilinearConvUpsample2d(nn.Module):
         return self.conv(x)
 
 
+class FpnFuseUpsample2d(nn.Module):
+    """
+    上采样时融合 SAM3 FPN 特征。
+
+    FPN 特征先通过 1×1 卷积投影到 fpn_proj_dim (64)，再与 hidden_dim (256)
+    通道的 refiner 特征在通道维拼接，最后用 3×3 卷积融合。
+    fpn_proj_dim=64 的作用是避免直接拼接 256 通道 FPN 后让 FPN 主导上采样结果。
+    """
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        fpn_proj_dim: int = 64,
+    ):
+        super().__init__()
+        self.hidden_dim = int(hidden_dim)
+        self.fpn_proj_dim = int(fpn_proj_dim)
+
+        self.fpn_proj = nn.Sequential(
+            nn.Conv2d(self.hidden_dim, self.fpn_proj_dim, kernel_size=1, bias=False),
+            _safe_group_norm(self.fpn_proj_dim),
+            nn.GELU(),
+        )
+        self.fuse = nn.Sequential(
+            nn.Conv2d(
+                self.hidden_dim + self.fpn_proj_dim,
+                self.hidden_dim,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            _safe_group_norm(self.hidden_dim),
+            nn.GELU(),
+        )
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        sam_fpn: torch.Tensor,
+        batch_size: int,
+        num_classes: int,
+        target_hw: tuple[int, int],
+    ) -> torch.Tensor:
+        x = F.interpolate(
+            x,
+            size=target_hw,
+            mode="bilinear",
+            align_corners=False,
+        )
+
+        fpn = F.interpolate(
+            sam_fpn.to(device=x.device, dtype=x.dtype),
+            size=target_hw,
+            mode="bilinear",
+            align_corners=False,
+        )
+        fpn = self.fpn_proj(fpn)
+
+        fpn = (
+            fpn[:, None]
+            .expand(batch_size, num_classes, self.fpn_proj_dim, target_hw[0], target_hw[1])
+            .reshape(batch_size * num_classes, self.fpn_proj_dim, target_hw[0], target_hw[1])
+        )
+
+        return self.fuse(torch.cat([x, fpn], dim=1))
+
+
 # ---------------------------------------------------------------------------
 # ClassTokenScoreClassAttention
 # ---------------------------------------------------------------------------
@@ -471,9 +538,9 @@ class MultiScaleImageScoreWindowAttention(nn.Module):
             dropout=dropout,
         )
 
-        self.up_36_to_72 = BilinearConvUpsample2d(self.hidden_dim)
-        self.up_18_to_36 = BilinearConvUpsample2d(self.hidden_dim)
-        self.up_36_from_18_to_72 = BilinearConvUpsample2d(self.hidden_dim)
+        self.up_36_to_72 = FpnFuseUpsample2d(self.hidden_dim, fpn_proj_dim=64)
+        self.up_18_to_36 = FpnFuseUpsample2d(self.hidden_dim, fpn_proj_dim=64)
+        self.up_36_from_18_to_72 = FpnFuseUpsample2d(self.hidden_dim, fpn_proj_dim=64)
 
         self.norm_36_to_72 = nn.LayerNorm(self.hidden_dim)
         self.norm_18_to_72 = nn.LayerNorm(self.hidden_dim)
@@ -515,20 +582,44 @@ class MultiScaleImageScoreWindowAttention(nn.Module):
     def _upsample_36_to_72(
         self,
         features_36: torch.Tensor,
+        sam_fpn_72: torch.Tensor,
         target_hw: tuple[int, int],
     ) -> torch.Tensor:
         features_36_flat, batch_size, num_classes = flatten_batch_class(features_36)
-        features_72_flat = self.up_36_to_72(features_36_flat, target_hw=target_hw)
+        features_72_flat = self.up_36_to_72(
+            features_36_flat,
+            sam_fpn=sam_fpn_72,
+            batch_size=batch_size,
+            num_classes=num_classes,
+            target_hw=target_hw,
+        )
         return unflatten_batch_class(features_72_flat, batch_size, num_classes)
 
     def _upsample_18_to_72(
         self,
         features_18: torch.Tensor,
+        sam_fpn_36: torch.Tensor,
+        sam_fpn_72: torch.Tensor,
         target_hw: tuple[int, int],
     ) -> torch.Tensor:
         features_18_flat, batch_size, num_classes = flatten_batch_class(features_18)
-        features_36_flat = self.up_18_to_36(features_18_flat, target_hw=(36, 36))
-        features_72_flat = self.up_36_from_18_to_72(features_36_flat, target_hw=target_hw)
+
+        features_36_flat = self.up_18_to_36(
+            features_18_flat,
+            sam_fpn=sam_fpn_36,
+            batch_size=batch_size,
+            num_classes=num_classes,
+            target_hw=(36, 36),
+        )
+
+        features_72_flat = self.up_36_from_18_to_72(
+            features_36_flat,
+            sam_fpn=sam_fpn_72,
+            batch_size=batch_size,
+            num_classes=num_classes,
+            target_hw=target_hw,
+        )
+
         return unflatten_batch_class(features_72_flat, batch_size, num_classes)
 
     def forward(
@@ -598,10 +689,13 @@ class MultiScaleImageScoreWindowAttention(nn.Module):
 
         features_36_to_72 = self._upsample_36_to_72(
             features_36,
+            sam_fpn_72=sam_image_last_72,
             target_hw=(72, 72),
         )
         features_18_to_72 = self._upsample_18_to_72(
             features_18,
+            sam_fpn_36=sam_image_last_36,
+            sam_fpn_72=sam_image_last_72,
             target_hw=(72, 72),
         )
 
@@ -637,7 +731,8 @@ class EncoderRefinerLayer(nn.Module):
         3. FFN
         4. LayerNorm
 
-    No layer-level residual; global residual is applied after all layers.
+    Each layer applies class attention, multi-scale spatial window attention,
+    and FFN in sequence. No cross-layer residual is applied here.
     """
 
     def __init__(

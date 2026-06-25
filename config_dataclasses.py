@@ -26,7 +26,40 @@ class OpenCLIPConfig:
 
     image_intermediate_layers: list[int] = field(default_factory=lambda: [7, 15])
 
-    prompt_template: str = "a remote sensing image of {}."
+    prompt_templates: list[str] = field(default_factory=lambda: [
+        "a remote sensing image of {}.",
+        "a satellite image of {}.",
+        "an aerial image of {}.",
+        "a high-resolution overhead image of {}.",
+        "a top-down view of {}.",
+        "a bird's-eye view image of {}.",
+        "a remote sensing scene containing {}.",
+        "a satellite scene containing {}.",
+        "an aerial scene containing {}.",
+        "a high-resolution remote sensing scene of {}.",
+        "a land cover region of {} in a satellite image.",
+        "a land use area of {} in an aerial image.",
+        "a semantic segmentation region of {}.",
+        "a labeled mask region corresponding to {}.",
+        "a continuous area of {} in overhead imagery.",
+        "a visible region of {} from above.",
+        "the texture pattern of {} in a satellite image.",
+        "the spatial pattern of {} in remote sensing imagery.",
+        "the shape and boundary of {} in an aerial image.",
+        "the object boundary of {} from an overhead view.",
+        "a small-scale remote sensing object of {}.",
+        "a large-scale remote sensing region of {}.",
+        "multiple instances of {} in a satellite image.",
+        "dense objects of {} in overhead imagery.",
+        "sparse objects of {} in remote sensing imagery.",
+        "urban remote sensing imagery showing {}.",
+        "rural remote sensing imagery showing {}.",
+        "natural land surface containing {}.",
+        "man-made structures containing {}.",
+        "a homogeneous area of {}.",
+        "a complex background with {}.",
+        "an object or region classified as {} in remote sensing imagery.",
+    ])
     normalize_label_for_clip: bool = True
 
 
@@ -34,14 +67,13 @@ class OpenCLIPConfig:
 class EncoderRefinerConfig:
     enabled: bool = True
 
-    num_query_tokens: int = 32
     fusion_layers: int = 4
     num_heads: int = 8
     dropout: float = 0.1
 
     hidden_dim: int = 256
 
-    clip_score_embed_dim: int = 32
+    clip_score_embed_dim: int = 64
     clip_score_conv_kernel: int = 7
 
     encoder_hw: int = 72

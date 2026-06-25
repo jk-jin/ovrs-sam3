@@ -6,31 +6,35 @@ import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 
-from .clip_prompt_encoder import SingleTokenClipPromptEncoder
 from .clip_score_embedding import ClipScoreEmbeddingBuilder
-from .encoder_query_extractor import EncoderQueryExtractor
 from .encoder_refiner_attention import EncoderRefinerLayer
 
 
 class ClassConditionedEncoderRefiner(nn.Module):
     """
-    Multi-layer encoder feature refiner with multi-scale spatial window attention.
+    多层 encoder 特征精炼器，使用多尺度空间窗口注意力。
 
-    All sub-modules are created eagerly in __init__ so that parameters are
-    visible to apply_freeze_cfg and the optimizer before the first forward.
+    输入 (forward)：
+        encoder_features:       [B, C, D, H, W]
+        clip_image_feat_map:    [B, D_clip, Hc, Wc]
+        clip_mid_features:      CLIP ViT 中间层特征列表
+        clip_mid_layer_indices: 中间层编号
+        sam_text_mean:          [B, C, D]
+        class_names:            C 个类别名的列表
+        sam_image_last:         [B, D, H, W]
 
-    Inputs (forward):
-        encoder_features:   [B, C, D, H, W]
-        clip_image_feat_map: [B, D_clip, Hc, Wc]
-        class_names:        list of C strings
-        sam_image_last:     [B, D, H, W]
+    输出 (forward)：
+        refined_encoder_features_72: [B, C, D, 72, 72]
+        template_clip_text:          [C, 32, D_clip]
+        clip_score_embeds:           {"scale_18": ..., "scale_36": ..., "scale_72": ...}
+        clip_score_maps_18:          [B, C, 32, 18, 18]
 
-    Output (forward):
-        refined_encoder_features: [B, C, D, 72, 72]
-        class_query_tokens:       [B, C, Q, D]
-        dynamic_clip_text:        [B, C, Q, D_clip]
-        clip_score_embeds:        {"scale_18": ..., "scale_36": ..., "scale_72": ...}
-        clip_score_maps_18:       [B, C, Q, 18, 18]
+    设计：
+        32 个固定 prompt 模板 → frozen OpenCLIP text encoder → template_clip_text
+        → × clip_image_feat_map → score_maps_18
+        → CLIP mid-layer15 融合 → score_embed_36
+        → CLIP mid-layer7  融合 → score_embed_72
+        → class attention + window attention (FPN 融合上采样)
     """
 
     def __init__(
@@ -38,14 +42,14 @@ class ClassConditionedEncoderRefiner(nn.Module):
         clip_text_encoder,
         hidden_dim: int = 256,
         clip_dim: int = 768,
-        score_embed_dim: int = 128,
+        clip_native_dim: int = 1024,
+        score_embed_dim: int = 64,
         num_heads: int = 8,
         window_size: int = 9,
         shift_size: int = 4,
         fusion_layers: int = 4,
         dropout: float = 0.1,
-        num_query_tokens: int = 32,
-        prompt_template: str = "a remote sensing image of {}.",
+        prompt_templates: list[str] | None = None,
         normalize_label_for_clip: bool = True,
         score_conv_kernel: int = 7,
         score_base_hw: int = 18,
@@ -54,31 +58,25 @@ class ClassConditionedEncoderRefiner(nn.Module):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
         self.clip_dim = int(clip_dim)
-        self.num_query_tokens = int(num_query_tokens)
         self.use_checkpoint = bool(use_checkpoint)
 
-        self.query_extractor = EncoderQueryExtractor(
-            hidden_dim=self.hidden_dim,
-            num_query_tokens=self.num_query_tokens,
-            num_heads=int(num_heads),
-            dropout=float(dropout),
-        )
-
-        self.clip_prompt_encoder = SingleTokenClipPromptEncoder(
-            clip_text_encoder=clip_text_encoder,
-            prompt_template=str(prompt_template),
-            sam_dim=self.hidden_dim,
-            normalize_label=bool(normalize_label_for_clip),
-            use_checkpoint=bool(use_checkpoint),
-            num_attention_heads=int(num_heads),
-        )
+        if prompt_templates is None:
+            raise ValueError("prompt_templates must be a list of 32 prompt templates.")
+        if len(prompt_templates) != 32:
+            raise ValueError(f"Expected 32 prompt templates, got {len(prompt_templates)}.")
 
         self.score_builder = ClipScoreEmbeddingBuilder(
+            clip_text_encoder=clip_text_encoder,
+            prompt_templates=list(prompt_templates),
+            normalize_label=bool(normalize_label_for_clip),
             clip_output_dim=int(clip_dim),
+            clip_native_dim=int(clip_native_dim),
             score_embed_dim=int(score_embed_dim),
-            num_query_tokens=self.num_query_tokens,
             conv_kernel=int(score_conv_kernel),
             base_hw=int(score_base_hw),
+            clip_mid_proj_dim=32,
+            clip_mid_layer_for_36=15,
+            clip_mid_layer_for_72=7,
         )
 
         self.layers = nn.ModuleList([
@@ -101,17 +99,18 @@ class ClassConditionedEncoderRefiner(nn.Module):
         self,
         encoder_features: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
+        clip_mid_features: List[torch.Tensor],
+        clip_mid_layer_indices: tuple[int, ...],
         sam_text_mean: torch.Tensor,
         class_names: List[str],
         sam_image_last: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor], torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor], torch.Tensor]:
         """
         Returns:
             refined_encoder_features_72: [B, C, D, 72, 72]
-            class_query_tokens:          [B, C, Q, D]
-            dynamic_clip_text:           [B, C, Q, D_clip]
+            template_clip_text:          [C, 32, D_clip]
             clip_score_embeds:           dict of 3-scale score embeddings
-            clip_score_maps_18:          [B, C, Q, 18, 18]
+            clip_score_maps_18:          [B, C, 32, 18, 18]
         """
         batch_size, num_classes, hidden_dim, height, width = encoder_features.shape
 
@@ -127,17 +126,11 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 f"got {tuple(sam_text_mean.shape)}."
             )
 
-        class_query_tokens = self.query_extractor(encoder_features)
-
-        dynamic_clip_text = self.clip_prompt_encoder(
-            class_query_tokens=class_query_tokens,
+        clip_score_embeds, clip_score_maps_18, template_clip_text = self.score_builder(
             class_names=class_names,
             clip_image_feat_map=clip_image_feat_map,
-        )
-
-        clip_score_embeds, clip_score_maps_18 = self.score_builder(
-            dynamic_clip_text=dynamic_clip_text,
-            clip_image_feat_map=clip_image_feat_map,
+            clip_mid_features=clip_mid_features,
+            clip_mid_layer_indices=clip_mid_layer_indices,
         )
 
         # Validate score embedding shapes.
@@ -159,6 +152,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     f"clip_score_embeds[{key!r}] shape mismatch: "
                     f"expected {expected_shape}, got {tuple(score_embed.shape)}."
                 )
+
         refined_encoder_features_72 = encoder_features
 
         clip_score_embed_18 = clip_score_embeds["scale_18"]
@@ -189,8 +183,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
         return (
             refined_encoder_features_72,
-            class_query_tokens,
-            dynamic_clip_text,
+            template_clip_text,
             clip_score_embeds,
             clip_score_maps_18,
         )

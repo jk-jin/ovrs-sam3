@@ -23,21 +23,53 @@ model = dict(
         default_output="feat_map",
         image_intermediate_layers=[7, 15],
 
-        prompt_template="a remote sensing image of {}.",
+        prompt_templates=[
+            "a remote sensing image of {}.",
+            "a satellite image of {}.",
+            "an aerial image of {}.",
+            "a high-resolution overhead image of {}.",
+            "a top-down view of {}.",
+            "a bird's-eye view image of {}.",
+            "a remote sensing scene containing {}.",
+            "a satellite scene containing {}.",
+            "an aerial scene containing {}.",
+            "a high-resolution remote sensing scene of {}.",
+            "a land cover region of {} in a satellite image.",
+            "a land use area of {} in an aerial image.",
+            "a semantic segmentation region of {}.",
+            "a labeled mask region corresponding to {}.",
+            "a continuous area of {} in overhead imagery.",
+            "a visible region of {} from above.",
+            "the texture pattern of {} in a satellite image.",
+            "the spatial pattern of {} in remote sensing imagery.",
+            "the shape and boundary of {} in an aerial image.",
+            "the object boundary of {} from an overhead view.",
+            "a small-scale remote sensing object of {}.",
+            "a large-scale remote sensing region of {}.",
+            "multiple instances of {} in a satellite image.",
+            "dense objects of {} in overhead imagery.",
+            "sparse objects of {} in remote sensing imagery.",
+            "urban remote sensing imagery showing {}.",
+            "rural remote sensing imagery showing {}.",
+            "natural land surface containing {}.",
+            "man-made structures containing {}.",
+            "a homogeneous area of {}.",
+            "a complex background with {}.",
+            "an object or region classified as {} in remote sensing imagery.",
+        ],
         normalize_label_for_clip=True,
     ),
 
     encoder_refiner_cfg=dict(
         enabled=True,
 
-        num_query_tokens=32,
         fusion_layers=4,
         num_heads=8,
         dropout=0.1,
 
         hidden_dim=256,
 
-        clip_score_embed_dim=128,
+        clip_score_embed_dim=64,
         clip_score_conv_kernel=7,
 
         encoder_hw=72,
@@ -61,7 +93,7 @@ model = dict(
         #   attention   = train text attention q/v + positional embedding
         #   transformer = train all text transformer params
         #   full        = train all OpenCLIP text encoder params
-        openclip_text_finetune="attention",
+        openclip_text_finetune="frozen",
 
         # Image side:
         #   frozen      = freeze OpenCLIP image encoder
@@ -120,15 +152,6 @@ optim_wrapper = dict(
             norm_decay_mult=0.0,
             custom_keys={
                 "core.encoder_refiner": dict(lr_mult=4.0, decay_mult=1.0),
-
-                # OpenCLIP text q/v or full text fine-tune.
-                # 1e-4 × 0.02 = 2e-6
-                "core.clip_text_encoder": dict(lr_mult=0.02, decay_mult=0.0),
-
-                # OpenCLIP image q/v or full image fine-tune.
-                # Conservative default; can be swept later.
-                # 1e-4 × 0.01 = 1e-6
-                "core.clip_image_encoder": dict(lr_mult=0.01, decay_mult=0.0),
             },
         ),
     )
