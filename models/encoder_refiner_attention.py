@@ -193,10 +193,11 @@ class WindowScoreAttention(nn.Module):
     """
     Intra-class window attention with relative position bias and dual value updates.
 
-    q/k = concat(feature, score_embed)  → 512 dims
+    q/k = concat(feature, score_embed, sam_fpn_36) → 768 dims
     v_feature = feature
     v_score   = score_embed
 
+    sam_fpn_36 is used only in Q/K, not in value projections.
     Window size = 12, shift_size = 0 for regular, 6 for shifted.
     """
 
@@ -227,7 +228,7 @@ class WindowScoreAttention(nn.Module):
                 f"shift_size={shift_size} must be in [0, window_size={window_size})"
             )
 
-        qk_in_dim = self.hidden_dim + self.score_embed_dim  # 256+256=512
+        qk_in_dim = self.hidden_dim + self.score_embed_dim + self.hidden_dim  # 256+256+256=768
 
         self.q_proj = nn.Linear(qk_in_dim, self.hidden_dim)
         self.k_proj = nn.Linear(qk_in_dim, self.hidden_dim)
@@ -360,11 +361,13 @@ class WindowScoreAttention(nn.Module):
         self,
         feature: torch.Tensor,
         score_embed: torch.Tensor,
+        sam_fpn_36: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             feature:     [B, C, D, H, W]
             score_embed: [B, C, D_score, H, W]
+            sam_fpn_36:  [B, D, H, W]
 
         Returns:
             feature:     [B, C, D, H, W]
@@ -383,6 +386,11 @@ class WindowScoreAttention(nn.Module):
                 f"score_embed must be [{B}, {C}, {D_score}, {H}, {W}], "
                 f"got {tuple(score_embed.shape)}"
             )
+        if tuple(sam_fpn_36.shape) != (B, D, H, W):
+            raise ValueError(
+                f"sam_fpn_36 must be [{B}, {D}, {H}, {W}], "
+                f"got {tuple(sam_fpn_36.shape)}."
+            )
 
         bc = B * C
         ws = self.window_size
@@ -390,8 +398,16 @@ class WindowScoreAttention(nn.Module):
         f_flat = feature.reshape(bc, D, H, W)
         s_flat = score_embed.reshape(bc, D_score, H, W)
 
+        p_flat = (
+            sam_fpn_36.to(device=feature.device, dtype=feature.dtype)
+            [:, None]
+            .expand(B, C, D, H, W)
+            .reshape(bc, D, H, W)
+        )
+
         f_flat, orig_h, orig_w = self._pad_to_window(f_flat, ws)
         s_flat, _, _ = self._pad_to_window(s_flat, ws)
+        p_flat, _, _ = self._pad_to_window(p_flat, ws)
 
         pad_h, pad_w = f_flat.shape[-2], f_flat.shape[-1]
 
@@ -399,9 +415,11 @@ class WindowScoreAttention(nn.Module):
         if shift > 0:
             f_flat = torch.roll(f_flat, shifts=(-shift, -shift), dims=(-2, -1))
             s_flat = torch.roll(s_flat, shifts=(-shift, -shift), dims=(-2, -1))
+            p_flat = torch.roll(p_flat, shifts=(-shift, -shift), dims=(-2, -1))
 
         f_windows = self._window_partition(f_flat)   # [num_win, ws*ws, D]
         s_windows = self._window_partition(s_flat)   # [num_win, ws*ws, D_score]
+        p_windows = self._window_partition(p_flat)   # [num_win, ws*ws, D]
 
         attn_mask = self._build_shift_attn_mask(
             padded_h=pad_h,
@@ -411,8 +429,8 @@ class WindowScoreAttention(nn.Module):
             dtype=feature.dtype,
         )
 
-        # q/k from concat(feature, score_embed).
-        qk_input = torch.cat([f_windows, s_windows], dim=-1)  # [num_win, N, 512]
+        # q/k from concat(feature, score_embed, sam_fpn_36).
+        qk_input = torch.cat([f_windows, s_windows, p_windows], dim=-1)  # [num_win, N, 768]
 
         q = self.q_proj(qk_input)
         k = self.k_proj(qk_input)
@@ -584,12 +602,14 @@ class EncoderRefinerLayer(nn.Module):
         feature_36: torch.Tensor,
         score_embed_36: torch.Tensor,
         sam_text_mean: torch.Tensor,
+        sam_fpn_36: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             feature_36:      [B, C, 256, 36, 36]
             score_embed_36:  [B, C, 256, 36, 36]
             sam_text_mean:   [B, C, 256]
+            sam_fpn_36:      [B, 256, 36, 36]
 
         Returns:
             feature_36:      [B, C, 256, 36, 36]
@@ -606,12 +626,14 @@ class EncoderRefinerLayer(nn.Module):
         feature_36, score_embed_36 = self.window_attn_regular(
             feature=feature_36,
             score_embed=score_embed_36,
+            sam_fpn_36=sam_fpn_36,
         )
 
         # Shifted window attention.
         feature_36, score_embed_36 = self.window_attn_shifted(
             feature=feature_36,
             score_embed=score_embed_36,
+            sam_fpn_36=sam_fpn_36,
         )
 
         # FFN.

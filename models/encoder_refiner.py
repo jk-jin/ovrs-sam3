@@ -29,50 +29,48 @@ def _safe_group_norm(num_channels: int) -> nn.GroupNorm:
 
 class EncoderFeatureUpsampler(nn.Module):
     """
-    Upsample refined 36×36 feature back to 72×72 with FPN and original encoder fusion.
+    Upsample refined 36×36 feature back to 72×72 with simple bilinear
+    interpolation and 1×1 channel fusion.
 
     Input:
         refined_feature_36:  [B, C, 256, 36, 36]
-        sam_fpn_72:          [B, 256, 72, 72]
+        sam_fpn_72:          [B, 256, 72, 72]  # kept for API compatibility, unused here
         original_encoder_72: [B, C, 256, 72, 72]
 
     Process:
-        1. ConvTranspose2d: 36 → 72
-        2. Concat with projected FPN and original encoder features
-        3. Conv fusion back to 256
+        1. Bilinear interpolate refined_feature_36: 36 → 72
+        2. Concatenate with original_encoder_72 along channel dim
+        3. 1×1 conv: 512 → 256
 
     Output:
         refined_feature_72: [B, C, 256, 72, 72]
     """
 
-    def __init__(self, hidden_dim: int = 256, fpn_proj_dim: int = 64):
+    def __init__(self, hidden_dim: int = 256):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
-        self.fpn_proj_dim = int(fpn_proj_dim)
 
-        self.deconv = nn.ConvTranspose2d(
+        self.fuse = nn.Conv2d(
+            self.hidden_dim * 2,
             self.hidden_dim,
-            self.hidden_dim,
-            kernel_size=2,
-            stride=2,
+            kernel_size=1,
+            bias=False,
         )
 
-        self.fpn_proj = nn.Sequential(
-            nn.Conv2d(self.hidden_dim, self.fpn_proj_dim, kernel_size=1, bias=False),
-            _safe_group_norm(self.fpn_proj_dim),
-            nn.GELU(),
-        )
+        self._init_original_passthrough()
 
-        total_in = self.hidden_dim + self.fpn_proj_dim + self.hidden_dim
+    def _init_original_passthrough(self) -> None:
+        """
+        Initialize the 1×1 fusion conv so that the module initially behaves
+        like original_encoder_72 passthrough.
 
-        self.fuse = nn.Sequential(
-            nn.Conv2d(total_in, self.hidden_dim, kernel_size=3, padding=1, bias=False),
-            _safe_group_norm(self.hidden_dim),
-            nn.GELU(),
-            nn.Conv2d(self.hidden_dim, self.hidden_dim, kernel_size=3, padding=1, bias=False),
-            _safe_group_norm(self.hidden_dim),
-            nn.GELU(),
-        )
+        Cat order is [upsampled_refined, original_encoder].
+        Therefore the second half of input channels is initialized as identity.
+        """
+        with torch.no_grad():
+            self.fuse.weight.zero_()
+            for i in range(self.hidden_dim):
+                self.fuse.weight[i, self.hidden_dim + i, 0, 0] = 1.0
 
     def forward(
         self,
@@ -80,47 +78,37 @@ class EncoderFeatureUpsampler(nn.Module):
         sam_fpn_72: torch.Tensor,
         original_encoder_72: torch.Tensor,
     ) -> torch.Tensor:
-        """
-        Args:
-            refined_feature_36:  [B, C, 256, 36, 36]
-            sam_fpn_72:          [B, 256, 72, 72]
-            original_encoder_72: [B, C, 256, 72, 72]
+        del sam_fpn_72
 
-        Returns:
-            refined_feature_72: [B, C, 256, 72, 72]
-        """
         B, C, D, H36, W36 = refined_feature_36.shape
 
+        if D != self.hidden_dim:
+            raise ValueError(
+                f"Expected hidden_dim={self.hidden_dim}, got D={D}."
+            )
         if (H36, W36) != (36, 36):
             raise ValueError(
                 f"Expected 36×36 refined feature, got {(H36, W36)}."
             )
-
-        # ConvTranspose2d upsampling.
-        x = refined_feature_36.reshape(B * C, D, 36, 36)
-        x = self.deconv(x)  # [B*C, 256, 72, 72]
-
-        # Project FPN.
-        fpn = sam_fpn_72.to(device=x.device, dtype=x.dtype)
-        if fpn.shape[-2:] != (72, 72):
-            fpn = F.interpolate(
-                fpn, size=(72, 72), mode="bilinear", align_corners=False
+        if tuple(original_encoder_72.shape) != (B, C, D, 72, 72):
+            raise ValueError(
+                f"original_encoder_72 must be [{B}, {C}, {D}, 72, 72], "
+                f"got {tuple(original_encoder_72.shape)}."
             )
-        fpn_proj = self.fpn_proj(fpn)  # [B, fpn_proj_dim, 72, 72]
-        fpn_proj = (
-            fpn_proj[:, None]
-            .expand(B, C, self.fpn_proj_dim, 72, 72)
-            .reshape(B * C, self.fpn_proj_dim, 72, 72)
+
+        up = F.interpolate(
+            refined_feature_36.reshape(B * C, D, 36, 36),
+            size=(72, 72),
+            mode="bilinear",
+            align_corners=False,
         )
 
-        # Original encoder features.
         orig = original_encoder_72.reshape(B * C, D, 72, 72)
 
-        # Concat and fuse.
-        fused = torch.cat([x, fpn_proj, orig], dim=1)
-        fused = self.fuse(fused)
+        fused = torch.cat([up, orig], dim=1)
+        out = self.fuse(fused)
 
-        return fused.reshape(B, C, D, 72, 72).contiguous()
+        return out.reshape(B, C, D, 72, 72).contiguous()
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +298,24 @@ class ClassConditionedEncoderRefiner(nn.Module):
             align_corners=False,
         ).reshape(batch_size, num_classes, hidden_dim, 36, 36)
 
+        # Downsample SAM3 FPN feature from 72×72 to 36×36 for window attention Q/K.
+        if sam_fpn_72.ndim != 4:
+            raise ValueError(
+                f"sam_fpn_72 must be [B, D, 72, 72], got {tuple(sam_fpn_72.shape)}."
+            )
+        if tuple(sam_fpn_72.shape) != (batch_size, hidden_dim, 72, 72):
+            raise ValueError(
+                f"sam_fpn_72 must be [{batch_size}, {hidden_dim}, 72, 72], "
+                f"got {tuple(sam_fpn_72.shape)}."
+            )
+
+        sam_fpn_36 = F.interpolate(
+            sam_fpn_72.to(device=feature_36.device, dtype=feature_36.dtype),
+            size=(36, 36),
+            mode="bilinear",
+            align_corners=False,
+        ).contiguous()
+
         # 5. Run refiner layers.
         for layer in self.layers:
             if self.use_checkpoint and self.training:
@@ -318,6 +324,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     feature_36,
                     score_embed_36,
                     sam_text_mean,
+                    sam_fpn_36,
                     use_reentrant=False,
                 )
             else:
@@ -325,6 +332,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     feature_36=feature_36,
                     score_embed_36=score_embed_36,
                     sam_text_mean=sam_text_mean,
+                    sam_fpn_36=sam_fpn_36,
                 )
 
         # 6. Upsample refined feature back to 72×72.
