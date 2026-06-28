@@ -1,6 +1,6 @@
 # ovrs-sam3 当前设计说明
 
-更新时间：2026-06-26（36×36 refiner + CLIP/SAM 双路 score 融合 + P0-P4 修复）
+更新时间：2026-06-28（新增 DynamicClassThresholdHead 动态类别阈值模块）
 目标分支：`master`
 主配置：
 - 基础配置：`configs/ovrs_sam3_isaid_loveda_base.py`
@@ -49,6 +49,11 @@ EncoderFeatureUpsampler: 36 → 72
   ConvTranspose2d + FPN fusion + original encoder fusion
 
 Write back → frozen segmentation_head → final_logits
+
+DynamicClassThresholdHead:
+  final_logits.detach().sigmoid() + refined_encoder_features_72.detach()
+  → score encoder + cross-attention (query-memory) + class self-attention + MLP
+  → class_thresholds [B, C] ∈ [0, 1]
 ```
 
 ---
@@ -314,7 +319,7 @@ refined_feature_72 → 写回 encoder_hidden_states
 | `models/openclip_text_encoder.py` | `OpenCLIPTextEncoder`: 冻结文本编码，`encode_prompt_templates()` 输出 [C, 32, 768] |
 | `models/clip_score_embedding.py` | `ClipScoreEmbedding`: CLIP score [B, C, 192, 36, 36]<br>`SamMaskScoreEmbedding`: SAM mask prior [B, C, 64, 36, 36]<br>`CombinedScoreEmbeddingBuilder`: fusion → [B, C, 256, 36, 36] |
 | `models/encoder_refiner_attention.py` | `ClassScoreAttention`: 类间双 value 注意力<br>`WindowScoreAttention`: 类内窗口注意力 + 相对位置偏置<br>`EncoderRefinerLayer`: 单层 refiner |
-| `models/encoder_refiner.py` | `EncoderFeatureUpsampler`: 36→72 上采样融合<br>`ClassConditionedEncoderRefiner`: 顶层 refiner |
+| `models/encoder_refiner.py` | `EncoderFeatureUpsampler`: 36→72 上采样融合<br>`DynamicClassThresholdHead`: 动态类别阈值预测<br>`ClassConditionedEncoderRefiner`: 顶层 refiner + threshold head |
 | `models/sam3_image.py` | `Sam3Image`: pipeline coordinator，含 `build_sam_mask_prior_logits()`、`run_encoder_refiner()` |
 | `config_dataclasses.py` | `EncoderRefinerConfig`、`OpenCLIPConfig` 等 dataclass |
 | `model_builder.py` | `SAM3ModelBuilder`: 模型构建、冻结策略 |
@@ -335,6 +340,12 @@ refined_feature_72 → 写回 encoder_hidden_states
 | `clip_score_maps` | `[B, C, 32, 36, 36]` | 图文相似度 maps |
 | `template_clip_text_features` | `[C, 32, 768]` | 32 模板文本特征 |
 | `clip_mid_features` | `List[[B, 1024, 36, 36]]` | CLIP 中间层特征（暂不接入主路径） |
+| `class_thresholds` | `[B, C]` | 每图每类的动态置信度阈值，范围 [0, 1] |
+| `class_threshold_logits` | `[B, C]` | 阈值 logits（sigmoid 前） |
+
+推理模式下新增：
+| `raw_final_score_map` | `[B, C, H_out, W_out]` | 原始 sigmoid(final_logits) |
+| `final_score_map` | `[B, C, H_out, W_out]` | 阈值过滤后的 score map |
 
 不再输出：`sam_prior_logits`（显存占用大，默认不保存）。
 
@@ -342,13 +353,29 @@ refined_feature_72 → 写回 encoder_hidden_states
 
 ## 7. Loss 设计
 
-只监督 `final_logits` vs `label_map`：
+### 7.1 Mask loss（BCE 主路径，不变）
 
 ```text
-total_loss = final_bce_weight × BCE + final_dice_weight × Dice
+total_loss = final_bce_weight × BCE + final_dice_weight × Dice + dynamic_threshold_loss_weight × threshold_loss
 ```
 
-当前 `final_dice_weight=0.0`，实际只用 BCE。
+BCE 始终使用原始 `final_logits`，不受阈值过滤影响。
+
+### 7.2 动态阈值 loss（仅对出现过的类别）
+
+```text
+m = min(sigmoid(final_logits.detach()) inside GT mask region)
+threshold_target = clamp(m - margin, 0, 1)
+
+loss = SmoothL1(pred, threshold_target) + λ_over * ReLU(pred - m)^2
+```
+
+- `pred`：模型预测的动态阈值
+- `m`：该类别真实区域内的最低分数
+- `margin`：安全间隔，让阈值略低于真实最低分
+- `λ_over`：越界惩罚权重（阈值超过真实最低分时严厉惩罚）
+
+阈值 loss 只对 `presence_target > 0.5` 的类别计算。
 
 ---
 
@@ -431,3 +458,5 @@ python -m py_compile configs/ovrs_sam3_isaid_loveda_full.py
 | `feature_36` (per layer) | `[B, C, 256, 36, 36]` |
 | `refined_feature_72` | `[B, C, 256, 72, 72]` |
 | `final_logits` | `[B, C, H_out, W_out]` |
+| `class_thresholds` | `[B, C]` |
+| `class_threshold_logits` | `[B, C]` |

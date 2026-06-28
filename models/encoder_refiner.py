@@ -112,6 +112,203 @@ class EncoderFeatureUpsampler(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# DynamicClassThresholdHead
+# ---------------------------------------------------------------------------
+
+
+class DynamicClassThresholdHead(nn.Module):
+    """
+    Predict one dynamic confidence threshold for each image-class pair.
+
+    Inputs:
+        refined_encoder_features_72: [B, C, 256, 72, 72]
+        final_logits:                 [B, C, H, W]
+
+    Outputs:
+        class_thresholds:      [B, C], values in [0, 1]
+        class_threshold_logits:[B, C]
+    """
+
+    def __init__(
+        self,
+        hidden_dim: int = 256,
+        score_feat_dim: int = 16,
+        encoder_hw: int = 72,
+        num_heads: int = 8,
+        mlp_ratio: float = 4.0,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+
+        self.hidden_dim = int(hidden_dim)
+        self.score_feat_dim = int(score_feat_dim)
+        self.encoder_hw = int(encoder_hw)
+        self.memory_dim = self.hidden_dim + self.score_feat_dim
+
+        if self.memory_dim % int(num_heads) != 0:
+            raise ValueError(
+                f"memory_dim={self.memory_dim} must be divisible by num_heads={num_heads}."
+            )
+
+        self.score_encoder = nn.Sequential(
+            nn.Conv2d(1, self.score_feat_dim, kernel_size=3, padding=1, bias=False),
+            _safe_group_norm(self.score_feat_dim),
+            nn.GELU(),
+            nn.Conv2d(
+                self.score_feat_dim,
+                self.score_feat_dim,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            _safe_group_norm(self.score_feat_dim),
+            nn.GELU(),
+        )
+
+        self.query = nn.Parameter(torch.zeros(1, 1, self.memory_dim))
+        nn.init.trunc_normal_(self.query, std=0.02)
+
+        self.query_norm = nn.LayerNorm(self.memory_dim)
+        self.memory_norm = nn.LayerNorm(self.memory_dim)
+
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=self.memory_dim,
+            num_heads=int(num_heads),
+            dropout=float(dropout),
+            batch_first=True,
+        )
+
+        self.cross_out_norm = nn.LayerNorm(self.memory_dim)
+
+        self.class_norm1 = nn.LayerNorm(self.memory_dim)
+        self.class_self_attn = nn.MultiheadAttention(
+            embed_dim=self.memory_dim,
+            num_heads=int(num_heads),
+            dropout=float(dropout),
+            batch_first=True,
+        )
+
+        self.class_norm2 = nn.LayerNorm(self.memory_dim)
+        mlp_hidden_dim = int(round(self.memory_dim * float(mlp_ratio)))
+        self.mlp = nn.Sequential(
+            nn.Linear(self.memory_dim, mlp_hidden_dim),
+            nn.GELU(),
+            nn.Dropout(float(dropout)),
+            nn.Linear(mlp_hidden_dim, self.memory_dim),
+            nn.Dropout(float(dropout)),
+        )
+
+        self.dropout = nn.Dropout(float(dropout))
+        self.threshold_proj = nn.Linear(self.memory_dim, 1)
+
+        # Start with a conservative low threshold: sigmoid(-2) ≈ 0.119.
+        nn.init.zeros_(self.threshold_proj.weight)
+        nn.init.constant_(self.threshold_proj.bias, -2.0)
+
+    def forward(
+        self,
+        refined_encoder_features_72: torch.Tensor,
+        final_logits: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        if refined_encoder_features_72.ndim != 5:
+            raise ValueError(
+                "refined_encoder_features_72 must be [B, C, D, 72, 72], "
+                f"got {tuple(refined_encoder_features_72.shape)}."
+            )
+
+        B, C, D, H, W = refined_encoder_features_72.shape
+
+        if D != self.hidden_dim:
+            raise ValueError(
+                f"Expected hidden_dim={self.hidden_dim}, got D={D}."
+            )
+
+        if (H, W) != (self.encoder_hw, self.encoder_hw):
+            raise ValueError(
+                f"Expected refined feature size {(self.encoder_hw, self.encoder_hw)}, "
+                f"got {(H, W)}."
+            )
+
+        if final_logits.ndim != 4:
+            raise ValueError(
+                f"final_logits must be [B, C, H, W], got {tuple(final_logits.shape)}."
+            )
+
+        if tuple(final_logits.shape[:2]) != (B, C):
+            raise ValueError(
+                "final_logits batch/class mismatch: "
+                f"expected {(B, C)}, got {tuple(final_logits.shape[:2])}."
+            )
+
+        # Detach refined features and final logits so threshold loss does
+        # not affect the refiner / segmentation main paths.
+        feature = refined_encoder_features_72.detach()
+        score = final_logits.detach().sigmoid()
+
+        score = score.reshape(B * C, 1, score.shape[-2], score.shape[-1])
+
+        if tuple(score.shape[-2:]) != (self.encoder_hw, self.encoder_hw):
+            score = F.interpolate(
+                score,
+                size=(self.encoder_hw, self.encoder_hw),
+                mode="bilinear",
+                align_corners=False,
+            )
+
+        score_feat = self.score_encoder(score)
+        score_feat = score_feat.to(dtype=feature.dtype)
+        score_feat = score_feat.reshape(
+            B,
+            C,
+            self.score_feat_dim,
+            self.encoder_hw,
+            self.encoder_hw,
+        )
+
+        memory = torch.cat([feature, score_feat], dim=2)
+        memory = memory.permute(0, 1, 3, 4, 2).reshape(
+            B * C,
+            self.encoder_hw * self.encoder_hw,
+            self.memory_dim,
+        )
+        memory = self.memory_norm(memory)
+
+        query = self.query.expand(B * C, -1, -1).to(
+            device=memory.device,
+            dtype=memory.dtype,
+        )
+
+        cross_out, _ = self.cross_attn(
+            query=self.query_norm(query),
+            key=memory,
+            value=memory,
+            need_weights=False,
+        )
+
+        token = self.cross_out_norm(query + self.dropout(cross_out))
+        token = token[:, 0].reshape(B, C, self.memory_dim)
+
+        class_attn_in = self.class_norm1(token)
+        class_attn_out, _ = self.class_self_attn(
+            query=class_attn_in,
+            key=class_attn_in,
+            value=class_attn_in,
+            need_weights=False,
+        )
+
+        token = token + self.dropout(class_attn_out)
+        token = token + self.mlp(self.class_norm2(token))
+
+        threshold_logits = self.threshold_proj(token).squeeze(-1)
+        thresholds = threshold_logits.sigmoid()
+
+        return {
+            "class_threshold_logits": threshold_logits,
+            "class_thresholds": thresholds,
+        }
+
+
+# ---------------------------------------------------------------------------
 # ClassConditionedEncoderRefiner
 # ---------------------------------------------------------------------------
 
@@ -206,6 +403,14 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
         self.upsampler = EncoderFeatureUpsampler(
             hidden_dim=self.hidden_dim,
+        )
+
+        self.threshold_head = DynamicClassThresholdHead(
+            hidden_dim=self.hidden_dim,
+            score_feat_dim=16,
+            encoder_hw=72,
+            num_heads=int(num_heads),
+            dropout=float(dropout),
         )
 
         self.clip_score_embed_dim = int(clip_score_embed_dim)
@@ -351,3 +556,13 @@ class ClassConditionedEncoderRefiner(nn.Module):
             "clip_score_maps_36": clip_score_maps_36,
             "template_clip_text": template_clip_text,
         }
+
+    def predict_thresholds(
+        self,
+        refined_encoder_features_72: torch.Tensor,
+        final_logits: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        return self.threshold_head(
+            refined_encoder_features_72=refined_encoder_features_72,
+            final_logits=final_logits,
+        )

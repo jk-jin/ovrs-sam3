@@ -96,6 +96,11 @@ class SemanticCriterionConfig:
     final_bce_weight: float = 1.0
     final_dice_weight: float = 0.0
 
+    # Dynamic class threshold loss.
+    dynamic_threshold_loss_weight: float = 0.1
+    dynamic_threshold_margin: float = 0.02
+    dynamic_threshold_over_weight: float = 20.0
+
     # 0.0 = absent classes not supervised for mask BCE.
     # Set to 0.01 / 0.05 for mild absent-class suppression.
     bce_absent_class_weight: float = 0.0

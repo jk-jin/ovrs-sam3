@@ -115,7 +115,16 @@ class SemanticSegAdapter(nn.Module):
         )
 
         if output_mode == "final":
-            return {OUTPUT_KEYS.final_logits: final_logits}
+            outputs = {OUTPUT_KEYS.final_logits: final_logits}
+
+            for key in (
+                OUTPUT_KEYS.class_thresholds,
+                OUTPUT_KEYS.class_threshold_logits,
+            ):
+                if key in raw_outputs:
+                    outputs[key] = raw_outputs[key]
+
+            return outputs
 
         # --- infer mode below ---
 
@@ -124,9 +133,38 @@ class SemanticSegAdapter(nn.Module):
 
         raw_final_score_map = final_logits.sigmoid()
 
+        thresholds = raw_outputs.get(OUTPUT_KEYS.class_thresholds, None)
+
+        if thresholds is not None:
+            if thresholds.dim() != 2:
+                raise ValueError(
+                    f"{OUTPUT_KEYS.class_thresholds} must be [B, C], "
+                    f"got {tuple(thresholds.shape)}."
+                )
+            if tuple(thresholds.shape) != tuple(raw_final_score_map.shape[:2]):
+                raise ValueError(
+                    f"{OUTPUT_KEYS.class_thresholds} shape mismatch: "
+                    f"expected {tuple(raw_final_score_map.shape[:2])}, "
+                    f"got {tuple(thresholds.shape)}."
+                )
+
+            keep = raw_final_score_map >= thresholds[:, :, None, None]
+            final_score_map = raw_final_score_map * keep.to(
+                dtype=raw_final_score_map.dtype
+            )
+        else:
+            final_score_map = raw_final_score_map
+
         outputs[OUTPUT_KEYS.raw_final_score_map] = raw_final_score_map
-        outputs[OUTPUT_KEYS.final_score_map] = raw_final_score_map
-        outputs[OUTPUT_KEYS.final_pred] = raw_final_score_map.argmax(dim=1)
+        outputs[OUTPUT_KEYS.final_score_map] = final_score_map
+        outputs[OUTPUT_KEYS.final_pred] = final_score_map.argmax(dim=1)
+
+        for key in (
+            OUTPUT_KEYS.class_thresholds,
+            OUTPUT_KEYS.class_threshold_logits,
+        ):
+            if key in raw_outputs:
+                outputs[key] = raw_outputs[key]
 
         for key in (
             OUTPUT_KEYS.encoder_features,

@@ -832,8 +832,19 @@ class Sam3Image(torch.nn.Module):
                 f"got {tuple(final_logits.shape[:2])}."
             )
 
+        threshold_out = self.encoder_refiner.predict_thresholds(
+            refined_encoder_features_72=refined_encoder_features_72,
+            final_logits=final_logits,
+        )
+
         result = {
             OUTPUT_KEYS.final_logits: final_logits.contiguous(),
+            OUTPUT_KEYS.class_thresholds: threshold_out[
+                "class_thresholds"
+            ].contiguous(),
+            OUTPUT_KEYS.class_threshold_logits: threshold_out[
+                "class_threshold_logits"
+            ].contiguous(),
         }
 
         if return_debug:

@@ -20,6 +20,10 @@ class ModelOutputKeys:
     final_score_map: str = "final_score_map"
     final_pred: str = "final_pred"
 
+    # Dynamic threshold outputs
+    class_thresholds: str = "class_thresholds"
+    class_threshold_logits: str = "class_threshold_logits"
+
     # Encoder feature refiner outputs
     encoder_features: str = "encoder_features"
     refined_encoder_features: str = "refined_encoder_features"

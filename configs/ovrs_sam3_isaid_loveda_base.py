@@ -105,6 +105,11 @@ model = dict(
         ignore_index=255,
         final_bce_weight=1.0,
         final_dice_weight=0.0,
+
+        dynamic_threshold_loss_weight=0.1,
+        dynamic_threshold_margin=0.02,
+        dynamic_threshold_over_weight=20.0,
+
         bce_absent_class_weight=0.0,
         bce_valid_pixel_weight=1.0,
         bce_ignore_pixel_weight=0.05,

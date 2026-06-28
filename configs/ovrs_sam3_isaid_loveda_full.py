@@ -14,7 +14,7 @@ train_cfg = dict(
     eval_interval=2000,
 
     # batch_size=1, so this validates about 500 LoveDA images.
-    val_max_iters=500,
+    val_max_iters=2000,
 
     log_window_size=20,
     use_amp=True,
@@ -63,7 +63,7 @@ visualization = dict(
     save_sam3_direct_segmentation=False,
 
     vis_prob=0.02,
-    max_samples_per_epoch=20,
+    max_samples_per_epoch=100,
     vis_seed=42,
 
     image_folder_pattern="image_{image_id:06d}",

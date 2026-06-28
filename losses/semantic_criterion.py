@@ -96,6 +96,7 @@ class SemanticCriterion(nn.Module):
             return {
                 "loss_final_bce": zero,
                 "loss_final_dice": zero,
+                "loss_dynamic_threshold": zero,
                 "total_loss": zero,
                 "num_valid": torch.tensor(
                     0,
@@ -126,14 +127,23 @@ class SemanticCriterion(nn.Module):
         else:
             loss_final_dice = zero
 
+        loss_dynamic_threshold = self._dynamic_threshold_loss(
+            outputs=outputs,
+            score_map=final_logits.sigmoid().detach(),
+            target=target,
+            presence_target=presence_target,
+        )
+
         total_loss = (
             float(self.cfg.final_bce_weight) * loss_final_bce
             + float(self.cfg.final_dice_weight) * loss_final_dice
+            + float(self.cfg.dynamic_threshold_loss_weight) * loss_dynamic_threshold
         )
 
         return {
             "loss_final_bce": loss_final_bce,
             "loss_final_dice": loss_final_dice,
+            "loss_dynamic_threshold": loss_dynamic_threshold,
             "total_loss": total_loss,
             "num_valid": torch.tensor(
                 num_loss_pixels,
@@ -252,6 +262,94 @@ class SemanticCriterion(nn.Module):
             presence_target[:, channel_idx] = appears.to(dtype=dtype)
 
         return presence_target
+
+    def _dynamic_threshold_loss(
+        self,
+        outputs: TensorDict,
+        score_map: torch.Tensor,
+        target: torch.Tensor,
+        presence_target: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Dynamic threshold supervision for present image-class pairs only.
+
+        score_map:
+            sigmoid(final_logits), detached, shape [B, C, H, W]
+
+        target:
+            binary target mask, shape [B, C, H, W]
+
+        presence_target:
+            image-level class presence, shape [B, C]
+
+        For each present pair (b, c), compute:
+            min_score[b, c] = min score inside GT mask region.
+
+        The predicted threshold should be close to:
+            min_score[b, c] - margin
+
+        But if predicted threshold > min_score[b, c], apply strong penalty.
+        """
+        zero = score_map.sum() * 0.0
+
+        if float(self.cfg.dynamic_threshold_loss_weight) <= 0.0:
+            return zero
+
+        thresholds = outputs.get(OUTPUT_KEYS.class_thresholds, None)
+        if thresholds is None:
+            raise ValueError(
+                f"dynamic_threshold_loss_weight > 0, but outputs "
+                f"does not contain {OUTPUT_KEYS.class_thresholds!r}."
+            )
+
+        if thresholds.dim() != 2:
+            raise ValueError(
+                f"{OUTPUT_KEYS.class_thresholds} must be [B, C], "
+                f"got {tuple(thresholds.shape)}."
+            )
+
+        if tuple(thresholds.shape) != tuple(presence_target.shape):
+            raise ValueError(
+                f"{OUTPUT_KEYS.class_thresholds} shape mismatch: "
+                f"expected {tuple(presence_target.shape)}, "
+                f"got {tuple(thresholds.shape)}."
+            )
+
+        if tuple(score_map.shape) != tuple(target.shape):
+            raise ValueError(
+                f"score_map and target shape mismatch: "
+                f"{tuple(score_map.shape)} vs {tuple(target.shape)}."
+            )
+
+        valid_pairs = presence_target > 0.5
+
+        if not bool(valid_pairs.any().item()):
+            return zero
+
+        gt_mask = target > 0.5
+
+        large = torch.finfo(score_map.dtype).max
+        min_score = score_map.masked_fill(~gt_mask, large).flatten(2).amin(dim=2)
+        min_score = min_score.detach()
+
+        margin = max(float(self.cfg.dynamic_threshold_margin), 0.0)
+        threshold_target = (min_score - margin).clamp(min=0.0, max=1.0)
+
+        pred = thresholds.to(device=score_map.device, dtype=score_map.dtype)
+
+        pred_valid = pred[valid_pairs]
+        target_valid = threshold_target[valid_pairs]
+        min_valid = min_score[valid_pairs]
+
+        loss_close = F.smooth_l1_loss(
+            pred_valid,
+            target_valid,
+            reduction="mean",
+        )
+
+        loss_over = F.relu(pred_valid - min_valid).pow(2).mean()
+
+        return loss_close + float(self.cfg.dynamic_threshold_over_weight) * loss_over
 
     @staticmethod
     def _binary_cross_entropy_pair_weighted_all_pixels(
