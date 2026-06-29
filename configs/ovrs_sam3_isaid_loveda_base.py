@@ -99,7 +99,9 @@ model = dict(
         openclip_image_finetune="frozen",
     ),
 
-    adapter_cfg=dict(),
+    adapter_cfg=dict(
+        threshold=0.0,
+    ),
 
     criterion_cfg=dict(
         ignore_index=255,
@@ -153,6 +155,13 @@ val_dataloader = dict(
         seg_suffix=".png",
         ignore_index=255,
         reduce_zero_label=True,
+
+        background_mapping=dict(
+            enabled=True,
+            background_id=0,
+            default_background_id=255,
+        ),
+
         return_raw_image=True,
         transforms=[
             dict(type="ToTensor"),
@@ -177,12 +186,11 @@ val_dataloader = dict(
 #   original 1 background   -> 0
 #   original 2 building     -> 1
 #   ...
-# so bg_idx=0 is correct.
+# background_mapping.background_id=0 matches this reduced label space.
+# Threshold and background logic are handled by adapter (adapter_cfg.threshold)
+# and dataset (background_mapping). Evaluator only needs ignore_index.
 eval_cfg = dict(
     ignore_index=255,
-    prob_thd=0.0,
-    bg_idx=0,
-    use_score_map=True,
 )
 
 # -------------------------------------------------------------------------

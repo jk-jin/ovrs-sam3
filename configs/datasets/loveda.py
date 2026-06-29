@@ -23,6 +23,13 @@ train_dataloader = dict(
         seg_suffix='.png',
         ignore_index=255,
         reduce_zero_label=True,
+
+        background_mapping=dict(
+            enabled=True,
+            background_id=0,
+            default_background_id=255,
+        ),
+
         return_raw_image=True,
         transforms=[
             dict(type='ToTensor'),
@@ -77,6 +84,13 @@ val_dataloader = dict(
         seg_suffix='.png',
         ignore_index=255,
         reduce_zero_label=True,
+
+        background_mapping=dict(
+            enabled=True,
+            background_id=0,
+            default_background_id=255,
+        ),
+
         return_raw_image=True,
         transforms=[
             dict(type='ToTensor'),

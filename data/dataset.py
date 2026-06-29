@@ -60,6 +60,7 @@ class OVSemanticSegDataset(Dataset):
         ignore_index: int = 255,
         reduce_zero_label: bool = False,
         return_raw_image: bool = False,
+        background_mapping: Optional[dict] = None,
     ):
         super().__init__()
         self.img_dir = Path(img_dir)
@@ -71,6 +72,19 @@ class OVSemanticSegDataset(Dataset):
         self.reduce_zero_label = bool(reduce_zero_label)
         self.return_raw_image = bool(return_raw_image)
         self.transforms = _build_transform_from_cfg(transforms)
+
+        self.background_mapping = self._normalize_background_mapping(background_mapping)
+
+        self.full_class_ids = list(range(len(self.classes)))
+        self.full_class_names = list(self.classes)
+
+        if self.background_mapping["enabled"]:
+            bg_id = int(self.background_mapping["background_id"])
+            self.active_class_ids = [i for i in self.full_class_ids if i != bg_id]
+        else:
+            self.active_class_ids = list(self.full_class_ids)
+
+        self.active_class_names = [self.classes[i] for i in self.active_class_ids]
 
         if not self.img_dir.exists():
             raise FileNotFoundError(f"img_dir not found: {self.img_dir}")
@@ -89,6 +103,35 @@ class OVSemanticSegDataset(Dataset):
 
     def __len__(self) -> int:
         return len(self.img_paths)
+
+    def _normalize_background_mapping(self, cfg):
+        if cfg is None:
+            return {
+                "enabled": False,
+                "background_id": None,
+                "default_background_id": self.ignore_index,
+            }
+
+        cfg = dict(cfg)
+        enabled = bool(cfg.get("enabled", False))
+        background_id = cfg.get("background_id", None)
+        default_background_id = int(cfg.get("default_background_id", self.ignore_index))
+
+        if enabled:
+            if background_id is None:
+                raise ValueError("background_mapping.enabled=True requires background_id.")
+            background_id = int(background_id)
+            if not 0 <= background_id < len(self.classes):
+                raise ValueError(
+                    f"background_id={background_id} out of range for "
+                    f"{len(self.classes)} classes."
+                )
+
+        return {
+            "enabled": enabled,
+            "background_id": None if background_id is None else int(background_id),
+            "default_background_id": default_background_id,
+        }
 
     def _process_label_map(self, label_map: torch.Tensor) -> torch.Tensor:
         label_map = label_map.long()
@@ -118,7 +161,10 @@ class OVSemanticSegDataset(Dataset):
         sample = {
             "image": image,
             "label_map": label_map,
-            "class_texts": self.classes,
+            "class_texts": self.full_class_names,
+            "active_class_texts": self.active_class_names,
+            "active_class_ids": self.active_class_ids,
+            "background_mapping": self.background_mapping,
             "image_id": index,
             "original_size": image.size[::-1],
             "img_path": str(img_path),

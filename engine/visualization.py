@@ -48,12 +48,12 @@ class BaseSemanticOverlayTask(VisualizationTask):
             final_source,
         ) = manager._extract_final_logits_raw_and_gated_score_maps(outputs)
 
-        raw_final_pred = manager._build_eval_style_final_pred(
+        raw_final_pred = manager._build_prediction_from_outputs(
             outputs=outputs,
             final_score_map=raw_final_score_map,
         )
 
-        final_pred = manager._build_eval_style_final_pred(
+        final_pred = manager._build_prediction_from_outputs(
             outputs=outputs,
             final_score_map=final_score_map,
         )
@@ -151,31 +151,23 @@ class BaseSemanticOverlayTask(VisualizationTask):
                 if manager.cfg.save_raw_final_prediction:
                     f.write(
                         "pred_raw_final.png\t"
-                        f"{raw_final_source}; eval_style_pred="
-                        f"use_score_map={manager.eval_use_score_map}, "
-                        f"prob_thd={manager.eval_prob_thd}, "
-                        f"bg_idx={manager.eval_bg_idx}\n"
+                        f"{raw_final_source}; raw_final_score_map argmax, "
+                        "before adapter threshold/background postprocess\n"
                     )
                     f.write(
                         "pred_raw_final_overlay.png\t"
-                        f"{raw_final_source}; eval_style_pred="
-                        f"use_score_map={manager.eval_use_score_map}, "
-                        f"prob_thd={manager.eval_prob_thd}, "
-                        f"bg_idx={manager.eval_bg_idx}\n"
+                        f"{raw_final_source}; raw_final_score_map argmax, "
+                        "before adapter threshold/background postprocess\n"
                     )
                 f.write(
                     "pred.png\t"
-                    f"{final_source}; eval_style_pred="
-                    f"use_score_map={manager.eval_use_score_map}, "
-                    f"prob_thd={manager.eval_prob_thd}, "
-                    f"bg_idx={manager.eval_bg_idx}\n"
+                    f"{final_source}; adapter final_pred, "
+                    "after adapter threshold/background postprocess\n"
                 )
                 f.write(
                     "pred_overlay.png\t"
-                    f"{final_source}; eval_style_pred="
-                    f"use_score_map={manager.eval_use_score_map}, "
-                    f"prob_thd={manager.eval_prob_thd}, "
-                    f"bg_idx={manager.eval_bg_idx}\n"
+                    f"{final_source}; adapter final_pred, "
+                    "after adapter threshold/background postprocess\n"
                 )
                 f.write(f"final_score_heatmaps\t{final_source}\n")
 
@@ -322,6 +314,9 @@ class VisualizationManager:
         eval_cfg: Optional[Dict[str, Any]] = None,
     ):
         self.cfg = cfg
+        # eval_cfg is kept for backward compatibility but no longer used
+        # for threshold/background logic. Threshold filtering and background
+        # mapping are handled exclusively by the adapter.
         self.eval_cfg = dict(eval_cfg or {})
 
         self.save_dir = Path(cfg.save_dir)
@@ -329,21 +324,6 @@ class VisualizationManager:
 
         self._saved_counts: Dict[Tuple[str, int], int] = {}
         self.tasks = self._build_tasks()
-
-    @property
-    def eval_prob_thd(self) -> Optional[float]:
-        value = self.eval_cfg.get("prob_thd", None)
-        if value is None:
-            return None
-        return float(value)
-
-    @property
-    def eval_bg_idx(self) -> int:
-        return int(self.eval_cfg.get("bg_idx", 0))
-
-    @property
-    def eval_use_score_map(self) -> bool:
-        return bool(self.eval_cfg.get("use_score_map", True))
 
     def _build_tasks(self) -> List[VisualizationTask]:
         return [
@@ -361,35 +341,16 @@ class VisualizationManager:
         model = cls._unwrap_model(model)
         return getattr(model, "core", None)
 
-    def _build_eval_style_final_pred(
+    def _build_prediction_from_outputs(
         self,
         outputs: Dict[str, torch.Tensor],
         final_score_map: torch.Tensor,
     ) -> torch.Tensor:
-        if final_score_map.dim() != 4:
-            raise ValueError(
-                f"Expected final_score_map as [B, C, H, W], "
-                f"got {tuple(final_score_map.shape)}."
-            )
+        """Build prediction from outputs, preferring adapter-generated final_pred.
 
-        if self.eval_use_score_map:
-            num_classes = int(final_score_map.shape[1])
-            bg_idx = self.eval_bg_idx
-
-            if not (0 <= bg_idx < num_classes):
-                raise ValueError(
-                    f"bg_idx={bg_idx} is out of range for num_classes={num_classes}."
-                )
-
-            max_score, pred = final_score_map.max(dim=1)
-            prob_thd = self.eval_prob_thd
-
-            if prob_thd is not None:
-                pred = pred.clone()
-                pred[max_score < prob_thd] = bg_idx
-
-            return pred.long()
-
+        No threshold filtering or background rewriting is performed here.
+        That logic belongs exclusively to the adapter.
+        """
         final_pred = outputs.get(OUTPUT_KEYS.final_pred, None)
         if final_pred is not None:
             if final_pred.dim() != 3:
@@ -398,6 +359,11 @@ class VisualizationManager:
                 )
             return final_pred.long()
 
+        if final_score_map.dim() != 4:
+            raise ValueError(
+                f"Expected final_score_map as [B, C, H, W], "
+                f"got {tuple(final_score_map.shape)}."
+            )
         return final_score_map.argmax(dim=1).long()
 
     def _build_sam3_direct_segmentation_for_visualization(

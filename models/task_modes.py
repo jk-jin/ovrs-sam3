@@ -24,6 +24,16 @@ class ModelOutputKeys:
     class_thresholds: str = "class_thresholds"
     class_threshold_logits: str = "class_threshold_logits"
 
+    # Active / full class mapping metadata
+    active_class_ids: str = "active_class_ids"
+    original_num_classes: str = "original_num_classes"
+    background_id: str = "background_id"
+    default_background_id: str = "default_background_id"
+
+    # Inference background / object region masks
+    background_region: str = "background_region"
+    object_region: str = "object_region"
+
     # Encoder feature refiner outputs
     encoder_features: str = "encoder_features"
     refined_encoder_features: str = "refined_encoder_features"

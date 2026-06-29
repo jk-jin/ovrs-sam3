@@ -73,7 +73,16 @@ class SemanticCriterion(nn.Module):
             target_hw=(H, W),
         )
 
-        class_ids = list(range(C))
+        class_ids_tensor = outputs.get(OUTPUT_KEYS.active_class_ids, None)
+        if class_ids_tensor is None:
+            class_ids = list(range(C))
+        else:
+            class_ids = [int(x) for x in class_ids_tensor.detach().cpu().tolist()]
+
+        if len(class_ids) != C:
+            raise ValueError(
+                f"final_logits has {C} channels, but active_class_ids has {len(class_ids)} ids."
+            )
 
         target, valid_mask = self._build_binary_targets(
             label_map=label_map,

@@ -84,7 +84,11 @@ class SAM3Segmentor(nn.Module):
             return_debug=return_debug,
         )
 
-    def forward(self, batch: BatchedDatapoint) -> dict[str, torch.Tensor]:
+    def forward(
+        self,
+        batch: BatchedDatapoint,
+        output_mode: Optional[str] = None,
+    ) -> dict[str, torch.Tensor]:
         encoder_refiner_cache = self.build_encoder_refiner_cache(batch)
 
         final_raw_outputs = self.run_encoder_refiner_from_cache(
@@ -92,7 +96,8 @@ class SAM3Segmentor(nn.Module):
             batch=batch,
         )
 
-        output_mode = "final" if self.training else "infer"
+        if output_mode is None:
+            output_mode = "final" if self.training else "infer"
 
         return self.adapter(
             raw_outputs=final_raw_outputs,

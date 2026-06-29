@@ -234,7 +234,11 @@ class Trainer:
     def _forward_val_outputs(self, batch) -> Dict[str, torch.Tensor]:
         use_amp = self.cfg.use_amp and self.device.type == "cuda"
         with autocast(device_type=self.device.type, enabled=use_amp):
-            outputs = inference_with_tta(self.model, batch, tta_cfg=self.cfg.tta_cfg)
+            outputs = inference_with_tta(
+                self.model,
+                batch,
+                tta_cfg=self.cfg.tta_cfg,
+            )
         return outputs
 
     @staticmethod
@@ -282,6 +286,13 @@ class Trainer:
 
         if dataset is None:
             return None
+
+        # Prefer active class names when background class is excluded.
+        # This avoids caching full classes first, then rebuilding the cache
+        # when the core receives active-only class names from find_text_batch.
+        active_classes = getattr(dataset, "active_class_names", None)
+        if active_classes is not None and len(active_classes) > 0:
+            return [str(x) for x in active_classes]
 
         classes = getattr(dataset, "classes", None)
         if classes is None:

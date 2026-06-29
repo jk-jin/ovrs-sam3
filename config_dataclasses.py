@@ -116,7 +116,9 @@ class SemanticCriterionConfig:
 
 @dataclass
 class AdapterConfig:
-    pass
+    # Base confidence threshold used by SemanticSegAdapter during inference.
+    # Effective per-class threshold = max(threshold, dynamic_class_threshold).
+    threshold: float = 0.0
 
 
 @dataclass

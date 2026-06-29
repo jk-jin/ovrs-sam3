@@ -13,18 +13,9 @@ TensorDict = Dict[str, torch.Tensor]
 
 
 class MulticlassSemanticEvaluator:
-    def __init__(
-        self,
-        ignore_index: int = 255,
-        prob_thd: Optional[float] = None,
-        bg_idx: int = 0,
-        use_score_map: bool = True,
-    ):
+    def __init__(self, ignore_index: int = 255):
         self.num_classes: Optional[int] = None
         self.ignore_index = int(ignore_index)
-        self.prob_thd = prob_thd
-        self.bg_idx = int(bg_idx)
-        self.use_score_map = bool(use_score_map)
         self.reset()
 
     def reset(self):
@@ -81,35 +72,25 @@ class MulticlassSemanticEvaluator:
         if "label_map" not in targets:
             raise ValueError("label_map is required in semantic targets.")
 
-        if self.use_score_map and OUTPUT_KEYS.final_score_map in outputs:
-            score_map = outputs[OUTPUT_KEYS.final_score_map]
-            if score_map.dim() != 4:
-                raise ValueError(f"Expected [B,C,H,W], got {tuple(score_map.shape)}")
-
-            num_classes = score_map.shape[1]
-            if not (0 <= self.bg_idx < num_classes):
-                raise ValueError(
-                    f"bg_idx={self.bg_idx} is out of range for num_classes={num_classes}"
-                )
-
-            if self.prob_thd is None:
-                pred = score_map.argmax(dim=1)
-            else:
-                max_score, pred = score_map.max(dim=1)
-                pred = pred.clone()
-                pred[max_score < float(self.prob_thd)] = self.bg_idx
-
-            out_hw = tuple(score_map.shape[-2:])
-            device = score_map.device
-        else:
+        if OUTPUT_KEYS.final_pred in outputs:
             pred = outputs[OUTPUT_KEYS.final_pred]
             if pred.dim() != 3:
                 raise ValueError(f"Expected final_pred as [B,H,W], got {tuple(pred.shape)}")
             out_hw = tuple(pred.shape[-2:])
             device = pred.device
-            num_classes = int(pred.max().item()) + 1 if pred.numel() > 0 else 1
-            if not (0 <= self.bg_idx < num_classes):
-                num_classes = max(num_classes, self.bg_idx + 1)
+
+            if OUTPUT_KEYS.final_score_map in outputs:
+                num_classes = outputs[OUTPUT_KEYS.final_score_map].shape[1]
+            else:
+                num_classes = int(pred[pred != self.ignore_index].max().item()) + 1 if pred.numel() > 0 else 1
+        else:
+            score_map = outputs[OUTPUT_KEYS.final_score_map]
+            if score_map.dim() != 4:
+                raise ValueError(f"Expected [B,C,H,W], got {tuple(score_map.shape)}")
+            num_classes = score_map.shape[1]
+            pred = score_map.argmax(dim=1)
+            out_hw = tuple(score_map.shape[-2:])
+            device = score_map.device
 
         target = self._prepare_target(
             label_map=targets["label_map"],
@@ -235,7 +216,10 @@ def inference_with_tta(
             aug_batch = copy.deepcopy(batch)
             aug_batch.img_batch = _flip_image_batch(resized_img_batch, flip_mode)
 
-            outputs = model(aug_batch)
+            outputs = model(
+                aug_batch,
+                output_mode="infer_raw",
+            )
             last_outputs = outputs
 
             for key, value in outputs.items():
@@ -266,21 +250,13 @@ def inference_with_tta(
     for key, value in sum_2d.items():
         merged_outputs[key] = value / float(num_views)
 
-    if OUTPUT_KEYS.final_score_map in merged_outputs:
-        score_map = merged_outputs[OUTPUT_KEYS.final_score_map]
-        max_score, pred = score_map.max(dim=1)
-
-        prob_thd = None
-        bg_idx = 0
-        if tta_cfg is not None:
-            prob_thd = tta_cfg.get("prob_thd", None)
-            bg_idx = int(tta_cfg.get("bg_idx", 0))
-
-        if prob_thd is not None:
-            pred = pred.clone()
-            pred[max_score < float(prob_thd)] = bg_idx
-
-        merged_outputs[OUTPUT_KEYS.final_pred] = pred.long()
+    # Postprocess with adapter after TTA fusion.
+    # Adapter reads base threshold from its own config (adapter_cfg.threshold).
+    if hasattr(model, "adapter") and hasattr(model.adapter, "postprocess_infer_outputs"):
+        return model.adapter.postprocess_infer_outputs(
+            raw_outputs=merged_outputs,
+            batch=batch,
+        )
 
     return merged_outputs
 

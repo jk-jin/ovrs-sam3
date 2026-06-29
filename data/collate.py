@@ -34,6 +34,14 @@ def _round_up(value: int, divisor: int) -> int:
     return int(math.ceil(value / divisor) * divisor)
 
 
+def _normalize_bg_mapping(bg_mapping):
+    return {
+        "enabled": bool(bg_mapping.get("enabled", False)),
+        "background_id": bg_mapping.get("background_id", None),
+        "default_background_id": int(bg_mapping.get("default_background_id", 255)),
+    }
+
+
 class OVSemanticCollator:
     def __init__(
         self,
@@ -81,17 +89,41 @@ class OVSemanticCollator:
         image_id_list = []
         original_size_list = []
 
-        shared_class_texts = None
+        shared_full_class_texts = None
+        shared_active_class_texts = None
+        shared_active_class_ids = None
+        shared_background_mapping = None
 
         for b, sample in enumerate(samples):
-            texts = [str(x) for x in sample["class_texts"]]
+            full_texts = [str(x) for x in sample["class_texts"]]
+            active_texts = [str(x) for x in sample.get("active_class_texts", full_texts)]
+            active_ids = [int(x) for x in sample.get("active_class_ids", list(range(len(full_texts))))]
+            bg_mapping = _normalize_bg_mapping(sample.get("background_mapping", {"enabled": False, "background_id": None, "default_background_id": 255}))
 
-            if shared_class_texts is None:
-                shared_class_texts = texts
+            if shared_full_class_texts is None:
+                shared_full_class_texts = full_texts
+                shared_active_class_texts = active_texts
+                shared_active_class_ids = active_ids
+                shared_background_mapping = bg_mapping
             else:
-                if texts != shared_class_texts:
+                if full_texts != shared_full_class_texts:
                     raise ValueError(
                         "All samples in one batch must share the same class_texts order. "
+                        f"Got mismatch at sample index {b}."
+                    )
+                if active_texts != shared_active_class_texts:
+                    raise ValueError(
+                        "All samples in one batch must share the same active_class_texts. "
+                        f"Got mismatch at sample index {b}."
+                    )
+                if active_ids != shared_active_class_ids:
+                    raise ValueError(
+                        "All samples in one batch must share the same active_class_ids. "
+                        f"Got mismatch at sample index {b}."
+                    )
+                if bg_mapping != shared_background_mapping:
+                    raise ValueError(
+                        "All samples in one batch must share the same background_mapping. "
                         f"Got mismatch at sample index {b}."
                     )
 
@@ -109,8 +141,10 @@ class OVSemanticCollator:
             orig_h, orig_w = sample.get("original_size", image_sizes[b])
             original_size_list.append(torch.tensor([orig_h, orig_w], dtype=torch.long))
 
-        if shared_class_texts is None:
-            raise ValueError("shared_class_texts is None.")
+        if shared_full_class_texts is None:
+            raise ValueError("shared_full_class_texts is None.")
+        if shared_active_class_texts is None:
+            raise ValueError("shared_active_class_texts is None.")
 
         find_stage = FindStage(
             img_ids=None,
@@ -129,8 +163,13 @@ class OVSemanticCollator:
         metadata = BatchedInferenceMetadata(
             original_image_id=torch.tensor(image_id_list, dtype=torch.long),
             original_size=torch.stack(original_size_list, dim=0),
-            num_classes=len(shared_class_texts),
-            class_names=shared_class_texts,
+            num_classes=len(shared_full_class_texts),
+            class_names=shared_full_class_texts,
+            active_class_ids=list(shared_active_class_ids),
+            active_class_names=list(shared_active_class_texts),
+            background_mapping_enabled=bool(shared_background_mapping["enabled"]),
+            background_id=shared_background_mapping["background_id"],
+            default_background_id=int(shared_background_mapping["default_background_id"]),
         )
 
         raw_images = self._collect_optional_images(samples, "raw_image")
@@ -138,7 +177,7 @@ class OVSemanticCollator:
 
         return BatchedDatapoint(
             img_batch=img_batch,
-            find_text_batch=shared_class_texts,
+            find_text_batch=shared_active_class_texts,
             find_inputs=[find_stage],
             find_targets=[find_target],
             find_metadatas=[metadata],

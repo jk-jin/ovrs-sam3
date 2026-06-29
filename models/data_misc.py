@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, List, Optional, Union
 
 import torch
@@ -46,6 +46,13 @@ class BatchedInferenceMetadata:
 
     num_classes: int
     class_names: List[str]
+
+    active_class_ids: List[int] = field(default_factory=list)
+    active_class_names: List[str] = field(default_factory=list)
+
+    background_mapping_enabled: bool = False
+    background_id: Optional[int] = None
+    default_background_id: int = 255
 
 
 @dataclass

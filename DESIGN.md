@@ -1,6 +1,6 @@
 # ovrs-sam3 当前设计说明
 
-更新时间：2026-06-28（新增 DynamicClassThresholdHead 动态类别阈值模块）
+更新时间：2026-06-29（清理背景映射与阈值配置：收敛到 dataset + adapter_cfg）
 目标分支：`master`
 主配置：
 - 基础配置：`configs/ovrs_sam3_isaid_loveda_base.py`
@@ -330,24 +330,27 @@ refined_feature_72 → 写回 encoder_hidden_states
 
 | key | 形状 | 含义 |
 |-----|------|------|
-| `final_logits` | `[B, C, H_out, W_out]` | 最终 mask logits |
-| `encoder_features` | `[B, C, 256, 72, 72]` | 原始 encoder feature |
-| `refined_encoder_features` | `[B, C, 256, 72, 72]` | refiner 更新后的 encoder feature |
-| `refiner_features_36` | `[B, C, 256, 36, 36]` | refiner 输出的 feature_36 |
-| `score_embed_36` | `[B, C, 256, 36, 36]` | fused score embedding |
-| `clip_score_embed_36` | `[B, C, 192, 36, 36]` | CLIP score embedding |
-| `sam_score_embed_36` | `[B, C, 64, 36, 36]` | SAM mask score embedding |
-| `clip_score_maps` | `[B, C, 32, 36, 36]` | 图文相似度 maps |
-| `template_clip_text_features` | `[C, 32, 768]` | 32 模板文本特征 |
+| `final_logits` | `[B, C_active, H_out, W_out]` | 最终 mask logits（仅 active 类别） |
+| `final_pred` | `[B, H, W]` | 最终预测（完整数据集 label id） |
+| `final_score_map` | `[B, C_full, H_out, W_out]` | 阈值过滤后的完整类别 score map |
+| `raw_final_score_map` | `[B, C_full, H_out, W_out]` | 原始 sigmoid score map（完整类别顺序，未阈值过滤） |
+| `active_class_ids` | `[C_active]` | active 类别在完整类别空间中的 id |
+| `original_num_classes` | scalar tensor | 完整数据集类别数 |
+| `background_region` | `[B, H, W]` | 推理时所有 active 类都低于阈值的位置（bool） |
+| `object_region` | `[B, H, W]` | 推理时至少一个 active 类通过阈值的位置（bool） |
+| `encoder_features` | `[B, C_active, 256, 72, 72]` | 原始 encoder feature |
+| `refined_encoder_features` | `[B, C_active, 256, 72, 72]` | refiner 更新后的 encoder feature |
+| `refiner_features_36` | `[B, C_active, 256, 36, 36]` | refiner 输出的 feature_36 |
+| `score_embed_36` | `[B, C_active, 256, 36, 36]` | fused score embedding |
+| `clip_score_embed_36` | `[B, C_active, 192, 36, 36]` | CLIP score embedding |
+| `sam_score_embed_36` | `[B, C_active, 64, 36, 36]` | SAM mask score embedding |
+| `clip_score_maps` | `[B, C_active, 32, 36, 36]` | 图文相似度 maps |
+| `template_clip_text_features` | `[C_active, 32, 768]` | 32 模板文本特征 |
 | `clip_mid_features` | `List[[B, 1024, 36, 36]]` | CLIP 中间层特征（暂不接入主路径） |
-| `class_thresholds` | `[B, C]` | 每图每类的动态置信度阈值，范围 [0, 1] |
-| `class_threshold_logits` | `[B, C]` | 阈值 logits（sigmoid 前） |
+| `class_thresholds` | `[B, C_active]` | 每图每类的动态置信度阈值，范围 [0, 1] |
+| `class_threshold_logits` | `[B, C_active]` | 阈值 logits（sigmoid 前） |
 
-推理模式下新增：
-| `raw_final_score_map` | `[B, C, H_out, W_out]` | 原始 sigmoid(final_logits) |
-| `final_score_map` | `[B, C, H_out, W_out]` | 阈值过滤后的 score map |
-
-不再输出：`sam_prior_logits`（显存占用大，默认不保存）。
+注意：`C_active` 表示参与模型前向的类别数（删除背景类后），`C_full` 表示完整数据集类别数。
 
 ---
 
@@ -379,7 +382,88 @@ loss = SmoothL1(pred, threshold_target) + λ_over * ReLU(pred - m)^2
 
 ---
 
-## 8. 文件结构
+## 8. 背景类处理（新增 2026-06-29）
+
+### 8.1 设计原则
+
+- **背景类别语义属于数据集**：是否启用、背景 id 是多少，在 dataset 配置的 `background_mapping` 中声明。
+- **背景 id 以 reduce_zero_label 之后为准**。
+- **训练和推理前向都删除背景类**：`find_text_batch` 只含 active 类别，core 只前向 active 类。
+- **训练不做推理背景判定**：用 active_class_ids 对齐真实标签监督，背景像素自然成为所有 active 类的负样本。
+- **推理阈值逻辑全部在 adapter**：`max(eval_cfg.prob_thd, dynamic_threshold)` 逐类过滤 → 背景区域判定 → active→full id 映射。
+- **Evaluator 不再做阈值过滤**：只负责拿最终 `final_pred` 算指标。
+
+### 8.2 配置职责划分
+
+**背景 id**：唯一来源是 `dataset.background_mapping`。
+**推理基础阈值**：唯一来源是 `adapter_cfg.threshold`。
+
+```python
+# 数据集配置
+dataset=dict(
+    ...
+    reduce_zero_label=True,
+    background_mapping=dict(
+        enabled=True,
+        background_id=0,        # reduce_zero_label 之后的背景 id
+        default_background_id=255,
+    ),
+)
+
+# adapter 配置（在 model dict 中）
+adapter_cfg=dict(
+    threshold=0.1,   # 推理基础置信度阈值
+)
+
+# eval_cfg 精简为仅保留 ignore_index
+eval_cfg=dict(
+    ignore_index=255,
+)
+```
+
+- `background_id`：reduce_zero_label 之后的真实背景类别 id。
+- `default_background_id`：adapter 推理时临时表示"背景区域"的默认 id（推荐 255，与 ignore_index 一致）。
+- `adapter_cfg.threshold`：推理有效阈值 = max(threshold, dynamic_class_threshold)。
+- `eval_cfg` 不再包含 `prob_thd`、`bg_idx`、`use_score_map`。
+
+### 8.3 数据流
+
+**训练**：
+```text
+dataset → full/active class 信息
+collator → find_text_batch = active_class_names
+core → 只前向 active 类 → final_logits [B, C_active, H, W]
+adapter(final) → compact logits + active_class_ids
+criterion → 用 active_class_ids 对齐 label_map
+```
+
+**推理**：
+```text
+core → 只前向 active 类
+adapter(infer) → sigmoid → max(prob_thd, dynamic_threshold) 过滤
+  → 所有 active 类低于阈值 = 背景区域
+  → 非背景区域 argmax → active→full id 映射
+  → final_pred (完整数据集 id), final_score_map (完整类别顺序)
+evaluator → 直接用 final_pred 算指标
+```
+
+### 8.4 Adapter 三种模式
+
+| 模式 | 用途 | 行为 |
+|------|------|------|
+| `final` | 训练 | 返回 compact logits + active_class_ids，不做 sigmoid/阈值/映射 |
+| `infer` | 普通推理 | 完整后处理：阈值过滤 → 背景判定 → id 映射 |
+| `infer_raw` | TTA | 返回 raw_final_score_map (完整类别顺序) + class_thresholds，不做最终后处理 |
+
+TTA 流程：各 view → `infer_raw` → 平均 raw score map 和 thresholds → `adapter.postprocess_infer_outputs()`。
+
+**有效阈值**：`max(adapter_cfg.threshold, dynamic_class_threshold[b, c])`。
+
+**argmax 修正**：未通过阈值的类别被 mask 为 `-inf`，只在通过阈值的类别中选最大值。所有类别都不通过才是背景区域。
+
+---
+
+## 9. 文件结构
 
 ```text
 models/
@@ -407,7 +491,7 @@ model_builder.py
 
 ---
 
-## 9. 与旧版的主要差异
+## 10. 与旧版的主要差异
 
 | 项目 | 旧设计 | 新设计 |
 |------|--------|--------|
@@ -429,15 +513,23 @@ model_builder.py
 
 ---
 
-## 10. 推荐检查命令
+## 11. 推荐检查命令
 
 ```bash
+python -m py_compile data/dataset.py
+python -m py_compile data/collate.py
+python -m py_compile models/data_misc.py
+python -m py_compile models/task_modes.py
+python -m py_compile models/adapters/semantic_adapter.py
+python -m py_compile losses/semantic_criterion.py
+python -m py_compile models/segmentor.py
+python -m py_compile engine/evaluator.py
+python -m py_compile engine/trainer.py
 python -m py_compile models/openclip_image_encoder.py
 python -m py_compile models/clip_score_embedding.py
 python -m py_compile models/encoder_refiner_attention.py
 python -m py_compile models/encoder_refiner.py
 python -m py_compile models/sam3_image.py
-python -m py_compile models/task_modes.py
 python -m py_compile config_dataclasses.py
 python -m py_compile model_builder.py
 python -m py_compile configs/ovrs_sam3_isaid_loveda_base.py
@@ -447,16 +539,20 @@ python -m py_compile configs/ovrs_sam3_isaid_loveda_full.py
 
 ---
 
-## 11. 最小 shape 验收
+## 12. 最小 shape 验收
 
 | 张量 | 期望形状 |
 |---|---|
 | `remoteclip_feat_map` | `[B, 768, 36, 36]` |
-| `clip_score_embed_36` | `[B, C, 192, 36, 36]` |
-| `sam_score_embed_36` | `[B, C, 64, 36, 36]` |
-| `score_embed_36` | `[B, C, 256, 36, 36]` |
-| `feature_36` (per layer) | `[B, C, 256, 36, 36]` |
-| `refined_feature_72` | `[B, C, 256, 72, 72]` |
-| `final_logits` | `[B, C, H_out, W_out]` |
-| `class_thresholds` | `[B, C]` |
-| `class_threshold_logits` | `[B, C]` |
+| `clip_score_embed_36` | `[B, C_active, 192, 36, 36]` |
+| `sam_score_embed_36` | `[B, C_active, 64, 36, 36]` |
+| `score_embed_36` | `[B, C_active, 256, 36, 36]` |
+| `feature_36` (per layer) | `[B, C_active, 256, 36, 36]` |
+| `refined_feature_72` | `[B, C_active, 256, 72, 72]` |
+| `final_logits` | `[B, C_active, H_out, W_out]` |
+| `final_pred` | `[B, H_out, W_out]` (完整数据集 label id) |
+| `final_score_map` | `[B, C_full, H_out, W_out]` |
+| `raw_final_score_map` | `[B, C_full, H_out, W_out]` |
+| `active_class_ids` | `[C_active]` |
+| `class_thresholds` | `[B, C_active]` |
+| `class_threshold_logits` | `[B, C_active]` |
