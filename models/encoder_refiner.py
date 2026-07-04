@@ -154,8 +154,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
         normalize_label_for_clip: bool = True,
         clip_score_conv_kernel: int = 7,
         use_checkpoint: bool = True,
-        feature_residual_scale: float = 1e-3,
-        score_residual_scale: float = 1e-3,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -198,8 +196,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 window_size=int(window_size),
                 shift_size=int(shift_size),
                 dropout=float(dropout),
-                feature_residual_scale=float(feature_residual_scale),
-                score_residual_scale=float(score_residual_scale),
             )
             for _ in range(int(fusion_layers))
         ])

@@ -64,8 +64,6 @@ class ClassScoreAttention(nn.Module):
         score_embed_dim: int = 256,
         num_heads: int = 8,
         dropout: float = 0.1,
-        feature_residual_scale: float = 1e-3,
-        score_residual_scale: float = 1e-3,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -92,13 +90,6 @@ class ClassScoreAttention(nn.Module):
         self.score_norm = nn.LayerNorm(self.score_embed_dim)
 
         self.dropout = nn.Dropout(float(dropout))
-
-        self.feature_residual_scale = nn.Parameter(
-            torch.tensor(float(feature_residual_scale))
-        )
-        self.score_residual_scale = nn.Parameter(
-            torch.tensor(float(score_residual_scale))
-        )
 
     def forward(
         self,
@@ -168,14 +159,14 @@ class ClassScoreAttention(nn.Module):
         out_feat = out_feat.permute(0, 2, 1, 3).reshape(B * N, C, D)
         out_feat = self.out_feature_proj(out_feat)
         out_feat = self.feature_norm(
-            f_flat + self.dropout(out_feat) * self.feature_residual_scale
+            f_flat + self.dropout(out_feat)
         )
 
         out_score = torch.matmul(attn, v_score)
         out_score = out_score.permute(0, 2, 1, 3).reshape(B * N, C, D)
         out_score = self.out_score_proj(out_score)
         out_score = self.score_norm(
-            s_flat + self.dropout(out_score) * self.score_residual_scale
+            s_flat + self.dropout(out_score)
         )
 
         feature_out = out_feat.reshape(B, H, W, C, D).permute(0, 3, 4, 1, 2).contiguous()
@@ -209,8 +200,6 @@ class WindowScoreAttention(nn.Module):
         window_size: int = 12,
         shift_size: int = 0,
         dropout: float = 0.1,
-        feature_residual_scale: float = 1e-3,
-        score_residual_scale: float = 1e-3,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -243,13 +232,6 @@ class WindowScoreAttention(nn.Module):
         self.score_norm = nn.LayerNorm(self.score_embed_dim)
 
         self.dropout = nn.Dropout(float(dropout))
-
-        self.feature_residual_scale = nn.Parameter(
-            torch.tensor(float(feature_residual_scale))
-        )
-        self.score_residual_scale = nn.Parameter(
-            torch.tensor(float(score_residual_scale))
-        )
 
         # Relative position bias (GSNet / Swin style).
         ws = self.window_size
@@ -463,14 +445,14 @@ class WindowScoreAttention(nn.Module):
         out_feat = out_feat.permute(0, 2, 1, 3).reshape(num_win, N, D)
         out_feat = self.out_feature_proj(out_feat)
         out_feat = self.feature_norm(
-            f_windows + self.dropout(out_feat) * self.feature_residual_scale
+            f_windows + self.dropout(out_feat)
         )
 
         out_score = torch.matmul(attn, v_score)
         out_score = out_score.permute(0, 2, 1, 3).reshape(num_win, N, D)
         out_score = self.out_score_proj(out_score)
         out_score = self.score_norm(
-            s_windows + self.dropout(out_score) * self.score_residual_scale
+            s_windows + self.dropout(out_score)
         )
 
         out_feat = self._window_reverse(out_feat, bc, pad_h, pad_w)
@@ -514,8 +496,6 @@ class EncoderRefinerLayer(nn.Module):
         window_size: int = 12,
         shift_size: int = 6,
         dropout: float = 0.1,
-        feature_residual_scale: float = 1e-3,
-        score_residual_scale: float = 1e-3,
     ):
         super().__init__()
 
@@ -524,8 +504,6 @@ class EncoderRefinerLayer(nn.Module):
             score_embed_dim=score_embed_dim,
             num_heads=num_heads,
             dropout=dropout,
-            feature_residual_scale=feature_residual_scale,
-            score_residual_scale=score_residual_scale,
         )
 
         self.window_attn_regular = WindowScoreAttention(
@@ -535,8 +513,6 @@ class EncoderRefinerLayer(nn.Module):
             window_size=window_size,
             shift_size=0,
             dropout=dropout,
-            feature_residual_scale=feature_residual_scale,
-            score_residual_scale=score_residual_scale,
         )
 
         self.window_attn_shifted = WindowScoreAttention(
@@ -546,8 +522,6 @@ class EncoderRefinerLayer(nn.Module):
             window_size=window_size,
             shift_size=shift_size,
             dropout=dropout,
-            feature_residual_scale=feature_residual_scale,
-            score_residual_scale=score_residual_scale,
         )
 
         # Per-token FFN for feature.
