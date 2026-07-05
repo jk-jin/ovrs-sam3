@@ -14,8 +14,9 @@
   → SAM3 提取 72×72 encoder feature
   → RemoteCLIP 提取 36×36 dense image feature
   → CLIP 文本模板和图像特征计算类别 score map
-  → SAM3 segmentation head 生成 mask prior score
-  → CLIP score + SAM score 融合成 score_embed
+  → CLIP score 直接生成 256 通道 score_embed
+  → SAM3 FPN feature 下采样到 36×36
+  → score_embed 和 SAM FPN feature 融合
   → encoder refiner 在 36×36 上同时更新 feature 和 score_embed
   → refined feature 上采样回 72×72
   → 写回 SAM3 encoder_hidden_states
@@ -76,9 +77,7 @@ configs/
 | `D` | SAM3 hidden dimension，当前是 256。 |
 | `D_clip` | RemoteCLIP 图文对齐空间维度，ViT-L/14 下通常是 768。 |
 | `D_native` | RemoteCLIP ViT 中间层原生通道数，ViT-L/14 下通常是 1024。 |
-| `D_score` | 融合后的 score embedding 通道数，当前是 256。 |
-| `D_clip_score` | CLIP score embedding 通道数，当前是 192。 |
-| `D_sam_score` | SAM mask prior score embedding 通道数，当前是 64。 |
+| `D_score` | score embedding 通道数，当前是 256。 |
 | `H, W` | SAM3 encoder feature 的空间分辨率，当前主流程中是 72×72。 |
 | `Hr, Wr` | refiner 主工作分辨率，当前是 36×36。 |
 | `Hc, Wc` | RemoteCLIP dense patch grid，当前是 36×36。 |
@@ -115,8 +114,7 @@ core.encoder_refiner
 
 ```text
 ClipScoreEmbedding 中的 score_conv
-SamMaskScoreEmbedding 中的下采样卷积
-CombinedScoreEmbeddingBuilder 中的融合卷积
+ScoreFpnFusion 中的融合卷积
 EncoderRefinerLayer 中的 class attention
 EncoderRefinerLayer 中的 window attention
 EncoderRefinerLayer 中的 FFN
@@ -207,58 +205,41 @@ clip_score_maps [B, C, 32, 36, 36]
   → clip_score_embed_36 [B, C, 192, 36, 36]
 ```
 
-## 7. SAM mask prior score embedding
+## 7. CLIP score embedding 与 SAM FPN 融合
 
-SAM3 原始 segmentation head 会先根据未 refine 的 encoder output 生成一个 mask prior。为了避免一次性保存完整高分辨率 prior，当前代码按类别 chunk 生成、立刻下采样、然后释放中间 logits。
-
-流程：
+### 7.1 CLIP score embedding
 
 ```text
-encoder_out_chunks
-  → frozen SAM3 segmentation_head
-  → chunk_logits
-  → SamMaskScoreEmbedding
-  → sam_score_embed_36
-```
-
-`SamMaskScoreEmbedding` 内部结构：
-
-```text
-sam_prior_logits [B, C, H_mask, W_mask]
-  → Conv stride=2 + GroupNorm + GELU
-  → Conv stride=2 + GroupNorm + GELU
-  → Conv stride=2 + GroupNorm + GELU
-  → bilinear resize 到 36×36
-  → Conv(hidden→64) + GroupNorm + GELU
-  → sam_score_embed_36 [B, C, 64, 36, 36]
-```
-
-说明：
-
-- SAM3 segmentation head 是冻结的。
-- `chunk_logits` 会 detach，避免梯度回传到 SAM3。
-- `SamMaskScoreEmbedding` 是可训练的。
-- 这个分支为 refiner 提供来自 SAM3 mask prior 的空间提示。
-
-## 8. Score embedding 融合
-
-CLIP score embedding 和 SAM score embedding 会在通道维度拼接：
-
-```text
-clip_score_embed_36: [B, C, 192, 36, 36]
-sam_score_embed_36:  [B, C,  64, 36, 36]
-```
-
-拼接后：
-
-```text
-concat → [B, C, 256, 36, 36]
+clip_score_maps_36 [B, C, 32, 36, 36]
+  → Conv(32→256, 7×7) + GroupNorm + GELU
   → Conv(256→256, 3×3) + GroupNorm + GELU
+  → clip_score_embed_36 [B, C, 256, 36, 36]
+```
+
+CLIP score embedding 直接输出 256 通道，不再和 SAM mask prior score 拼接。
+
+### 7.2 SAM FPN 融合
+
+`sam_fpn_72` 下采样到 36×36 后和 `clip_score_embed_36` 融合：
+
+```text
+sam_fpn_72: [B, 256, 72, 72]
+  → bilinear downsample
+  → sam_fpn_36: [B, 256, 36, 36]
+
+sam_fpn_36 broadcast 到类别维:
+  [B, 256, 36, 36] → [B, C, 256, 36, 36]
+
+clip_score_embed_36: [B, C, 256, 36, 36]
+sam_fpn_36 (broadcast): [B, C, 256, 36, 36]
+
+concat → [B, C, 512, 36, 36]
+  → Conv(512→256, 3×3) + GroupNorm + GELU
   → Conv(256→256, 3×3) + GroupNorm + GELU
   → score_embed_36 [B, C, 256, 36, 36]
 ```
 
-这里的 `score_embed_36` 是 refiner 中与 image feature 并行更新的类别 score 表征。
+融合后的 `score_embed_36` 进入 refiner layers 参与更新。SAM FPN 不再作为每层窗口注意力的独立输入。
 
 ## 9. Encoder refiner
 
@@ -271,7 +252,6 @@ encoder_features_72: [B, C, 256, 72, 72]
 clip_image_feat_map: [B, D_clip, 36, 36]
 sam_text_mean:       [B, C, 256]
 class_names:         List[str]
-sam_score_embed_36:  [B, C, 64, 36, 36]
 sam_fpn_72:          [B, 256, 72, 72]
 ```
 
@@ -281,8 +261,7 @@ sam_fpn_72:          [B, 256, 72, 72]
 refined_encoder_features_72: [B, C, 256, 72, 72]
 refiner_features_36:         [B, C, 256, 36, 36]
 score_embed_36:              [B, C, 256, 36, 36]
-clip_score_embed_36:         [B, C, 192, 36, 36]
-sam_score_embed_36:          [B, C,  64, 36, 36]
+clip_score_embed_36:         [B, C, 256, 36, 36]
 clip_score_maps_36:          [B, C,  32, 36, 36]
 template_clip_text:          [C, 32, D_clip]
 ```
@@ -388,20 +367,21 @@ shift_size = 6
 当前 q/k 构造：
 
 ```text
-q/k = concat(feature, score_embed, sam_fpn_36)
+q/k = concat(feature, score_embed)
 ```
 
 拼接后通道数是：
 
 ```text
-256 + 256 + 256 = 768
+256 + 256 = 512
 ```
 
 其中：
 
 - 第一个 256 来自当前类别的 feature。
-- 第二个 256 来自当前类别的 score embedding。
-- 第三个 256 来自 SAM3 FPN feature 下采样后的 `sam_fpn_36`。
+- 第二个 256 来自当前类别的 score embedding（已融合 SAM FPN）。
+
+SAM FPN 信息已通过 `ScoreFpnFusion` 提前融入 `score_embed`，不再作为 window attention 的独立输入。
 
 value 分两路：
 
@@ -535,13 +515,10 @@ BCE 的目标是 per-class binary mask。也就是说，对于每个类别，模
 | `refined_encoder_features` | `[B, C, 256, 72, 72]` | refiner 更新后的 encoder feature。 |
 | `refiner_features_36` | `[B, C, 256, 36, 36]` | refiner 在 36×36 上输出的 feature。 |
 | `score_embed_36` | `[B, C, 256, 36, 36]` | CLIP score 和 SAM score 融合后的 score embedding。 |
-| `clip_score_embed_36` | `[B, C, 192, 36, 36]` | CLIP score embedding。 |
-| `sam_score_embed_36` | `[B, C, 64, 36, 36]` | SAM mask prior score embedding。 |
+| `clip_score_embed_36` | `[B, C, 256, 36, 36]` | CLIP score embedding。 |
 | `clip_score_maps` | `[B, C, 32, 36, 36]` | 32 个模板对应的图文相似度 map。 |
 | `template_clip_text_features` | `[C, 32, D_clip]` | 每个类别、每个模板对应的 CLIP 文本特征。 |
 | `clip_mid_features` | `List[[B, D_native, 36, 36]]` | RemoteCLIP 中间层特征，当前主路径不直接使用。 |
-
-默认不保存完整 `sam_prior_logits`，因为它可能占用较多显存。
 
 ## 14. 主要文件说明
 
@@ -554,7 +531,7 @@ models/
     RemoteCLIP text encoder wrapper，负责类别 prompt templates 编码。
 
   score_embeddings.py
-    ClipScoreEmbedding、SamMaskScoreEmbedding、CombinedScoreEmbeddingBuilder。
+    ClipScoreEmbedding、ScoreFpnFusion。
 
   encoder_refiner_attention.py
     ClassScoreAttention、WindowScoreAttention、EncoderRefinerLayer。
@@ -596,8 +573,7 @@ model_builder.py
 |---|---|
 | `remoteclip_feat_map` | `[B, 768, 36, 36]` |
 | `clip_score_maps` | `[B, C, 32, 36, 36]` |
-| `clip_score_embed_36` | `[B, C, 192, 36, 36]` |
-| `sam_score_embed_36` | `[B, C, 64, 36, 36]` |
+| `clip_score_embed_36` | `[B, C, 256, 36, 36]` |
 | `score_embed_36` | `[B, C, 256, 36, 36]` |
 | `feature_36` | `[B, C, 256, 36, 36]` |
 | `refiner_features_36` | `[B, C, 256, 36, 36]` |
@@ -633,7 +609,17 @@ python -m py_compile models/encoder_refiner.py
 
 ## 17. 当前实现重点
 
-当前代码里，feature 和 score embedding 在 refiner 中是并行更新的：
+当前代码里，score_embed 来源是 CLIP-only 路径（不再使用 SAM mask prior）：
+
+```text
+clip_score_maps → ClipScoreEmbedding → clip_score_embed_36 (256 ch)
+sam_fpn_72 → downsample → sam_fpn_36
+→ ScoreFpnFusion(feature + FPN) → score_embed_36 (256 ch)
+```
+
+SAM FPN 特征在进入 refiner layers 前融合进 score_embed，窗口注意力不再单独接收 `sam_fpn_36`。
+
+feature 和 score embedding 在 refiner 中是并行更新的：
 
 ```text
 同一套 attention 权重
@@ -641,14 +627,14 @@ python -m py_compile models/encoder_refiner.py
   → 更新 score_embed
 ```
 
-但两路 value projection 是分开的：
+两路 value projection 是分开的：
 
 ```text
 v_feature = feature
 v_score   = score_embed
 ```
 
-因此 attention 决定“看哪里”，feature 分支和 score 分支分别决定“更新什么内容”。
+因此 attention 决定”看哪里”，feature 分支和 score 分支分别决定”更新什么内容”。
 
 当前残差更新是普通 Transformer 风格：
 
@@ -663,4 +649,5 @@ x = LayerNorm(x + Dropout(update))
 - `Dropout` 用于训练时随机丢弃部分更新，降低过拟合风险。
 - `LayerNorm` 用于稳定每一层输出的特征分布。
 
-这个设计保留了 feature 与 score 的协同更新，同时避免额外引入可学习残差系数，结构更直接。
+window attention 的 q/k 输入从原来的 768 维（256+256+256）简化为 512 维（256+256），
+SAM FPN 信息通过 ScoreFpnFusion 提前注入 score_embed，结构更清晰。

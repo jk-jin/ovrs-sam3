@@ -29,7 +29,7 @@ class ClipScoreEmbedding(nn.Module):
 
     Process:
         template_text × remoteclip_feat_map → score_maps [B, C, 32, 36, 36]
-        → two-stage conv → clip_score_embed [B, C, 192, 36, 36]
+        → two-stage conv → clip_score_embed [B, C, 256, 36, 36]
     """
 
     def __init__(
@@ -38,7 +38,7 @@ class ClipScoreEmbedding(nn.Module):
         prompt_templates: list[str],
         normalize_label: bool = True,
         clip_output_dim: int = 768,
-        score_embed_dim: int = 192,
+        score_embed_dim: int = 256,
         conv_kernel: int = 7,
     ):
         super().__init__()
@@ -202,155 +202,81 @@ class ClipScoreEmbedding(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# SamMaskScoreEmbedding
+# ScoreFpnFusion
 # ---------------------------------------------------------------------------
 
 
-class SamMaskScoreEmbedding(nn.Module):
+class ScoreFpnFusion(nn.Module):
     """
-    Produce SAM3 mask-prior score embedding by downsampling SAM3 seg logits.
+    Fuse CLIP-only score embedding with SAM FPN feature before refiner layers.
 
-    Input:
-        sam_prior_logits: [B, C, H_mask, W_mask]
-
-    Process:
-        Progressive stride-2 conv downsample (3 stages),
-        then bilinear to 36×36 if needed, then final conv to out_dim.
+    Inputs:
+        score_embed_36: [B, C, score_dim, 36, 36]
+        sam_fpn_36:     [B, fpn_dim,   36, 36]
 
     Output:
-        sam_score_embed_36: [B, C, out_dim, 36, 36]
-    """
-
-    def __init__(self, out_dim: int = 64, hidden_dim: int = 128):
-        super().__init__()
-        self.out_dim = int(out_dim)
-        self.hidden_dim = int(hidden_dim)
-
-        self.down1 = nn.Sequential(
-            nn.Conv2d(1, hidden_dim, kernel_size=3, stride=2, padding=1, bias=False),
-            _safe_group_norm(hidden_dim),
-            nn.GELU(),
-        )
-        self.down2 = nn.Sequential(
-            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=2, padding=1, bias=False),
-            _safe_group_norm(hidden_dim),
-            nn.GELU(),
-        )
-        self.down3 = nn.Sequential(
-            nn.Conv2d(hidden_dim, hidden_dim, kernel_size=3, stride=2, padding=1, bias=False),
-            _safe_group_norm(hidden_dim),
-            nn.GELU(),
-        )
-
-        self.final_conv = nn.Sequential(
-            nn.Conv2d(hidden_dim, out_dim, kernel_size=3, padding=1, bias=False),
-            _safe_group_norm(out_dim),
-            nn.GELU(),
-        )
-
-    def forward(
-        self,
-        sam_prior_logits: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Args:
-            sam_prior_logits: [B, C, H_mask, W_mask]
-
-        Returns:
-            sam_score_embed_36: [B, C, out_dim, 36, 36]
-        """
-        B, C, H_mask, W_mask = sam_prior_logits.shape
-
-        x = sam_prior_logits.reshape(B * C, 1, H_mask, W_mask)
-
-        x = self.down1(x)
-        x = self.down2(x)
-        x = self.down3(x)
-
-        if x.shape[-2:] != (36, 36):
-            x = F.interpolate(
-                x,
-                size=(36, 36),
-                mode="bilinear",
-                align_corners=False,
-            )
-
-        x = self.final_conv(x)
-
-        return x.reshape(B, C, self.out_dim, 36, 36).contiguous()
-
-
-# ---------------------------------------------------------------------------
-# CombinedScoreEmbeddingBuilder
-# ---------------------------------------------------------------------------
-
-
-class CombinedScoreEmbeddingBuilder(nn.Module):
-    """
-    Fuse CLIP score embedding and SAM mask score embedding.
-
-    Input:
-        clip_score_embed_36: [B, C, 192, 36, 36]
-        sam_score_embed_36:  [B, C,  64, 36, 36]
-
-    Output:
-        score_embed_36: [B, C, 256, 36, 36]
+        fused_score_embed_36: [B, C, fused_dim, 36, 36]
     """
 
     def __init__(
         self,
-        clip_dim: int = 192,
-        sam_dim: int = 64,
+        score_dim: int = 256,
+        fpn_dim: int = 256,
         fused_dim: int = 256,
     ):
         super().__init__()
-        self.clip_dim = int(clip_dim)
-        self.sam_dim = int(sam_dim)
+        self.score_dim = int(score_dim)
+        self.fpn_dim = int(fpn_dim)
         self.fused_dim = int(fused_dim)
-        total_in = self.clip_dim + self.sam_dim
-
-        if total_in != self.fused_dim:
-            raise ValueError(
-                f"clip_dim + sam_dim must equal fused_dim, "
-                f"got {self.clip_dim} + {self.sam_dim} != {self.fused_dim}"
-            )
 
         self.fuse = nn.Sequential(
-            nn.Conv2d(total_in, self.fused_dim, kernel_size=3, padding=1, bias=False),
+            nn.Conv2d(
+                self.score_dim + self.fpn_dim,
+                self.fused_dim,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
             _safe_group_norm(self.fused_dim),
             nn.GELU(),
-            nn.Conv2d(self.fused_dim, self.fused_dim, kernel_size=3, padding=1, bias=False),
+            nn.Conv2d(
+                self.fused_dim,
+                self.fused_dim,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
             _safe_group_norm(self.fused_dim),
             nn.GELU(),
         )
 
     def forward(
         self,
-        clip_score_embed_36: torch.Tensor,
-        sam_score_embed_36: torch.Tensor,
+        score_embed_36: torch.Tensor,
+        sam_fpn_36: torch.Tensor,
     ) -> torch.Tensor:
-        """
-        Returns:
-            score_embed_36: [B, C, fused_dim, 36, 36]
-        """
-        B, C, _, H, W = clip_score_embed_36.shape
+        B, C, score_dim, H, W = score_embed_36.shape
 
-        if tuple(clip_score_embed_36.shape) != (B, C, self.clip_dim, H, W):
+        if tuple(score_embed_36.shape) != (B, C, self.score_dim, H, W):
             raise ValueError(
-                f"clip_score_embed_36 shape mismatch: "
-                f"expected {(B, C, self.clip_dim, H, W)}, "
-                f"got {tuple(clip_score_embed_36.shape)}"
-            )
-        if tuple(sam_score_embed_36.shape) != (B, C, self.sam_dim, H, W):
-            raise ValueError(
-                f"sam_score_embed_36 shape mismatch: "
-                f"expected {(B, C, self.sam_dim, H, W)}, "
-                f"got {tuple(sam_score_embed_36.shape)}"
+                f"score_embed_36 must be [{B}, {C}, {self.score_dim}, {H}, {W}], "
+                f"got {tuple(score_embed_36.shape)}."
             )
 
-        score = torch.cat([clip_score_embed_36, sam_score_embed_36], dim=2)
-        score_flat = score.reshape(B * C, self.fused_dim, H, W)
+        if tuple(sam_fpn_36.shape) != (B, self.fpn_dim, H, W):
+            raise ValueError(
+                f"sam_fpn_36 must be [{B}, {self.fpn_dim}, {H}, {W}], "
+                f"got {tuple(sam_fpn_36.shape)}."
+            )
 
-        score_fused = self.fuse(score_flat)
+        fpn = (
+            sam_fpn_36[:, None]
+            .expand(B, C, self.fpn_dim, H, W)
+            .contiguous()
+        )
 
-        return score_fused.reshape(B, C, self.fused_dim, H, W).contiguous()
+        x = torch.cat([score_embed_36, fpn], dim=2)
+        x = x.reshape(B * C, self.score_dim + self.fpn_dim, H, W)
+
+        out = self.fuse(x)
+        return out.reshape(B, C, self.fused_dim, H, W).contiguous()

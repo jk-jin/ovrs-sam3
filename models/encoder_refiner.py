@@ -9,8 +9,7 @@ from torch.utils.checkpoint import checkpoint
 
 from .score_embeddings import (
     ClipScoreEmbedding,
-    CombinedScoreEmbeddingBuilder,
-    SamMaskScoreEmbedding,
+    ScoreFpnFusion,
 )
 from .encoder_refiner_attention import EncoderRefinerLayer
 
@@ -118,21 +117,21 @@ class EncoderFeatureUpsampler(nn.Module):
 
 class ClassConditionedEncoderRefiner(nn.Module):
     """
-    Encoder feature refiner operating at 36×36 with combined CLIP + SAM score embedding.
+    Encoder feature refiner operating at 36×36 with CLIP-only score embedding
+    and SAM FPN fused before refiner layers.
 
     Forward inputs:
         encoder_features_72:  [B, C, 256, 72, 72]
         clip_image_feat_map:  [B, D_clip, 36, 36]
         sam_text_mean:        [B, C, 256]
         class_names:          list of C class names
-        sam_prior_logits:     [B, C, H_mask, W_mask]
         sam_fpn_72:           [B, 256, 72, 72]
 
     Forward outputs:
         refined_encoder_features_72: [B, C, 256, 72, 72]
+        refiner_features_36:         [B, C, 256, 36, 36]
         score_embed_36:              [B, C, 256, 36, 36]
-        clip_score_embed_36:         [B, C, 192, 36, 36]
-        sam_score_embed_36:          [B, C,  64, 36, 36]
+        clip_score_embed_36:         [B, C, 256, 36, 36]
         clip_score_maps_36:          [B, C,  32, 36, 36]
         template_clip_text:          [C, 32, D_clip]
     """
@@ -143,8 +142,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         hidden_dim: int = 256,
         clip_dim: int = 768,
         score_embed_dim: int = 256,
-        clip_score_embed_dim: int = 192,
-        sam_score_embed_dim: int = 64,
+        clip_score_embed_dim: int = 256,
         num_heads: int = 8,
         window_size: int = 12,
         shift_size: int = 6,
@@ -160,6 +158,13 @@ class ClassConditionedEncoderRefiner(nn.Module):
         self.score_embed_dim = int(score_embed_dim)
         self.use_checkpoint = bool(use_checkpoint)
 
+        if int(clip_score_embed_dim) != int(score_embed_dim):
+            raise ValueError(
+                "clip_score_embed_dim must equal score_embed_dim in the CLIP-only score path. "
+                f"Got clip_score_embed_dim={clip_score_embed_dim}, "
+                f"score_embed_dim={score_embed_dim}."
+            )
+
         if prompt_templates is None:
             raise ValueError(
                 "prompt_templates must be a list of 32 prompt templates."
@@ -174,17 +179,13 @@ class ClassConditionedEncoderRefiner(nn.Module):
             prompt_templates=list(prompt_templates),
             normalize_label=bool(normalize_label_for_clip),
             clip_output_dim=int(clip_dim),
-            score_embed_dim=int(clip_score_embed_dim),
+            score_embed_dim=int(score_embed_dim),
             conv_kernel=int(clip_score_conv_kernel),
         )
 
-        self.sam_score_embed = SamMaskScoreEmbedding(
-            out_dim=int(sam_score_embed_dim),
-        )
-
-        self.score_fusion = CombinedScoreEmbeddingBuilder(
-            clip_dim=int(clip_score_embed_dim),
-            sam_dim=int(sam_score_embed_dim),
+        self.score_fpn_fusion = ScoreFpnFusion(
+            score_dim=int(score_embed_dim),
+            fpn_dim=int(hidden_dim),
             fused_dim=int(score_embed_dim),
         )
 
@@ -204,8 +205,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
             hidden_dim=self.hidden_dim,
         )
 
-        self.clip_score_embed_dim = int(clip_score_embed_dim)
-        self.sam_score_embed_dim = int(sam_score_embed_dim)
+        self.clip_score_embed_dim = int(score_embed_dim)
 
     # ------------------------------------------------------------------
     # Forward
@@ -217,7 +217,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
         clip_image_feat_map: torch.Tensor,
         sam_text_mean: torch.Tensor,
         class_names: List[str],
-        sam_score_embed_36: torch.Tensor,
         sam_fpn_72: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
         """
@@ -226,7 +225,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
             clip_image_feat_map:  [B, D_clip, 36, 36]
             sam_text_mean:        [B, C, 256]
             class_names:          list of C class names
-            sam_score_embed_36:   [B, C, 64, 36, 36]  (pre-downsampled)
             sam_fpn_72:           [B, 256, 72, 72]
 
         Returns dict with keys:
@@ -234,7 +232,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
             refiner_features_36
             score_embed_36
             clip_score_embed_36
-            sam_score_embed_36
             clip_score_maps_36
             template_clip_text
         """
@@ -255,20 +252,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 f"clip_image_feat_map must be 36×36, "
                 f"got {tuple(clip_image_feat_map.shape[-2:])}."
             )
-        if tuple(sam_score_embed_36.shape) != (
-            batch_size,
-            num_classes,
-            self.sam_score_embed_dim,
-            36,
-            36,
-        ):
-            raise ValueError(
-                f"sam_score_embed_36 must be "
-                f"[{batch_size}, {num_classes}, {self.sam_score_embed_dim}, 36, 36], "
-                f"got {tuple(sam_score_embed_36.shape)}."
-            )
 
-        # 1. CLIP score embedding at 36×36.
+        # 1. CLIP score embedding at 36×36 (CLIP-only, 256 channels).
         (
             clip_score_embed_36,
             clip_score_maps_36,
@@ -278,13 +263,9 @@ class ClassConditionedEncoderRefiner(nn.Module):
             remoteclip_feat_map=clip_image_feat_map,
         )
 
-        # 2. Fuse CLIP and SAM score embeddings into combined score_embed_36.
-        score_embed_36 = self.score_fusion(
-            clip_score_embed_36=clip_score_embed_36,
-            sam_score_embed_36=sam_score_embed_36,
-        )
+        score_embed_36 = clip_score_embed_36
 
-        # 4. Downsample encoder features from 72×72 to 36×36.
+        # 2. Downsample encoder features from 72×72 to 36×36.
         feature_36 = F.interpolate(
             encoder_features_72.reshape(
                 batch_size * num_classes, hidden_dim, 72, 72
@@ -294,7 +275,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
             align_corners=False,
         ).reshape(batch_size, num_classes, hidden_dim, 36, 36)
 
-        # Downsample SAM3 FPN feature from 72×72 to 36×36 for window attention Q/K.
+        # 3. Downsample SAM3 FPN feature from 72×72 to 36×36.
         if sam_fpn_72.ndim != 4:
             raise ValueError(
                 f"sam_fpn_72 must be [B, D, 72, 72], got {tuple(sam_fpn_72.shape)}."
@@ -312,6 +293,12 @@ class ClassConditionedEncoderRefiner(nn.Module):
             align_corners=False,
         ).contiguous()
 
+        # 4. Fuse CLIP score embedding with SAM FPN before refiner layers.
+        score_embed_36 = self.score_fpn_fusion(
+            score_embed_36=score_embed_36,
+            sam_fpn_36=sam_fpn_36,
+        )
+
         # 5. Run refiner layers.
         for layer in self.layers:
             if self.use_checkpoint and self.training:
@@ -320,7 +307,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     feature_36,
                     score_embed_36,
                     sam_text_mean,
-                    sam_fpn_36,
                     use_reentrant=False,
                 )
             else:
@@ -328,7 +314,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     feature_36=feature_36,
                     score_embed_36=score_embed_36,
                     sam_text_mean=sam_text_mean,
-                    sam_fpn_36=sam_fpn_36,
                 )
 
         # 6. Upsample refined feature back to 72×72.
@@ -343,7 +328,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
             "refiner_features_36": feature_36,
             "score_embed_36": score_embed_36,
             "clip_score_embed_36": clip_score_embed_36,
-            "sam_score_embed_36": sam_score_embed_36,
             "clip_score_maps_36": clip_score_maps_36,
             "template_clip_text": template_clip_text,
         }

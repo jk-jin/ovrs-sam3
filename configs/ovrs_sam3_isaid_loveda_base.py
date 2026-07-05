@@ -75,8 +75,7 @@ model = dict(
         hidden_dim=256,
 
         score_embed_dim=256,
-        clip_score_embed_dim=192,
-        sam_score_embed_dim=64,
+        clip_score_embed_dim=256,
         clip_score_conv_kernel=7,
 
         refiner_hw=36,

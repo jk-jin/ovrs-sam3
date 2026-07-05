@@ -297,6 +297,14 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 f"got refiner_hw={cfg.refiner_hw}, encoder_hw={cfg.encoder_hw}."
             )
 
+        if cfg.clip_score_embed_dim != cfg.score_embed_dim:
+            raise ValueError(
+                "Current CLIP-only score path requires "
+                "encoder_refiner_cfg.clip_score_embed_dim == encoder_refiner_cfg.score_embed_dim. "
+                f"Got clip_score_embed_dim={cfg.clip_score_embed_dim}, "
+                f"score_embed_dim={cfg.score_embed_dim}."
+            )
+
         return cfg
 
     @staticmethod
@@ -769,7 +777,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             encoder_refiner_hidden_dim=int(refiner_cfg.hidden_dim),
             encoder_refiner_score_embed_dim=int(refiner_cfg.score_embed_dim),
             encoder_refiner_clip_score_embed_dim=int(refiner_cfg.clip_score_embed_dim),
-            encoder_refiner_sam_score_embed_dim=int(refiner_cfg.sam_score_embed_dim),
             encoder_refiner_conv_kernel=int(refiner_cfg.clip_score_conv_kernel),
             encoder_refiner_window_size=int(refiner_cfg.window_size),
             encoder_refiner_shift_size=int(refiner_cfg.shift_size),

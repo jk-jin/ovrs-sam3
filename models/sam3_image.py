@@ -41,8 +41,7 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_dropout: float = 0.1,
         encoder_refiner_hidden_dim: int = 256,
         encoder_refiner_score_embed_dim: int = 256,
-        encoder_refiner_clip_score_embed_dim: int = 192,
-        encoder_refiner_sam_score_embed_dim: int = 64,
+        encoder_refiner_clip_score_embed_dim: int = 256,
         encoder_refiner_conv_kernel: int = 7,
         encoder_refiner_window_size: int = 12,
         encoder_refiner_shift_size: int = 6,
@@ -111,7 +110,6 @@ class Sam3Image(torch.nn.Module):
             clip_dim=self.clip_align_dim,
             score_embed_dim=int(encoder_refiner_score_embed_dim),
             clip_score_embed_dim=int(encoder_refiner_clip_score_embed_dim),
-            sam_score_embed_dim=int(encoder_refiner_sam_score_embed_dim),
             num_heads=int(encoder_refiner_num_heads),
             window_size=int(encoder_refiner_window_size),
             shift_size=int(encoder_refiner_shift_size),
@@ -643,92 +641,6 @@ class Sam3Image(torch.nn.Module):
             input_points_mask=torch.zeros((num_pairs, 0), dtype=torch.bool, device=device),
         )
 
-    def build_sam_score_embed_36(
-        self,
-        encoder_out_chunks: List[Dict],
-        chunk_prompts: List[torch.Tensor],
-        chunk_prompt_masks: List[torch.Tensor],
-        chunk_class_counts: List[int],
-        backbone_fpn: List[torch.Tensor],
-        batch_size: int,
-        num_classes: int,
-        device: torch.device,
-    ) -> torch.Tensor:
-        """
-        Generate low-resolution SAM score embedding chunk by chunk.
-
-        Each chunk's high-resolution logits are immediately downsampled by
-        SamMaskScoreEmbedding and then released, avoiding a full
-        [B, C, H_mask, W_mask] allocation.
-
-        Returns:
-            sam_score_embed_36: [B, C, 64, 36, 36]
-        """
-        sam_score_chunks: list[torch.Tensor] = []
-
-        for chunk_idx, encoder_out in enumerate(encoder_out_chunks):
-            C_chunk = chunk_class_counts[chunk_idx]
-
-            chunk_find_input = self._build_prompt_expanded_find_stage(
-                batch_size=batch_size,
-                num_chunk_classes=C_chunk,
-                device=device,
-            )
-
-            with torch.no_grad():
-                seg_outputs = self.segmentation_head(
-                    backbone_feats=backbone_fpn,
-                    obj_queries=torch.empty(0, device=device),
-                    image_ids=chunk_find_input.img_ids,
-                    encoder_hidden_states=encoder_out["encoder_hidden_states"],
-                    prompt=chunk_prompts[chunk_idx],
-                    prompt_mask=chunk_prompt_masks[chunk_idx],
-                    apply_prompt_attention=not self.encoder_refiner_early_prompt_attention,
-                )
-
-                chunk_logits = seg_outputs["semantic_seg"]
-
-                if chunk_logits.dim() == 4 and chunk_logits.shape[0] == batch_size * C_chunk:
-                    chunk_logits = chunk_logits.reshape(
-                        batch_size, C_chunk, *chunk_logits.shape[-2:]
-                    )
-                elif (
-                    chunk_logits.dim() == 4
-                    and chunk_logits.shape[0] == batch_size
-                    and chunk_logits.shape[1] == C_chunk
-                ):
-                    pass
-                elif chunk_logits.dim() == 4 and chunk_logits.shape[1] == 1:
-                    chunk_logits = chunk_logits.squeeze(1)
-                    if chunk_logits.dim() == 3:
-                        chunk_logits = chunk_logits[:, None]
-                else:
-                    raise ValueError(
-                        f"Unexpected semantic_seg shape in SAM prior: "
-                        f"{tuple(chunk_logits.shape)}."
-                    )
-
-            # chunk_logits is detached so gradients don't flow back into SAM3.
-            # SamMaskScoreEmbedding remains trainable.
-            chunk_score = self.encoder_refiner.sam_score_embed(
-                sam_prior_logits=chunk_logits.detach()
-            )
-
-            sam_score_chunks.append(chunk_score)
-
-            del chunk_logits, seg_outputs
-
-        sam_score_embed_36 = torch.cat(sam_score_chunks, dim=1)
-
-        if tuple(sam_score_embed_36.shape[:2]) != (batch_size, num_classes):
-            raise ValueError(
-                f"sam_score_embed_36 batch/class mismatch: "
-                f"expected {(batch_size, num_classes)}, "
-                f"got {tuple(sam_score_embed_36.shape[:2])}."
-            )
-
-        return sam_score_embed_36.contiguous()
-
     def run_encoder_refiner(
         self,
         encoder_features_72: torch.Tensor,
@@ -748,31 +660,18 @@ class Sam3Image(torch.nn.Module):
 
         sam_fpn_72 = backbone_fpn[-1].detach()
 
-        # 1. Build SAM score embedding chunk by chunk (avoids full high-res allocation).
-        sam_score_embed_36 = self.build_sam_score_embed_36(
-            encoder_out_chunks=encoder_out_chunks,
-            chunk_prompts=chunk_prompts,
-            chunk_prompt_masks=chunk_prompt_masks,
-            chunk_class_counts=chunk_class_counts,
-            backbone_fpn=backbone_fpn,
-            batch_size=B,
-            num_classes=C,
-            device=encoder_features_72.device,
-        )
-
-        # 2. Run encoder refiner (CLIP score + SAM score + refiner layers + upsample).
+        # 1. Run encoder refiner (CLIP score + SAM FPN fusion + refiner layers + upsample).
         refiner_out = self.encoder_refiner(
             encoder_features_72=encoder_features_72,
             clip_image_feat_map=clip_image_feat_map,
             sam_text_mean=sam_text_mean,
             class_names=class_names,
-            sam_score_embed_36=sam_score_embed_36,
             sam_fpn_72=sam_fpn_72,
         )
 
         refined_encoder_features_72 = refiner_out["refined_encoder_features_72"]
 
-        # 3. Write refined features back and get final logits from segmentation_head.
+        # 2. Write refined features back and get final logits from segmentation_head.
         final_logits_chunks: list[torch.Tensor] = []
         chunk_start = 0
 
@@ -843,7 +742,6 @@ class Sam3Image(torch.nn.Module):
                 OUTPUT_KEYS.refiner_features_36: refiner_out["refiner_features_36"].detach().contiguous(),
                 OUTPUT_KEYS.score_embed_36: refiner_out["score_embed_36"].detach().contiguous(),
                 OUTPUT_KEYS.clip_score_embed_36: refiner_out["clip_score_embed_36"].detach().contiguous(),
-                OUTPUT_KEYS.sam_score_embed_36: refiner_out["sam_score_embed_36"].detach().contiguous(),
                 OUTPUT_KEYS.clip_score_maps: refiner_out["clip_score_maps_36"].detach().contiguous(),
                 OUTPUT_KEYS.template_clip_text_features: refiner_out["template_clip_text"].detach().contiguous(),
                 OUTPUT_KEYS.clip_mid_features: [

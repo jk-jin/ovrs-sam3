@@ -134,7 +134,6 @@ class SemanticSegAdapter(nn.Module):
             OUTPUT_KEYS.refiner_features_36,
             OUTPUT_KEYS.score_embed_36,
             OUTPUT_KEYS.clip_score_embed_36,
-            OUTPUT_KEYS.sam_score_embed_36,
             OUTPUT_KEYS.template_clip_text_features,
             OUTPUT_KEYS.clip_score_maps,
             OUTPUT_KEYS.clip_score_embed,
