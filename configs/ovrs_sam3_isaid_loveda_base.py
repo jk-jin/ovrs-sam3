@@ -147,6 +147,12 @@ val_dataloader = dict(
         seg_suffix=".png",
         ignore_index=255,
         reduce_zero_label=True,
+        background_cfg=dict(
+            enabled=True,
+            class_id=0,
+            class_name="background",
+            exclude_from_forward=True,
+        ),
         return_raw_image=True,
         transforms=[
             dict(type="ToTensor"),
@@ -171,12 +177,10 @@ val_dataloader = dict(
 #   original 1 background   -> 0
 #   original 2 building     -> 1
 #   ...
-# so bg_idx=0 is correct.
+# Background class id=0 is declared in dataset.background_cfg.
 eval_cfg = dict(
     ignore_index=255,
     prob_thd=0.0,
-    bg_idx=0,
-    use_score_map=True,
 )
 
 # -------------------------------------------------------------------------

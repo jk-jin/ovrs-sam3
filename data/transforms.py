@@ -46,6 +46,18 @@ def _to_tensor_mask(mask: Any) -> torch.Tensor:
     raise TypeError(f"Unsupported mask type: {type(mask)}")
 
 
+_LABEL_KEYS = ("label_map", "eval_label_map")
+
+
+def _apply_to_label_keys(sample: dict, fn):
+    """Apply *fn* to every label key present in the sample, returning a new dict."""
+    sample = dict(sample)
+    for key in _LABEL_KEYS:
+        if key in sample and sample[key] is not None:
+            sample[key] = fn(sample[key]).long()
+    return sample
+
+
 def _resize_tensor_image(image: torch.Tensor, size: Tuple[int, int]) -> torch.Tensor:
     if image.ndim != 3:
         raise ValueError(f"Unsupported image shape: {tuple(image.shape)}")
@@ -119,8 +131,10 @@ class ToTensor:
         if "raw_image" in sample and sample["raw_image"] is not None:
             sample["raw_image"] = _to_tensor_image(sample["raw_image"])
 
-        if "label_map" in sample and sample["label_map"] is not None:
-            sample["label_map"] = _to_tensor_mask(sample["label_map"]).long()
+        sample = _apply_to_label_keys(
+            sample,
+            lambda m: _to_tensor_mask(m).long(),
+        )
 
         return sample
 
@@ -224,8 +238,10 @@ class Resize:
         if "raw_image" in sample and sample["raw_image"] is not None:
             sample["raw_image"] = _resize_tensor_image(sample["raw_image"], (out_h, out_w))
 
-        if "label_map" in sample and sample["label_map"] is not None:
-            sample["label_map"] = _resize_label_map(sample["label_map"], (out_h, out_w))
+        sample = _apply_to_label_keys(
+            sample,
+            lambda m: _resize_label_map(m, (out_h, out_w)),
+        )
 
         sample["img_shape"] = (out_h, out_w)
         sample["scale_factor"] = (out_w / w, out_h / h)
@@ -314,13 +330,13 @@ class RandomCrop:
             if raw_image is not None:
                 raw_image = _pad_last_two_dims(raw_image, crop_h, crop_w, self.image_pad_value)
 
-            if label_map is not None:
-                label_map = _pad_last_two_dims(
-                    label_map,
-                    crop_h,
-                    crop_w,
-                    self.ignore_index,
-                ).long()
+            sample = _apply_to_label_keys(
+                sample,
+                lambda m: _pad_last_two_dims(
+                    m, crop_h, crop_w, self.ignore_index,
+                ).long(),
+            )
+            label_map = sample.get("label_map", None)
 
         h, w = image.shape[-2:]
         if h < crop_h or w < crop_w:
@@ -338,6 +354,7 @@ class RandomCrop:
 
             crop_label = None
             if label_map is not None:
+                # Use label_map (forward) for cat_max_ratio check
                 crop_label = _crop_last_two_dims(label_map, top, left, crop_h, crop_w)
 
             if self._is_valid_crop(crop_label):
@@ -359,14 +376,12 @@ class RandomCrop:
                 crop_w,
             )
 
-        if label_map is not None:
-            sample["label_map"] = _crop_last_two_dims(
-                label_map,
-                chosen_top,
-                chosen_left,
-                crop_h,
-                crop_w,
-            ).long()
+        sample = _apply_to_label_keys(
+            sample,
+            lambda m: _crop_last_two_dims(
+                m, chosen_top, chosen_left, crop_h, crop_w,
+            ).long(),
+        )
 
         sample["img_shape"] = (crop_h, crop_w)
         return sample
@@ -386,8 +401,10 @@ class RandomVerticalFlip:
         if "raw_image" in sample and sample["raw_image"] is not None:
             sample["raw_image"] = torch.flip(sample["raw_image"], dims=[-2])
 
-        if "label_map" in sample and sample["label_map"] is not None:
-            sample["label_map"] = torch.flip(sample["label_map"], dims=[-2])
+        sample = _apply_to_label_keys(
+            sample,
+            lambda m: torch.flip(m, dims=[-2]),
+        )
 
         return sample
 
@@ -408,8 +425,10 @@ class RandomRotate90:
         if "raw_image" in sample and sample["raw_image"] is not None:
             sample["raw_image"] = torch.rot90(sample["raw_image"], k=k, dims=(-2, -1))
 
-        if "label_map" in sample and sample["label_map"] is not None:
-            sample["label_map"] = torch.rot90(sample["label_map"], k=k, dims=(-2, -1)).long()
+        sample = _apply_to_label_keys(
+            sample,
+            lambda m: torch.rot90(m, k=k, dims=(-2, -1)).long(),
+        )
 
         return sample
 
@@ -437,8 +456,10 @@ class RandomHorizontalFlip:
         if "raw_image" in sample and sample["raw_image"] is not None:
             sample["raw_image"] = torch.flip(sample["raw_image"], dims=[-1])
 
-        if "label_map" in sample and sample["label_map"] is not None:
-            sample["label_map"] = torch.flip(sample["label_map"], dims=[-1])
+        sample = _apply_to_label_keys(
+            sample,
+            lambda m: torch.flip(m, dims=[-1]),
+        )
 
         return sample
 
@@ -471,11 +492,12 @@ class PadToSize:
         if "raw_image" in sample and sample["raw_image"] is not None:
             sample["raw_image"] = self._pad_last_two_dims(sample["raw_image"], self.image_pad_value)
 
-        if "label_map" in sample and sample["label_map"] is not None:
-            sample["label_map"] = self._pad_last_two_dims(
-                sample["label_map"],
-                self.label_pad_value,
-            ).long()
+        sample = _apply_to_label_keys(
+            sample,
+            lambda m: self._pad_last_two_dims(
+                m, self.label_pad_value,
+            ).long(),
+        )
 
         sample["pad_shape"] = self.size
         return sample

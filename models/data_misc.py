@@ -35,6 +35,9 @@ class BatchedFindTarget:
     semantic_label_map: MyTensor
     semantic_label_map__type = torch.long
 
+    semantic_eval_label_map: Optional[MyTensor] = None
+    semantic_eval_label_map__type = torch.long
+
 
 @dataclass
 class BatchedInferenceMetadata:
@@ -46,6 +49,14 @@ class BatchedInferenceMetadata:
 
     num_classes: int
     class_names: List[str]
+
+    eval_num_classes: int
+    eval_class_names: List[str]
+
+    background_enabled: bool = False
+    background_class_id: int = 0
+    background_class_name: Optional[str] = None
+    background_exclude_from_forward: bool = False
 
 
 @dataclass

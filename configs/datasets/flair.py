@@ -19,6 +19,12 @@ val_dataloader = dict(
         seg_suffix='.png',
         ignore_index=255,
         reduce_zero_label=False,
+        background_cfg=dict(
+            enabled=False,
+            class_id=0,
+            class_name=None,
+            exclude_from_forward=False,
+        ),
         return_raw_image=True,
         transforms=[
             dict(type='ToTensor'),

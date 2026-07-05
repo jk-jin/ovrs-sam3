@@ -75,13 +75,15 @@ class OVSemanticCollator:
             raise ValueError("Empty batch.")
 
         img_batch, image_sizes, padded_hw = self._collate_images(samples)
-        batch_size = len(samples)
 
         label_maps = []
+        eval_label_maps = []
         image_id_list = []
         original_size_list = []
 
         shared_class_texts = None
+        shared_eval_class_texts = None
+        shared_background_cfg = None
 
         for b, sample in enumerate(samples):
             texts = [str(x) for x in sample["class_texts"]]
@@ -95,6 +97,28 @@ class OVSemanticCollator:
                         f"Got mismatch at sample index {b}."
                     )
 
+            eval_texts = [
+                str(x) for x in sample.get("eval_class_texts", sample["class_texts"])
+            ]
+            if shared_eval_class_texts is None:
+                shared_eval_class_texts = eval_texts
+            else:
+                if eval_texts != shared_eval_class_texts:
+                    raise ValueError(
+                        "All samples in one batch must share the same eval_class_texts order. "
+                        f"Got mismatch at sample index {b}."
+                    )
+
+            bg_cfg = sample.get("background_cfg", {})
+            if shared_background_cfg is None:
+                shared_background_cfg = dict(bg_cfg)
+            else:
+                if dict(bg_cfg) != shared_background_cfg:
+                    raise ValueError(
+                        "All samples in one batch must share the same background_cfg. "
+                        f"Got mismatch at sample index {b}."
+                    )
+
             label_map = sample["label_map"].long()
             if tuple(label_map.shape[-2:]) != tuple(padded_hw):
                 label_map = _pad_tensor_hw(
@@ -105,12 +129,26 @@ class OVSemanticCollator:
                 ).long()
             label_maps.append(label_map)
 
+            eval_label_map = sample.get("eval_label_map", sample["label_map"]).long()
+            if tuple(eval_label_map.shape[-2:]) != tuple(padded_hw):
+                eval_label_map = _pad_tensor_hw(
+                    eval_label_map,
+                    padded_hw[0],
+                    padded_hw[1],
+                    self.label_pad_value,
+                ).long()
+            eval_label_maps.append(eval_label_map)
+
             image_id_list.append(int(sample.get("image_id", b)))
             orig_h, orig_w = sample.get("original_size", image_sizes[b])
             original_size_list.append(torch.tensor([orig_h, orig_w], dtype=torch.long))
 
         if shared_class_texts is None:
             raise ValueError("shared_class_texts is None.")
+        if shared_eval_class_texts is None:
+            raise ValueError("shared_eval_class_texts is None.")
+        if shared_background_cfg is None:
+            shared_background_cfg = {}
 
         find_stage = FindStage(
             img_ids=None,
@@ -123,7 +161,8 @@ class OVSemanticCollator:
         )
 
         find_target = BatchedFindTarget(
-            semantic_label_map=torch.stack(label_maps, dim=0),  # [B, H, W]
+            semantic_label_map=torch.stack(label_maps, dim=0),
+            semantic_eval_label_map=torch.stack(eval_label_maps, dim=0),
         )
 
         metadata = BatchedInferenceMetadata(
@@ -131,6 +170,14 @@ class OVSemanticCollator:
             original_size=torch.stack(original_size_list, dim=0),
             num_classes=len(shared_class_texts),
             class_names=shared_class_texts,
+            eval_num_classes=len(shared_eval_class_texts),
+            eval_class_names=shared_eval_class_texts,
+            background_enabled=bool(shared_background_cfg.get("enabled", False)),
+            background_class_id=int(shared_background_cfg.get("class_id", 0)),
+            background_class_name=shared_background_cfg.get("class_name", None),
+            background_exclude_from_forward=bool(
+                shared_background_cfg.get("exclude_from_forward", False)
+            ),
         )
 
         raw_images = self._collect_optional_images(samples, "raw_image")

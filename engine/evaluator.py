@@ -12,19 +12,98 @@ from ..models.task_modes import OUTPUT_KEYS
 TensorDict = Dict[str, torch.Tensor]
 
 
+def build_eval_semantic_pred(
+    outputs: Dict[str, torch.Tensor],
+    metadata,
+    prob_thd: Optional[float] = None,
+    ignore_index: int = 255,
+) -> tuple[torch.Tensor, int, list[str]]:
+    """
+    Shared post-processing for evaluator, visualizer, and TTA.
+
+    Returns:
+        pred_eval: [B, H, W] prediction mapped to eval class space
+        eval_num_classes: number of eval classes (includes background if enabled)
+        eval_class_names: eval class names
+    """
+    score_map = outputs.get(OUTPUT_KEYS.final_score_map, None)
+
+    background_enabled = bool(getattr(metadata, "background_enabled", False))
+    background_class_id = int(getattr(metadata, "background_class_id", 0))
+    exclude_from_forward = bool(
+        getattr(metadata, "background_exclude_from_forward", False)
+    )
+
+    eval_num_classes = int(
+        getattr(metadata, "eval_num_classes", None)
+        or getattr(metadata, "num_classes", 0)
+    )
+    eval_class_names = list(
+        getattr(metadata, "eval_class_names", None)
+        or getattr(metadata, "class_names", [])
+    )
+
+    if score_map is not None:
+        forward_channels = int(score_map.shape[1])
+        max_score, pred_model = score_map.max(dim=1)
+    else:
+        pred_model = outputs[OUTPUT_KEYS.final_pred].long()
+        forward_channels = int(pred_model.max().item()) + 1 if pred_model.numel() > 0 else 1
+        max_score = None
+
+    # Shape invariant checks.
+    if background_enabled and exclude_from_forward:
+        if forward_channels != eval_num_classes - 1:
+            raise ValueError(
+                "Shape invariant violation: background excluded from forward, so "
+                f"forward channels ({forward_channels}) must equal "
+                f"eval_num_classes ({eval_num_classes}) - 1."
+            )
+    else:
+        if forward_channels != eval_num_classes:
+            raise ValueError(
+                "Shape invariant violation: forward channels ({forward_channels}) "
+                f"must equal eval_num_classes ({eval_num_classes})."
+            )
+
+    if not background_enabled:
+        return pred_model.long(), eval_num_classes, eval_class_names
+
+    if not exclude_from_forward:
+        pred_eval = pred_model.long()
+
+        if prob_thd is not None and max_score is not None:
+            pred_eval = pred_eval.clone()
+            pred_eval[max_score < float(prob_thd)] = background_class_id
+
+        return pred_eval, eval_num_classes, eval_class_names
+
+    pred_eval = pred_model.long().clone()
+    pred_eval[pred_eval >= background_class_id] += 1
+
+    if prob_thd is not None and max_score is not None:
+        pred_eval[max_score < float(prob_thd)] = background_class_id
+
+    return pred_eval, eval_num_classes, eval_class_names
+
+
 class MulticlassSemanticEvaluator:
     def __init__(
         self,
         ignore_index: int = 255,
         prob_thd: Optional[float] = None,
-        bg_idx: int = 0,
-        use_score_map: bool = True,
+        **kwargs,
     ):
+        for forbidden_key in ("bg_idx", "use_score_map"):
+            if forbidden_key in kwargs:
+                raise ValueError(
+                    f"eval_cfg.{forbidden_key} is removed. "
+                    "Background id and behavior are now controlled by dataset.background_cfg."
+                )
+
         self.num_classes: Optional[int] = None
         self.ignore_index = int(ignore_index)
         self.prob_thd = prob_thd
-        self.bg_idx = int(bg_idx)
-        self.use_score_map = bool(use_score_map)
         self.reset()
 
     def reset(self):
@@ -81,35 +160,17 @@ class MulticlassSemanticEvaluator:
         if "label_map" not in targets:
             raise ValueError("label_map is required in semantic targets.")
 
-        if self.use_score_map and OUTPUT_KEYS.final_score_map in outputs:
-            score_map = outputs[OUTPUT_KEYS.final_score_map]
-            if score_map.dim() != 4:
-                raise ValueError(f"Expected [B,C,H,W], got {tuple(score_map.shape)}")
+        metadata = targets.get("metadata", None)
 
-            num_classes = score_map.shape[1]
-            if not (0 <= self.bg_idx < num_classes):
-                raise ValueError(
-                    f"bg_idx={self.bg_idx} is out of range for num_classes={num_classes}"
-                )
+        pred_eval, eval_num_classes, _ = build_eval_semantic_pred(
+            outputs=outputs,
+            metadata=metadata,
+            prob_thd=self.prob_thd,
+            ignore_index=self.ignore_index,
+        )
 
-            if self.prob_thd is None:
-                pred = score_map.argmax(dim=1)
-            else:
-                max_score, pred = score_map.max(dim=1)
-                pred = pred.clone()
-                pred[max_score < float(self.prob_thd)] = self.bg_idx
-
-            out_hw = tuple(score_map.shape[-2:])
-            device = score_map.device
-        else:
-            pred = outputs[OUTPUT_KEYS.final_pred]
-            if pred.dim() != 3:
-                raise ValueError(f"Expected final_pred as [B,H,W], got {tuple(pred.shape)}")
-            out_hw = tuple(pred.shape[-2:])
-            device = pred.device
-            num_classes = int(pred.max().item()) + 1 if pred.numel() > 0 else 1
-            if not (0 <= self.bg_idx < num_classes):
-                num_classes = max(num_classes, self.bg_idx + 1)
+        out_hw = tuple(pred_eval.shape[-2:])
+        device = pred_eval.device
 
         target = self._prepare_target(
             label_map=targets["label_map"],
@@ -117,14 +178,14 @@ class MulticlassSemanticEvaluator:
             device=device,
         )
 
-        self._ensure_buffers(num_classes=num_classes, device=device)
+        self._ensure_buffers(num_classes=eval_num_classes, device=device)
 
         valid = target != self.ignore_index
-        self.correct += float(((pred == target) & valid).sum().item())
+        self.correct += float(((pred_eval == target) & valid).sum().item())
         self.total += float(valid.sum().item())
 
-        for cls_id in range(num_classes):
-            pred_c = (pred == cls_id) & valid
+        for cls_id in range(eval_num_classes):
+            pred_c = (pred_eval == cls_id) & valid
             target_c = (target == cls_id) & valid
 
             inter = (pred_c & target_c).sum()
@@ -268,19 +329,7 @@ def inference_with_tta(
 
     if OUTPUT_KEYS.final_score_map in merged_outputs:
         score_map = merged_outputs[OUTPUT_KEYS.final_score_map]
-        max_score, pred = score_map.max(dim=1)
-
-        prob_thd = None
-        bg_idx = 0
-        if tta_cfg is not None:
-            prob_thd = tta_cfg.get("prob_thd", None)
-            bg_idx = int(tta_cfg.get("bg_idx", 0))
-
-        if prob_thd is not None:
-            pred = pred.clone()
-            pred[max_score < float(prob_thd)] = bg_idx
-
-        merged_outputs[OUTPUT_KEYS.final_pred] = pred.long()
+        merged_outputs[OUTPUT_KEYS.final_pred] = score_map.argmax(dim=1).long()
 
     return merged_outputs
 
@@ -380,15 +429,23 @@ def format_semantic_metric_tables(
 
 
 def extract_semantic_targets_from_batch(batch) -> Dict[str, torch.Tensor]:
+    target = batch.find_targets[0]
+    label_map = getattr(target, "semantic_eval_label_map", None)
+    if label_map is None:
+        label_map = target.semantic_label_map
+
     return {
-        "label_map": batch.find_targets[0].semantic_label_map,
+        "label_map": label_map,
+        "metadata": batch.find_metadatas[0],
     }
 
 
 def extract_class_names_from_batch(batch) -> Optional[List[str]]:
     try:
-        class_names = batch.find_metadatas[0].class_names
-        return [str(x) for x in class_names]
+        meta = batch.find_metadatas[0]
+        if hasattr(meta, "eval_class_names"):
+            return [str(x) for x in meta.eval_class_names]
+        return [str(x) for x in meta.class_names]
     except Exception:
         return None
 

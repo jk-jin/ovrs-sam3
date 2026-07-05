@@ -56,6 +56,12 @@ train_dataloader = dict(
         seg_suffix='.png',
         ignore_index=255,
         reduce_zero_label=False,
+        background_cfg=dict(
+            enabled=True,
+            class_id=0,
+            class_name="background",
+            exclude_from_forward=True,
+        ),
         return_raw_image=True,
         transforms=[
             dict(type='ToTensor'),
@@ -110,6 +116,12 @@ val_dataloader = dict(
         seg_suffix='.png',
         ignore_index=255,
         reduce_zero_label=False,
+        background_cfg=dict(
+            enabled=True,
+            class_id=0,
+            class_name="background",
+            exclude_from_forward=True,
+        ),
         return_raw_image=True,
         transforms=[
             dict(type='ToTensor'),

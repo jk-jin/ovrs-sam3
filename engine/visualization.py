@@ -12,6 +12,7 @@ from PIL import Image
 
 from ..config_dataclasses import VisualizerConfig
 from ..models.task_modes import OUTPUT_KEYS
+from .evaluator import build_eval_semantic_pred
 
 
 @dataclass
@@ -48,14 +49,26 @@ class BaseSemanticOverlayTask(VisualizationTask):
             final_source,
         ) = manager._extract_final_logits_raw_and_gated_score_maps(outputs)
 
-        raw_final_pred = manager._build_eval_style_final_pred(
-            outputs=outputs,
-            final_score_map=raw_final_score_map,
+        metadata = batch.find_metadatas[0]
+
+        raw_outputs_for_pred = dict(outputs)
+        raw_outputs_for_pred[OUTPUT_KEYS.final_score_map] = raw_final_score_map
+
+        raw_final_pred, eval_num_classes, eval_class_names = build_eval_semantic_pred(
+            outputs=raw_outputs_for_pred,
+            metadata=metadata,
+            prob_thd=manager.eval_prob_thd,
+            ignore_index=manager.cfg.ignore_index,
         )
 
-        final_pred = manager._build_eval_style_final_pred(
-            outputs=outputs,
-            final_score_map=final_score_map,
+        final_outputs_for_pred = dict(outputs)
+        final_outputs_for_pred[OUTPUT_KEYS.final_score_map] = final_score_map
+
+        final_pred, _, _ = build_eval_semantic_pred(
+            outputs=final_outputs_for_pred,
+            metadata=metadata,
+            prob_thd=manager.eval_prob_thd,
+            ignore_index=manager.cfg.ignore_index,
         )
 
         gt = targets["label_map"]
@@ -72,20 +85,9 @@ class BaseSemanticOverlayTask(VisualizationTask):
                 f"got {tuple(gt.shape)}."
             )
 
-        final_num_classes = int(final_score_map.shape[1])
-
-        try:
-            class_names: Optional[List[str]] = [
-                str(x) for x in batch.find_metadatas[0].class_names
-            ]
-            gt_num_classes = len(class_names)
-        except Exception:
-            class_names = None
-            gt_num_classes = manager._infer_num_classes_from_label_map(
-                gt,
-                ignore_index=manager.cfg.ignore_index,
-                fallback=final_num_classes,
-            )
+        final_num_classes = eval_num_classes
+        gt_num_classes = eval_num_classes
+        class_names: Optional[List[str]] = eval_class_names
 
         for b in ctx.selected_indices:
             image_id = manager._extract_image_id(batch, b)
@@ -146,36 +148,48 @@ class BaseSemanticOverlayTask(VisualizationTask):
                     gt_num_classes,
                 ).save(sample_dir / "gt_overlay.png")
 
+            bg_enabled = bool(getattr(metadata, "background_enabled", False))
+            bg_class_id = int(getattr(metadata, "background_class_id", 0))
+            bg_excl = bool(getattr(metadata, "background_exclude_from_forward", False))
+
             with open(sample_dir / "visualization_sources.txt", "w", encoding="utf-8") as f:
                 f.write("item\tsource\n")
                 if manager.cfg.save_raw_final_prediction:
                     f.write(
                         "pred_raw_final.png\t"
                         f"{raw_final_source}; eval_style_pred="
-                        f"use_score_map={manager.eval_use_score_map}, "
                         f"prob_thd={manager.eval_prob_thd}, "
-                        f"bg_idx={manager.eval_bg_idx}\n"
+                        f"background_enabled={bg_enabled}, "
+                        f"background_class_id={bg_class_id}, "
+                        f"background_exclude_from_forward={bg_excl}, "
+                        f"eval_num_classes={eval_num_classes}\n"
                     )
                     f.write(
                         "pred_raw_final_overlay.png\t"
                         f"{raw_final_source}; eval_style_pred="
-                        f"use_score_map={manager.eval_use_score_map}, "
                         f"prob_thd={manager.eval_prob_thd}, "
-                        f"bg_idx={manager.eval_bg_idx}\n"
+                        f"background_enabled={bg_enabled}, "
+                        f"background_class_id={bg_class_id}, "
+                        f"background_exclude_from_forward={bg_excl}, "
+                        f"eval_num_classes={eval_num_classes}\n"
                     )
                 f.write(
                     "pred.png\t"
                     f"{final_source}; eval_style_pred="
-                    f"use_score_map={manager.eval_use_score_map}, "
                     f"prob_thd={manager.eval_prob_thd}, "
-                    f"bg_idx={manager.eval_bg_idx}\n"
+                    f"background_enabled={bg_enabled}, "
+                    f"background_class_id={bg_class_id}, "
+                    f"background_exclude_from_forward={bg_excl}, "
+                    f"eval_num_classes={eval_num_classes}\n"
                 )
                 f.write(
                     "pred_overlay.png\t"
                     f"{final_source}; eval_style_pred="
-                    f"use_score_map={manager.eval_use_score_map}, "
                     f"prob_thd={manager.eval_prob_thd}, "
-                    f"bg_idx={manager.eval_bg_idx}\n"
+                    f"background_enabled={bg_enabled}, "
+                    f"background_class_id={bg_class_id}, "
+                    f"background_exclude_from_forward={bg_excl}, "
+                    f"eval_num_classes={eval_num_classes}\n"
                 )
                 f.write(f"final_score_heatmaps\t{final_source}\n")
 
@@ -220,11 +234,14 @@ class ScoreAnalysisTask(VisualizationTask):
             )
 
         try:
-            class_names: Optional[List[str]] = [
-                str(x) for x in batch.find_metadatas[0].class_names
+            meta = batch.find_metadatas[0]
+            # Score maps are in forward (model output) channel space.
+            # Use metadata.class_names so channel index matches class name.
+            forward_class_names: Optional[List[str]] = [
+                str(x) for x in meta.class_names
             ]
         except Exception:
-            class_names = None
+            forward_class_names = None
 
         for b in ctx.selected_indices:
             image_id = manager._extract_image_id(batch, b)
@@ -242,7 +259,7 @@ class ScoreAnalysisTask(VisualizationTask):
                     sample_dir=sample_dir,
                     raw_final_scores=raw_final_score_map[b],
                     final_scores=final_score_map[b],
-                    class_names=class_names,
+                    class_names=forward_class_names,
                 )
 
             if manager.cfg.save_score_heatmaps:
@@ -251,7 +268,7 @@ class ScoreAnalysisTask(VisualizationTask):
                     raw_final_scores=raw_final_score_map[b],
                     final_scores=final_score_map[b],
                     out_hw=out_hw,
-                    class_names=class_names,
+                    class_names=forward_class_names,
                 )
 
 
@@ -337,14 +354,6 @@ class VisualizationManager:
             return None
         return float(value)
 
-    @property
-    def eval_bg_idx(self) -> int:
-        return int(self.eval_cfg.get("bg_idx", 0))
-
-    @property
-    def eval_use_score_map(self) -> bool:
-        return bool(self.eval_cfg.get("use_score_map", True))
-
     def _build_tasks(self) -> List[VisualizationTask]:
         return [
             BaseSemanticOverlayTask(),
@@ -360,45 +369,6 @@ class VisualizationManager:
     def _extract_core_model(cls, model: torch.nn.Module) -> Optional[torch.nn.Module]:
         model = cls._unwrap_model(model)
         return getattr(model, "core", None)
-
-    def _build_eval_style_final_pred(
-        self,
-        outputs: Dict[str, torch.Tensor],
-        final_score_map: torch.Tensor,
-    ) -> torch.Tensor:
-        if final_score_map.dim() != 4:
-            raise ValueError(
-                f"Expected final_score_map as [B, C, H, W], "
-                f"got {tuple(final_score_map.shape)}."
-            )
-
-        if self.eval_use_score_map:
-            num_classes = int(final_score_map.shape[1])
-            bg_idx = self.eval_bg_idx
-
-            if not (0 <= bg_idx < num_classes):
-                raise ValueError(
-                    f"bg_idx={bg_idx} is out of range for num_classes={num_classes}."
-                )
-
-            max_score, pred = final_score_map.max(dim=1)
-            prob_thd = self.eval_prob_thd
-
-            if prob_thd is not None:
-                pred = pred.clone()
-                pred[max_score < prob_thd] = bg_idx
-
-            return pred.long()
-
-        final_pred = outputs.get(OUTPUT_KEYS.final_pred, None)
-        if final_pred is not None:
-            if final_pred.dim() != 3:
-                raise ValueError(
-                    f"Expected final_pred as [B, H, W], got {tuple(final_pred.shape)}."
-                )
-            return final_pred.long()
-
-        return final_score_map.argmax(dim=1).long()
 
     def _build_sam3_direct_segmentation_for_visualization(
         self,
@@ -947,6 +917,10 @@ class VisualizationManager:
         order = torch.argsort(final_max, descending=True)
 
         with open(sample_dir / "branch_score_summary.txt", "w", encoding="utf-8") as f:
+            f.write(
+                "# Score channels are in forward (model output) class space.\n"
+                "# When exclude_from_forward=True, background is absent from this table.\n"
+            )
             f.write(
                 "rank\tclass_id\tclass_name\t"
                 "raw_final_max\traw_final_mean\t"

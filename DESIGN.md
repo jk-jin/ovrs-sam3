@@ -1,6 +1,6 @@
 # ovrs-sam3 项目说明文档
 
-更新时间：2026-07-04  
+更新时间：2026-07-05  
 目标分支：`master`
 
 ## 1. 项目定位
@@ -504,7 +504,53 @@ final_dice_weight = 0.0
 
 BCE 的目标是 per-class binary mask。也就是说，对于每个类别，模型都学习一个“该像素是否属于这个类别”的二分类 mask。最后推理时再通过 `argmax` 选出每个像素分数最高的类别。
 
-## 13. Debug 输出
+## 13. 背景类别配置
+
+每个数据集通过 `background_cfg` 描述是否存在显式背景类别以及是否在前向时剔除。
+
+### 13.1 配置字段
+
+```python
+background_cfg=dict(
+    enabled=False,              # 是否声明该数据集有显式背景类
+    class_id=0,                 # 背景在 eval 类别空间中的 id
+    class_name=None,            # 背景类别名称，用于合法性校验
+    exclude_from_forward=False, # 是否在模型前向时剔除
+)
+```
+
+### 13.2 三种模式
+
+| 模式 | enabled | exclude_from_forward | 行为 |
+|---|---|---|---|
+| 无背景 | False | False | 普通 argmax，不启用阈值过滤 |
+| 背景参与前向 | True | False | 低置信度像素设为背景 id，无 id remap |
+| 背景不参与前向 | True | True | 前向类别数 = eval 类别数 - 1；验证时 remap + 阈值过滤 |
+
+### 13.3 标签处理流程
+
+```text
+raw label
+  → reduce_zero_label (可选)
+  → eval_label_map (保留背景)
+  → background exclusion (可选)
+  → label_map (用于训练 loss)
+```
+
+`eval_label_map` 始终保留背景类，用于 mIoU 和可视化。`label_map` 用于训练 loss。
+
+### 13.4 评估后处理
+
+共享函数 `build_eval_semantic_pred()` 统一处理 evaluator 和 visualizer 的预测后处理：
+
+- 优先使用 `final_score_map`，fallback 到 `final_pred`
+- `background_cfg.enabled=False`：普通 argmax，不做阈值过滤
+- `background_cfg.enabled=True, exclude_from_forward=False`：低置信度 → 背景 id
+- `background_cfg.enabled=True, exclude_from_forward=True`：先 remap 预测 id（`pred >= bg_id` 的 +1），再低置信度 → 背景 id
+
+该函数返回 `(pred_eval, eval_num_classes, eval_class_names)`。
+
+## 14. Debug 输出
 
 当 `return_debug=True` 时，主要调试输出包括：
 
@@ -520,7 +566,7 @@ BCE 的目标是 per-class binary mask。也就是说，对于每个类别，模
 | `template_clip_text_features` | `[C, 32, D_clip]` | 每个类别、每个模板对应的 CLIP 文本特征。 |
 | `clip_mid_features` | `List[[B, D_native, 36, 36]]` | RemoteCLIP 中间层特征，当前主路径不直接使用。 |
 
-## 14. 主要文件说明
+## 15. 主要文件说明
 
 ```text
 models/
@@ -540,7 +586,7 @@ models/
     EncoderFeatureUpsampler、ClassConditionedEncoderRefiner。
 
   sam3_image.py
-    主流程协调器，负责构建 refiner cache、生成 SAM score embedding、运行 refiner、写回 encoder_hidden_states、生成 final_logits。
+    主流程协调器，负责构建 refiner cache、运行 refiner、写回 encoder_hidden_states、生成 final_logits。
 
   segmentor.py
     SAM3Segmentor wrapper，负责训练/推理模式下的输出适配。
@@ -550,6 +596,24 @@ models/
 
   task_modes.py
     输出 key 和 task mode 定义。
+
+data/
+  dataset.py
+    OVSemanticSegDataset，支持 background_cfg 和两步标签处理。
+  collate.py
+    OVSemanticCollator，collate eval_label_map 和 background metadata。
+
+models/
+  data_misc.py
+    BatchedFindTarget（含 semantic_eval_label_map）、BatchedInferenceMetadata（含 background 字段）。
+
+engine/
+  evaluator.py
+    MulticlassSemanticEvaluator、build_eval_semantic_pred（共享后处理）。
+  visualization.py
+    VisualizationManager、可视化任务，复用 build_eval_semantic_pred。
+  trainer.py
+    Trainer，训练和验证主循环。
 
 losses/
   semantic_criterion.py
@@ -567,7 +631,7 @@ model_builder.py
   模型、criterion、hooks、训练组件构建逻辑。
 ```
 
-## 15. 最小 shape 验收
+## 16. 最小 shape 验收
 
 | 张量 | 期望形状 |
 |---|---|
@@ -580,7 +644,7 @@ model_builder.py
 | `refined_encoder_features_72` | `[B, C, 256, 72, 72]` |
 | `final_logits` | `[B, C, H_out, W_out]` |
 
-## 16. 推荐检查命令
+## 17. 推荐检查命令
 
 ```bash
 python -m py_compile models/openclip_image_encoder.py
@@ -607,7 +671,7 @@ python -m py_compile models/encoder_refiner_attention.py
 python -m py_compile models/encoder_refiner.py
 ```
 
-## 17. 当前实现重点
+## 18. 当前实现重点
 
 当前代码里，score_embed 来源是 CLIP-only 路径（不再使用 SAM mask prior）：
 
