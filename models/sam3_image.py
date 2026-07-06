@@ -41,7 +41,6 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_dropout: float = 0.1,
         encoder_refiner_hidden_dim: int = 256,
         encoder_refiner_score_embed_dim: int = 256,
-        encoder_refiner_clip_score_embed_dim: int = 256,
         encoder_refiner_conv_kernel: int = 7,
         encoder_refiner_window_size: int = 12,
         encoder_refiner_shift_size: int = 6,
@@ -109,7 +108,6 @@ class Sam3Image(torch.nn.Module):
             hidden_dim=int(encoder_refiner_hidden_dim),
             clip_dim=self.clip_align_dim,
             score_embed_dim=int(encoder_refiner_score_embed_dim),
-            clip_score_embed_dim=int(encoder_refiner_clip_score_embed_dim),
             num_heads=int(encoder_refiner_num_heads),
             window_size=int(encoder_refiner_window_size),
             shift_size=int(encoder_refiner_shift_size),
@@ -660,7 +658,8 @@ class Sam3Image(torch.nn.Module):
 
         sam_fpn_72 = backbone_fpn[-1].detach()
 
-        # 1. Run encoder refiner (CLIP score + SAM FPN fusion + refiner layers + upsample).
+        # 1. Run encoder refiner:
+        #    CLIP score embedding → refiner layers → output fusion with original encoder feature and SAM FPN 72.
         refiner_out = self.encoder_refiner(
             encoder_features_72=encoder_features_72,
             clip_image_feat_map=clip_image_feat_map,

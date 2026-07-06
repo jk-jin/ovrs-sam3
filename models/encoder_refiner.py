@@ -7,10 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
-from .score_embeddings import (
-    ClipScoreEmbedding,
-    ScoreFpnFusion,
-)
+from .score_embeddings import ClipScoreEmbedding
 from .encoder_refiner_attention import EncoderRefinerLayer
 
 
@@ -28,48 +25,63 @@ def _safe_group_norm(num_channels: int) -> nn.GroupNorm:
 
 class EncoderFeatureUpsampler(nn.Module):
     """
-    Upsample refined 36×36 feature back to 72×72 with simple bilinear
-    interpolation and 1×1 channel fusion.
+    Upsample refined 36×36 feature back to 72×72 and fuse it with
+    original SAM3 encoder feature and SAM3 FPN 72×72 feature.
 
-    Input:
+    Inputs:
         refined_feature_36:  [B, C, 256, 36, 36]
-        sam_fpn_72:          [B, 256, 72, 72]  # kept for API compatibility, unused here
+        sam_fpn_72:          [B, 256, 72, 72]
         original_encoder_72: [B, C, 256, 72, 72]
 
     Process:
-        1. Bilinear interpolate refined_feature_36: 36 → 72
-        2. Concatenate with original_encoder_72 along channel dim
-        3. 1×1 conv: 512 → 256
+        1. Bilinear upsample refined_feature_36 to 72×72.
+        2. Broadcast sam_fpn_72 to class dimension.
+        3. Concatenate [refiner_up_72, original_encoder_72, sam_fpn_72].
+        4. Conv fusion 768 → 256.
+        5. Concatenate fused_72 with refiner_up_72.
+        6. 1×1 conv 512 → 256.
 
     Output:
-        refined_feature_72: [B, C, 256, 72, 72]
+        refined_encoder_features_72: [B, C, 256, 72, 72]
     """
 
     def __init__(self, hidden_dim: int = 256):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
 
-        self.fuse = nn.Conv2d(
+        # Stage A:
+        # [refiner_up_72, original_encoder_72, sam_fpn_72] = 256 * 3
+        # 768 -> 256
+        self.local_fusion = nn.Sequential(
+            nn.Conv2d(
+                self.hidden_dim * 3,
+                self.hidden_dim,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            _safe_group_norm(self.hidden_dim),
+            nn.GELU(),
+            nn.Conv2d(
+                self.hidden_dim,
+                self.hidden_dim,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            _safe_group_norm(self.hidden_dim),
+            nn.GELU(),
+        )
+
+        # Stage B:
+        # [local_fused_72, refiner_up_72] = 256 * 2
+        # 512 -> 256
+        self.final_fusion = nn.Conv2d(
             self.hidden_dim * 2,
             self.hidden_dim,
             kernel_size=1,
             bias=False,
         )
-
-        self._init_original_passthrough()
-
-    def _init_original_passthrough(self) -> None:
-        """
-        Initialize the 1×1 fusion conv so that the module initially behaves
-        like original_encoder_72 passthrough.
-
-        Cat order is [upsampled_refined, original_encoder].
-        Therefore the second half of input channels is initialized as identity.
-        """
-        with torch.no_grad():
-            self.fuse.weight.zero_()
-            for i in range(self.hidden_dim):
-                self.fuse.weight[i, self.hidden_dim + i, 0, 0] = 1.0
 
     def forward(
         self,
@@ -77,8 +89,6 @@ class EncoderFeatureUpsampler(nn.Module):
         sam_fpn_72: torch.Tensor,
         original_encoder_72: torch.Tensor,
     ) -> torch.Tensor:
-        del sam_fpn_72
-
         B, C, D, H36, W36 = refined_feature_36.shape
 
         if D != self.hidden_dim:
@@ -89,23 +99,67 @@ class EncoderFeatureUpsampler(nn.Module):
             raise ValueError(
                 f"Expected 36×36 refined feature, got {(H36, W36)}."
             )
+
         if tuple(original_encoder_72.shape) != (B, C, D, 72, 72):
             raise ValueError(
                 f"original_encoder_72 must be [{B}, {C}, {D}, 72, 72], "
                 f"got {tuple(original_encoder_72.shape)}."
             )
 
-        up = F.interpolate(
+        if sam_fpn_72.ndim != 4:
+            raise ValueError(
+                f"sam_fpn_72 must be [B, D, 72, 72], got {tuple(sam_fpn_72.shape)}."
+            )
+        if tuple(sam_fpn_72.shape) != (B, D, 72, 72):
+            raise ValueError(
+                f"sam_fpn_72 must be [{B}, {D}, 72, 72], "
+                f"got {tuple(sam_fpn_72.shape)}."
+            )
+
+        # refined_feature_36: [B, C, D, 36, 36]
+        # -> refiner_up_72: [B*C, D, 72, 72]
+        refiner_up_72 = F.interpolate(
             refined_feature_36.reshape(B * C, D, 36, 36),
             size=(72, 72),
             mode="bilinear",
             align_corners=False,
         )
 
-        orig = original_encoder_72.reshape(B * C, D, 72, 72)
+        # original_encoder_72: [B, C, D, 72, 72]
+        # -> [B*C, D, 72, 72]
+        orig_72 = original_encoder_72.reshape(B * C, D, 72, 72)
 
-        fused = torch.cat([up, orig], dim=1)
-        out = self.fuse(fused)
+        # sam_fpn_72: [B, D, 72, 72]
+        # -> [B, C, D, 72, 72]
+        # -> [B*C, D, 72, 72]
+        fpn_72 = (
+            sam_fpn_72.to(device=refiner_up_72.device, dtype=refiner_up_72.dtype)
+            .contiguous()
+            .unsqueeze(1)
+            .expand(B, C, D, 72, 72)
+            .reshape(B * C, D, 72, 72)
+        )
+
+        # Stage A: fuse upsampled refiner feature, original encoder feature, and SAM FPN.
+        local_in = torch.cat(
+            [
+                refiner_up_72,
+                orig_72.to(device=refiner_up_72.device, dtype=refiner_up_72.dtype),
+                fpn_72,
+            ],
+            dim=1,
+        )
+        local_fused_72 = self.local_fusion(local_in)
+
+        # Stage B: fuse the local fused feature with the original refiner attention output.
+        final_in = torch.cat(
+            [
+                local_fused_72,
+                refiner_up_72,
+            ],
+            dim=1,
+        )
+        out = self.final_fusion(final_in)
 
         return out.reshape(B, C, D, 72, 72).contiguous()
 
@@ -117,8 +171,8 @@ class EncoderFeatureUpsampler(nn.Module):
 
 class ClassConditionedEncoderRefiner(nn.Module):
     """
-    Encoder feature refiner operating at 36×36 with CLIP-only score embedding
-    and SAM FPN fused before refiner layers.
+    Encoder feature refiner operating at 36×36 with CLIP-only score embedding.
+    SAM FPN is used only in the output upsampling fusion stage.
 
     Forward inputs:
         encoder_features_72:  [B, C, 256, 72, 72]
@@ -142,7 +196,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
         hidden_dim: int = 256,
         clip_dim: int = 768,
         score_embed_dim: int = 256,
-        clip_score_embed_dim: int = 256,
         num_heads: int = 8,
         window_size: int = 12,
         shift_size: int = 6,
@@ -157,13 +210,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
         self.hidden_dim = int(hidden_dim)
         self.score_embed_dim = int(score_embed_dim)
         self.use_checkpoint = bool(use_checkpoint)
-
-        if int(clip_score_embed_dim) != int(score_embed_dim):
-            raise ValueError(
-                "clip_score_embed_dim must equal score_embed_dim in the CLIP-only score path. "
-                f"Got clip_score_embed_dim={clip_score_embed_dim}, "
-                f"score_embed_dim={score_embed_dim}."
-            )
 
         if prompt_templates is None:
             raise ValueError(
@@ -183,12 +229,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
             conv_kernel=int(clip_score_conv_kernel),
         )
 
-        self.score_fpn_fusion = ScoreFpnFusion(
-            score_dim=int(score_embed_dim),
-            fpn_dim=int(hidden_dim),
-            fused_dim=int(score_embed_dim),
-        )
-
         self.layers = nn.ModuleList([
             EncoderRefinerLayer(
                 hidden_dim=self.hidden_dim,
@@ -204,8 +244,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
         self.upsampler = EncoderFeatureUpsampler(
             hidden_dim=self.hidden_dim,
         )
-
-        self.clip_score_embed_dim = int(score_embed_dim)
 
     # ------------------------------------------------------------------
     # Forward
@@ -234,6 +272,12 @@ class ClassConditionedEncoderRefiner(nn.Module):
             clip_score_embed_36
             clip_score_maps_36
             template_clip_text
+
+        Process:
+            1. Build CLIP score embedding at 36×36.
+            2. Downsample SAM3 encoder features from 72×72 to 36×36.
+            3. Run refiner layers with CLIP-only score embedding.
+            4. Upsample refined feature to 72×72 and fuse with original encoder feature and SAM FPN 72.
         """
         batch_size, num_classes, hidden_dim, H, W = encoder_features_72.shape
 
@@ -275,7 +319,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
             align_corners=False,
         ).reshape(batch_size, num_classes, hidden_dim, 36, 36)
 
-        # 3. Downsample SAM3 FPN feature from 72×72 to 36×36.
+        # Validate sam_fpn_72 shape, but do not downsample/fuse into score_embed_36.
         if sam_fpn_72.ndim != 4:
             raise ValueError(
                 f"sam_fpn_72 must be [B, D, 72, 72], got {tuple(sam_fpn_72.shape)}."
@@ -286,20 +330,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 f"got {tuple(sam_fpn_72.shape)}."
             )
 
-        sam_fpn_36 = F.interpolate(
-            sam_fpn_72.to(device=feature_36.device, dtype=feature_36.dtype),
-            size=(36, 36),
-            mode="bilinear",
-            align_corners=False,
-        ).contiguous()
-
-        # 4. Fuse CLIP score embedding with SAM FPN before refiner layers.
-        score_embed_36 = self.score_fpn_fusion(
-            score_embed_36=score_embed_36,
-            sam_fpn_36=sam_fpn_36,
-        )
-
-        # 5. Run refiner layers.
+        # 3. Run refiner layers with CLIP-only score embedding.
         for layer in self.layers:
             if self.use_checkpoint and self.training:
                 feature_36, score_embed_36 = checkpoint(
@@ -316,7 +347,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     sam_text_mean=sam_text_mean,
                 )
 
-        # 6. Upsample refined feature back to 72×72.
+        # 4. Upsample refined feature to 72×72 and fuse with original encoder feature and SAM FPN.
         refined_encoder_features_72 = self.upsampler(
             refined_feature_36=feature_36,
             sam_fpn_72=sam_fpn_72,

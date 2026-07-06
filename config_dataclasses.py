@@ -75,7 +75,6 @@ class EncoderRefinerConfig:
     hidden_dim: int = 256
 
     score_embed_dim: int = 256
-    clip_score_embed_dim: int = 256
     clip_score_conv_kernel: int = 7
 
     refiner_hw: int = 36

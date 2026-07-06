@@ -188,7 +188,8 @@ class WindowScoreAttention(nn.Module):
     v_feature = feature
     v_score   = score_embed
 
-    sam_fpn_36 is fused into score_embed before refiner layers, not used here.
+    score_embed is CLIP-derived and updated jointly with feature.
+    SAM FPN is not fused into score_embed; it is used later in the output upsampling fusion stage.
     Window size = 12, shift_size = 0 for regular, 6 for shifted.
     """
 
