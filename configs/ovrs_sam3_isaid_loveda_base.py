@@ -104,7 +104,7 @@ model = dict(
         ignore_index=255,
         final_bce_weight=1.0,
         final_dice_weight=0.0,
-        bce_absent_class_weight=0.0,
+        bce_absent_class_weight=0.1,
         bce_valid_pixel_weight=1.0,
         bce_ignore_pixel_weight=0.05,
         eps=1e-6,
@@ -180,7 +180,7 @@ val_dataloader = dict(
 # Background class id=0 is declared in dataset.background_cfg.
 eval_cfg = dict(
     ignore_index=255,
-    prob_thd=0.0,
+    prob_thd=0.1,
 )
 
 # -------------------------------------------------------------------------

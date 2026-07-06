@@ -19,10 +19,10 @@ class SemanticCriterion(nn.Module):
 
     Losses:
         1. mask BCE on final_logits
-           - all pixels participate
-           - ignore_index pixels are NOT removed
+           - present class pairs use valid and ignore pixels
+           - absent class pairs use valid pixels only
            - absent class pairs are weighted by bce_absent_class_weight
-           - valid/ignore pixels weighted independently
+           - ignore pixels suppress leakage only for present classes
 
         2. present-only Dice on final_logits
            - optional
@@ -265,17 +265,19 @@ class SemanticCriterion(nn.Module):
         eps: float,
     ) -> torch.Tensor:
         """
-        BCE over all pixels with per-pixel and per-pair weighting.
+        BCE over all image-class pairs with pair-dependent pixel masking.
 
-        Pixel-level weights:
-            valid pixels (label_map != ignore_index): valid_pixel_weight
-            ignore pixels (label_map == ignore_index): ignore_pixel_weight
+        For present image-class pairs:
+            valid pixels use valid_pixel_weight.
+            ignore pixels use ignore_pixel_weight.
+
+        For absent image-class pairs:
+            valid pixels use valid_pixel_weight.
+            ignore pixels are ignored with weight 0.
 
         Pair-level weights:
             present image-class pairs: 1.0
             absent image-class pairs:  absent_weight
-
-        ignore_index pixels are not removed; they are already target=0 for every class.
         """
         pixel_loss = F.binary_cross_entropy_with_logits(
             logits,
@@ -285,6 +287,7 @@ class SemanticCriterion(nn.Module):
 
         valid_pixel_weight = max(float(valid_pixel_weight), 0.0)
         ignore_pixel_weight = max(float(ignore_pixel_weight), 0.0)
+        absent_weight = max(float(absent_weight), 0.0)
 
         if valid_mask.dim() != 3:
             raise ValueError(
@@ -298,10 +301,43 @@ class SemanticCriterion(nn.Module):
                 f"got {tuple(valid_mask.shape)}."
             )
 
+        if presence_target.dim() != 2:
+            raise ValueError(
+                f"presence_target must be [B, C], got {tuple(presence_target.shape)}."
+            )
+
+        if tuple(presence_target.shape) != tuple(logits.shape[:2]):
+            raise ValueError(
+                "presence_target shape mismatch: "
+                f"expected {(logits.shape[0], logits.shape[1])}, "
+                f"got {tuple(presence_target.shape)}."
+            )
+
+        present_pair = presence_target > 0.5          # [B, C]
+        valid = valid_mask[:, None]                   # [B, 1, H, W]
+
+        valid_weight_map = torch.full_like(pixel_loss, valid_pixel_weight)
+        ignore_weight_map = torch.full_like(pixel_loss, ignore_pixel_weight)
+        zero_weight_map = torch.zeros_like(pixel_loss)
+
+        # present pair: valid -> valid_pixel_weight, ignore -> ignore_pixel_weight
+        present_pixel_weight = torch.where(
+            valid,
+            valid_weight_map,
+            ignore_weight_map,
+        )
+
+        # absent pair: valid -> valid_pixel_weight, ignore -> 0
+        absent_pixel_weight = torch.where(
+            valid,
+            valid_weight_map,
+            zero_weight_map,
+        )
+
         pixel_weight = torch.where(
-            valid_mask[:, None],
-            torch.full_like(pixel_loss, valid_pixel_weight),
-            torch.full_like(pixel_loss, ignore_pixel_weight),
+            present_pair[:, :, None, None],
+            present_pixel_weight,
+            absent_pixel_weight,
         )
 
         weighted_pixel_loss = pixel_loss * pixel_weight
@@ -309,10 +345,8 @@ class SemanticCriterion(nn.Module):
         pixel_weight_sum = pixel_weight.flatten(2).sum(dim=2).clamp_min(float(eps))
         pair_loss = weighted_pixel_loss.flatten(2).sum(dim=2) / pixel_weight_sum
 
-        absent_weight = max(float(absent_weight), 0.0)
-
         pair_weight = torch.where(
-            presence_target > 0.5,
+            present_pair,
             torch.ones_like(presence_target),
             torch.full_like(presence_target, absent_weight),
         )
