@@ -1,6 +1,6 @@
 # ovrs-sam3 项目说明文档
 
-更新时间：2026-07-05  
+更新时间：2026-07-08  
 目标分支：`master`
 
 ## 1. 项目定位
@@ -11,13 +11,15 @@
 
 ```text
 遥感图像 + 类别文本
-  → SAM3 提取 72×72 encoder feature
+  → SAM3 提取 72×72 encoder feature 和 SAM text tokens
   → RemoteCLIP 提取 36×36 dense image feature
   → CLIP 文本模板和图像特征计算类别 score map
-  → CLIP score 直接生成 256 通道 score_embed
-  → encoder refiner 在 36×36 上同时更新 feature 和 score_embed
+  → CLIP score 生成 256 通道 clip_score_embed
+  → SAM3 FPN 72×72 下采样到 36×36，注入 clip_score_embed 得到 score_embed_36
+  → SAM text tokens 通过 attention pooling 得到 sam_text_context
+  → encoder refiner 在 36×36 上同时更新 feature 和 score_embed（每层带 1+learnable 残差系数）
   → refined feature 上采样回 72×72
-  → 同时融合原始 encoder feature、refiner 上采样特征和 SAM3 FPN feature
+  → 融合原始 encoder feature 和 refiner 上采样特征
   → 写回 SAM3 encoder_hidden_states
   → 冻结的 SAM3 segmentation head 输出 final_logits
 ```
@@ -203,7 +205,7 @@ clip_score_maps [B, C, 32, 36, 36]
   → clip_score_embed_36 [B, C, 192, 36, 36]
 ```
 
-## 7. CLIP score embedding
+## 7. CLIP score embedding 与 SAM3 FPN 注入
 
 ```text
 clip_score_maps_36 [B, C, 32, 36, 36]
@@ -212,8 +214,21 @@ clip_score_maps_36 [B, C, 32, 36, 36]
   → clip_score_embed_36 [B, C, 256, 36, 36]
 ```
 
-CLIP score embedding 直接输出 256 通道，作为 `score_embed_36` 进入 refiner layers 参与更新。
-SAM FPN 不再进入 score_embed 路径，只在 refiner 输出端的 72×72 upsampling fusion 阶段参与融合。
+然后在进入 refiner layers 前注入 SAM3 FPN 纹理：
+
+```text
+sam_fpn_72 [B, 256, 72, 72]
+  → interpolate 到 36×36
+  → broadcast 到类别维度
+  → 与 clip_score_embed_36 在通道维拼接
+  → Conv(512→256) + GroupNorm + GELU → Conv(256→256) + GroupNorm + GELU
+  → fpn_score_delta_36 [B, C, 256, 36, 36]
+
+score_embed_36 = clip_score_embed_36 + (1.0 + score_fpn_res_scale) * fpn_score_delta_36
+```
+
+其中 `score_fpn_res_scale` 是 `nn.Parameter(torch.zeros(1))`，系数形式为 `1.0 + score_fpn_res_scale`。
+FPN fusion 最后一层卷积权重初始化为 0，因此初始时 FPN 分支输出为 0，行为接近旧模型。
 
 ## 9. Encoder refiner
 
@@ -222,11 +237,12 @@ SAM FPN 不再进入 score_embed 路径，只在 refiner 输出端的 72×72 ups
 输入包括：
 
 ```text
-encoder_features_72: [B, C, 256, 72, 72]
-clip_image_feat_map: [B, D_clip, 36, 36]
-sam_text_mean:       [B, C, 256]
-class_names:         List[str]
-sam_fpn_72:          [B, 256, 72, 72]
+encoder_features_72:  [B, C, 256, 72, 72]
+clip_image_feat_map:  [B, D_clip, 36, 36]
+sam_text_tokens:      [B, C, T, 256]
+sam_text_token_mask:  [B, C, T]
+class_names:          List[str]
+sam_fpn_72:           [B, 256, 72, 72]
 ```
 
 输出包括：
@@ -240,7 +256,21 @@ clip_score_maps_36:          [B, C,  32, 36, 36]
 template_clip_text:          [C, 32, D_clip]
 ```
 
-### 9.1 进入 refiner 前的尺度变换
+### 9.1 SAM text token attention pooling
+
+进入 refiner layers 之前，SAM text tokens 通过 `SAMTextAttentionPooling` 做一次轻量 attention pooling：
+
+```text
+sam_text_tokens [B, C, T, 256] + sam_text_token_mask [B, C, T]
+  → LayerNorm → Linear(256→1)
+  → softmax (masked)
+  → weighted sum
+  → sam_text_context [B, C, 256]
+```
+
+`sam_text_context` 在所有 refiner layers 之间共享，不在每层重复 pooling。
+
+### 9.2 进入 refiner 前的尺度变换
 
 SAM3 encoder feature 原始是 72×72：
 
@@ -250,38 +280,39 @@ encoder_features_72 [B, C, 256, 72, 72]
   → feature_36 [B, C, 256, 36, 36]
 ```
 
-`feature_36` 和 `score_embed_36` 会一起进入多个 `EncoderRefinerLayer`。
+`feature_36` 和 `score_embed_36`（已注入 SAM3 FPN）会一起进入多个 `EncoderRefinerLayer`。
 
-### 9.2 EncoderRefinerLayer 结构
+### 9.3 EncoderRefinerLayer 结构
 
 每一层 refiner 的顺序是：
 
 ```text
-ClassScoreAttention
-  → WindowScoreAttention regular
-  → WindowScoreAttention shifted
+ClassScoreAttention → residual(1+scale) → LayerNorm
+  → WindowScoreAttention regular → residual(1+scale) → LayerNorm
+  → WindowScoreAttention shifted → residual(1+scale) → LayerNorm
   → feature FFN + score FFN
   → output LayerNorm
 ```
 
-默认有 4 层。
+默认有 4 层。每层有自己独立的 `attn_feature_res_scale` 和 `attn_score_res_scale`（`nn.Parameter(torch.zeros(1))`），
+系数形式为 `1.0 + scale`，在该层三个 attention block 中共享。
 
-### 9.3 ClassScoreAttention
+### 9.4 ClassScoreAttention
 
 `ClassScoreAttention` 在每个空间位置上做类别之间的 attention。
 
 输入：
 
 ```text
-feature:      [B, C, 256, 36, 36]
-score_embed:  [B, C, 256, 36, 36]
-sam_text_mean:[B, C, 256]
+feature:           [B, C, 256, 36, 36]
+score_embed:       [B, C, 256, 36, 36]
+sam_text_context:  [B, C, 256]
 ```
 
 q/k 构造：
 
 ```text
-q/k = concat(feature, sam_text_mean, score_embed)
+q/k = concat(feature, sam_text_context, score_embed)
 ```
 
 拼接后通道数是：
@@ -293,7 +324,7 @@ q/k = concat(feature, sam_text_mean, score_embed)
 其中：
 
 - 第一个 256 来自图像 feature。
-- 第二个 256 来自 SAM3 text prompt mean。
+- 第二个 256 来自 SAM3 text context（由 attention pooling 得到）。
 - 第三个 256 来自 score embedding。
 
 value 分两路：
@@ -303,16 +334,12 @@ v_feature = feature
 v_score   = score_embed
 ```
 
-注意力权重只有一套，但会同时更新 feature 和 score_embed：
+注意力权重只有一套，但会同时更新 feature 和 score_embed。
 
-```text
-feature    = LayerNorm(feature + Dropout(feature_update))
-score_embed = LayerNorm(score_embed + Dropout(score_update))
-```
+ClassScoreAttention 只返回 `feature_update` 和 `score_update`，不做 residual 和 LayerNorm。
+residual 和 LayerNorm 由 `EncoderRefinerLayer` 在外部统一完成。
 
-这里没有额外的可学习残差系数，使用的是普通残差。
-
-### 9.4 WindowScoreAttention
+### 9.5 WindowScoreAttention
 
 `WindowScoreAttention` 在每个类别内部做局部窗口注意力。
 
@@ -338,7 +365,7 @@ window_size = 12
 shift_size = 6
 ```
 
-当前 q/k 构造：
+q/k 构造：
 
 ```text
 q/k = concat(feature, score_embed)
@@ -353,9 +380,7 @@ q/k = concat(feature, score_embed)
 其中：
 
 - 第一个 256 来自当前类别的 feature。
-- 第二个 256 来自当前类别的 score embedding（CLIP 生成，与 feature 联合更新）。
-
-SAM FPN 不在 score_embed 路径中，只在 refiner 输出端 upsampling fusion 阶段参与融合。
+- 第二个 256 来自当前类别的 score embedding。
 
 value 分两路：
 
@@ -364,16 +389,10 @@ v_feature = feature
 v_score   = score_embed
 ```
 
-输出更新：
+WindowScoreAttention 只返回 `feature_update` 和 `score_update`，不做 residual 和 LayerNorm。
+residual 和 LayerNorm 由 `EncoderRefinerLayer` 在外部统一完成。
 
-```text
-feature    = LayerNorm(feature + Dropout(feature_update))
-score_embed = LayerNorm(score_embed + Dropout(score_update))
-```
-
-这里同样使用普通残差，不使用可学习残差系数。
-
-### 9.5 相对位置偏置
+### 9.6 相对位置偏置
 
 每个 `WindowScoreAttention` 都维护一个可学习的相对位置偏置表：
 
@@ -419,7 +438,7 @@ attn = softmax(attn)
 
 ## 10. 36×36 到 72×72 上采样
 
-`EncoderFeatureUpsampler` 采用两阶段融合结构：
+`EncoderFeatureUpsampler` 采用两阶段融合结构（SAM FPN 不再参与）：
 
 ```text
 Stage A：72×72 空间细节融合
@@ -431,19 +450,15 @@ refiner_features_36 [B, C, 256, 36, 36]
 original_encoder_72 [B, C, 256, 72, 72]
   → reshape → orig_72 [B*C, 256, 72, 72]
 
-sam_fpn_72 [B, 256, 72, 72]
-  → broadcast to class dim
-  → fpn_72 [B*C, 256, 72, 72]
-
-cat([refiner_up_72, orig_72, fpn_72]) → [B*C, 768, 72, 72]
-  → Conv(768→256, 3×3) + GroupNorm + GELU
+cat([refiner_up_72, orig_72]) → [B*C, 512, 72, 72]
+  → Conv(512→256, 3×3) + GroupNorm + GELU
   → Conv(256→256, 3×3) + GroupNorm + GELU
   → local_fused_72 [B*C, 256, 72, 72]
 
 
-Stage B：再次融合原始 refiner attention 输出
+Stage B：再次融合原始 encoder feature
 
-cat([local_fused_72, refiner_up_72]) → [B*C, 512, 72, 72]
+cat([local_fused_72, orig_72]) → [B*C, 512, 72, 72]
   → 1×1 Conv(512→256)
   → refined_encoder_features_72 [B*C, 256, 72, 72]
   → reshape → [B, C, 256, 72, 72]
@@ -451,8 +466,8 @@ cat([local_fused_72, refiner_up_72]) → [B*C, 512, 72, 72]
 
 说明：
 
-- SAM FPN 72×72 特征在 Stage A 中和上采样后的 refiner feature 及原始 encoder feature 一起参与空间细节融合。
-- Stage B 将融合结果再和原始 refiner attention 输出（上采样版）拼接，做最终投影。
+- Stage A 将上采样后的 refiner feature 和原始 encoder feature 拼接做空间融合。
+- Stage B 将融合结果再和原始 encoder feature 拼接，做最终投影。
 - 输出的 `refined_encoder_features_72` 会写回 SAM3 的 `encoder_hidden_states` 图像 token 区域。
 
 ## 11. 写回 SAM3 并输出最终 logits
@@ -667,23 +682,35 @@ python -m py_compile models/encoder_refiner.py
 
 ## 18. 当前实现重点
 
-当前代码里，score_embed 来源是 CLIP-only 路径：
+当前代码里，score_embed 来源是 CLIP + SAM3 FPN 注入路径：
 
 ```text
 clip_score_maps → ClipScoreEmbedding → clip_score_embed_36 (256 ch)
-→ score_embed_36 直接进入 refiner layers
+→ SAM3 FPN 72 下采样到 36×36 并 broadcast 到类别维度
+→ 与 clip_score_embed_36 拼接后 conv 融合
+→ fpn_score_delta_36
+→ score_embed_36 = clip_score_embed_36 + (1.0 + score_fpn_res_scale) * fpn_score_delta_36
+→ score_embed_36 进入 refiner layers
 ```
 
-SAM FPN 不再进入 score_embed 路径。SAM FPN 只在 refiner 输出端的 72×72 upsampling fusion 阶段和上采样后的 refiner feature 及原始 encoder feature 一起参与融合。
+SAM3 text tokens 通过 attention pooling 得到 context 后再进入 refiner：
+
+```text
+sam_text_tokens [B, C, T, 256] + sam_text_token_mask [B, C, T]
+→ SAMTextAttentionPooling
+→ sam_text_context [B, C, 256]
+```
 
 Encoder refiner path:
     1. RemoteCLIP dense feature + prompt text features build clip_score_embed_36.
-    2. SAM3 encoder feature is downsampled to 36×36.
-    3. Refiner layers update encoder feature and score embedding jointly.
-    4. Refiner feature is upsampled to 72×72.
-    5. The upsampled refiner feature, original SAM3 encoder feature, and SAM3 FPN 72 are fused by conv layers.
-    6. The fused 72×72 feature is concatenated with the upsampled raw refiner feature and projected back to 256 channels.
-    7. The final 72×72 256-channel feature is written back to encoder_hidden_states and consumed by the SAM3 segmentation head.
+    2. SAM3 FPN 72 is downsampled to 36×36, fused with clip_score_embed_36 to form score_embed_36.
+    3. SAM3 encoder feature is downsampled to 36×36.
+    4. SAM text tokens are pooled to sam_text_context via attention pooling.
+    5. Refiner layers update encoder feature and score embedding jointly.
+    6. Refiner feature is upsampled to 72×72.
+    7. The upsampled refiner feature and original SAM3 encoder feature are fused by conv layers.
+    8. The fused 72×72 feature is concatenated with the original encoder feature and projected back to 256 channels.
+    9. The final 72×72 256-channel feature is written back to encoder_hidden_states and consumed by the SAM3 segmentation head.
 
 feature 和 score embedding 在 refiner 中是并行更新的：
 
@@ -702,18 +729,18 @@ v_score   = score_embed
 
 因此 attention 决定”看哪里”，feature 分支和 score 分支分别决定”更新什么内容”。
 
-当前残差更新是普通 Transformer 风格：
+当前残差更新带 per-layer learnable scale：
 
 ```text
-x = LayerNorm(x + Dropout(update))
+feature    = LayerNorm(feature + (1.0 + attn_feature_res_scale) * feature_update)
+score_embed = LayerNorm(score_embed + (1.0 + attn_score_res_scale) * score_update)
 ```
 
 其中：
 
-- `x` 可以是 feature，也可以是 score embedding。
-- `update` 表示 attention 或 FFN 产生的更新量。
-- `Dropout` 用于训练时随机丢弃部分更新，降低过拟合风险。
-- `LayerNorm` 用于稳定每一层输出的特征分布。
+- `attn_feature_res_scale` 和 `attn_score_res_scale` 初始为 0，初始行为与普通 residual 一致。
+- 每个 EncoderRefinerLayer 有自己独立的系数，在该层三个 attention block 中共享。
+- ClassScoreAttention 和 WindowScoreAttention 不再内部做 residual 和 LayerNorm，只返回 update。
+- LayerNorm 由 EncoderRefinerLayer 在外部完成。
 
-window attention 的 q/k 输入为 512 维（256+256），SAM FPN 不参与 attention 计算，
-只在输出端 upsampling fusion 阶段参与空间细节融合。
+window attention 的 q/k 输入为 512 维（256+256），SAM FPN 已在上游注入 score_embed。

@@ -50,12 +50,12 @@ class ClassScoreAttention(nn.Module):
     """
     Inter-class attention at each spatial position with dual value updates.
 
-    q/k = concat(feature, sam_text_mean, score_embed)  → 768 dims
+    q/k = concat(feature, sam_text_context, score_embed)  → 768 dims
     v_feature = feature
     v_score   = score_embed
 
     Attention happens across C classes at every spatial position.
-    Both feature and score_embed are updated via the same attention weights.
+    Returns feature_update and score_update (no residual, no LayerNorm).
     """
 
     def __init__(
@@ -86,8 +86,9 @@ class ClassScoreAttention(nn.Module):
         self.out_feature_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.out_score_proj = nn.Linear(self.hidden_dim, self.score_embed_dim)
 
-        self.feature_norm = nn.LayerNorm(self.hidden_dim)
-        self.score_norm = nn.LayerNorm(self.score_embed_dim)
+        self.qk_feature_norm = nn.LayerNorm(self.hidden_dim)
+        self.qk_text_norm = nn.LayerNorm(self.hidden_dim)
+        self.qk_score_norm = nn.LayerNorm(self.score_embed_dim)
 
         self.dropout = nn.Dropout(float(dropout))
 
@@ -95,17 +96,17 @@ class ClassScoreAttention(nn.Module):
         self,
         feature: torch.Tensor,
         score_embed: torch.Tensor,
-        sam_text_mean: torch.Tensor,
+        sam_text_context: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            feature:      [B, C, D, H, W]
-            score_embed:  [B, C, D_score, H, W]
-            sam_text_mean: [B, C, D]
+            feature:          [B, C, D, H, W]
+            score_embed:      [B, C, D_score, H, W]
+            sam_text_context: [B, C, D]
 
         Returns:
-            feature:      [B, C, D, H, W]
-            score_embed:  [B, C, D_score, H, W]
+            feature_update: [B, C, D, H, W]
+            score_update:   [B, C, D_score, H, W]
         """
         B, C, D, H, W = feature.shape
         D_score = self.score_embed_dim
@@ -115,10 +116,10 @@ class ClassScoreAttention(nn.Module):
                 f"score_embed must be [{B}, {C}, {D_score}, {H}, {W}], "
                 f"got {tuple(score_embed.shape)}"
             )
-        if tuple(sam_text_mean.shape) != (B, C, D):
+        if tuple(sam_text_context.shape) != (B, C, D):
             raise ValueError(
-                f"sam_text_mean must be [{B}, {C}, {D}], "
-                f"got {tuple(sam_text_mean.shape)}"
+                f"sam_text_context must be [{B}, {C}, {D}], "
+                f"got {tuple(sam_text_context.shape)}"
             )
 
         N = H * W
@@ -130,15 +131,18 @@ class ClassScoreAttention(nn.Module):
         # score_embed: [B, C, D_score, H, W] → [B*N, C, D_score]
         s_flat = score_embed.permute(0, 3, 4, 1, 2).reshape(B * N, C, D_score)
 
-        # Broadcast sam_text_mean to each spatial position.
+        # Broadcast sam_text_context to each spatial position.
         text_broadcast = (
-            sam_text_mean.to(device=f_flat.device, dtype=f_flat.dtype)[:, None]
+            sam_text_context.to(device=f_flat.device, dtype=f_flat.dtype)[:, None]
             .expand(B, N, C, D)
             .reshape(B * N, C, D)
         )
 
-        # Build q/k from concat(feature, text_mean, score_embed).
-        qk_input = torch.cat([f_flat, text_broadcast, s_flat], dim=-1)  # [B*N, C, 768]
+        # Build q/k from concat(norm(feature), norm(text), norm(score_embed)).
+        f_qk = self.qk_feature_norm(f_flat)
+        t_qk = self.qk_text_norm(text_broadcast)
+        s_qk = self.qk_score_norm(s_flat)
+        qk_input = torch.cat([f_qk, t_qk, s_qk], dim=-1)  # [B*N, C, 768]
 
         q = self.q_proj(qk_input)
         k = self.k_proj(qk_input)
@@ -158,21 +162,17 @@ class ClassScoreAttention(nn.Module):
         out_feat = torch.matmul(attn, v_feat)
         out_feat = out_feat.permute(0, 2, 1, 3).reshape(B * N, C, D)
         out_feat = self.out_feature_proj(out_feat)
-        out_feat = self.feature_norm(
-            f_flat + self.dropout(out_feat)
-        )
+        out_feat = self.dropout(out_feat)
 
         out_score = torch.matmul(attn, v_score)
         out_score = out_score.permute(0, 2, 1, 3).reshape(B * N, C, D)
         out_score = self.out_score_proj(out_score)
-        out_score = self.score_norm(
-            s_flat + self.dropout(out_score)
-        )
+        out_score = self.dropout(out_score)
 
-        feature_out = out_feat.reshape(B, H, W, C, D).permute(0, 3, 4, 1, 2).contiguous()
-        score_out = out_score.reshape(B, H, W, C, D_score).permute(0, 3, 4, 1, 2).contiguous()
+        feature_update = out_feat.reshape(B, H, W, C, D).permute(0, 3, 4, 1, 2).contiguous()
+        score_update = out_score.reshape(B, H, W, C, D_score).permute(0, 3, 4, 1, 2).contiguous()
 
-        return feature_out, score_out
+        return feature_update, score_update
 
 
 # ---------------------------------------------------------------------------
@@ -188,8 +188,7 @@ class WindowScoreAttention(nn.Module):
     v_feature = feature
     v_score   = score_embed
 
-    score_embed is CLIP-derived and updated jointly with feature.
-    SAM FPN is not fused into score_embed; it is used later in the output upsampling fusion stage.
+    Returns feature_update and score_update (no residual, no LayerNorm).
     Window size = 12, shift_size = 0 for regular, 6 for shifted.
     """
 
@@ -229,8 +228,8 @@ class WindowScoreAttention(nn.Module):
         self.out_feature_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.out_score_proj = nn.Linear(self.hidden_dim, self.score_embed_dim)
 
-        self.feature_norm = nn.LayerNorm(self.hidden_dim)
-        self.score_norm = nn.LayerNorm(self.score_embed_dim)
+        self.qk_feature_norm = nn.LayerNorm(self.hidden_dim)
+        self.qk_score_norm = nn.LayerNorm(self.score_embed_dim)
 
         self.dropout = nn.Dropout(float(dropout))
 
@@ -351,8 +350,8 @@ class WindowScoreAttention(nn.Module):
             score_embed: [B, C, D_score, H, W]
 
         Returns:
-            feature:     [B, C, D, H, W]
-            score_embed: [B, C, D_score, H, W]
+            feature_update: [B, C, D, H, W]
+            score_update:   [B, C, D_score, H, W]
         """
         B, C, D, H, W = feature.shape
         D_score = self.score_embed_dim
@@ -395,8 +394,10 @@ class WindowScoreAttention(nn.Module):
             dtype=feature.dtype,
         )
 
-        # q/k from concat(feature, score_embed).
-        qk_input = torch.cat([f_windows, s_windows], dim=-1)  # [num_win, N, 512]
+        # q/k from concat(norm(feature), norm(score_embed)).
+        f_qk = self.qk_feature_norm(f_windows)
+        s_qk = self.qk_score_norm(s_windows)
+        qk_input = torch.cat([f_qk, s_qk], dim=-1)  # [num_win, N, 512]
 
         q = self.q_proj(qk_input)
         k = self.k_proj(qk_input)
@@ -428,16 +429,12 @@ class WindowScoreAttention(nn.Module):
         out_feat = torch.matmul(attn, v_feat)
         out_feat = out_feat.permute(0, 2, 1, 3).reshape(num_win, N, D)
         out_feat = self.out_feature_proj(out_feat)
-        out_feat = self.feature_norm(
-            f_windows + self.dropout(out_feat)
-        )
+        out_feat = self.dropout(out_feat)
 
         out_score = torch.matmul(attn, v_score)
         out_score = out_score.permute(0, 2, 1, 3).reshape(num_win, N, D)
         out_score = self.out_score_proj(out_score)
-        out_score = self.score_norm(
-            s_windows + self.dropout(out_score)
-        )
+        out_score = self.dropout(out_score)
 
         out_feat = self._window_reverse(out_feat, bc, pad_h, pad_w)
         out_score = self._window_reverse(out_score, bc, pad_h, pad_w)
@@ -449,10 +446,10 @@ class WindowScoreAttention(nn.Module):
         out_feat = out_feat[:, :, :orig_h, :orig_w]
         out_score = out_score[:, :, :orig_h, :orig_w]
 
-        feature_out = out_feat.reshape(B, C, D, H, W).contiguous()
-        score_out = out_score.reshape(B, C, D_score, H, W).contiguous()
+        feature_update = out_feat.reshape(B, C, D, H, W).contiguous()
+        score_update = out_score.reshape(B, C, D_score, H, W).contiguous()
 
-        return feature_out, score_out
+        return feature_update, score_update
 
 
 # ---------------------------------------------------------------------------
@@ -465,9 +462,9 @@ class EncoderRefinerLayer(nn.Module):
     One refiner layer operating at 36×36.
 
     Sequence:
-        1. ClassScoreAttention (inter-class, updates both feature and score)
-        2. WindowScoreAttention regular  (window_size=12, shift=0)
-        3. WindowScoreAttention shifted  (window_size=12, shift=6)
+        1. ClassScoreAttention → residual with 1+learnable scale → LayerNorm
+        2. WindowScoreAttention regular  → residual with 1+learnable scale → LayerNorm
+        3. WindowScoreAttention shifted  → residual with 1+learnable scale → LayerNorm
         4. Per-token FFN on both feature and score
         5. Output LayerNorm
     """
@@ -507,6 +504,20 @@ class EncoderRefinerLayer(nn.Module):
             shift_size=shift_size,
             dropout=dropout,
         )
+
+        # Per-layer learnable attention residual scales (shared across three attention blocks).
+        self.attn_feature_res_scale = nn.Parameter(torch.zeros(1))
+        self.attn_score_res_scale = nn.Parameter(torch.zeros(1))
+
+        # LayerNorm after each attention block (residual applied at layer level).
+        self.class_attn_norm_feat = nn.LayerNorm(hidden_dim)
+        self.class_attn_norm_score = nn.LayerNorm(score_embed_dim)
+
+        self.window_regular_norm_feat = nn.LayerNorm(hidden_dim)
+        self.window_regular_norm_score = nn.LayerNorm(score_embed_dim)
+
+        self.window_shifted_norm_feat = nn.LayerNorm(hidden_dim)
+        self.window_shifted_norm_score = nn.LayerNorm(score_embed_dim)
 
         # Per-token FFN for feature.
         self.ffn_norm_feat = nn.LayerNorm(hidden_dim)
@@ -559,35 +570,65 @@ class EncoderRefinerLayer(nn.Module):
         self,
         feature_36: torch.Tensor,
         score_embed_36: torch.Tensor,
-        sam_text_mean: torch.Tensor,
+        sam_text_context: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            feature_36:      [B, C, 256, 36, 36]
-            score_embed_36:  [B, C, 256, 36, 36]
-            sam_text_mean:   [B, C, 256]
+            feature_36:       [B, C, 256, 36, 36]
+            score_embed_36:   [B, C, 256, 36, 36]
+            sam_text_context: [B, C, 256]
 
         Returns:
-            feature_36:      [B, C, 256, 36, 36]
-            score_embed_36:  [B, C, 256, 36, 36]
+            feature_36:       [B, C, 256, 36, 36]
+            score_embed_36:   [B, C, 256, 36, 36]
         """
+        feature_scale = 1.0 + self.attn_feature_res_scale
+        score_scale = 1.0 + self.attn_score_res_scale
+
         # Class attention.
-        feature_36, score_embed_36 = self.class_attn(
+        feature_update, score_update = self.class_attn(
             feature=feature_36,
             score_embed=score_embed_36,
-            sam_text_mean=sam_text_mean,
+            sam_text_context=sam_text_context,
+        )
+
+        feature_36 = self._apply_layer_norm_bcdhw(
+            feature_36 + feature_scale * feature_update,
+            self.class_attn_norm_feat,
+        )
+        score_embed_36 = self._apply_layer_norm_bcdhw(
+            score_embed_36 + score_scale * score_update,
+            self.class_attn_norm_score,
         )
 
         # Regular window attention.
-        feature_36, score_embed_36 = self.window_attn_regular(
+        feature_update, score_update = self.window_attn_regular(
             feature=feature_36,
             score_embed=score_embed_36,
         )
 
+        feature_36 = self._apply_layer_norm_bcdhw(
+            feature_36 + feature_scale * feature_update,
+            self.window_regular_norm_feat,
+        )
+        score_embed_36 = self._apply_layer_norm_bcdhw(
+            score_embed_36 + score_scale * score_update,
+            self.window_regular_norm_score,
+        )
+
         # Shifted window attention.
-        feature_36, score_embed_36 = self.window_attn_shifted(
+        feature_update, score_update = self.window_attn_shifted(
             feature=feature_36,
             score_embed=score_embed_36,
+        )
+
+        feature_36 = self._apply_layer_norm_bcdhw(
+            feature_36 + feature_scale * feature_update,
+            self.window_shifted_norm_feat,
+        )
+        score_embed_36 = self._apply_layer_norm_bcdhw(
+            score_embed_36 + score_scale * score_update,
+            self.window_shifted_norm_score,
         )
 
         # FFN.
