@@ -180,6 +180,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
         normalize_label_for_clip: bool = True,
         clip_score_conv_kernel: int = 7,
         use_checkpoint: bool = True,
+        text_prompt_batch_size: int = 64,
+        text_prompt_use_checkpoint: bool = True,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -202,6 +204,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
             clip_output_dim=int(clip_dim),
             score_embed_dim=int(score_embed_dim),
             conv_kernel=int(clip_score_conv_kernel),
+            text_prompt_batch_size=int(text_prompt_batch_size),
+            text_prompt_use_checkpoint=bool(text_prompt_use_checkpoint),
         )
 
         self.score_fpn_fusion = nn.Sequential(

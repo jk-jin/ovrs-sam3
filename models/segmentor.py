@@ -27,6 +27,12 @@ class SAM3Segmentor(nn.Module):
 
         core = self.core
 
+        # Clear RemoteCLIP text cache on every train/eval mode switch.
+        # In validation this ensures the first image re-encodes templates
+        # at current weights; subsequent images reuse the cache within the
+        # same validation pass.
+        core.clear_remoteclip_text_cache()
+
         # Frozen SAM3 modules must stay in eval mode even during training.
         core.backbone.eval()
         core.transformer.eval()

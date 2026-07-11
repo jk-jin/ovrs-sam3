@@ -36,6 +36,8 @@ class Sam3Image(torch.nn.Module):
         clip_text_encoder=None,
         openclip_prompt_templates: list[str] | None = None,
         normalize_label_for_clip: bool = True,
+        text_prompt_batch_size: int = 64,
+        text_prompt_use_checkpoint: bool = True,
         encoder_refiner_fusion_layers: int = 4,
         encoder_refiner_num_heads: int = 8,
         encoder_refiner_dropout: float = 0.1,
@@ -117,6 +119,8 @@ class Sam3Image(torch.nn.Module):
             normalize_label_for_clip=bool(normalize_label_for_clip),
             clip_score_conv_kernel=int(encoder_refiner_conv_kernel),
             use_checkpoint=bool(encoder_refiner_use_checkpoint),
+            text_prompt_batch_size=int(text_prompt_batch_size),
+            text_prompt_use_checkpoint=bool(text_prompt_use_checkpoint),
         )
 
         self.encoder_refiner_early_prompt_attention = bool(
@@ -147,6 +151,10 @@ class Sam3Image(torch.nn.Module):
         self._text_cache = None
         self._text_cache_key = None
         self._text_cache_device = None
+        self.clear_remoteclip_text_cache()
+
+    def clear_remoteclip_text_cache(self) -> None:
+        self.encoder_refiner.clip_score_embed.clear_text_cache()
 
     def prepare_text_cache(
         self,
@@ -268,7 +276,11 @@ class Sam3Image(torch.nn.Module):
             and self.clip_image_encoder.has_trainable_params()
         )
 
-        if image_encoder_trainable:
+        keep_image_graph = bool(
+            torch.is_grad_enabled() and image_encoder_trainable
+        )
+
+        if keep_image_graph:
             clip_feat_map = clip_feat_map.contiguous()
         else:
             clip_feat_map = clip_feat_map.detach().contiguous()

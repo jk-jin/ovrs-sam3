@@ -239,6 +239,18 @@ def _flip_image_batch(img_batch: torch.Tensor, flip_mode: str) -> torch.Tensor:
     raise ValueError(f"Unknown flip_mode: {flip_mode}")
 
 
+def _flip_raw_images(
+    raw_images: Optional[list[torch.Tensor]],
+    flip_mode: str,
+) -> Optional[list[torch.Tensor]]:
+    if raw_images is None:
+        return None
+    return [
+        _flip_image_batch(image, flip_mode)
+        for image in raw_images
+    ]
+
+
 def _deaugment_logits(logits: torch.Tensor, target_hw: tuple[int, int], flip_mode: str) -> torch.Tensor:
     if flip_mode == "h":
         logits = torch.flip(logits, dims=[-1])
@@ -266,6 +278,17 @@ def inference_with_tta(
     scales = [float(x) for x in tta_cfg.get("scales", [1.0])]
     flip_modes = list(tta_cfg.get("flip_modes", ["none"]))
     size_divisor = int(tta_cfg.get("size_divisor", 14))
+
+    unsupported_scales = [
+        scale for scale in scales
+        if abs(float(scale) - 1.0) > 1e-8
+    ]
+    if unsupported_scales:
+        raise ValueError(
+            "Current OVRS-SAM3 refiner requires fixed 1008×1008 SAM3 input "
+            "with 72×72 encoder and 36×36 refiner features. "
+            f"Only TTA scale=1.0 is supported, got {unsupported_scales}."
+        )
 
     base_img_batch = batch.img_batch
     target_hw = tuple(base_img_batch.shape[-2:])
@@ -295,6 +318,7 @@ def inference_with_tta(
         for flip_mode in flip_modes:
             aug_batch = copy.deepcopy(batch)
             aug_batch.img_batch = _flip_image_batch(resized_img_batch, flip_mode)
+            aug_batch.raw_images = _flip_raw_images(batch.raw_images, flip_mode)
 
             outputs = model(aug_batch)
             last_outputs = outputs

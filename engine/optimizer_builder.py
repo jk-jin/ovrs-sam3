@@ -77,6 +77,9 @@ class OptimizerBuilder:
                     if 'decay_mult' in rule:
                         group['weight_decay'] = base_wd * float(rule['decay_mult'])
 
+            if getattr(param, "_ovrs_disable_weight_decay", False):
+                group["weight_decay"] = 0.0
+
             params.append(group)
         return params
 
@@ -94,7 +97,7 @@ class OptimizerBuilder:
         # remove keys used only for param grouping
         optim_cfg.pop('paramwise_cfg', None)
         optimizer = optimizer_cls(param_groups, **optim_cfg)
-        return optimizer
+        return enforce_optimizer_param_group_invariants(optimizer)
 
     @classmethod
     def build_scheduler(cls, optimizer: torch.optim.Optimizer, cfg: ConfigDict):
@@ -135,3 +138,23 @@ def build_optimizer(model: torch.nn.Module, cfg: ConfigDict) -> torch.optim.Opti
 
 def build_scheduler(optimizer: torch.optim.Optimizer, cfg: ConfigDict):
     return OptimizerBuilder.build_scheduler(optimizer, cfg)
+
+
+def enforce_optimizer_param_group_invariants(
+    optimizer: torch.optim.Optimizer,
+) -> torch.optim.Optimizer:
+    """Re-apply hard constraints on optimizer param groups after load_state_dict.
+
+    When an optimizer is restored from checkpoint, load_state_dict() may
+    overwrite per-group hyperparameters (e.g. weight_decay).  This function
+    ensures that fused QKV parameters marked with _ovrs_disable_weight_decay
+    always have weight_decay=0.0, regardless of what the checkpoint contains.
+    """
+    for group in optimizer.param_groups:
+        params = list(group.get("params", []))
+        if any(
+            getattr(param, "_ovrs_disable_weight_decay", False)
+            for param in params
+        ):
+            group["weight_decay"] = 0.0
+    return optimizer

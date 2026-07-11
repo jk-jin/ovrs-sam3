@@ -328,6 +328,9 @@ class OpenCLIPTextEncoder(nn.Module):
 
         return base_text
 
+    def has_trainable_params(self) -> bool:
+        return any(p.requires_grad for p in self.parameters())
+
     def encode_prompt_templates(
         self,
         class_names: List[str],
@@ -335,6 +338,8 @@ class OpenCLIPTextEncoder(nn.Module):
         device: Optional[torch.device] = None,
         normalize_label: bool = True,
         normalize: bool = False,
+        prompt_batch_size: int = 64,
+        use_checkpoint: bool = True,
     ) -> torch.Tensor:
         """
         Args:
@@ -342,6 +347,8 @@ class OpenCLIPTextEncoder(nn.Module):
             templates: prompt 模板列表，长度为 K
             normalize_label: 是否把类别名里的 '_'、'-' 替换成空格
             normalize: 是否对投影后的文本向量做 L2 normalize
+            prompt_batch_size: 一次送入文本 Transformer 的扁平化 prompt 数量
+            use_checkpoint: 文本编码器可训练时是否使用 activation checkpoint
 
         Returns:
             pooled: [C, K, output_dim]
@@ -369,17 +376,40 @@ class OpenCLIPTextEncoder(nn.Module):
             for tpl in templates:
                 flat_texts.append(tpl.format(name))
 
-        _, pooled, _ = self.encode_text(
-            text=flat_texts,
-            device=device,
-            output_mode="pooled",
-            normalize=normalize,
-        )
-
         num_classes = len(class_names)
         num_templates = len(templates)
 
-        pooled = pooled.view(num_classes, num_templates, self.output_dim)
+        tokenized = self.tokenizer(flat_texts, context_length=self.context_length)
+        if device is not None:
+            tokenized = tokenized.to(device)
+
+        track_grad = torch.is_grad_enabled() and self.has_trainable_params()
+
+        def encode_chunk(token_chunk: torch.Tensor) -> torch.Tensor:
+            return self.encode_tokenized(
+                tokenized=token_chunk,
+                normalize=normalize,
+                detach_output=False,
+            )
+
+        outputs: list[torch.Tensor] = []
+        for token_chunk in tokenized.split(prompt_batch_size, dim=0):
+            if track_grad and use_checkpoint:
+                chunk_output = checkpoint(
+                    encode_chunk,
+                    token_chunk,
+                    use_reentrant=False,
+                )
+            elif track_grad:
+                chunk_output = encode_chunk(token_chunk)
+            else:
+                with torch.no_grad():
+                    chunk_output = encode_chunk(token_chunk)
+                chunk_output = chunk_output.detach()
+            outputs.append(chunk_output)
+
+        pooled = torch.cat(outputs, dim=0)
+        pooled = pooled.reshape(num_classes, num_templates, self.output_dim)
         return pooled
 
     def forward(

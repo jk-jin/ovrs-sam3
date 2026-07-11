@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 import torch
 
 from ..config_dataclasses import CheckpointManagerConfig
+from .optimizer_builder import enforce_optimizer_param_group_invariants
 
 class CheckpointManager:
     def __init__(self, cfg: CheckpointManagerConfig):
@@ -185,6 +186,7 @@ class CheckpointManager:
 
         if optimizer is not None and ckpt.get("optimizer") is not None:
             optimizer.load_state_dict(ckpt["optimizer"])
+            enforce_optimizer_param_group_invariants(optimizer)
 
         if scaler is not None and ckpt.get("scaler") is not None:
             scaler.load_state_dict(ckpt["scaler"])

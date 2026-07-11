@@ -1,47 +1,101 @@
-# ovrs-sam3 项目说明文档
+# OVRS-SAM3 设计与实现说明
 
-更新时间：2026-07-08  
+更新时间：2026-07-11
 目标分支：`master`
+项目仓库：`jk-jin/ovrs-sam3`
+任务状态：当前只实现开放词汇语义分割；hybrid模式尚未实现
 
-## 1. 项目定位
+> 本文描述的是当前 `master` 分支上的实际实现。后续修改模型时，应同步更新本文，避免文档再次落后于实现。
 
-`ovrs-sam3` 是一个面向遥感图像开放词汇语义分割的模型框架。项目把 SAM3 的图像编码能力、SAM3 的 mask 预测能力和 RemoteCLIP 的图文对齐能力结合起来，用一个可训练的 encoder refiner 对类别相关的图像特征和 score embedding 进行融合更新，最后仍然通过冻结的 SAM3 segmentation head 输出每个类别的 mask logits。
+## 1. 给AI的快速阅读入口
 
-当前主线设计可以概括为：
+如果需要在最短时间内理解本项目，请先记住下面五点：
 
-```text
-遥感图像 + 类别文本
-  → SAM3 提取 72×72 encoder feature 和 SAM text tokens
-  → RemoteCLIP 提取 36×36 dense image feature
-  → CLIP 文本模板和图像特征计算类别 score map
-  → CLIP score 生成 256 通道 clip_score_embed
-  → SAM3 FPN 72×72 下采样到 36×36，注入 clip_score_embed 得到 score_embed_36
-  → SAM text tokens 通过 masked mean 得到 sam_text_mean
-  → encoder refiner 在 36×36 上同时更新 feature 和 score_embed（每层带 1+learnable 残差系数）
-  → refined feature 上采样回 72×72
-  → 融合原始 encoder feature 和 refiner 上采样特征
-  → 写回 SAM3 encoder_hidden_states
-  → 冻结的 SAM3 segmentation head 输出 final_logits
-```
+1. 项目目标是遥感图像开放词汇语义分割：输入图像和一组类别名称，输出每个像素的类别。
+2. SAM3主体负责生成图像特征、SAM文本特征和最终mask logits；SAM3主体在训练中冻结。
+3. RemoteCLIP负责建立类别文本与局部图像区域的对应关系；默认只微调其注意力Q/V和位置嵌入。
+4. 真正的核心可训练模块是`ClassConditionedEncoderRefiner`：它在36×36尺度上联合更新SAM3图像feature和类别score embedding。
+5. 更新后的feature写回SAM3的`encoder_hidden_states`，仍由冻结的SAM3 segmentation head生成最终分割结果。
 
-最终预测方式是：
+建议继续按以下顺序阅读代码：
 
 ```text
-raw_final_score_map = sigmoid(final_logits)
-final_pred = raw_final_score_map.argmax(dim=1)
+configs/ovrs_sam3_isaid_loveda_base.py
+  → model_builder.py
+  → models/sam3_image.py
+  → models/openclip_image_encoder.py
+  → models/openclip_text_encoder.py
+  → models/score_embeddings.py
+  → models/encoder_refiner.py
+  → models/encoder_refiner_attention.py
+  → losses/semantic_criterion.py
+  → data/dataset.py
+  → engine/evaluator.py
 ```
 
-其中：
+## 2. 项目定位
 
-- `final_logits` 表示模型输出的每类 mask logits，形状是 `[B, C, H_out, W_out]`。
-- `sigmoid` 表示把 logits 转成 0 到 1 之间的类别得分。
-- `raw_final_score_map` 表示每个像素属于每个类别的分数图。
-- `argmax(dim=1)` 表示在类别维度上取分数最高的类别。
-- `final_pred` 表示最终语义分割类别图，形状是 `[B, H_out, W_out]`。
+`ovrs-sam3`把三个能力组合在一起：
 
-## 2. 主入口和配置
+* SAM3的遥感图像编码能力。
+* SAM3基于文本prompt生成mask的能力。
+* RemoteCLIP的遥感图文对齐能力。
 
-### 2.1 训练入口
+SAM3原生encoder feature具有较强的图像结构信息，但不一定能直接形成适合开放类别语义分割的类别响应。RemoteCLIP能判断局部图像区域与类别文本的相似程度，但其36×36 dense feature不直接替代SAM3特征。
+
+本项目的做法是：先用RemoteCLIP生成类别相关的score embedding，再让encoder refiner把它与SAM3 encoder feature联合更新，最后把更新后的SAM3 feature交回原有segmentation head解码。
+
+当前主流程为：
+
+```text
+遥感图像 + 当前数据集的类别名称
+  → 冻结的SAM3图像backbone提取FPN特征
+  → 冻结的SAM3文本与transformer encoder生成72×72类别相关feature和SAM文本token
+  → RemoteCLIP图像分支生成36×36 dense image feature
+  → RemoteCLIP文本分支用32个模板生成类别文本特征
+  → 文本特征与dense image feature计算32张类别相似度图
+  → 两层卷积把32通道相似度图编码成256通道clip_score_embed_36
+  → SAM3 FPN下采样到36×36并注入clip_score_embed_36
+  → encoder refiner联合更新feature_36与score_embed_36
+  → refined feature上采样并与原始72×72 encoder feature融合
+  → 写回SAM3 encoder_hidden_states的图像token区域
+  → 冻结的SAM3 segmentation head输出final_logits
+```
+
+## 3. 关键符号与张量约定
+
+| 符号             | 含义                                       |
+| -------------- | ---------------------------------------- |
+| `B`            | batch size，一次输入的图像数量。                    |
+| `C`            | 当前前向传播使用的类别数量。背景被排除时，它可能少于评估类别数。         |
+| `K`            | 每个类别的RemoteCLIP文本模板数量，当前固定为32。           |
+| `T`            | SAM3文本prompt的token数量。                    |
+| `D`            | SAM3 hidden dimension，当前固定为256。          |
+| `D_clip`       | RemoteCLIP图文对齐空间维度，ViT-L/14当前为768。       |
+| `D_native`     | RemoteCLIP ViT投影前的原生通道数，ViT-L/14通常为1024。 |
+| `D_score`      | score embedding通道数，当前固定为256。             |
+| `H_out, W_out` | segmentation head最终输出的空间尺寸。              |
+| `L_refiner`    | encoder refiner层数，默认4。                   |
+| `ws`           | window attention窗口边长，默认12。               |
+| `shift`        | shifted window attention平移距离，默认6。        |
+
+主要张量形状：
+
+| 张量                            | 形状                     | 含义                                          |
+| ----------------------------- | ---------------------- | ------------------------------------------- |
+| `encoder_features_72`         | `[B, C, 256, 72, 72]`  | SAM3 transformer encoder产生的原始类别相关图像feature。 |
+| `sam_fpn_72`                  | `[B, 256, 72, 72]`     | SAM3 backbone FPN的72×72纹理feature。           |
+| `sam_text_mean`               | `[B, C, 256]`          | SAM3文本token经过masked mean后的类别向量。             |
+| `remoteclip_feat_map`         | `[B, 768, 36, 36]`     | RemoteCLIP dense image feature。             |
+| `template_clip_text`          | `[C, 32, 768]`         | 每个类别、每个模板的RemoteCLIP文本feature。              |
+| `clip_score_maps_36`          | `[B, C, 32, 36, 36]`   | 32个模板分别产生的局部图文相似度图。                         |
+| `clip_score_embed_36`         | `[B, C, 256, 36, 36]`  | 相似度图经过卷积编码后的初始score embedding。              |
+| `score_embed_36`              | `[B, C, 256, 36, 36]`  | 注入SAM3 FPN并经过refiner更新后的score embedding。    |
+| `refiner_features_36`         | `[B, C, 256, 36, 36]`  | refiner最终输出的图像feature。                      |
+| `refined_encoder_features_72` | `[B, C, 256, 72, 72]`  | 上采样并融合后的SAM3 encoder feature。               |
+| `final_logits`                | `[B, C, H_out, W_out]` | 每个类别的最终mask logits。                         |
+
+## 4. 训练入口与主配置
 
 短实验：
 
@@ -55,606 +109,776 @@ python tools/train.py configs/ovrs_sam3_isaid_loveda_exp.py
 python tools/train.py configs/ovrs_sam3_isaid_loveda_full.py
 ```
 
-### 2.2 主配置文件
+配置关系：
 
 ```text
-configs/
-  ovrs_sam3_isaid_loveda_base.py  # 基础配置
-  ovrs_sam3_isaid_loveda_exp.py   # 短实验配置
-  ovrs_sam3_isaid_loveda_full.py  # 完整训练配置
+ovrs_sam3_isaid_loveda_base.py
+  ├─ ovrs_sam3_isaid_loveda_exp.py   # 4000 iter短实验和sweep
+  └─ ovrs_sam3_isaid_loveda_full.py  # 20000 iter完整训练
 ```
 
-`base.py` 负责定义模型、数据、优化器、默认训练参数。  
-`exp.py` 继承 `base.py`，用于短实验和 sweep。  
-`full.py` 继承 `base.py`，用于完整训练。
-
-## 3. 关键符号说明
-
-| 符号 | 含义 |
-|---|---|
-| `B` | batch size，也就是一次输入的图像数量。 |
-| `C` | 类别数量，也就是当前 batch 中参与开放词汇分割的类别数。 |
-| `K` | 每个类别使用的 prompt 模板数量，当前固定为 32。 |
-| `D` | SAM3 hidden dimension，当前是 256。 |
-| `D_clip` | RemoteCLIP 图文对齐空间维度，ViT-L/14 下通常是 768。 |
-| `D_native` | RemoteCLIP ViT 中间层原生通道数，ViT-L/14 下通常是 1024。 |
-| `D_score` | score embedding 通道数，当前是 256。 |
-| `H, W` | SAM3 encoder feature 的空间分辨率，当前主流程中是 72×72。 |
-| `Hr, Wr` | refiner 主工作分辨率，当前是 36×36。 |
-| `Hc, Wc` | RemoteCLIP dense patch grid，当前是 36×36。 |
-| `L` | refiner layer 数量，当前默认是 4。 |
-| `ws` | window attention 的窗口边长，当前默认是 12。 |
-| `shift` | shifted window attention 的平移距离，当前默认是 6。 |
-
-## 4. 冻结模块和可训练模块
-
-### 4.1 冻结模块
-
-训练时以下模块保持冻结，并强制处于 eval mode：
+当前基础设置：
 
 ```text
-SAM3 backbone
-SAM3 transformer encoder
-SAM3 geometry encoder
-SAM3 segmentation_head
-RemoteCLIP image encoder
-RemoteCLIP text encoder
+SAM3输入尺寸：1008×1008
+RemoteCLIP输入尺寸：504×504
+prompt_chunk_size：8
+refiner层数：4
+refiner尺度：36×36
+encoder尺度：72×72
+attention heads：8
+window_size：12
+shift_size：6
+score_embed_dim：256
 ```
 
-这些模块不直接更新参数，主要提供稳定的图像特征、文本特征和 mask 解码能力。
+训练集默认继承iSAID配置，验证集为LoveDA。
 
-### 4.2 可训练模块
+## 5. 冻结、微调与运行模式
 
-当前默认训练对象是：
+### 5.1 始终冻结的SAM3模块
+
+训练中以下模块参数保持冻结，并强制处于`eval()`：
 
 ```text
-core.encoder_refiner
+core.backbone
+core.transformer
+core.geometry_encoder
+core.segmentation_head
 ```
 
-它内部主要包括：
+这些模块的前向主要运行在`torch.no_grad()`中。`eval()`用于稳定Dropout等行为；`requires_grad=False`和`no_grad()`负责真正冻结参数与节省显存。
 
-```text
-ClipScoreEmbedding 中的 score_conv
-EncoderRefinerLayer 中的 class attention
-EncoderRefinerLayer 中的 window attention
-EncoderRefinerLayer 中的 FFN
-EncoderFeatureUpsampler 中的融合卷积
-```
+### 5.2 始终训练的encoder refiner
 
-默认 freeze 配置如下：
+基础配置先冻结整个模型，再解冻：
 
 ```python
-freeze_cfg=dict(
-    train_adapters_only=True,
-    trainable_modules=["core.encoder_refiner"],
-    frozen_modules=[],
-    openclip_text_finetune="frozen",
-    openclip_image_finetune="frozen",
-)
+trainable_modules=["core.encoder_refiner"]
 ```
 
-## 5. RemoteCLIP 图像分支
+它包含：
 
-RemoteCLIP image encoder 用于生成 36×36 的 dense image feature。
+* `ClipScoreEmbedding.score_conv`。
+* SAM3 FPN与score embedding的融合卷积。
+* ClassScoreAttention。
+* regular和shifted WindowScoreAttention。
+* feature与score两路FFN和LayerNorm。
+* 36×36到72×72的上采样融合模块。
+* 各层可学习残差系数。
 
-处理流程：
+### 5.3 RemoteCLIP微调模式
+
+文本和图像分支分别支持：
+
+| 模式            | 行为                           |
+| ------------- | ---------------------------- |
+| `frozen`      | 全部参数冻结，不为该分支建立训练计算图。         |
+| `attention`   | 训练注意力Q/V与位置嵌入，K保持冻结。         |
+| `transformer` | 训练Transformer与位置嵌入，其他外围参数冻结。 |
+| `full`        | 训练整个对应编码器。                   |
+
+当前默认配置：
+
+```python
+openclip_text_finetune="attention"
+openclip_image_finetune="attention"
+```
+
+RemoteCLIP即使部分可训练也保持`eval()`，目的是关闭Dropout和patch dropout的随机行为。这不等于冻结；只要参数`requires_grad=True`、前向建立计算图且输出没有detach，参数仍能正常收到梯度。
+
+### 5.4 Q/V only的严格含义
+
+OpenCLIP的多头注意力常把Q、K、V权重存放在同一个`in_proj_weight`中。项目对融合QKV参数注册梯度mask：
 
 ```text
-raw image
-  → resize 到 504×504
-  → CLIP mean/std normalize
-  → ViT patch embedding
-  → 得到 36×36 patch grid
-  → 加入 class token
-  → positional embedding 插值到 36×36
-  → 前 L-1 个 transformer block 正常 forward
-  → 最后一个 block 使用 dense value-branch forward
-  → ln_post + projection
-  → 去掉 class token
-  → reshape 成 remoteclip_feat_map
+Q区域：保留梯度
+K区域：梯度清零
+V区域：保留梯度
 ```
 
-输出：
+仅把K梯度清零仍不足以严格冻结K，因为AdamW可能对整个融合参数应用weight decay。修复后的实现会给受Q/V mask保护的参数添加运行时标记，`OptimizerBuilder`据此把整个融合参数的weight decay强制设为0。
+
+这样可以保证：
+
+* K没有反向传播梯度。
+* K不会被AdamW权重衰减修改。
+* Q/V仍可通过梯度更新。
+* 代价是同一个融合参数中的Q/V也不使用weight decay。
+
+RemoteCLIP最后一个图像block使用dense value-branch，因此该block实际只消费V分支；它的Q梯度可能合法地为0。前面的标准attention block仍会使用Q和V。
+
+### 5.5 学习率
+
+基础AdamW学习率为`1e-4`。参数组设置为：
 
 ```text
-remoteclip_feat_map: [B, D_clip, 36, 36]
-clip_mid_features: List[[B, D_native, 36, 36]]
+encoder refiner学习率倍率：1.0，实际初始学习率1e-4
+RemoteCLIP text学习率倍率：0.01，实际初始学习率1e-6
+RemoteCLIP image学习率倍率：0.01，实际初始学习率1e-6
 ```
 
-说明：
+这里`1e-6`来自`1e-4 × 0.01`：`1e-4`是基础学习率，`0.01`是RemoteCLIP参数组倍率。
 
-- RemoteCLIP 输入固定为 504×504。
-- ViT-L/14 的 patch size 是 14，因此 504 / 14 = 36，天然得到 36×36 patch grid。
-- positional embedding 会使用 bicubic 插值到 36×36。
-- 最后一个 block 不使用标准 QK attention 聚合，而是提取 value branch，并注入 class token 信息，得到更密集的局部图像特征。
-- `clip_mid_features` 当前会提取，但主路径没有直接使用。
+## 6. 三种不同缓存必须区分
 
-## 6. RemoteCLIP 文本分支和 CLIP score embedding
+项目里存在三种含义不同的缓存。
 
-每个类别会使用 32 个固定 prompt templates 生成文本特征。
+### 6.1 SAM3类别文本缓存
 
-流程：
+`Sam3Image.prepare_text_cache()`缓存冻结的SAM3文本backbone输出：
 
 ```text
-class_names × 32 templates
-  → RemoteCLIP text encoder
-  → template_clip_text: [C, 32, D_clip]
+language_features
+language_mask
+language_embeds（存在时）
 ```
 
-然后用文本特征和 RemoteCLIP dense image feature 做点积：
+SAM3文本backbone始终冻结，因此该缓存可以跨batch复用。
+
+### 6.2 RemoteCLIP模板文本缓存
+
+`ClipScoreEmbedding`缓存32模板对应的RemoteCLIP文本feature，但只允许在RemoteCLIP文本编码器完全冻结时使用。
+
+| 文本模式          | 是否允许跨step缓存模板feature |
+| ------------- | -------------------- |
+| `frozen`      | 允许，缓存内容detach。       |
+| `attention`   | 不允许，每个step重新编码。      |
+| `transformer` | 不允许，每个step重新编码。      |
+| `full`        | 不允许，每个step重新编码。      |
+
+原因是可训练文本参数在optimizer step后会变化，旧模板feature会过期；复用带计算图的旧feature还会造成错误的反向传播。
+
+验证阶段处于外层`torch.no_grad()`，因此不建立梯度图。但只要文本编码器属于可训练模式，仍不启用长期模板缓存，以免训练恢复后读到旧参数产生的结果。
+
+### 6.3 单次前向的encoder refiner cache
+
+`build_encoder_refiner_cache()`为当前batch收集：
 
 ```text
-template_clip_text × remoteclip_feat_map
-  → clip_score_maps: [B, C, 32, 36, 36]
+SAM3 encoder feature chunks
+prompt与prompt mask
+SAM3 FPN
+RemoteCLIP dense image feature
+SAM text mean
+类别名称和chunk信息
 ```
 
-其中：
+该cache只服务同一次模型前向，不是跨训练step的特征缓存。RemoteCLIP图像分支可训练时，cache中的主`clip_image_feat_map`必须保留计算图。
 
-- `B` 表示图像数量。
-- `C` 表示类别数量。
-- `32` 表示每个类别的 prompt 模板数量。
-- `36×36` 表示 RemoteCLIP 图像特征的空间网格。
-- `clip_score_maps` 表示每个类别、每个模板在每个位置上的图文相似度。
+## 7. SAM3分支与类别chunk
 
-随后通过两层卷积生成 CLIP score embedding：
+### 7.1 SAM3图像backbone
 
-```text
-clip_score_maps [B, C, 32, 36, 36]
-  → Conv(32→192, 7×7) + GroupNorm + GELU
-  → Conv(192→192, 3×3) + GroupNorm + GELU
-  → clip_score_embed_36 [B, C, 192, 36, 36]
-```
+输入的标准化图像经过冻结的SAM3图像backbone，得到FPN特征和位置编码。主流程保存`backbone_fpn`供encoder refiner和segmentation head使用。
 
-## 7. CLIP score embedding 与 SAM3 FPN 注入
+### 7.2 类别文本与prompt chunk
 
-```text
-clip_score_maps_36 [B, C, 32, 36, 36]
-  → Conv(32→256, 7×7) + GroupNorm + GELU
-  → Conv(256→256, 3×3) + GroupNorm + GELU
-  → clip_score_embed_36 [B, C, 256, 36, 36]
-```
+同一batch中的所有图像共享相同的类别名称及顺序。为了控制SAM3 encoder和segmentation head的显存，占用类别维度按`prompt_chunk_size`切分，当前默认每个chunk包含8个类别。
 
-然后在进入 refiner layers 前注入 SAM3 FPN 纹理：
+对于每个类别chunk：
 
-```text
-sam_fpn_72 [B, 256, 72, 72]
-  → interpolate 到 36×36
-  → broadcast 到类别维度
-  → 与 clip_score_embed_36 在通道维拼接
-  → Conv(512→256) + GroupNorm + GELU → Conv(256→256) + GroupNorm + GELU
-  → fpn_score_delta_36 [B, C, 256, 36, 36]
+1. 从SAM3文本缓存切出当前类别的文本feature。
+2. 按`B × C_chunk`扩展语义prompt对。
+3. 运行冻结的SAM3 grounding encoder。
+4. 提取72×72图像token feature。
+5. 提取SAM文本token并计算`sam_text_mean`。
 
-score_embed_36 = clip_score_embed_36 + (1.0 + score_fpn_res_scale) * fpn_score_delta_36
-```
+所有chunk最终按原始类别顺序拼接，必须完整覆盖`0 ... C-1`，不允许缺失、重复或乱序。
 
-其中 `score_fpn_res_scale` 是 `nn.Parameter(torch.zeros(1))`，系数形式为 `1.0 + score_fpn_res_scale`。
-FPN fusion 最后一层卷积权重初始化为 0，因此初始时 FPN 分支输出为 0，行为接近旧模型。
-
-## 9. Encoder refiner
-
-`ClassConditionedEncoderRefiner` 是项目当前最核心的可训练模块。
-
-输入包括：
-
-```text
-encoder_features_72:  [B, C, 256, 72, 72]
-clip_image_feat_map:  [B, D_clip, 36, 36]
-sam_text_mean:        [B, C, 256]
-class_names:          List[str]
-sam_fpn_72:           [B, 256, 72, 72]
-```
-
-输出包括：
-
-```text
-refined_encoder_features_72: [B, C, 256, 72, 72]
-refiner_features_36:         [B, C, 256, 36, 36]
-score_embed_36:              [B, C, 256, 36, 36]
-clip_score_embed_36:         [B, C, 256, 36, 36]
-clip_score_maps_36:          [B, C,  32, 36, 36]
-template_clip_text:          [C, 32, D_clip]
-```
-
-### 9.1 SAM text token masked mean
-
-进入 refiner layers 之前，SAM text tokens 通过 masked mean 简化为单一的 per-class 向量：
-
-```text
-prompt_tokens [T, B*C, 256]
-prompt_mask   [B*C, T]
-  → valid = ~prompt_mask
-  → masked mean over T
-  → sam_text_mean [B, C, 256]
-```
-
-`sam_text_mean` 在所有 refiner layers 之间共享。
-
-### 9.2 进入 refiner 前的尺度变换
-
-SAM3 encoder feature 原始是 72×72：
-
-```text
-encoder_features_72 [B, C, 256, 72, 72]
-  → bilinear downsample
-  → feature_36 [B, C, 256, 36, 36]
-```
-
-`feature_36` 和 `score_embed_36`（已注入 SAM3 FPN）会一起进入多个 `EncoderRefinerLayer`。
-
-### 9.3 EncoderRefinerLayer 结构
-
-每一层 refiner 的顺序是：
-
-```text
-ClassScoreAttention → residual(1+scale) → LayerNorm
-  → WindowScoreAttention regular → residual(1+scale) → LayerNorm
-  → WindowScoreAttention shifted → residual(1+scale) → LayerNorm
-  → feature FFN + score FFN
-  → output LayerNorm
-```
-
-默认有 4 层。每层有自己独立的 `attn_feature_res_scale` 和 `attn_score_res_scale`（`nn.Parameter(torch.zeros(1))`），
-系数形式为 `1.0 + scale`，在该层三个 attention block 中共享。
-
-### 9.4 ClassScoreAttention
-
-`ClassScoreAttention` 在每个空间位置上做类别之间的 attention。
+### 7.3 SAM文本masked mean
 
 输入：
 
 ```text
-feature:           [B, C, 256, 36, 36]
-score_embed:       [B, C, 256, 36, 36]
-sam_text_mean:  [B, C, 256]
+prompt_tokens [T, B*C, 256]
+prompt_mask   [B*C, T]
 ```
 
-q/k 构造：
+处理：
 
 ```text
-q/k = concat(norm(feature), norm(sam_text_mean), norm(score_embed))
+valid = logical_not(prompt_mask)
+sum_valid_tokens / valid_token_count
+  → sam_text_mean [B, C, 256]
 ```
 
-拼接后通道数是：
+`T`表示文本token数量，`B*C`表示每张图像与每个类别组成的prompt对数量。padding token不参与均值；分母最小限制为1，避免空prompt导致除零。
+
+## 8. RemoteCLIP图像分支
+
+`OpenCLIPImageEncoder`生成36×36 dense image feature。
 
 ```text
-256 + 256 + 256 = 768
+raw image
+  → resize到504×504
+  → RemoteCLIP mean/std normalize
+  → ViT-L/14 patch embedding
+  → 36×36 patch grid
+  → 加入class token
+  → positional embedding bicubic插值到36×36
+  → 前N-1个Transformer block正常forward
+  → 最后一个block执行dense value-branch forward
+  → ln_post与原始visual projection
+  → 去掉class token
+  → remoteclip_feat_map [B, 768, 36, 36]
 ```
 
-其中：
+504除以patch size 14得到36，因此RemoteCLIP输入被固定为504×504。
 
-- 第一个 256 来自图像 feature。
-- 第二个 256 来自 SAM3 text mean（由 masked mean 得到）。
-- 第三个 256 来自 score embedding。
+最后一个block不执行标准QK注意力聚合，而是：
 
-value 分两路：
+1. 计算融合QKV投影。
+2. 只提取V分支。
+3. 经过attention output projection。
+4. 向所有token注入class token信息。
+5. 经过该block的MLP残差。
+
+输出还包括指定中间层的：
 
 ```text
-v_feature = feature
-v_score   = score_embed
+clip_mid_features: List[[B, D_native, 36, 36]]
 ```
 
-注意力权重只有一套，但会同时更新 feature 和 score_embed。
+这些中间层feature当前只用于debug，不进入主模型，因此会detach。主`remoteclip_feat_map`在图像编码器可训练时不会detach。
 
-ClassScoreAttention 只返回 `feature_update` 和 `score_update`，不做 residual 和 LayerNorm。
-residual 和 LayerNorm 由 `EncoderRefinerLayer` 在外部统一完成。
+## 9. RemoteCLIP文本分支
 
-### 9.5 WindowScoreAttention
+### 9.1 32个固定模板
 
-`WindowScoreAttention` 在每个类别内部做局部窗口注意力。
-
-默认参数：
+每个类别使用配置中的32个遥感prompt模板：
 
 ```text
-window_size = 12
-shift_size = 6
-num_heads = 8
+C个class_names × 32 templates
+  → C×32条完整文本
+  → tokenize
+  → RemoteCLIP text transformer
+  → text projection
+  → template_clip_text [C, 32, 768]
 ```
 
-regular window attention：
+类别名称默认会去除首尾空白，并把下划线、连字符规范为空格。
+
+### 9.2 修复后的梯度规则
+
+通用`encode_text()`保留冻结式推理语义。模板编码不再调用这个带`torch.no_grad()`和detach的接口，而是通过`encode_tokenized()`与`encode_embeds()`执行。
+
+模板路径是否建立计算图由两项共同决定：
 
 ```text
-window_size = 12
-shift_size = 0
+全局梯度是否开启：torch.is_grad_enabled()
+文本编码器是否存在requires_grad=True的参数
 ```
 
-shifted window attention：
+不能用`self.training`判断，因为RemoteCLIP文本编码器在微调时也有意保持`eval()`。
+
+结果：
+
+* 训练阶段且文本参数可训练：保留完整计算图。
+* 文本编码器完全冻结：显式无梯度并允许缓存。
+* 验证阶段：外层`torch.no_grad()`关闭计算图。
+
+### 9.3 文本micro-batch与activation checkpoint
+
+扁平模板数量为`C × 32`。为了避免微调文本Transformer后显存突然增大，使用：
+
+```python
+text_prompt_batch_size=64
+text_prompt_use_checkpoint=True
+```
+
+`text_prompt_batch_size`表示每次送入文本Transformer的完整prompt数量，不是类别数，也不是token数。
+
+可训练时，每个文本micro-batch使用：
+
+```python
+checkpoint(..., use_reentrant=False)
+```
+
+non-reentrant checkpoint允许输入为不需要梯度的整数token，同时仍能追踪闭包中模型参数的梯度。编码完所有micro-batch后沿第0维拼接，再reshape回`[C, 32, 768]`。
+
+## 10. CLIP相似度图与score embedding
+
+RemoteCLIP文本和图像feature先分别做L2归一化，然后计算点积相似度：
 
 ```text
-window_size = 12
-shift_size = 6
+normalized template text [C, 32, 768]
+× normalized image feature [B, 768, 36, 36]
+→ clip_score_maps_36 [B, C, 32, 36, 36]
+→ 乘固定缩放值20.0
 ```
 
-q/k 构造：
+这里点积表示768个对齐维度逐项相乘后相加；值越大，表示该空间位置与对应类别模板越相似。固定缩放值20.0用于放大相似度数值范围。
+
+32个模板通道经过两层卷积：
 
 ```text
-q/k = concat(feature, score_embed)
+[B, C, 32, 36, 36]
+  → reshape为[B*C, 32, 36, 36]
+  → Conv(32→256, 7×7) + GroupNorm + GELU
+  → Conv(256→256, 3×3) + GroupNorm + GELU
+  → reshape为[B, C, 256, 36, 36]
+  → clip_score_embed_36
 ```
 
-拼接后通道数是：
+项目当前不存在192通道的score embedding主路径；所有相关模块统一使用256通道。
+
+## 11. SAM3 FPN注入score embedding
+
+SAM3 FPN为图像共享feature，没有类别维度：
 
 ```text
-256 + 256 = 512
+sam_fpn_72 [B, 256, 72, 72]
+  → bilinear下采样到36×36
+  → broadcast到C个类别
+  → [B*C, 256, 36, 36]
 ```
 
-其中：
-
-- 第一个 256 来自当前类别的 feature。
-- 第二个 256 来自当前类别的 score embedding。
-
-value 分两路：
+它与CLIP score embedding拼接：
 
 ```text
-v_feature = feature
-v_score   = score_embed
+cat([clip_score_embed_36, sam_fpn_36])
+  → [B*C, 512, 36, 36]
+  → Conv(512→256, 3×3) + GroupNorm + GELU
+  → Conv(256→256, 3×3) + GroupNorm + GELU
+  → fpn_score_delta_36
 ```
 
-WindowScoreAttention 只返回 `feature_update` 和 `score_update`，不做 residual 和 LayerNorm。
-residual 和 LayerNorm 由 `EncoderRefinerLayer` 在外部统一完成。
-
-### 9.6 相对位置偏置
-
-每个 `WindowScoreAttention` 都维护一个可学习的相对位置偏置表：
+残差注入：
 
 ```text
-relative_position_bias_table: [(2 × ws - 1)², num_heads]
+score_embed_36 = clip_score_embed_36
+               + (1 + score_fpn_res_scale) × fpn_score_delta_36
 ```
 
-当前 `ws = 12`，所以：
+`score_fpn_res_scale`是初始值为0的可训练标量。因此初始残差倍率为1，而不是0。
+
+当前实现没有对FPN融合分支最后一层卷积做显式零初始化，所以不要假设该分支初始输出为0。
+
+## 12. Encoder refiner
+
+### 12.1 输入与尺度变换
+
+输入：
 
 ```text
-(2 × 12 - 1)² = 23² = 529
+encoder_features_72 [B, C, 256, 72, 72]
+score_embed_36      [B, C, 256, 36, 36]
+sam_text_mean       [B, C, 256]
 ```
 
-因此相对位置偏置表形状是：
+SAM3 encoder feature先做双线性下采样：
+
+```text
+encoder_features_72
+  → feature_36 [B, C, 256, 36, 36]
+```
+
+`feature_36`和`score_embed_36`经过默认4层`EncoderRefinerLayer`联合更新。训练时可对每层使用activation checkpoint。
+
+### 12.2 每层顺序
+
+```text
+ClassScoreAttention
+  → feature/score各自执行残差更新与LayerNorm
+  → regular WindowScoreAttention
+  → feature/score各自执行残差更新与LayerNorm
+  → shifted WindowScoreAttention
+  → feature/score各自执行残差更新与LayerNorm
+  → feature FFN与score FFN
+  → 输出LayerNorm
+```
+
+每层具有两个独立标量：
+
+```text
+attn_feature_res_scale
+attn_score_res_scale
+```
+
+二者初始为0，并在该层的三个attention block中共享。更新形式为：
+
+```text
+feature = LayerNorm(feature + (1 + feature_scale) × feature_update)
+score   = LayerNorm(score   + (1 + score_scale)   × score_update)
+```
+
+初始倍率为1，等价于普通残差更新。
+
+### 12.3 ClassScoreAttention
+
+它在每个空间位置上沿类别维度做attention，解决“同一位置更可能属于哪个类别”的竞争与信息交换。
+
+输入构造：
+
+```text
+q/k input = concat(
+  LayerNorm(feature),
+  LayerNorm(sam_text_mean),
+  LayerNorm(score_embed)
+)
+```
+
+三个部分各256维，拼接后为768维。`sam_text_mean`会broadcast到所有36×36空间位置。
+
+value分成两路：
+
+```text
+v_feature来自feature
+v_score来自score_embed
+```
+
+两路共享同一套类别attention权重，但使用不同的value和输出投影，分别得到`feature_update`与`score_update`。attention模块本身不做残差和LayerNorm，这些操作由外层`EncoderRefinerLayer`统一完成。
+
+### 12.4 WindowScoreAttention
+
+它在每个类别内部做局部空间attention，解决局部区域的结构和边界传播问题。
+
+默认配置：
+
+```text
+regular window：window_size=12，shift_size=0
+shifted window：window_size=12，shift_size=6
+num_heads=8
+```
+
+q/k输入为：
+
+```text
+concat(feature, score_embed)
+```
+
+两个部分各256维，拼接后为512维。value仍分为feature和score两路，并共享attention权重。
+
+shifted window通过循环平移和attention mask连接相邻常规窗口，同时阻止平移后本不相邻的位置错误混合。
+
+### 12.5 相对位置偏置
+
+每个WindowScoreAttention维护：
+
+```text
+relative_position_bias_table
+```
+
+当窗口边长`ws=12`时，一个轴上的相对位移范围为`-11 ... 11`，共有23种；二维组合共有`23 × 23 = 529`种。因此8个attention head对应的表形状为：
 
 ```text
 [529, 8]
 ```
 
-其中：
+attention score由query-key点积、缩放、相对位置偏置以及shift mask共同决定，随后经过softmax变成权重。
 
-- `ws` 表示窗口边长。
-- `num_heads` 表示注意力头数量。
-- `529` 表示窗口内任意两个 token 的相对位置种类数。
-- `8` 表示每个 attention head 都有自己的相对位置偏置。
+## 13. 36×36上采样并融合回72×72
 
-attention 计算逻辑：
+`EncoderFeatureUpsampler`采用两阶段融合。
 
-```text
-attn = q @ k^T × scale + relative_position_bias + shift_mask
-attn = softmax(attn)
-```
-
-其中：
-
-- `q` 表示 query。
-- `k` 表示 key。
-- `k^T` 表示 key 的最后两个维度转置。
-- `scale` 表示缩放系数，用来稳定 attention 数值。
-- `relative_position_bias` 表示窗口内部相对位置偏置。
-- `shift_mask` 只在 shifted window attention 中使用，用来避免不该相互注意的位置发生混合。
-- `softmax` 表示把 attention 分数归一化成权重。
-
-## 10. 36×36 到 72×72 上采样
-
-`EncoderFeatureUpsampler` 采用两阶段融合结构（SAM FPN 不再参与）：
+Stage A：
 
 ```text
-Stage A：72×72 空间细节融合
-
 refiner_features_36 [B, C, 256, 36, 36]
-  → bilinear upsample
-  → refiner_up_72 [B*C, 256, 72, 72]
+  → bilinear上采样
+  → [B*C, 256, 72, 72]
 
-original_encoder_72 [B, C, 256, 72, 72]
-  → reshape → orig_72 [B*C, 256, 72, 72]
-
-cat([refiner_up_72, orig_72]) → [B*C, 512, 72, 72]
+与original_encoder_72拼接
+  → [B*C, 512, 72, 72]
   → Conv(512→256, 3×3) + GroupNorm + GELU
   → Conv(256→256, 3×3) + GroupNorm + GELU
-  → local_fused_72 [B*C, 256, 72, 72]
-
-
-Stage B：再次融合原始 encoder feature
-
-cat([local_fused_72, orig_72]) → [B*C, 512, 72, 72]
-  → 1×1 Conv(512→256)
-  → refined_encoder_features_72 [B*C, 256, 72, 72]
-  → reshape → [B, C, 256, 72, 72]
+  → local_fused_72
 ```
 
-说明：
-
-- Stage A 将上采样后的 refiner feature 和原始 encoder feature 拼接做空间融合。
-- Stage B 将融合结果再和原始 encoder feature 拼接，做最终投影。
-- 输出的 `refined_encoder_features_72` 会写回 SAM3 的 `encoder_hidden_states` 图像 token 区域。
-
-## 11. 写回 SAM3 并输出最终 logits
-
-`Sam3Image.run_encoder_refiner()` 会完成最终输出流程：
+Stage B：
 
 ```text
-refined_encoder_features_72
-  → 按类别 chunk 切分
-  → 写回每个 chunk 的 encoder_hidden_states
-  → frozen segmentation_head
-  → chunk_logits
-  → concat
-  → final_logits [B, C, H_out, W_out]
+cat([local_fused_72, original_encoder_72])
+  → [B*C, 512, 72, 72]
+  → Conv(512→256, 1×1)
+  → refined_encoder_features_72
+  → reshape为[B, C, 256, 72, 72]
 ```
 
-写回逻辑只替换 `encoder_hidden_states` 中的图像 token 区域，prompt token 和其他结构保持不变。
+Stage A恢复空间尺度并融合原始细节；Stage B再次提供原始SAM3 feature直达最终输出的路径。SAM3 FPN不参与该上采样器，它已经在refiner之前注入score embedding。
 
-## 12. Loss 设计
+## 14. 写回SAM3并生成最终logits
 
-训练时只监督最终输出：
+refiner输出按最初的类别chunk重新切分。对每个chunk：
+
+1. clone原始`encoder_hidden_states`。
+2. 只替换第一个空间层对应的图像token区域。
+3. prompt token、prompt mask、位置编码和其他结构保持原样。
+4. 调用冻结的SAM3 segmentation head。
+5. 把chunk输出整理为`[B, C_chunk, H_out, W_out]`。
+
+最后沿类别维拼接：
 
 ```text
-total_loss = final_bce_weight × BCE + final_dice_weight × Dice
+final_logits [B, C, H_out, W_out]
+```
+
+segmentation head参数虽然冻结，但它的前向不能整体放进`torch.no_grad()`，因为loss仍需通过segmentation head的运算返回到`refined_encoder_features_72`和前面的可训练模块。
+
+## 15. 训练loss
+
+训练只监督`final_logits`：
+
+```text
+total_loss = final_bce_weight × loss_final_bce
+           + final_dice_weight × loss_final_dice
 ```
 
 其中：
 
-- `total_loss` 表示总损失。
-- `final_bce_weight` 表示 BCE 损失的权重。
-- `BCE` 表示 binary cross entropy，用来监督每个类别的二值 mask。
-- `final_dice_weight` 表示 Dice 损失的权重。
-- `Dice` 表示 Dice loss，用来衡量预测 mask 和真实 mask 的重叠程度。
+* `loss_final_bce`是按“图像—类别”二元mask计算的BCE。
+* `loss_final_dice`是只对当前图像中实际出现类别计算的Dice loss。
+* 当前`final_bce_weight=1.0`。
+* 当前`final_dice_weight=0.0`，所以默认训练实际只使用BCE。
 
-当前配置里：
+### 15.1 二值目标
+
+对每个类别通道分别构造：
 
 ```text
-final_bce_weight = 1.0
-final_dice_weight = 0.0
+target[b, c, y, x] = 1，当label_map[b, y, x]等于类别c
+target[b, c, y, x] = 0，其他情况
 ```
 
-因此实际训练主要使用 BCE。
+`b`表示图像索引，`c`表示类别索引，`y/x`表示像素坐标。
 
-BCE 的目标是 per-class binary mask。也就是说，对于每个类别，模型都学习一个“该像素是否属于这个类别”的二分类 mask。最后推理时再通过 `argmax` 选出每个像素分数最高的类别。
+### 15.2 present与absent类别对
 
-## 13. 背景类别配置
+如果某类别出现在当前图像的非ignore区域，它是present pair；否则是absent pair。
 
-每个数据集通过 `background_cfg` 描述是否存在显式背景类别以及是否在前向时剔除。
+当前基础配置：
 
-### 13.1 配置字段
+```text
+bce_absent_class_weight=0.05
+bce_valid_pixel_weight=1.0
+bce_ignore_pixel_weight=0.05
+```
+
+实际权重规则：
+
+| 图像—类别关系 | valid像素 | ignore像素 | pair整体权重 |
+| ------- | ------: | -------: | -------: |
+| present |     1.0 |     0.05 |      1.0 |
+| absent  |     1.0 |        0 |     0.05 |
+
+这意味着：
+
+* present类别在ignore区域仍受到轻微的泄漏抑制。
+* absent类别只在valid区域学习“不要预测该类别”。
+* absent类别整体贡献被降到0.05，避免负类数量过多主导训练。
+
+## 16. 推理、背景类与评估
+
+### 16.1 基础预测
+
+```text
+raw_final_score_map = sigmoid(final_logits)
+final_pred = argmax(raw_final_score_map, class_dimension)
+```
+
+`sigmoid`把每个类别的独立logit变为0到1之间的分数；`argmax`再从类别维选择分数最高的类别。由于sigmoid对单个数值单调递增，直接对logits做argmax会得到相同类别索引，但项目保留score map供阈值过滤和可视化使用。
+
+### 16.2 背景配置
+
+每个数据集通过：
 
 ```python
 background_cfg=dict(
-    enabled=False,              # 是否声明该数据集有显式背景类
-    class_id=0,                 # 背景在 eval 类别空间中的 id
-    class_name=None,            # 背景类别名称，用于合法性校验
-    exclude_from_forward=False, # 是否在模型前向时剔除
+    enabled=False,
+    class_id=0,
+    class_name=None,
+    exclude_from_forward=False,
 )
 ```
 
-### 13.2 三种模式
+描述背景类。
 
-| 模式 | enabled | exclude_from_forward | 行为 |
-|---|---|---|---|
-| 无背景 | False | False | 普通 argmax，不启用阈值过滤 |
-| 背景参与前向 | True | False | 低置信度像素设为背景 id，无 id remap |
-| 背景不参与前向 | True | True | 前向类别数 = eval 类别数 - 1；验证时 remap + 阈值过滤 |
+| 模式                                         | 行为                                   |
+| ------------------------------------------ | ------------------------------------ |
+| `enabled=False`                            | 没有显式背景，普通argmax，不做低置信度背景过滤。          |
+| `enabled=True, exclude_from_forward=False` | 背景参与前向；低于阈值的像素设为背景id。                |
+| `enabled=True, exclude_from_forward=True`  | 背景不进入模型类别列表；评估时先恢复类别id，再把低置信度像素设为背景。 |
 
-### 13.3 标签处理流程
+LoveDA验证配置使用第三种模式：背景id为0，但背景不参与模型前向。
+
+### 16.3 标签流水线
 
 ```text
 raw label
-  → reduce_zero_label (可选)
-  → eval_label_map (保留背景)
-  → background exclusion (可选)
-  → label_map (用于训练 loss)
+  → reduce_zero_label（可选）
+  → eval_label_map（保留评估类别空间）
+  → background exclusion（可选）
+  → label_map（训练loss使用）
 ```
 
-`eval_label_map` 始终保留背景类，用于 mIoU 和可视化。`label_map` 用于训练 loss。
+`eval_label_map`用于mIoU和可视化；`label_map`用于训练。
 
-### 13.4 评估后处理
+### 16.4 共享后处理
 
-共享函数 `build_eval_semantic_pred()` 统一处理 evaluator 和 visualizer 的预测后处理：
+`engine/evaluator.py`中的`build_eval_semantic_pred()`同时服务evaluator和visualizer，避免指标与图片使用不同预测规则。
 
-- 优先使用 `final_score_map`，fallback 到 `final_pred`
-- `background_cfg.enabled=False`：普通 argmax，不做阈值过滤
-- `background_cfg.enabled=True, exclude_from_forward=False`：低置信度 → 背景 id
-- `background_cfg.enabled=True, exclude_from_forward=True`：先 remap 预测 id（`pred >= bg_id` 的 +1），再低置信度 → 背景 id
-
-该函数返回 `(pred_eval, eval_num_classes, eval_class_names)`。
-
-## 14. Debug 输出
-
-当 `return_debug=True` 时，主要调试输出包括：
-
-| key | 形状 | 含义 |
-|---|---|---|
-| `final_logits` | `[B, C, H_out, W_out]` | 最终 mask logits。 |
-| `encoder_features` | `[B, C, 256, 72, 72]` | 原始 encoder feature。 |
-| `refined_encoder_features` | `[B, C, 256, 72, 72]` | refiner 更新后的 encoder feature。 |
-| `refiner_features_36` | `[B, C, 256, 36, 36]` | refiner 在 36×36 上输出的 feature。 |
-| `score_embed_36` | `[B, C, 256, 36, 36]` | refiner 更新后的 score embedding（由 CLIP score embedding 初始化）。 |
-| `clip_score_embed_36` | `[B, C, 256, 36, 36]` | CLIP score embedding。 |
-| `clip_score_maps` | `[B, C, 32, 36, 36]` | 32 个模板对应的图文相似度 map。 |
-| `template_clip_text_features` | `[C, 32, D_clip]` | 每个类别、每个模板对应的 CLIP 文本特征。 |
-| `clip_mid_features` | `List[[B, D_native, 36, 36]]` | RemoteCLIP 中间层特征，当前主路径不直接使用。 |
-
-## 15. 主要文件说明
+它优先读取`final_score_map`，缺失时回退到`final_pred`，最终返回：
 
 ```text
-models/
-  openclip_image_encoder.py
-    RemoteCLIP dense image encoder，负责 504×504 输入、36×36 输出、positional embedding 插值和 dense value-branch last block。
-
-  openclip_text_encoder.py
-    RemoteCLIP text encoder wrapper，负责类别 prompt templates 编码。
-
-  score_embeddings.py
-    ClipScoreEmbedding。
-
-  encoder_refiner_attention.py
-    ClassScoreAttention、WindowScoreAttention、EncoderRefinerLayer。
-
-  encoder_refiner.py
-    EncoderFeatureUpsampler、ClassConditionedEncoderRefiner。
-
-  sam3_image.py
-    主流程协调器，负责构建 refiner cache、运行 refiner、写回 encoder_hidden_states、生成 final_logits。
-
-  segmentor.py
-    SAM3Segmentor wrapper，负责训练/推理模式下的输出适配。
-
-  adapters/semantic_adapter.py
-    语义分割输出 adapter，训练时返回 final_logits，推理时返回 score map 和 final_pred。
-
-  task_modes.py
-    输出 key 和 task mode 定义。
-
-data/
-  dataset.py
-    OVSemanticSegDataset，支持 background_cfg 和两步标签处理。
-  collate.py
-    OVSemanticCollator，collate eval_label_map 和 background metadata。
-
-models/
-  data_misc.py
-    BatchedFindTarget（含 semantic_eval_label_map）、BatchedInferenceMetadata（含 background 字段）。
-
-engine/
-  evaluator.py
-    MulticlassSemanticEvaluator、build_eval_semantic_pred（共享后处理）。
-  visualization.py
-    VisualizationManager、可视化任务，复用 build_eval_semantic_pred。
-  trainer.py
-    Trainer，训练和验证主循环。
-
-losses/
-  semantic_criterion.py
-    语义分割损失函数。
-
-configs/
-  ovrs_sam3_isaid_loveda_base.py
-  ovrs_sam3_isaid_loveda_exp.py
-  ovrs_sam3_isaid_loveda_full.py
-
-config_dataclasses.py
-  配置 dataclass 定义。
-
-model_builder.py
-  模型、criterion、hooks、训练组件构建逻辑。
+pred_eval
+eval_num_classes
+eval_class_names
 ```
 
-## 16. 最小 shape 验收
+评估指标包括：
 
-| 张量 | 期望形状 |
+```text
+mIoU
+mAcc
+pixel accuracy / aAcc
+每个类别的IoU和accuracy
+```
+
+## 17. 训练与验证生命周期
+
+一次训练step：
+
+```text
+batch移到device
+  → optimizer.zero_grad(set_to_none=True)
+  → build_encoder_refiner_cache
+  → run_encoder_refiner_from_cache
+  → adapter输出final_logits
+  → criterion计算loss
+  → AMP scaler backward
+  → unscale
+  → 全模型梯度裁剪（默认max norm 0.01）
+  → optimizer step
+  → scheduler step
+```
+
+验证函数使用`@torch.no_grad()`，支持翻转TTA（仅`scale=1.0`，因当前refiner固定72×72/36×36尺度）。TTA翻转时同步变换`img_batch`和`raw_images`，确保SAM3和RemoteCLIP空间一致。验证结束后模型重新进入训练模式，但冻结的SAM3模块以及RemoteCLIP编码器仍被强制保持`eval()`。
+
+当前TTA配置：
+
+```python
+tta_cfg = dict(
+    enabled=False,
+    scales=[1.0],               # 仅1.0，多尺度在支持动态空间尺寸前禁用
+    flip_modes=["none", "h", "v"],
+    size_divisor=14,
+)
+```
+
+非1.0尺度会在进入view循环前直接抛出`ValueError`。
+
+## 18. 验证阶段RemoteCLIP缓存
+
+RemoteCLIP模板文本feature的缓存策略：
+
+| 场景 | 缓存行为 |
 |---|---|
-| `remoteclip_feat_map` | `[B, 768, 36, 36]` |
-| `clip_score_maps` | `[B, C, 32, 36, 36]` |
-| `clip_score_embed_36` | `[B, C, 256, 36, 36]` |
-| `score_embed_36` | `[B, C, 256, 36, 36]` |
-| `feature_36` | `[B, C, 256, 36, 36]` |
-| `refiner_features_36` | `[B, C, 256, 36, 36]` |
-| `refined_encoder_features_72` | `[B, C, 256, 72, 72]` |
-| `final_logits` | `[B, C, H_out, W_out]` |
+| RemoteCLIP文本编码器完全冻结 | 允许长期缓存detach后的模板feature |
+| 训练 + 文本编码器可训练 | 禁止缓存，每个step重新编码并保留计算图 |
+| 验证 + 文本编码器可训练 | 本次验证内允许缓存detach后的模板feature |
 
-## 17. 推荐检查命令
+每次调用`model.train(mode)`切换训练/验证模式时，会自动清除RemoteCLIP模板缓存。这样：
+1. 进入验证时清除旧cache。
+2. 验证第一张图重新编码当前权重对应的模板feature并缓存。
+3. 后续验证图复用该cache。
+4. 验证结束调用`model.train()`时再次清除。
+
+## 19. 验证阶段图像梯度保护
+
+`OpenCLIPImageEncoder.encode_image_with_intermediate()`中判断是否建立梯度时同时检查`torch.is_grad_enabled()`、`self.enable_grad`和`self.has_trainable_params()`。验证阶段外层`@torch.no_grad()`会使`torch.is_grad_enabled()`返回False，因此不会错误开启RemoteCLIP图像计算图。
+
+`Sam3Image._build_clip_image_cache()`也使用`keep_image_graph = torch.is_grad_enabled() and image_encoder_trainable`判断是否需要保留计算图。
+
+## 20. Optimizer checkpoint恢复后的K参数保护
+
+融合QKV参数（`in_proj_weight`/`in_proj_bias`）受Q/V mask保护，标记为`_ovrs_disable_weight_decay=True`。新建optimizer时该标记使对应参数组`weight_decay=0.0`。
+
+`optimizer.load_state_dict()`从checkpoint恢复时会覆盖参数组超参数。为防御旧checkpoint中可能保存的`weight_decay≠0`，`CheckpointManager.load()`在调用`load_state_dict()`后立即执行`enforce_optimizer_param_group_invariants()`，重新强制受保护参数组的`weight_decay=0.0`。
+
+## 21. 全ignore batch的optimizer step跳过
+
+`SemanticCriterion`使用`valid_mask.sum()`（非ignore像素数）作为`num_valid`。当batch中所有像素都是`ignore_index`时，`num_valid=0`，criterion返回零loss。`Trainer.train_step()`检查`num_valid>0`才执行backward和optimizer step，不会在全ignore batch上更新参数。
+
+## 22. Debug输出
+
+`return_debug=True`时可获得：
+
+| key                           | 形状                            | 用途                                 |
+| ----------------------------- | ----------------------------- | ---------------------------------- |
+| `final_logits`                | `[B, C, H_out, W_out]`        | 最终分割logits。                        |
+| `encoder_features`            | `[B, C, 256, 72, 72]`         | refiner之前的SAM3 encoder feature。    |
+| `refined_encoder_features`    | `[B, C, 256, 72, 72]`         | 写回前的refined feature。               |
+| `refiner_features_36`         | `[B, C, 256, 36, 36]`         | refiner最终图像feature。                |
+| `score_embed_36`              | `[B, C, 256, 36, 36]`         | FPN注入并经过refiner更新的score embedding。 |
+| `clip_score_embed_36`         | `[B, C, 256, 36, 36]`         | 进入FPN融合前的CLIP score embedding。     |
+| `clip_score_maps`             | `[B, C, 32, 36, 36]`          | 原始32模板相似度图。                        |
+| `template_clip_text_features` | `[C, 32, 768]`                | RemoteCLIP模板文本feature。             |
+| `clip_mid_features`           | `List[[B, D_native, 36, 36]]` | RemoteCLIP中间层debug feature。        |
+
+Debug分支中的detach只用于返回诊断副本，不应提前作用于参与最终loss的主路径。
+
+## 19. 主要文件职责
+
+| 文件                                    | 职责                                                            |
+| ------------------------------------- | ------------------------------------------------------------- |
+| `tools/train.py`                      | 读取配置、构建组件、启动训练或验证。                                            |
+| `config_dataclasses.py`               | 模型、RemoteCLIP、refiner、loss和trainer配置定义。                       |
+| `model_builder.py`                    | 构建SAM3/RemoteCLIP/refiner，加载权重，应用冻结与微调策略。                     |
+| `engine/optimizer_builder.py`         | 创建参数组、学习率、weight decay和scheduler。                             |
+| `models/sam3_image.py`                | 主流程协调、类别chunk、cache构建、refiner调用、feature写回和logits拼接。           |
+| `models/openclip_image_encoder.py`    | 504×504 RemoteCLIP dense图像编码与last-block value branch。         |
+| `models/openclip_text_encoder.py`     | RemoteCLIP通用冻结文本接口，以及支持梯度、micro-batch和checkpoint的模板编码接口。      |
+| `models/score_embeddings.py`          | 32模板相似度图、RemoteCLIP模板缓存和256通道score embedding。                 |
+| `models/encoder_refiner.py`           | FPN注入、36×36 refiner主流程和72×72上采样融合。                            |
+| `models/encoder_refiner_attention.py` | ClassScoreAttention、WindowScoreAttention、EncoderRefinerLayer。 |
+| `models/segmentor.py`                 | 模型外层wrapper和训练/推理模式管理。                                        |
+| `models/adapters/semantic_adapter.py` | 训练只返回logits；推理生成score map和最终类别图。                              |
+| `losses/semantic_criterion.py`        | present/absent加权BCE与可选Dice。                                   |
+| `data/dataset.py`                     | 图像、标签、类别名称和背景配置处理。                                            |
+| `data/collate.py`                     | batch padding、共享类别顺序、label map与metadata组装。                    |
+| `engine/trainer.py`                   | AMP训练、梯度裁剪、checkpoint、验证和hook生命周期。                            |
+| `engine/evaluator.py`                 | 背景后处理、TTA合并和语义分割指标。                                           |
+| `engine/visualization.py`             | 保存预测、GT、score heatmap等可视化结果。                                  |
+## 20. 关键实现不变量
+
+修改项目时必须保持：
+
+1. 同一batch中的所有样本共享完全相同的前向类别名称和顺序。
+2. 类别chunk拼接后必须按原顺序完整覆盖全部前向类别。
+3. RemoteCLIP图像与文本投影维度必须相同，当前为768。
+4. RemoteCLIP dense grid必须是36×36。
+5. SAM3 encoder主feature必须是72×72。
+6. score embedding和SAM3 hidden dimension当前都为256。
+7. 训练阶段可训练RemoteCLIP文本feature不得跨optimizer step缓存；验证阶段允许单次验证内缓存。
+8. 验证阶段不得为RemoteCLIP图像分支重新开启autograd（尊重外层`torch.no_grad()`）。
+9. TTA翻转时必须同步变换`img_batch`和`raw_images`。
+10. `clip_mid_features`当前不参与主路径。
+11. segmentation head虽然冻结，但必须允许梯度穿过其运算返回refiner。
+12. 恢复checkpoint optimizer状态后必须重新强制K参数weight decay约束。
+11. attention模式下融合QKV的K区域既不能有梯度，也不能受到weight decay。
+12. evaluator与visualizer必须共用背景后处理逻辑。
+
+## 21. 已知限制与当前非目标
+
+* 当前只支持semantic task mode；hybrid模式会抛出`NotImplementedError`。
+* 一个batch不能混用不同类别列表或类别顺序。
+* 当前语义前向不支持非空几何prompt。
+* RemoteCLIP图像输入固定为504×504和36×36 grid。
+* SAM3 encoder/refiner尺度固定为72×72与36×36。
+* prompt模板数量固定为32。
+* `clip_mid_features`已提取但未进入主路径。
+* 默认Dice权重为0，当前主要研究对象是加权BCE下的refiner与RemoteCLIP微调。
+* 默认训练是iSAID、验证是LoveDA，属于跨数据集开放词汇评估设置。
+
+## 22. 语法检查
 
 ```bash
+python -m py_compile config_dataclasses.py
+python -m py_compile model_builder.py
+python -m py_compile engine/optimizer_builder.py
+python -m py_compile engine/checkpoint.py
+python -m py_compile engine/evaluator.py
 python -m py_compile models/openclip_image_encoder.py
 python -m py_compile models/openclip_text_encoder.py
 python -m py_compile models/score_embeddings.py
@@ -662,86 +886,24 @@ python -m py_compile models/encoder_refiner_attention.py
 python -m py_compile models/encoder_refiner.py
 python -m py_compile models/sam3_image.py
 python -m py_compile models/segmentor.py
-python -m py_compile models/adapters/semantic_adapter.py
-python -m py_compile models/task_modes.py
 python -m py_compile losses/semantic_criterion.py
-python -m py_compile config_dataclasses.py
-python -m py_compile model_builder.py
-python -m py_compile configs/ovrs_sam3_isaid_loveda_base.py
-python -m py_compile configs/ovrs_sam3_isaid_loveda_exp.py
-python -m py_compile configs/ovrs_sam3_isaid_loveda_full.py
 ```
-
-如果只检查本次 refiner 相关修改，至少运行：
 
 ```bash
-python -m py_compile models/encoder_refiner_attention.py
-python -m py_compile models/encoder_refiner.py
+git diff --check
 ```
 
-## 18. 当前实现重点
+## 23. 修改本文的规则
 
-当前代码里，score_embed 来源是 CLIP + SAM3 FPN 注入路径：
+出现以下变化时必须同步更新本文：
 
-```text
-clip_score_maps → ClipScoreEmbedding → clip_score_embed_36 (256 ch)
-→ SAM3 FPN 72 下采样到 36×36 并 broadcast 到类别维度
-→ 与 clip_score_embed_36 拼接后 conv 融合
-→ fpn_score_delta_36
-→ score_embed_36 = clip_score_embed_36 + (1.0 + score_fpn_res_scale) * fpn_score_delta_36
-→ score_embed_36 进入 refiner layers
-```
+* 任一主要张量的通道数或空间尺寸变化。
+* RemoteCLIP模板数量、输入尺寸或微调模式变化。
+* 新增或删除feature融合路径。
+* refiner attention顺序、残差方式或value分支变化。
+* loss权重逻辑或背景类后处理变化。
+* 冻结模块、学习率倍率或缓存规则变化。
+* `clip_mid_features`开始进入主路径。
+* 新增hybrid或几何prompt训练模式。
 
-SAM3 text tokens 通过 masked mean 得到 per-class 向量后再进入 refiner：
-
-```text
-prompt_tokens [T, B*C, 256]
-prompt_mask   [B*C, T]
-  → valid = ~prompt_mask
-  → masked mean over T
-  → sam_text_mean [B, C, 256]
-```
-
-Encoder refiner path:
-    1. RemoteCLIP dense feature + prompt text features build clip_score_embed_36.
-    2. SAM3 FPN 72 is downsampled to 36×36, fused with clip_score_embed_36 to form score_embed_36.
-    3. SAM3 encoder feature is downsampled to 36×36.
-    4. SAM text tokens are reduced to sam_text_mean via masked mean.
-    5. Refiner layers update encoder feature and score embedding jointly.
-    6. Refiner feature is upsampled to 72×72.
-    7. The upsampled refiner feature and original SAM3 encoder feature are fused by conv layers.
-    8. The fused 72×72 feature is concatenated with the original encoder feature and projected back to 256 channels.
-    9. The final 72×72 256-channel feature is written back to encoder_hidden_states and consumed by the SAM3 segmentation head.
-
-feature 和 score embedding 在 refiner 中是并行更新的：
-
-```text
-同一套 attention 权重
-  → 更新 feature
-  → 更新 score_embed
-```
-
-两路 value projection 是分开的：
-
-```text
-v_feature = feature
-v_score   = score_embed
-```
-
-因此 attention 决定”看哪里”，feature 分支和 score 分支分别决定”更新什么内容”。
-
-当前残差更新带 per-layer learnable scale：
-
-```text
-feature    = LayerNorm(feature + (1.0 + attn_feature_res_scale) * feature_update)
-score_embed = LayerNorm(score_embed + (1.0 + attn_score_res_scale) * score_update)
-```
-
-其中：
-
-- `attn_feature_res_scale` 和 `attn_score_res_scale` 初始为 0，初始行为与普通 residual 一致。
-- 每个 EncoderRefinerLayer 有自己独立的系数，在该层三个 attention block 中共享。
-- ClassScoreAttention 和 WindowScoreAttention 不再内部做 residual 和 LayerNorm，只返回 update。
-- LayerNorm 由 EncoderRefinerLayer 在外部完成。
-
-window attention 的 q/k 输入为 512 维（256+256），SAM FPN 已在上游注入 score_embed。
+本文应描述实际执行路径，而不是仅描述最初设想。发生冲突时，以经过测试的当前代码为准，并立即修正文档。

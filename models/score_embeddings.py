@@ -40,6 +40,8 @@ class ClipScoreEmbedding(nn.Module):
         clip_output_dim: int = 768,
         score_embed_dim: int = 256,
         conv_kernel: int = 7,
+        text_prompt_batch_size: int = 64,
+        text_prompt_use_checkpoint: bool = True,
     ):
         super().__init__()
 
@@ -50,6 +52,8 @@ class ClipScoreEmbedding(nn.Module):
         self.clip_output_dim = int(clip_output_dim)
         self.score_embed_dim = int(score_embed_dim)
         self.num_prompt_templates = len(self.prompt_templates)
+        self.text_prompt_batch_size = int(text_prompt_batch_size)
+        self.text_prompt_use_checkpoint = bool(text_prompt_use_checkpoint)
 
         if self.num_prompt_templates != 32:
             raise ValueError(
@@ -100,8 +104,10 @@ class ClipScoreEmbedding(nn.Module):
         self, class_names: list[str], device: torch.device
     ) -> torch.Tensor:
         trainable = self._has_trainable_clip_text_params()
+        grad_enabled = torch.is_grad_enabled()
+        cache_allowed = (not trainable) or (not grad_enabled)
 
-        if not trainable:
+        if cache_allowed:
             cache_key = self._make_text_cache_key(class_names, device)
             if cache_key in self._text_feature_cache:
                 return self._text_feature_cache[cache_key].to(device=device)
@@ -112,10 +118,14 @@ class ClipScoreEmbedding(nn.Module):
             device=device,
             normalize_label=self.normalize_label,
             normalize=False,
+            prompt_batch_size=self.text_prompt_batch_size,
+            use_checkpoint=self.text_prompt_use_checkpoint,
         )
 
-        if not trainable:
-            self._text_feature_cache[cache_key] = result.detach().contiguous()
+        if cache_allowed:
+            cached = result.detach().contiguous()
+            self._text_feature_cache[cache_key] = cached
+            return cached.to(device=device)
 
         return result
 

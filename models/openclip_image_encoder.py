@@ -538,7 +538,11 @@ class OpenCLIPImageEncoder(nn.Module):
         """
         self.visual.eval()
 
-        grad_enabled = bool(self.enable_grad and self.has_trainable_params())
+        grad_enabled = bool(
+            torch.is_grad_enabled()
+            and self.enable_grad
+            and self.has_trainable_params()
+        )
 
         with torch.set_grad_enabled(grad_enabled):
             dense_tokens, (grid_h, grid_w), mid_features = (

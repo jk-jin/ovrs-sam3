@@ -65,6 +65,8 @@ model = dict(
             "an object or region classified as {} in remote sensing imagery.",
         ],
         normalize_label_for_clip=True,
+        text_prompt_batch_size=64,
+        text_prompt_use_checkpoint=True,
     ),
 
     encoder_refiner_cfg=dict(
@@ -271,7 +273,7 @@ experiment_tracking = dict(
 
 tta_cfg = dict(
     enabled=False,
-    scales=[0.75, 1.0, 1.25],
+    scales=[1.0],
     flip_modes=["none", "h", "v"],
     size_divisor=14,
 )

@@ -63,6 +63,9 @@ class OpenCLIPConfig:
     ])
     normalize_label_for_clip: bool = True
 
+    text_prompt_batch_size: int = 64
+    text_prompt_use_checkpoint: bool = True
+
 
 @dataclass
 class EncoderRefinerConfig:

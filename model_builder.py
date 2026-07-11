@@ -248,6 +248,21 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 raise ValueError(
                     f"openclip_cfg.prompt_templates[{idx}] must contain '{{}}'."
                 )
+
+        if not isinstance(openclip_cfg.text_prompt_batch_size, int) or openclip_cfg.text_prompt_batch_size <= 0:
+            raise ValueError(
+                "openclip_cfg.text_prompt_batch_size must be a positive integer, "
+                f"got {openclip_cfg.text_prompt_batch_size!r}."
+            )
+
+        try:
+            _ = bool(openclip_cfg.text_prompt_use_checkpoint)
+        except Exception:
+            raise ValueError(
+                "openclip_cfg.text_prompt_use_checkpoint must be convertible to bool, "
+                f"got {openclip_cfg.text_prompt_use_checkpoint!r}."
+            )
+
         return openclip_cfg
 
     @classmethod
@@ -607,6 +622,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         param.register_hook(hook)
         param._qv_only_grad_mask_registered = True
+        param._ovrs_disable_weight_decay = True
 
     @staticmethod
     def _normalize_finetune_mode(mode: str, name: str) -> str:
@@ -763,6 +779,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             clip_text_encoder=clip_text_encoder,
             openclip_prompt_templates=list(cfg.openclip_cfg.prompt_templates),
             normalize_label_for_clip=bool(cfg.openclip_cfg.normalize_label_for_clip),
+            text_prompt_batch_size=int(cfg.openclip_cfg.text_prompt_batch_size),
+            text_prompt_use_checkpoint=bool(cfg.openclip_cfg.text_prompt_use_checkpoint),
             encoder_refiner_fusion_layers=int(refiner_cfg.fusion_layers),
             encoder_refiner_num_heads=int(refiner_cfg.num_heads),
             encoder_refiner_dropout=float(refiner_cfg.dropout),

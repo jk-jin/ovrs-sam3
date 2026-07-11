@@ -89,10 +89,10 @@ class SemanticCriterion(nn.Module):
             dtype=final_logits.dtype,
         )
 
-        num_loss_pixels = int(label_map.numel())
+        num_valid_pixels = int(valid_mask.sum().item())
         zero = self._zero_loss(final_logits)
 
-        if num_loss_pixels <= 0:
+        if num_valid_pixels <= 0:
             return {
                 "loss_final_bce": zero,
                 "loss_final_dice": zero,
@@ -136,7 +136,7 @@ class SemanticCriterion(nn.Module):
             "loss_final_dice": loss_final_dice,
             "total_loss": total_loss,
             "num_valid": torch.tensor(
-                num_loss_pixels,
+                num_valid_pixels,
                 device=final_logits.device,
                 dtype=torch.long,
             ),
