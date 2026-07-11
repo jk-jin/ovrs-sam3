@@ -50,7 +50,7 @@ class ClassScoreAttention(nn.Module):
     """
     Inter-class attention at each spatial position with dual value updates.
 
-    q/k = concat(feature, sam_text_context, score_embed)  → 768 dims
+    q/k = concat(feature, sam_text_mean, score_embed)  → 768 dims
     v_feature = feature
     v_score   = score_embed
 
@@ -96,13 +96,13 @@ class ClassScoreAttention(nn.Module):
         self,
         feature: torch.Tensor,
         score_embed: torch.Tensor,
-        sam_text_context: torch.Tensor,
+        sam_text_mean: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            feature:          [B, C, D, H, W]
-            score_embed:      [B, C, D_score, H, W]
-            sam_text_context: [B, C, D]
+            feature:       [B, C, D, H, W]
+            score_embed:   [B, C, D_score, H, W]
+            sam_text_mean: [B, C, D]
 
         Returns:
             feature_update: [B, C, D, H, W]
@@ -116,10 +116,10 @@ class ClassScoreAttention(nn.Module):
                 f"score_embed must be [{B}, {C}, {D_score}, {H}, {W}], "
                 f"got {tuple(score_embed.shape)}"
             )
-        if tuple(sam_text_context.shape) != (B, C, D):
+        if tuple(sam_text_mean.shape) != (B, C, D):
             raise ValueError(
-                f"sam_text_context must be [{B}, {C}, {D}], "
-                f"got {tuple(sam_text_context.shape)}"
+                f"sam_text_mean must be [{B}, {C}, {D}], "
+                f"got {tuple(sam_text_mean.shape)}"
             )
 
         N = H * W
@@ -131,9 +131,9 @@ class ClassScoreAttention(nn.Module):
         # score_embed: [B, C, D_score, H, W] → [B*N, C, D_score]
         s_flat = score_embed.permute(0, 3, 4, 1, 2).reshape(B * N, C, D_score)
 
-        # Broadcast sam_text_context to each spatial position.
+        # Broadcast sam_text_mean to each spatial position.
         text_broadcast = (
-            sam_text_context.to(device=f_flat.device, dtype=f_flat.dtype)[:, None]
+            sam_text_mean.to(device=f_flat.device, dtype=f_flat.dtype)[:, None]
             .expand(B, N, C, D)
             .reshape(B * N, C, D)
         )
@@ -570,17 +570,17 @@ class EncoderRefinerLayer(nn.Module):
         self,
         feature_36: torch.Tensor,
         score_embed_36: torch.Tensor,
-        sam_text_context: torch.Tensor,
+        sam_text_mean: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            feature_36:       [B, C, 256, 36, 36]
-            score_embed_36:   [B, C, 256, 36, 36]
-            sam_text_context: [B, C, 256]
+            feature_36:      [B, C, 256, 36, 36]
+            score_embed_36:  [B, C, 256, 36, 36]
+            sam_text_mean:   [B, C, 256]
 
         Returns:
-            feature_36:       [B, C, 256, 36, 36]
-            score_embed_36:   [B, C, 256, 36, 36]
+            feature_36:      [B, C, 256, 36, 36]
+            score_embed_36:  [B, C, 256, 36, 36]
         """
         feature_scale = 1.0 + self.attn_feature_res_scale
         score_scale = 1.0 + self.attn_score_res_scale
@@ -589,7 +589,7 @@ class EncoderRefinerLayer(nn.Module):
         feature_update, score_update = self.class_attn(
             feature=feature_36,
             score_embed=score_embed_36,
-            sam_text_context=sam_text_context,
+            sam_text_mean=sam_text_mean,
         )
 
         feature_36 = self._apply_layer_norm_bcdhw(

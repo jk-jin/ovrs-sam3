@@ -19,70 +19,6 @@ def _safe_group_norm(num_channels: int) -> nn.GroupNorm:
 
 
 # ---------------------------------------------------------------------------
-# SAMTextAttentionPooling
-# ---------------------------------------------------------------------------
-
-
-class SAMTextAttentionPooling(nn.Module):
-    """Lightweight attention pooling over SAM3 text tokens.
-
-    Given token sequences and a boolean invalid mask, computes a single
-    context vector per (batch, class) pair via learned softmax weights.
-    """
-
-    def __init__(self, hidden_dim: int = 256):
-        super().__init__()
-        self.hidden_dim = int(hidden_dim)
-        self.token_score = nn.Sequential(
-            nn.LayerNorm(self.hidden_dim),
-            nn.Linear(self.hidden_dim, 1, bias=False),
-        )
-        nn.init.zeros_(self.token_score[-1].weight)
-
-    def forward(
-        self,
-        sam_text_tokens: torch.Tensor,
-        sam_text_token_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        """Pool SAM text tokens into a context vector.
-
-        Args:
-            sam_text_tokens:     [B, C, T, D]
-            sam_text_token_mask: [B, C, T], True means invalid / padding.
-
-        Returns:
-            sam_text_context: [B, C, D]
-        """
-        B, C, T, D = sam_text_tokens.shape
-        if D != self.hidden_dim:
-            raise ValueError(
-                f"SAMTextAttentionPooling expects hidden_dim={self.hidden_dim}, "
-                f"got D={D}."
-            )
-        if tuple(sam_text_token_mask.shape) != (B, C, T):
-            raise ValueError(
-                f"sam_text_token_mask must be [{B}, {C}, {T}], "
-                f"got {tuple(sam_text_token_mask.shape)}."
-            )
-
-        tokens = sam_text_tokens
-        mask = sam_text_token_mask.bool().to(device=tokens.device)
-
-        logits = self.token_score(tokens).squeeze(-1)  # [B, C, T]
-        logits = logits.masked_fill(mask, torch.finfo(logits.dtype).min)
-
-        all_invalid = mask.all(dim=-1, keepdim=True)  # [B, C, 1]
-        logits = torch.where(all_invalid, torch.zeros_like(logits), logits)
-
-        weights = torch.softmax(logits, dim=-1)  # [B, C, T]
-        weights = weights.masked_fill(mask, 0.0)
-        weights = weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-6)
-
-        context = (tokens * weights.unsqueeze(-1)).sum(dim=2)  # [B, C, D]
-        return context.contiguous()
-
-
-# ---------------------------------------------------------------------------
 # EncoderFeatureUpsampler
 # ---------------------------------------------------------------------------
 
@@ -209,14 +145,14 @@ class ClassConditionedEncoderRefiner(nn.Module):
     Encoder feature refiner operating at 36×36.
 
     SAM3 FPN is injected into score_embed before refiner layers
-    with a 1+learnable residual scale. SAM text tokens are pooled
-    via attention pooling once, then shared across all refiner layers.
+    with a 1+learnable residual scale. SAM text prompt tokens are
+    reduced to a masked mean before entering the refiner.
+    The refiner receives sam_text_mean directly.
 
     Forward inputs:
         encoder_features_72:  [B, C, 256, 72, 72]
         clip_image_feat_map:  [B, D_clip, 36, 36]
-        sam_text_tokens:      [B, C, T, 256]
-        sam_text_token_mask:  [B, C, T]
+        sam_text_mean:        [B, C, 256]
         class_names:          list of C class names
         sam_fpn_72:           [B, 256, 72, 72]
 
@@ -268,8 +204,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
             conv_kernel=int(clip_score_conv_kernel),
         )
 
-        self.sam_text_pooler = SAMTextAttentionPooling(hidden_dim=self.hidden_dim)
-
         self.score_fpn_fusion = nn.Sequential(
             nn.Conv2d(
                 self.score_embed_dim + self.hidden_dim,
@@ -316,8 +250,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         self,
         encoder_features_72: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
-        sam_text_tokens: torch.Tensor,
-        sam_text_token_mask: torch.Tensor,
+        sam_text_mean: torch.Tensor,
         class_names: List[str],
         sam_fpn_72: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
@@ -325,8 +258,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         Args:
             encoder_features_72:  [B, C, 256, 72, 72]
             clip_image_feat_map:  [B, D_clip, 36, 36]
-            sam_text_tokens:      [B, C, T, 256]
-            sam_text_token_mask:  [B, C, T]
+            sam_text_mean:        [B, C, 256]
             class_names:          list of C class names
             sam_fpn_72:           [B, 256, 72, 72]
 
@@ -342,9 +274,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
             1. Build CLIP score embedding at 36×36.
             2. Inject SAM3 FPN into score embedding with 1+learnable residual scale.
             3. Downsample SAM3 encoder features from 72×72 to 36×36.
-            4. Pool SAM text tokens to context via attention pooling.
-            5. Run refiner layers.
-            6. Upsample refined feature to 72×72 and fuse with original encoder feature.
+            4. Run refiner layers.
+            5. Upsample refined feature to 72×72 and fuse with original encoder feature.
         """
         batch_size, num_classes, hidden_dim, H, W = encoder_features_72.shape
 
@@ -359,27 +290,10 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 f"got {tuple(clip_image_feat_map.shape[-2:])}."
             )
 
-        # Validate sam_text_tokens and sam_text_token_mask.
-        if sam_text_tokens.ndim != 4:
+        if tuple(sam_text_mean.shape) != (batch_size, num_classes, hidden_dim):
             raise ValueError(
-                f"sam_text_tokens must be [B, C, T, D], got {tuple(sam_text_tokens.shape)}."
-            )
-        if sam_text_token_mask.ndim != 3:
-            raise ValueError(
-                f"sam_text_token_mask must be [B, C, T], got {tuple(sam_text_token_mask.shape)}."
-            )
-
-        token_B, token_C, token_T, token_D = sam_text_tokens.shape
-        if (token_B, token_C, token_D) != (batch_size, num_classes, hidden_dim):
-            raise ValueError(
-                f"sam_text_tokens batch/class/dim mismatch: "
-                f"expected ({batch_size}, {num_classes}, {hidden_dim}), "
-                f"got ({token_B}, {token_C}, {token_D})."
-            )
-        if tuple(sam_text_token_mask.shape) != (batch_size, num_classes, token_T):
-            raise ValueError(
-                f"sam_text_token_mask must be [{batch_size}, {num_classes}, {token_T}], "
-                f"got {tuple(sam_text_token_mask.shape)}."
+                f"sam_text_mean must be [{batch_size}, {num_classes}, {hidden_dim}], "
+                f"got {tuple(sam_text_mean.shape)}."
             )
 
         # 1. CLIP score embedding at 36×36.
@@ -444,30 +358,24 @@ class ClassConditionedEncoderRefiner(nn.Module):
             align_corners=False,
         ).reshape(batch_size, num_classes, hidden_dim, 36, 36)
 
-        # 4. Pool SAM text tokens to context (once, shared across all layers).
-        sam_text_context = self.sam_text_pooler(
-            sam_text_tokens=sam_text_tokens,
-            sam_text_token_mask=sam_text_token_mask,
-        )
-
-        # 5. Run refiner layers.
+        # 4. Run refiner layers.
         for layer in self.layers:
             if self.use_checkpoint and self.training:
                 feature_36, score_embed_36 = checkpoint(
                     layer,
                     feature_36,
                     score_embed_36,
-                    sam_text_context,
+                    sam_text_mean,
                     use_reentrant=False,
                 )
             else:
                 feature_36, score_embed_36 = layer(
                     feature_36=feature_36,
                     score_embed_36=score_embed_36,
-                    sam_text_context=sam_text_context,
+                    sam_text_mean=sam_text_mean,
                 )
 
-        # 6. Upsample refined feature to 72×72 and fuse with original encoder feature.
+        # 5. Upsample refined feature to 72×72 and fuse with original encoder feature.
         refined_encoder_features_72 = self.upsampler(
             refined_feature_36=feature_36,
             original_encoder_72=encoder_features_72,

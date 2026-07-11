@@ -93,8 +93,8 @@ model = dict(
             "core.encoder_refiner",
         ],
         frozen_modules=[],
-        openclip_text_finetune="frozen",
-        openclip_image_finetune="frozen",
+        openclip_text_finetune="attention",
+        openclip_image_finetune="attention",
     ),
 
     adapter_cfg=dict(),
@@ -197,6 +197,8 @@ optim_wrapper = dict(
             norm_decay_mult=0.0,
             custom_keys={
                 "core.encoder_refiner": dict(lr_mult=1.0, decay_mult=1.0),
+                "core.clip_text_encoder": dict(lr_mult=0.01, decay_mult=1.0),
+                "core.clip_image_encoder": dict(lr_mult=0.01, decay_mult=1.0),
             },
         ),
     )

@@ -376,8 +376,7 @@ class Sam3Image(torch.nn.Module):
         chunk_prompt_masks: list[torch.Tensor] = []
         chunk_class_counts: list[int] = []
         merged_class_ids: list[int] = []
-        sam_text_token_chunks: list[torch.Tensor] = []
-        sam_text_token_mask_chunks: list[torch.Tensor] = []
+        sam_text_mean_chunks: list[torch.Tensor] = []
 
         for start in range(0, num_classes, chunk_size):
             end = min(start + chunk_size, num_classes)
@@ -433,13 +432,12 @@ class Sam3Image(torch.nn.Module):
                 num_chunk_classes=num_chunk_classes,
             )
 
-            sam_text_tokens_chunk, sam_text_token_mask_chunk = self._extract_sam_text_tokens(
+            sam_text_mean_chunk = self._extract_sam_text_mean(
                 encoder_out=encoder_out_for_refiner,
                 batch_size=batch_size,
                 num_chunk_classes=num_chunk_classes,
             )
-            sam_text_token_chunks.append(sam_text_tokens_chunk)
-            sam_text_token_mask_chunks.append(sam_text_token_mask_chunk)
+            sam_text_mean_chunks.append(sam_text_mean_chunk)
 
             encoder_feature_chunks.append(encoder_feature_chunk)
             encoder_out_chunks.append(encoder_out_for_refiner)
@@ -474,8 +472,7 @@ class Sam3Image(torch.nn.Module):
             "chunk_prompt_masks": chunk_prompt_masks,
             "backbone_fpn": backbone_fpn,
             "clip_image_feat_map": clip_image_cache["clip_image_feat_map_native"],
-            "sam_text_tokens": torch.cat(sam_text_token_chunks, dim=1),
-            "sam_text_token_mask": torch.cat(sam_text_token_mask_chunks, dim=1),
+            "sam_text_mean": torch.cat(sam_text_mean_chunks, dim=1),
             OUTPUT_KEYS.clip_mid_features: clip_image_cache[OUTPUT_KEYS.clip_mid_features],
             "clip_mid_layer_indices": clip_image_cache["clip_mid_layer_indices"],
             "class_names": class_texts,
@@ -484,11 +481,11 @@ class Sam3Image(torch.nn.Module):
         }
 
     @staticmethod
-    def _extract_sam_text_tokens(
+    def _extract_sam_text_mean(
         encoder_out: Dict[str, torch.Tensor],
         batch_size: int,
         num_chunk_classes: int,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> torch.Tensor:
         prompt_tokens = encoder_out.get(
             "prompt_after_enc",
             encoder_out.get("prompt_before_enc"),
@@ -525,20 +522,17 @@ class Sam3Image(torch.nn.Module):
             )
 
         tokens = prompt_tokens.transpose(0, 1)  # [B*C_chunk, T, D]
-        tokens = tokens.reshape(
+
+        valid = (~prompt_mask.bool()).to(device=tokens.device, dtype=tokens.dtype).unsqueeze(-1)
+        denom = valid.sum(dim=1).clamp_min(1.0)
+
+        mean = (tokens * valid).sum(dim=1) / denom  # [B*C_chunk, D]
+
+        return mean.reshape(
             batch_size,
             num_chunk_classes,
-            token_len,
             hidden_dim,
         ).contiguous()
-
-        mask = prompt_mask.reshape(
-            batch_size,
-            num_chunk_classes,
-            token_len,
-        ).bool().contiguous()
-
-        return tokens, mask
 
     def _extract_encoder_last_feature(
         self,
@@ -654,8 +648,7 @@ class Sam3Image(torch.nn.Module):
         chunk_class_counts: List[int],
         backbone_fpn: List[torch.Tensor],
         clip_image_feat_map: torch.Tensor,
-        sam_text_tokens: torch.Tensor,
-        sam_text_token_mask: torch.Tensor,
+        sam_text_mean: torch.Tensor,
         class_names: List[str],
         clip_mid_features: List[torch.Tensor],
         clip_mid_layer_indices: tuple[int, ...],
@@ -670,8 +663,7 @@ class Sam3Image(torch.nn.Module):
         refiner_out = self.encoder_refiner(
             encoder_features_72=encoder_features_72,
             clip_image_feat_map=clip_image_feat_map,
-            sam_text_tokens=sam_text_tokens,
-            sam_text_token_mask=sam_text_token_mask,
+            sam_text_mean=sam_text_mean,
             class_names=class_names,
             sam_fpn_72=sam_fpn_72,
         )
@@ -774,8 +766,7 @@ class Sam3Image(torch.nn.Module):
         chunk_class_counts = encoder_refiner_cache["chunk_class_counts"]
         backbone_fpn = encoder_refiner_cache["backbone_fpn"]
         clip_image_feat_map = encoder_refiner_cache["clip_image_feat_map"]
-        sam_text_tokens = encoder_refiner_cache["sam_text_tokens"]
-        sam_text_token_mask = encoder_refiner_cache["sam_text_token_mask"]
+        sam_text_mean = encoder_refiner_cache["sam_text_mean"]
         clip_mid_features = encoder_refiner_cache[OUTPUT_KEYS.clip_mid_features]
         clip_mid_layer_indices = encoder_refiner_cache["clip_mid_layer_indices"]
 
@@ -797,8 +788,7 @@ class Sam3Image(torch.nn.Module):
             chunk_class_counts=chunk_class_counts,
             backbone_fpn=backbone_fpn,
             clip_image_feat_map=clip_image_feat_map,
-            sam_text_tokens=sam_text_tokens,
-            sam_text_token_mask=sam_text_token_mask,
+            sam_text_mean=sam_text_mean,
             class_names=class_names,
             clip_mid_features=clip_mid_features,
             clip_mid_layer_indices=clip_mid_layer_indices,
