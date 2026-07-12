@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Optional, TypeVar
 
@@ -310,6 +311,21 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             raise ValueError(
                 "Current design requires refiner_hw * 2 == encoder_hw (36→72 upsampling), "
                 f"got refiner_hw={cfg.refiner_hw}, encoder_hw={cfg.encoder_hw}."
+            )
+
+        if (
+            not math.isfinite(float(cfg.layer_scale_init))
+            or float(cfg.layer_scale_init) < 0.0
+        ):
+            raise ValueError(
+                "encoder_refiner_cfg.layer_scale_init must be finite "
+                f"and non-negative, got {cfg.layer_scale_init!r}."
+            )
+
+        if cfg.score_embed_dim <= 0 or cfg.score_embed_dim % 2 != 0:
+            raise ValueError(
+                "encoder_refiner_cfg.score_embed_dim must be a positive "
+                f"even integer, got {cfg.score_embed_dim}."
             )
 
         return cfg
@@ -786,7 +802,9 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             encoder_refiner_dropout=float(refiner_cfg.dropout),
             encoder_refiner_hidden_dim=int(refiner_cfg.hidden_dim),
             encoder_refiner_score_embed_dim=int(refiner_cfg.score_embed_dim),
-            encoder_refiner_conv_kernel=int(refiner_cfg.clip_score_conv_kernel),
+            encoder_refiner_layer_scale_init=float(
+                refiner_cfg.layer_scale_init
+            ),
             encoder_refiner_window_size=int(refiner_cfg.window_size),
             encoder_refiner_shift_size=int(refiner_cfg.shift_size),
             encoder_refiner_use_checkpoint=bool(refiner_cfg.use_checkpoint),

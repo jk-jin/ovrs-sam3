@@ -34,6 +34,16 @@ def unflatten_batch_class(
     ).contiguous()
 
 
+def apply_layer_norm_bcdhw(
+    x: torch.Tensor,
+    norm: nn.LayerNorm,
+) -> torch.Tensor:
+    """Apply LayerNorm on the channel dim of [B, C, D, H, W]."""
+    return norm(
+        x.permute(0, 1, 3, 4, 2)
+    ).permute(0, 1, 4, 2, 3).contiguous()
+
+
 def _safe_group_norm(num_channels: int) -> nn.GroupNorm:
     num_groups = min(8, num_channels)
     if num_channels % num_groups != 0:
@@ -49,6 +59,9 @@ def _safe_group_norm(num_channels: int) -> nn.GroupNorm:
 class ClassScoreAttention(nn.Module):
     """
     Inter-class attention at each spatial position with dual value updates.
+
+    feature, score_embed and sam_text_mean are pre-normalized by the outer layer.
+    q, k and both value paths are produced from the normalized inputs.
 
     q/k = concat(feature, sam_text_mean, score_embed)  → 768 dims
     v_feature = feature
@@ -86,10 +99,6 @@ class ClassScoreAttention(nn.Module):
         self.out_feature_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.out_score_proj = nn.Linear(self.hidden_dim, self.score_embed_dim)
 
-        self.qk_feature_norm = nn.LayerNorm(self.hidden_dim)
-        self.qk_text_norm = nn.LayerNorm(self.hidden_dim)
-        self.qk_score_norm = nn.LayerNorm(self.score_embed_dim)
-
         self.dropout = nn.Dropout(float(dropout))
 
     def forward(
@@ -100,9 +109,9 @@ class ClassScoreAttention(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            feature:       [B, C, D, H, W]
-            score_embed:   [B, C, D_score, H, W]
-            sam_text_mean: [B, C, D]
+            feature:       [B, C, D, H, W]  pre-normalized
+            score_embed:   [B, C, D_score, H, W]  pre-normalized
+            sam_text_mean: [B, C, D]  pre-normalized
 
         Returns:
             feature_update: [B, C, D, H, W]
@@ -138,11 +147,8 @@ class ClassScoreAttention(nn.Module):
             .reshape(B * N, C, D)
         )
 
-        # Build q/k from concat(norm(feature), norm(text), norm(score_embed)).
-        f_qk = self.qk_feature_norm(f_flat)
-        t_qk = self.qk_text_norm(text_broadcast)
-        s_qk = self.qk_score_norm(s_flat)
-        qk_input = torch.cat([f_qk, t_qk, s_qk], dim=-1)  # [B*N, C, 768]
+        # q/k from concat of pre-normalized inputs.
+        qk_input = torch.cat([f_flat, text_broadcast, s_flat], dim=-1)  # [B*N, C, 768]
 
         q = self.q_proj(qk_input)
         k = self.k_proj(qk_input)
@@ -183,6 +189,9 @@ class ClassScoreAttention(nn.Module):
 class WindowScoreAttention(nn.Module):
     """
     Intra-class window attention with relative position bias and dual value updates.
+
+    feature and score_embed are pre-normalized by the outer layer.
+    q, k and both value paths are produced from the normalized inputs.
 
     q/k = concat(feature, score_embed) → 512 dims
     v_feature = feature
@@ -227,9 +236,6 @@ class WindowScoreAttention(nn.Module):
 
         self.out_feature_proj = nn.Linear(self.hidden_dim, self.hidden_dim)
         self.out_score_proj = nn.Linear(self.hidden_dim, self.score_embed_dim)
-
-        self.qk_feature_norm = nn.LayerNorm(self.hidden_dim)
-        self.qk_score_norm = nn.LayerNorm(self.score_embed_dim)
 
         self.dropout = nn.Dropout(float(dropout))
 
@@ -346,8 +352,8 @@ class WindowScoreAttention(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            feature:     [B, C, D, H, W]
-            score_embed: [B, C, D_score, H, W]
+            feature:     [B, C, D, H, W]  pre-normalized
+            score_embed: [B, C, D_score, H, W]  pre-normalized
 
         Returns:
             feature_update: [B, C, D, H, W]
@@ -394,10 +400,8 @@ class WindowScoreAttention(nn.Module):
             dtype=feature.dtype,
         )
 
-        # q/k from concat(norm(feature), norm(score_embed)).
-        f_qk = self.qk_feature_norm(f_windows)
-        s_qk = self.qk_score_norm(s_windows)
-        qk_input = torch.cat([f_qk, s_qk], dim=-1)  # [num_win, N, 512]
+        # q/k from concat of pre-normalized inputs.
+        qk_input = torch.cat([f_windows, s_windows], dim=-1)  # [num_win, N, 512]
 
         q = self.q_proj(qk_input)
         k = self.k_proj(qk_input)
@@ -459,14 +463,17 @@ class WindowScoreAttention(nn.Module):
 
 class EncoderRefinerLayer(nn.Module):
     """
-    One refiner layer operating at 36×36.
+    One refiner layer operating at 36×36 with pre-norm and independent LayerScale.
 
     Sequence:
-        1. ClassScoreAttention → residual with 1+learnable scale → LayerNorm
-        2. WindowScoreAttention regular  → residual with 1+learnable scale → LayerNorm
-        3. WindowScoreAttention shifted  → residual with 1+learnable scale → LayerNorm
-        4. Per-token FFN on both feature and score
-        5. Output LayerNorm
+        1. ClassScoreAttention (pre-norm → attn → LayerScale → residual)
+        2. WindowScoreAttention regular (pre-norm → attn → LayerScale → residual)
+        3. WindowScoreAttention shifted (pre-norm → attn → LayerScale → residual)
+        4. Feature FFN (pre-norm → FFN → LayerScale → residual)
+        5. Score FFN (pre-norm → FFN → LayerScale → residual)
+
+    No post-norm after any sub-layer. Eight independent LayerScale scalars
+    control the update magnitude for each sub-layer.
     """
 
     def __init__(
@@ -477,8 +484,14 @@ class EncoderRefinerLayer(nn.Module):
         window_size: int = 12,
         shift_size: int = 6,
         dropout: float = 0.1,
+        layer_scale_init: float = 0.1,
     ):
         super().__init__()
+
+        if layer_scale_init < 0:
+            raise ValueError(
+                f"layer_scale_init must be non-negative, got {layer_scale_init}."
+            )
 
         self.class_attn = ClassScoreAttention(
             hidden_dim=hidden_dim,
@@ -505,66 +518,73 @@ class EncoderRefinerLayer(nn.Module):
             dropout=dropout,
         )
 
-        # Per-layer learnable attention residual scales (shared across three attention blocks).
-        self.attn_feature_res_scale = nn.Parameter(torch.zeros(1))
-        self.attn_score_res_scale = nn.Parameter(torch.zeros(1))
+        # Pre-norm for class attention.
+        self.class_norm_feature = nn.LayerNorm(hidden_dim)
+        self.class_norm_score = nn.LayerNorm(score_embed_dim)
+        self.class_norm_text = nn.LayerNorm(hidden_dim)
 
-        # LayerNorm after each attention block (residual applied at layer level).
-        self.class_attn_norm_feat = nn.LayerNorm(hidden_dim)
-        self.class_attn_norm_score = nn.LayerNorm(score_embed_dim)
+        # Pre-norm for regular window attention.
+        self.regular_norm_feature = nn.LayerNorm(hidden_dim)
+        self.regular_norm_score = nn.LayerNorm(score_embed_dim)
 
-        self.window_regular_norm_feat = nn.LayerNorm(hidden_dim)
-        self.window_regular_norm_score = nn.LayerNorm(score_embed_dim)
+        # Pre-norm for shifted window attention.
+        self.shifted_norm_feature = nn.LayerNorm(hidden_dim)
+        self.shifted_norm_score = nn.LayerNorm(score_embed_dim)
 
-        self.window_shifted_norm_feat = nn.LayerNorm(hidden_dim)
-        self.window_shifted_norm_score = nn.LayerNorm(score_embed_dim)
+        # Pre-norm for FFN.
+        self.ffn_norm_feature = nn.LayerNorm(hidden_dim)
+        self.ffn_norm_score = nn.LayerNorm(score_embed_dim)
 
         # Per-token FFN for feature.
-        self.ffn_norm_feat = nn.LayerNorm(hidden_dim)
-        self.ffn_fc1_feat = nn.Linear(hidden_dim, hidden_dim * 4)
-        self.ffn_fc2_feat = nn.Linear(hidden_dim * 4, hidden_dim)
-        self.ffn_dropout_feat = nn.Dropout(float(dropout))
+        self.ffn_fc1_feature = nn.Linear(hidden_dim, hidden_dim * 4)
+        self.ffn_fc2_feature = nn.Linear(hidden_dim * 4, hidden_dim)
+        self.ffn_dropout_feature = nn.Dropout(float(dropout))
 
         # Per-token FFN for score.
-        self.ffn_norm_score = nn.LayerNorm(score_embed_dim)
         self.ffn_fc1_score = nn.Linear(score_embed_dim, score_embed_dim * 4)
         self.ffn_fc2_score = nn.Linear(score_embed_dim * 4, score_embed_dim)
         self.ffn_dropout_score = nn.Dropout(float(dropout))
 
-        self.output_norm_feat = nn.LayerNorm(hidden_dim)
-        self.output_norm_score = nn.LayerNorm(score_embed_dim)
+        # Eight independent LayerScale parameters.
+        init = float(layer_scale_init)
 
-    def _apply_layer_norm_bcdhw(
-        self, x: torch.Tensor, norm: nn.LayerNorm
+        self.class_feature_scale = nn.Parameter(torch.tensor(init))
+        self.class_score_scale = nn.Parameter(torch.tensor(init))
+
+        self.regular_feature_scale = nn.Parameter(torch.tensor(init))
+        self.regular_score_scale = nn.Parameter(torch.tensor(init))
+
+        self.shifted_feature_scale = nn.Parameter(torch.tensor(init))
+        self.shifted_score_scale = nn.Parameter(torch.tensor(init))
+
+        self.ffn_feature_scale = nn.Parameter(torch.tensor(init))
+        self.ffn_score_scale = nn.Parameter(torch.tensor(init))
+
+    def _ffn_feature_update(
+        self,
+        feature: torch.Tensor,
     ) -> torch.Tensor:
-        """Apply LayerNorm on the channel dim of [B, C, D, H, W]."""
-        return norm(
-            x.permute(0, 1, 3, 4, 2)
-        ).permute(0, 1, 4, 2, 3).contiguous()
-
-    def _ffn_feature(self, feature: torch.Tensor) -> torch.Tensor:
-        """Per-token FFN for feature: [B, C, D, H, W] → [B, C, D, H, W]"""
+        """Per-token FFN for pre-normalized feature. Returns update only."""
         B, C, D, H, W = feature.shape
-        x = feature.permute(0, 3, 4, 1, 2).reshape(B * H * W, C, D)
-        residual = x
-        x = self.ffn_norm_feat(x)
-        x = self.ffn_fc2_feat(
-            self.ffn_dropout_feat(F.gelu(self.ffn_fc1_feat(x)))
+        x = feature.permute(0, 1, 3, 4, 2)
+        x = self.ffn_fc2_feature(
+            self.ffn_dropout_feature(F.gelu(self.ffn_fc1_feature(x)))
         )
-        x = residual + self.ffn_dropout_feat(x)
-        return x.reshape(B, H, W, C, D).permute(0, 3, 4, 1, 2).contiguous()
+        x = self.ffn_dropout_feature(x)
+        return x.permute(0, 1, 4, 2, 3).contiguous()
 
-    def _ffn_score(self, score: torch.Tensor) -> torch.Tensor:
-        """Per-token FFN for score: [B, C, D_score, H, W] → [B, C, D_score, H, W]"""
+    def _ffn_score_update(
+        self,
+        score: torch.Tensor,
+    ) -> torch.Tensor:
+        """Per-token FFN for pre-normalized score. Returns update only."""
         B, C, Ds, H, W = score.shape
-        x = score.permute(0, 3, 4, 1, 2).reshape(B * H * W, C, Ds)
-        residual = x
-        x = self.ffn_norm_score(x)
+        x = score.permute(0, 1, 3, 4, 2)
         x = self.ffn_fc2_score(
             self.ffn_dropout_score(F.gelu(self.ffn_fc1_score(x)))
         )
-        x = residual + self.ffn_dropout_score(x)
-        return x.reshape(B, H, W, C, Ds).permute(0, 3, 4, 1, 2).contiguous()
+        x = self.ffn_dropout_score(x)
+        return x.permute(0, 1, 4, 2, 3).contiguous()
 
     def forward(
         self,
@@ -582,65 +602,102 @@ class EncoderRefinerLayer(nn.Module):
             feature_36:      [B, C, 256, 36, 36]
             score_embed_36:  [B, C, 256, 36, 36]
         """
-        feature_scale = 1.0 + self.attn_feature_res_scale
-        score_scale = 1.0 + self.attn_score_res_scale
+        # Class attention (pre-norm).
+        class_feature = apply_layer_norm_bcdhw(
+            feature_36,
+            self.class_norm_feature,
+        )
+        class_score = apply_layer_norm_bcdhw(
+            score_embed_36,
+            self.class_norm_score,
+        )
+        class_text = self.class_norm_text(sam_text_mean)
 
-        # Class attention.
         feature_update, score_update = self.class_attn(
-            feature=feature_36,
-            score_embed=score_embed_36,
-            sam_text_mean=sam_text_mean,
+            feature=class_feature,
+            score_embed=class_score,
+            sam_text_mean=class_text,
         )
 
-        feature_36 = self._apply_layer_norm_bcdhw(
-            feature_36 + feature_scale * feature_update,
-            self.class_attn_norm_feat,
+        feature_36 = (
+            feature_36
+            + self.class_feature_scale * feature_update
         )
-        score_embed_36 = self._apply_layer_norm_bcdhw(
-            score_embed_36 + score_scale * score_update,
-            self.class_attn_norm_score,
+        score_embed_36 = (
+            score_embed_36
+            + self.class_score_scale * score_update
         )
 
-        # Regular window attention.
+        # Regular window attention (pre-norm).
+        regular_feature = apply_layer_norm_bcdhw(
+            feature_36,
+            self.regular_norm_feature,
+        )
+        regular_score = apply_layer_norm_bcdhw(
+            score_embed_36,
+            self.regular_norm_score,
+        )
+
         feature_update, score_update = self.window_attn_regular(
-            feature=feature_36,
-            score_embed=score_embed_36,
+            feature=regular_feature,
+            score_embed=regular_score,
         )
 
-        feature_36 = self._apply_layer_norm_bcdhw(
-            feature_36 + feature_scale * feature_update,
-            self.window_regular_norm_feat,
+        feature_36 = (
+            feature_36
+            + self.regular_feature_scale * feature_update
         )
-        score_embed_36 = self._apply_layer_norm_bcdhw(
-            score_embed_36 + score_scale * score_update,
-            self.window_regular_norm_score,
+        score_embed_36 = (
+            score_embed_36
+            + self.regular_score_scale * score_update
         )
 
-        # Shifted window attention.
+        # Shifted window attention (pre-norm).
+        shifted_feature = apply_layer_norm_bcdhw(
+            feature_36,
+            self.shifted_norm_feature,
+        )
+        shifted_score = apply_layer_norm_bcdhw(
+            score_embed_36,
+            self.shifted_norm_score,
+        )
+
         feature_update, score_update = self.window_attn_shifted(
-            feature=feature_36,
-            score_embed=score_embed_36,
+            feature=shifted_feature,
+            score_embed=shifted_score,
         )
 
-        feature_36 = self._apply_layer_norm_bcdhw(
-            feature_36 + feature_scale * feature_update,
-            self.window_shifted_norm_feat,
+        feature_36 = (
+            feature_36
+            + self.shifted_feature_scale * feature_update
         )
-        score_embed_36 = self._apply_layer_norm_bcdhw(
-            score_embed_36 + score_scale * score_update,
-            self.window_shifted_norm_score,
+        score_embed_36 = (
+            score_embed_36
+            + self.shifted_score_scale * score_update
         )
 
-        # FFN.
-        feature_36 = self._ffn_feature(feature_36)
-        score_embed_36 = self._ffn_score(score_embed_36)
-
-        # Output LayerNorm.
-        feature_36 = self._apply_layer_norm_bcdhw(
-            feature_36, self.output_norm_feat
+        # Feature FFN (pre-norm).
+        ffn_feature = apply_layer_norm_bcdhw(
+            feature_36,
+            self.ffn_norm_feature,
         )
-        score_embed_36 = self._apply_layer_norm_bcdhw(
-            score_embed_36, self.output_norm_score
+        feature_update = self._ffn_feature_update(ffn_feature)
+
+        feature_36 = (
+            feature_36
+            + self.ffn_feature_scale * feature_update
+        )
+
+        # Score FFN (pre-norm).
+        ffn_score = apply_layer_norm_bcdhw(
+            score_embed_36,
+            self.ffn_norm_score,
+        )
+        score_update = self._ffn_score_update(ffn_score)
+
+        score_embed_36 = (
+            score_embed_36
+            + self.ffn_score_scale * score_update
         )
 
         return feature_36, score_embed_36

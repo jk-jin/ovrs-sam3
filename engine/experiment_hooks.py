@@ -163,7 +163,7 @@ def _compact_key_name(key: str) -> str:
         "bce_ignore_pixel_weight": "ignore",
         "bce_absent_class_weight": "abs",
         "score_embed_dim": "score_dim",
-        "clip_score_conv_kernel": "k",
+        "layer_scale_init": "lsi",
         "openclip_text_finetune": "text",
         "openclip_image_finetune": "image",
     }

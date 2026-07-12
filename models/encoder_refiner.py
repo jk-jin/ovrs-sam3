@@ -8,7 +8,10 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 from .score_embeddings import ClipScoreEmbedding
-from .encoder_refiner_attention import EncoderRefinerLayer
+from .encoder_refiner_attention import (
+    EncoderRefinerLayer,
+    apply_layer_norm_bcdhw,
+)
 
 
 def _safe_group_norm(num_channels: int) -> nn.GroupNorm:
@@ -178,7 +181,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         dropout: float = 0.1,
         prompt_templates: list[str] | None = None,
         normalize_label_for_clip: bool = True,
-        clip_score_conv_kernel: int = 7,
+        layer_scale_init: float = 0.1,
         use_checkpoint: bool = True,
         text_prompt_batch_size: int = 64,
         text_prompt_use_checkpoint: bool = True,
@@ -203,7 +206,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
             normalize_label=bool(normalize_label_for_clip),
             clip_output_dim=int(clip_dim),
             score_embed_dim=int(score_embed_dim),
-            conv_kernel=int(clip_score_conv_kernel),
             text_prompt_batch_size=int(text_prompt_batch_size),
             text_prompt_use_checkpoint=bool(text_prompt_use_checkpoint),
         )
@@ -238,9 +240,13 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 window_size=int(window_size),
                 shift_size=int(shift_size),
                 dropout=float(dropout),
+                layer_scale_init=float(layer_scale_init),
             )
             for _ in range(int(fusion_layers))
         ])
+
+        self.final_feature_norm = nn.LayerNorm(self.hidden_dim)
+        self.final_score_norm = nn.LayerNorm(self.score_embed_dim)
 
         self.upsampler = EncoderFeatureUpsampler(
             hidden_dim=self.hidden_dim,
@@ -378,6 +384,16 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     score_embed_36=score_embed_36,
                     sam_text_mean=sam_text_mean,
                 )
+
+        # Final LayerNorm after all refiner layers.
+        feature_36 = apply_layer_norm_bcdhw(
+            feature_36,
+            self.final_feature_norm,
+        )
+        score_embed_36 = apply_layer_norm_bcdhw(
+            score_embed_36,
+            self.final_score_norm,
+        )
 
         # 5. Upsample refined feature to 72×72 and fuse with original encoder feature.
         refined_encoder_features_72 = self.upsampler(

@@ -15,6 +15,146 @@ def _safe_group_norm(num_channels: int) -> nn.GroupNorm:
 
 
 # ---------------------------------------------------------------------------
+# Multi-scale score encoder
+# ---------------------------------------------------------------------------
+
+
+class _ScoreConvBranch(nn.Module):
+    """Depthwise 3×3 conv branch with dilation for multi-scale receptive fields.
+
+    Depthwise Conv 3×3 (dilation) → GroupNorm → GELU
+    → Pointwise Conv 1×1 → GroupNorm → GELU
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        branch_channels: int,
+        dilation: int,
+    ):
+        super().__init__()
+        self.depthwise = nn.Conv2d(
+            channels,
+            channels,
+            kernel_size=3,
+            padding=dilation,
+            dilation=dilation,
+            groups=channels,
+            bias=False,
+        )
+        self.norm1 = _safe_group_norm(channels)
+        self.act1 = nn.GELU()
+
+        self.pointwise = nn.Conv2d(
+            channels,
+            branch_channels,
+            kernel_size=1,
+            bias=False,
+        )
+        self.norm2 = _safe_group_norm(branch_channels)
+        self.act2 = nn.GELU()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.depthwise(x)
+        x = self.norm1(x)
+        x = self.act1(x)
+        x = self.pointwise(x)
+        x = self.norm2(x)
+        x = self.act2(x)
+        return x
+
+
+class MultiScaleScoreEncoder(nn.Module):
+    """Encode 32-template score maps into a 256-channel embedding via multi-scale conv.
+
+    32 templates → 1×1 stem (256 ch)
+    → three parallel depthwise branches (dilations 1, 2, 3; each 256→128)
+    → concat (384 ch) → 1×1 fuse (384→256)
+    → residual add with stem → GroupNorm + GELU
+    """
+
+    def __init__(
+        self,
+        num_templates: int = 32,
+        score_embed_dim: int = 256,
+    ):
+        super().__init__()
+
+        if score_embed_dim <= 0 or score_embed_dim % 2 != 0:
+            raise ValueError(
+                f"score_embed_dim must be a positive even integer, got {score_embed_dim}."
+            )
+
+        branch_channels = score_embed_dim // 2
+
+        self.stem = nn.Sequential(
+            nn.Conv2d(
+                num_templates,
+                score_embed_dim,
+                kernel_size=1,
+                bias=False,
+            ),
+            _safe_group_norm(score_embed_dim),
+            nn.GELU(),
+        )
+
+        self.branches = nn.ModuleList([
+            _ScoreConvBranch(
+                channels=score_embed_dim,
+                branch_channels=branch_channels,
+                dilation=1,
+            ),
+            _ScoreConvBranch(
+                channels=score_embed_dim,
+                branch_channels=branch_channels,
+                dilation=2,
+            ),
+            _ScoreConvBranch(
+                channels=score_embed_dim,
+                branch_channels=branch_channels,
+                dilation=3,
+            ),
+        ])
+
+        fused_channels = branch_channels * 3
+
+        self.fuse = nn.Conv2d(
+            fused_channels,
+            score_embed_dim,
+            kernel_size=1,
+            bias=False,
+        )
+
+        self.output_norm = _safe_group_norm(score_embed_dim)
+        self.output_act = nn.GELU()
+
+    def forward(self, score_maps: torch.Tensor) -> torch.Tensor:
+        if score_maps.ndim != 4:
+            raise ValueError(
+                f"score_maps must be 4D [N, C_in, H, W], got shape {tuple(score_maps.shape)}."
+            )
+        if score_maps.shape[1] != 32:
+            raise ValueError(
+                f"score_maps must have 32 input channels, got {score_maps.shape[1]}."
+            )
+
+        base = self.stem(score_maps)
+
+        branch_outputs = [
+            branch(base)
+            for branch in self.branches
+        ]
+
+        multiscale = torch.cat(branch_outputs, dim=1)
+        delta = self.fuse(multiscale)
+
+        output = self.output_norm(base + delta)
+        output = self.output_act(output)
+
+        return output
+
+
+# ---------------------------------------------------------------------------
 # ClipScoreEmbedding
 # ---------------------------------------------------------------------------
 
@@ -29,7 +169,7 @@ class ClipScoreEmbedding(nn.Module):
 
     Process:
         template_text × remoteclip_feat_map → score_maps [B, C, 32, 36, 36]
-        → two-stage conv → clip_score_embed [B, C, 256, 36, 36]
+        → multi-scale score encoder → clip_score_embed [B, C, 256, 36, 36]
     """
 
     def __init__(
@@ -39,7 +179,6 @@ class ClipScoreEmbedding(nn.Module):
         normalize_label: bool = True,
         clip_output_dim: int = 768,
         score_embed_dim: int = 256,
-        conv_kernel: int = 7,
         text_prompt_batch_size: int = 64,
         text_prompt_use_checkpoint: bool = True,
     ):
@@ -60,29 +199,9 @@ class ClipScoreEmbedding(nn.Module):
                 f"Expected 32 prompt templates, got {self.num_prompt_templates}."
             )
 
-        padding = int(conv_kernel) // 2
-
-        self.score_conv = nn.Sequential(
-            nn.Conv2d(
-                self.num_prompt_templates,
-                self.score_embed_dim,
-                kernel_size=int(conv_kernel),
-                stride=1,
-                padding=padding,
-                bias=False,
-            ),
-            _safe_group_norm(self.score_embed_dim),
-            nn.GELU(),
-            nn.Conv2d(
-                self.score_embed_dim,
-                self.score_embed_dim,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-                bias=False,
-            ),
-            _safe_group_norm(self.score_embed_dim),
-            nn.GELU(),
+        self.score_encoder = MultiScaleScoreEncoder(
+            num_templates=self.num_prompt_templates,
+            score_embed_dim=self.score_embed_dim,
         )
 
         self._text_feature_cache: dict[tuple, torch.Tensor] = {}
@@ -198,7 +317,7 @@ class ClipScoreEmbedding(nn.Module):
             W,
         )
 
-        clip_score_flat = self.score_conv(score_flat)
+        clip_score_flat = self.score_encoder(score_flat)
 
         clip_score_embed_36 = clip_score_flat.reshape(
             batch_size, num_classes, self.score_embed_dim, H, W
@@ -209,4 +328,3 @@ class ClipScoreEmbedding(nn.Module):
             score_maps_36.contiguous(),
             template_clip_text.contiguous(),
         )
-
