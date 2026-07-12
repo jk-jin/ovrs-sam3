@@ -1,0 +1,22 @@
+experiment_tracking = dict(
+    metrics_jsonl=dict(
+        enabled=True,
+        filename="metrics.jsonl",
+        train_interval=20,
+        val_interval=1,
+        priority=80,
+    ),
+    wandb=dict(
+        enabled=False,
+        project="ovrs-sam3",
+        name=None,
+        group=None,
+        tags=[],
+        mode="online",
+        train_interval=20,
+        log_val_iter=False,
+        priority=90,
+        name_from_config_keys=[],
+        name_prefix=None,
+    ),
+)

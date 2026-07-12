@@ -26,19 +26,7 @@ parameters:
       - loveda-val
       - final-design
       - fixed-32-templates
-      - score-dim-64
-
-  train_cfg.max_iters:
-    value: 20000
-
-  train_cfg.eval_interval:
-    value: 2000
-
-  train_cfg.save_interval:
-    value: 2000
-
-  train_cfg.val_max_iters:
-    value: 500
+      - score-dim-256
 
   visualization.enabled:
     value: true
@@ -47,7 +35,7 @@ command:
   - ${env}
   - ${interpreter}
   - ${program}
-  - configs/ovrs_sam3_isaid_loveda_full.py
+  - configs/train/isaid_loveda_full.py
 
   - --work-dir
   - work_dirs/full/isaid_loveda_final_v1

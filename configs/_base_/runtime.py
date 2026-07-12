@@ -1,8 +1,8 @@
 seed = 42
-work_dir = './work_dirs/ovrs_sam3'
+work_dir = "./work_dirs/ovrs_sam3"
 
-default_scope = 'sam3'
-log_level = 'INFO'
+default_scope = "sam3"
+log_level = "INFO"
 
 default_hooks = dict(
     logger=dict(

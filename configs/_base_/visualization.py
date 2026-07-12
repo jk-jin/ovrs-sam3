@@ -1,5 +1,5 @@
 visualization = dict(
-    enabled=True,
+    enabled=False,
     save_dir="visualizations",
     save_stage="val",
     alpha=0.45,

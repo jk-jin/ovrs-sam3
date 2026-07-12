@@ -7,14 +7,12 @@ metric:
   goal: maximize
 
 parameters:
-  # Final design: OpenCLIP text/image both frozen.
   model.freeze_cfg.openclip_text_finetune:
     value: frozen
 
   model.freeze_cfg.openclip_image_finetune:
     value: frozen
 
-  # Loss sweep.
   model.criterion_cfg.final_bce_weight:
     values:
       - 0.5
@@ -37,7 +35,6 @@ parameters:
       - 0.05
       - 0.1
 
-  # W&B logging.
   experiment_tracking.wandb.enabled:
     value: true
 
@@ -64,7 +61,7 @@ command:
   - ${env}
   - ${interpreter}
   - ${program}
-  - configs/ovrs_sam3_isaid_loveda_exp.py
+  - configs/train/isaid_loveda_exp.py
 
   - --work-dir
   - work_dirs/sweeps/exp_isaid_loveda_loss_v1
