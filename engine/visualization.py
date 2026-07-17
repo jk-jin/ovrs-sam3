@@ -661,12 +661,14 @@ class VisualizationManager:
 
         if final_score_map is None:
             final_score_map = raw_final_score_map
+            gated_source = raw_source
         else:
             if final_score_map.dim() != 4:
                 raise ValueError(
                     f"Expected final_score_map as [B, C, H, W], "
                     f"got {tuple(final_score_map.shape)}."
                 )
+            gated_source = OUTPUT_KEYS.final_score_map
 
         if tuple(final_score_map.shape) != tuple(raw_final_score_map.shape):
             raise ValueError(
@@ -680,7 +682,6 @@ class VisualizationManager:
                 f"{tuple(final_logits.shape)} vs {tuple(raw_final_score_map.shape)}."
             )
 
-        gated_source = raw_source
         return (
             final_logits,
             raw_final_score_map,

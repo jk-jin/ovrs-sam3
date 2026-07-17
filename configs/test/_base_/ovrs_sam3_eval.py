@@ -24,3 +24,9 @@ train_cfg = dict(
     auto_resume=False,
     device="cuda",
 )
+
+visualization = dict(
+    enabled=True,
+    vis_prob=0.02,
+    max_samples_per_epoch=100,
+)

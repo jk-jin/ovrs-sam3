@@ -1,6 +1,6 @@
 # OVRS-SAM3 设计与实现说明
 
-更新时间：2026-07-13
+更新时间：2026-07-17
 目标分支：`master`
 项目仓库：`jk-jin/ovrs-sam3`
 任务状态：当前只实现开放词汇语义分割；hybrid模式尚未实现
@@ -713,14 +713,35 @@ bce_ignore_pixel_weight=0.05
 
 ## 16. 推理、背景类与评估
 
-### 16.1 基础预测
+### 16.1 基础预测与逐类别相对过滤
 
 ```text
-raw_final_score_map = sigmoid(final_logits)
-final_pred = argmax(raw_final_score_map, class_dimension)
+final_logits
+  → sigmoid
+  → raw_final_score_map（未过滤的原始sigmoid分数，永久保留）
+  → 每张图、每个类别独立做空间min-max缩放得到relative_score
+  → relative_score低于class_relative_prob_thd的位置在原始分数上置0
+  → final_score_map（过滤后分数，保留位置仍是原始sigmoid数值）
+  → argmax(final_score_map, class_dimension) → final_pred
 ```
 
-`sigmoid`把每个类别的独立logit变为0到1之间的分数；`argmax`再从类别维选择分数最高的类别。由于sigmoid对单个数值单调递增，直接对logits做argmax会得到相同类别索引，但项目保留score map供阈值过滤和可视化使用。
+`sigmoid`把每个类别的独立logit变为0到1之间的分数。相对过滤由adapter配置控制：
+
+```python
+adapter_cfg=dict(
+    class_relative_prob_thd=0.5,  # None表示关闭逐类别相对过滤
+    class_relative_eps=1e-6,      # 判定掩码数值跨度是否小到无法稳定缩放
+)
+```
+
+规则：
+
+* `raw_final_score_map`与`final_score_map`是两套不同输出：前者是未过滤的sigmoid分数，后者是相对低分位置已置0、保留位置仍为原始数值的分数。缩放后的relative_score只用于生成保留掩码，绝不作为输出分数。
+* min/max只在每个`[b, c]`掩码的`H×W`空间内计算，不跨batch、不跨类别。
+* 掩码数值跨度不超过`class_relative_eps`时视为近似常数，整张保留，不做过滤。
+* 不引入softmax类别竞争；`final_pred`始终由过滤后的`final_score_map`做argmax得到。
+* 普通推理与TTA共用`SemanticSegAdapter.build_infer_score_outputs()`统一生成这三个输出。
+* 训练的`output_mode="final"`路径只返回`final_logits`，不经过任何阈值处理。
 
 ### 16.2 背景配置
 
@@ -740,8 +761,8 @@ background_cfg=dict(
 | 模式                                         | 行为                                   |
 | ------------------------------------------ | ------------------------------------ |
 | `enabled=False`                            | 没有显式背景，普通argmax，不做低置信度背景过滤。          |
-| `enabled=True, exclude_from_forward=False` | 背景参与前向；低于阈值的像素设为背景id。                |
-| `enabled=True, exclude_from_forward=True`  | 背景不进入模型类别列表；评估时先恢复类别id，再把低置信度像素设为背景。 |
+| `enabled=True, exclude_from_forward=False` | 背景参与前向；分数小于等于阈值的像素设为背景id。            |
+| `enabled=True, exclude_from_forward=True`  | 背景不进入模型类别列表；评估时先恢复类别id，再把分数小于等于阈值的像素设为背景。 |
 
 LoveDA验证配置使用第三种模式：背景id为0，但背景不参与模型前向。
 
@@ -761,13 +782,15 @@ raw label
 
 `engine/evaluator.py`中的`build_eval_semantic_pred()`同时服务evaluator和visualizer，避免指标与图片使用不同预测规则。
 
-它优先读取`final_score_map`，缺失时回退到`final_pred`，最终返回：
+它优先读取`final_score_map`（逐类别相对过滤后的原始绝对分数），缺失时回退到`final_pred`，最终返回：
 
 ```text
 pred_eval
 eval_num_classes
 eval_class_names
 ```
+
+`eval_cfg.prob_thd`（当前0.1）是全局绝对分数阈值，作用于过滤后`final_score_map`的类别最大值，把小于等于阈值的像素设为背景id；使用`<=`是为了让逐类别相对过滤置0的像素在`prob_thd=0.0`时也能直接归为背景。它只在启用背景类时生效，与adapter的逐类别相对阈值职责分离。
 
 评估指标包括：
 
@@ -796,7 +819,19 @@ batch移到device
   → scheduler step
 ```
 
-验证函数使用`@torch.no_grad()`，支持翻转TTA（仅`scale=1.0`，因当前refiner固定72×72/36×36尺度）。TTA翻转时同步变换`img_batch`和`raw_images`，确保SAM3和RemoteCLIP空间一致。验证结束后模型重新进入训练模式，但冻结的SAM3模块以及RemoteCLIP编码器仍被强制保持`eval()`。
+验证函数使用`@torch.no_grad()`，支持翻转TTA（仅`scale=1.0`，因当前refiner固定72×72/36×36尺度）。TTA翻转时同步变换`img_batch`和`raw_images`，确保SAM3和RemoteCLIP空间一致。
+
+逐类别相对过滤是非线性操作，TTA合并顺序必须是“先平均原始分数，再统一过滤一次”：
+
+```text
+每个视图输出raw_final_score_map
+  → 反翻转恢复空间方向
+  → 多视图平均raw_final_score_map（跳过各视图已过滤的final_score_map，不参与平均）
+  → adapter.build_infer_score_outputs()
+  → 重新生成final_score_map与final_pred
+```
+
+TTA未启用时直接执行`model(batch)`，由adapter的infer分支完成一次过滤。验证结束后模型重新进入训练模式，但冻结的SAM3模块以及RemoteCLIP编码器仍被强制保持`eval()`。
 
 当前TTA配置：
 
@@ -850,6 +885,8 @@ RemoteCLIP模板文本feature的缓存策略：
 | key                           | 形状                            | 用途                                 |
 | ----------------------------- | ----------------------------- | ---------------------------------- |
 | `final_logits`                | `[B, C, H_out, W_out]`        | 最终分割logits。                        |
+| `raw_final_score_map`         | `[B, C, H_out, W_out]`        | 未过滤的sigmoid分数。                     |
+| `final_score_map`             | `[B, C, H_out, W_out]`        | 逐类别相对过滤后分数，保留位置仍是原始sigmoid数值。      |
 | `encoder_features`            | `[B, C, 256, 72, 72]`         | refiner之前的SAM3 encoder feature。    |
 | `refined_encoder_features`    | `[B, C, 256, 72, 72]`         | 写回前的refined feature。               |
 | `refiner_features_36`         | `[B, C, 256, 36, 36]`         | refiner最终图像feature。                |
@@ -882,7 +919,7 @@ Debug分支中的detach只用于返回诊断副本，不应提前作用于参与
 | `models/encoder_refiner.py`           | FPN注入、36×36 refiner主流程和72×72上采样融合。                            |
 | `models/encoder_refiner_attention.py` | ClassScoreAttention、WindowScoreAttention、EncoderRefinerLayer。 |
 | `models/segmentor.py`                 | 模型外层wrapper和训练/推理模式管理。                                        |
-| `models/adapters/semantic_adapter.py` | 训练只返回logits；推理生成score map和最终类别图。                              |
+| `models/adapters/semantic_adapter.py` | 训练只返回logits；推理生成raw/过滤后score map和最终类别图，逐类别相对过滤在此实现。                              |
 | `losses/semantic_criterion.py`        | present/absent加权BCE与可选Dice。                                   |
 | `data/dataset.py`                     | 图像、标签、类别名称和背景配置处理。                                            |
 | `data/collate.py`                     | batch padding、共享类别顺序、label map与metadata组装。                    |
@@ -912,6 +949,9 @@ Debug分支中的detach只用于返回诊断副本，不应提前作用于参与
 15. 每个refiner子层的feature与score更新使用独立LayerScale。
 16. 每层内部不允许恢复post-norm。
 17. 整个refiner只在四层全部结束后执行一次最终LayerNorm。
+18. 推理中`raw_final_score_map`不得被原地修改；逐类别过滤必须用非原地操作生成`final_score_map`。
+19. 相对过滤保留区域必须保留原始sigmoid分数，不得用缩放后的relative_score替换。
+20. TTA必须先平均`raw_final_score_map`再统一过滤一次，不能平均各视图已过滤的`final_score_map`。
 
 ## 21. 已知限制与当前非目标
 

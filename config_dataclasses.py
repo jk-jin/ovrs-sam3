@@ -112,7 +112,8 @@ class SemanticCriterionConfig:
 
 @dataclass
 class AdapterConfig:
-    pass
+    class_relative_prob_thd: Optional[float] = None
+    class_relative_eps: float = 1e-6
 
 
 @dataclass

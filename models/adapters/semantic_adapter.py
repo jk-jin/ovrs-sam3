@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Dict, Optional
 
 import torch
@@ -10,8 +11,32 @@ from ..task_modes import OUTPUT_KEYS
 
 
 class SemanticSegAdapter(nn.Module):
-    def __init__(self):
+    def __init__(
+        self,
+        class_relative_prob_thd: Optional[float] = None,
+        class_relative_eps: float = 1e-6,
+    ):
         super().__init__()
+
+        if class_relative_prob_thd is not None:
+            class_relative_prob_thd = float(class_relative_prob_thd)
+            if not math.isfinite(class_relative_prob_thd) or not (
+                0.0 <= class_relative_prob_thd <= 1.0
+            ):
+                raise ValueError(
+                    "class_relative_prob_thd must be None or a finite value "
+                    f"in [0.0, 1.0], got {class_relative_prob_thd}."
+                )
+
+        class_relative_eps = float(class_relative_eps)
+        if not math.isfinite(class_relative_eps) or class_relative_eps <= 0.0:
+            raise ValueError(
+                "class_relative_eps must be a finite positive value, "
+                f"got {class_relative_eps}."
+            )
+
+        self.class_relative_prob_thd = class_relative_prob_thd
+        self.class_relative_eps = class_relative_eps
 
     @staticmethod
     def _require(
@@ -86,6 +111,41 @@ class SemanticSegAdapter(nn.Module):
                 f"{tuple(lhs.shape)} vs {tuple(rhs.shape)}."
             )
 
+    def _apply_class_relative_filter(
+        self,
+        raw_score_map: torch.Tensor,
+    ) -> torch.Tensor:
+        raw_score_map = self._as_4d_map(
+            raw_score_map, OUTPUT_KEYS.raw_final_score_map
+        )
+
+        if self.class_relative_prob_thd is None:
+            return raw_score_map
+
+        spatial_min = raw_score_map.amin(dim=(-2, -1), keepdim=True)
+        spatial_max = raw_score_map.amax(dim=(-2, -1), keepdim=True)
+        span = spatial_max - spatial_min
+
+        relative_score = (
+            (raw_score_map - spatial_min)
+            / span.clamp_min(self.class_relative_eps)
+        )
+
+        keep = relative_score >= self.class_relative_prob_thd
+        keep = keep | (span <= self.class_relative_eps)
+        return raw_score_map.masked_fill(~keep, 0.0)
+
+    def build_infer_score_outputs(
+        self,
+        raw_final_score_map: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        final_score_map = self._apply_class_relative_filter(raw_final_score_map)
+        return {
+            OUTPUT_KEYS.raw_final_score_map: raw_final_score_map,
+            OUTPUT_KEYS.final_score_map: final_score_map,
+            OUTPUT_KEYS.final_pred: final_score_map.argmax(dim=1),
+        }
+
     def forward(
         self,
         raw_outputs: Dict[str, torch.Tensor],
@@ -123,10 +183,7 @@ class SemanticSegAdapter(nn.Module):
         outputs[OUTPUT_KEYS.final_logits] = final_logits
 
         raw_final_score_map = final_logits.sigmoid()
-
-        outputs[OUTPUT_KEYS.raw_final_score_map] = raw_final_score_map
-        outputs[OUTPUT_KEYS.final_score_map] = raw_final_score_map
-        outputs[OUTPUT_KEYS.final_pred] = raw_final_score_map.argmax(dim=1)
+        outputs.update(self.build_infer_score_outputs(raw_final_score_map))
 
         for key in (
             OUTPUT_KEYS.encoder_features,

@@ -74,7 +74,7 @@ def build_eval_semantic_pred(
 
         if prob_thd is not None and max_score is not None:
             pred_eval = pred_eval.clone()
-            pred_eval[max_score < float(prob_thd)] = background_class_id
+            pred_eval[max_score <= float(prob_thd)] = background_class_id
 
         return pred_eval, eval_num_classes, eval_class_names
 
@@ -82,7 +82,7 @@ def build_eval_semantic_pred(
     pred_eval[pred_eval >= background_class_id] += 1
 
     if prob_thd is not None and max_score is not None:
-        pred_eval[max_score < float(prob_thd)] = background_class_id
+        pred_eval[max_score <= float(prob_thd)] = background_class_id
 
     return pred_eval, eval_num_classes, eval_class_names
 
@@ -327,6 +327,11 @@ def inference_with_tta(
                 if not torch.is_tensor(value):
                     continue
 
+                # 逐类别相对过滤是非线性操作，各视图的过滤结果不能平均；
+                # 只平均原始分数，合并后统一过滤一次。
+                if key == OUTPUT_KEYS.final_score_map:
+                    continue
+
                 if value.dim() == 4:
                     deaug = _deaugment_logits(value, target_hw=target_hw, flip_mode=flip_mode)
                     if key not in sum_4d:
@@ -351,9 +356,23 @@ def inference_with_tta(
     for key, value in sum_2d.items():
         merged_outputs[key] = value / float(num_views)
 
-    if OUTPUT_KEYS.final_score_map in merged_outputs:
-        score_map = merged_outputs[OUTPUT_KEYS.final_score_map]
-        merged_outputs[OUTPUT_KEYS.final_pred] = score_map.argmax(dim=1).long()
+    if OUTPUT_KEYS.raw_final_score_map not in merged_outputs:
+        raise ValueError(
+            f"TTA merged outputs must contain '{OUTPUT_KEYS.raw_final_score_map}'."
+        )
+
+    segmentor = getattr(model, "module", model)
+    adapter = getattr(segmentor, "adapter", None)
+    if adapter is None or not hasattr(adapter, "build_infer_score_outputs"):
+        raise ValueError(
+            "TTA requires model.adapter with build_infer_score_outputs()."
+        )
+
+    merged_outputs.update(
+        adapter.build_infer_score_outputs(
+            merged_outputs[OUTPUT_KEYS.raw_final_score_map]
+        )
+    )
 
     return merged_outputs
 

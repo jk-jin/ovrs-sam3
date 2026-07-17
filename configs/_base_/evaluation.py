@@ -1,6 +1,6 @@
 eval_cfg = dict(
     ignore_index=255,
-    prob_thd=0.1,
+    prob_thd=0.0,
 )
 
 tta_cfg = dict(

@@ -85,7 +85,10 @@ model = dict(
         openclip_image_finetune="attention",
     ),
 
-    adapter_cfg=dict(),
+    adapter_cfg=dict(
+        class_relative_prob_thd=0.2,
+        class_relative_eps=1e-6,
+    ),
 
     criterion_cfg=dict(
         ignore_index=255,
