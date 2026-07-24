@@ -45,13 +45,11 @@ class MetricsJsonlHook(Hook):
         enabled: bool = True,
         filename: str = "metrics.jsonl",
         train_interval: int = 20,
-        val_interval: int = 1,
         priority: int = 80,
     ):
         self.enabled = bool(enabled)
         self.filename = str(filename)
         self.train_interval = int(train_interval)
-        self.val_interval = int(val_interval)
         self.priority = int(priority)
         self.path: Optional[Path] = None
 
@@ -63,7 +61,8 @@ class MetricsJsonlHook(Hook):
         save_dir.mkdir(parents=True, exist_ok=True)
         self.path = save_dir / self.filename
 
-        with self.path.open("a", encoding="utf-8") as f:
+        mode = "a" if getattr(trainer, "is_resumed", False) else "w"
+        with self.path.open(mode, encoding="utf-8") as f:
             f.write(json.dumps({
                 "mode": "meta",
                 "event": "before_run",
@@ -210,7 +209,6 @@ class WandbHook(Hook):
         tags: Optional[list[str]] = None,
         mode: str = "online",
         train_interval: int = 20,
-        log_val_iter: bool = False,
         priority: int = 90,
         name_from_config_keys: Optional[list[str]] = None,
         name_prefix: Optional[str] = None,
@@ -222,12 +220,42 @@ class WandbHook(Hook):
         self.tags = list(tags or [])
         self.mode = str(mode)
         self.train_interval = int(train_interval)
-        self.log_val_iter = bool(log_val_iter)
         self.priority = int(priority)
         self.name_from_config_keys = list(name_from_config_keys or [])
         self.name_prefix = name_prefix
+
+        self.run_id: Optional[str] = None
+        self.run_name: Optional[str] = None
+        self.entity: Optional[str] = None
+
         self._wandb = None
         self._run = None
+        self._metric_defined = False
+
+        self._resume_project: Optional[str] = None
+        self._resume_entity: Optional[str] = None
+
+    # ------------------------------------------------------------------
+    # Checkpoint state
+    # ------------------------------------------------------------------
+
+    def state_dict(self):
+        return {
+            "run_id": self.run_id,
+            "project": self.project,
+            "entity": self.entity,
+            "run_name": self.run_name,
+        }
+
+    def load_state_dict(self, state):
+        self.run_id = state.get("run_id", None)
+        self.run_name = state.get("run_name", None)
+        self._resume_project = state.get("project", None)
+        self._resume_entity = state.get("entity", None)
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
 
     def before_run(self, trainer):
         if not self.enabled:
@@ -243,27 +271,79 @@ class WandbHook(Hook):
 
         self._wandb = wandb
 
+        is_resumed = bool(getattr(trainer, "is_resumed", False))
+
+        if is_resumed:
+            if self.run_id is not None:
+                resume_mode = "must"
+            else:
+                # Checkpoint was saved without W&B state; start a fresh run.
+                print(
+                    "WandbHook: resumed checkpoint has no W&B run_id — "
+                    "starting a new W&B run."
+                )
+                resume_mode = "never"
+                self.run_id = wandb.util.generate_id()
+        else:
+            resume_mode = "never"
+            self.run_id = wandb.util.generate_id()
+
+        if resume_mode == "must":
+            # Verify project/entity consistency against checkpoint.
+            if self._resume_project is not None and self._resume_project != self.project:
+                raise ValueError(
+                    f"W&B project mismatch: checkpoint saved under "
+                    f"{self._resume_project!r}, current config is {self.project!r}."
+                )
+            if self._resume_entity is not None and self.entity is not None:
+                if self._resume_entity != self.entity:
+                    raise ValueError(
+                        f"W&B entity mismatch: checkpoint saved under "
+                        f"{self._resume_entity!r}, current config is {self.entity!r}."
+                    )
+
         config = {}
         raw_cfg = getattr(trainer, "raw_cfg_for_logging", None)
         if raw_cfg is not None:
             config = _jsonable(raw_cfg) or {}
 
-        run_name = self.name
-        if run_name is None:
-            run_name = _build_auto_run_name(
+        if self.run_name is None:
+            self.run_name = self.name
+        if self.run_name is None:
+            self.run_name = _build_auto_run_name(
                 raw_cfg=config,
                 keys=self.name_from_config_keys,
                 prefix=self.name_prefix,
             )
 
         self._run = wandb.init(
+            id=self.run_id,
+            resume=resume_mode,
             project=self.project,
-            name=run_name,
+            entity=self.entity,
+            name=self.run_name,
             group=self.group,
             tags=self.tags,
             mode=self.mode,
             config=config,
         )
+
+        # Sync from the actual run (in case W&B assigned different values).
+        self.run_id = self._run.id
+        self.project = self._run.project or self.project
+        self.entity = self._run.entity
+        self.run_name = self._run.name or self.run_name
+
+        self._define_metrics()
+
+    def _define_metrics(self) -> None:
+        if self._metric_defined or self._run is None:
+            return
+        self._run.define_metric("trainer/global_iter")
+        self._run.define_metric("train/*", step_metric="trainer/global_iter")
+        self._run.define_metric("val/*", step_metric="trainer/global_iter")
+        self._run.define_metric("extra/*", step_metric="trainer/global_iter")
+        self._metric_defined = True
 
     def after_train_iter(self, trainer, global_iter: int, batch, outputs: Dict[str, float]):
         if not self.enabled or self._wandb is None:
@@ -279,7 +359,7 @@ class WandbHook(Hook):
         extra_log_vars = dict(state.get("extra_log_vars", {}) or {})
 
         payload = {
-            "iter": int(global_iter),
+            "trainer/global_iter": int(global_iter),
             "train/iter_time": state.get("iter_time"),
             "train/data_time": state.get("data_time"),
             "train/memory_mb": state.get("memory_mb"),
@@ -297,21 +377,26 @@ class WandbHook(Hook):
             payload[f"extra/{k}"] = v
 
         payload = {k: v for k, v in payload.items() if _jsonable(v) is not None}
-        self._wandb.log(payload, step=int(global_iter))
+        self._run.log(payload)
 
     def after_val(self, trainer, global_iter: int, val_stats: Dict[str, float]):
         if not self.enabled or self._wandb is None or not val_stats:
             return
 
-        payload = {"iter": int(global_iter)}
+        payload = {"trainer/global_iter": int(global_iter)}
         for k, v in val_stats.items():
             if str(k).startswith("_"):
                 continue
             if _jsonable(v) is not None:
                 payload[f"val/{k}"] = v
 
-        self._wandb.log(payload, step=int(global_iter))
+        self._run.log(payload)
+
+    def on_exception(self, trainer, exception):
+        if self.enabled and self._run is not None:
+            self._run.finish(exit_code=1)
 
     def after_run(self, trainer):
-        if self.enabled and self._wandb is not None:
-            self._wandb.finish()
+        if self.enabled and self._run is not None:
+            self._run.finish(exit_code=0)
+            self._run = None

@@ -10,7 +10,6 @@ train_cfg = dict(
     monitor="semantic.miou",
     monitor_mode="max",
     max_keep_ckpts=5,
-    auto_resume=False,
     device="cuda",
 )
 

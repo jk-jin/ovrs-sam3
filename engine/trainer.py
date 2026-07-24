@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import signal
 import time
 from collections import deque
 from dataclasses import fields, is_dataclass
@@ -19,7 +20,9 @@ from .evaluator import (
     inference_with_tta,
 )
 from .hooks import Hook, HookManager
+from .runtime_state import capture_rng_state, restore_rng_state
 from .visualization import VisualizationManager
+
 
 class Trainer:
     def __init__(
@@ -62,8 +65,10 @@ class Trainer:
         self.global_iter = 0
 
         self.iters_per_cycle = None
-        if self.train_dataloader is not None and hasattr(self.train_dataloader, "__len__"):
-            self.iters_per_cycle = len(self.train_dataloader)
+        if self.train_dataloader is not None:
+            batch_sampler = getattr(self.train_dataloader, "batch_sampler", None)
+            if batch_sampler is not None and hasattr(batch_sampler, "__len__"):
+                self.iters_per_cycle = len(batch_sampler)
 
         self.val_iters_per_epoch = None
         if self.val_dataloader is not None and hasattr(self.val_dataloader, "__len__"):
@@ -88,7 +93,49 @@ class Trainer:
         self._val_metric_history = deque(maxlen=self.cfg.log_window_size)
 
         self._train_iterator = None
-        self._data_cycle = 0
+        self.is_resumed = False
+        self._stop_requested = False
+        self._pending_rng_state = None
+        self._pending_val_from_resume = False
+
+        self._setup_signal_handlers()
+
+    # ------------------------------------------------------------------
+    # Signal handlers
+    # ------------------------------------------------------------------
+
+    def _setup_signal_handlers(self) -> None:
+        def _handler(signum, frame):
+            self._stop_requested = True
+
+        try:
+            signal.signal(signal.SIGINT, _handler)
+            signal.signal(signal.SIGTERM, _handler)
+        except ValueError:
+            pass
+
+    # ------------------------------------------------------------------
+    # State dict (for checkpoint runtime_state)
+    # ------------------------------------------------------------------
+
+    def state_dict(self) -> Dict[str, object]:
+        train_sampler_state = None
+        if self.train_dataloader is not None:
+            batch_sampler = getattr(self.train_dataloader, "batch_sampler", None)
+            if batch_sampler is not None and hasattr(batch_sampler, "state_dict"):
+                train_sampler_state = batch_sampler.state_dict()
+
+        return {
+            "rng": capture_rng_state(),
+            "data": {
+                "sampler": train_sampler_state,
+            },
+            "hooks": self.hook_manager.state_dict(),
+        }
+
+    # ------------------------------------------------------------------
+    # Resume
+    # ------------------------------------------------------------------
 
     def _get_val_max_iters(self) -> Optional[int]:
         value = getattr(self.cfg, "val_max_iters", None)
@@ -99,34 +146,52 @@ class Trainer:
             return None
         return value
 
-    def maybe_resume_latest(self):
-        if not self.cfg.auto_resume:
-            return None
+    def _restore_runtime_state(self, runtime_state: Dict) -> None:
+        """Restore sampler and hook state from checkpoint.
 
-        ckpt = self.checkpoint_manager.resume_latest(
-            model=self.model,
-            optimizer=self.optimizer,
-            scaler=self.scaler,
-            scheduler=self.lr_scheduler,
-            strict=False,
-        )
-        if ckpt is not None:
-            self.global_iter = int(ckpt.get("global_iter", 0))
-            print(f"Auto resumed from latest checkpoint, starting at iter={self.global_iter}")
-        return ckpt
+        RNG state is deferred — saved to ``_pending_rng_state`` and restored
+        after the iterator and W&B are set up, so the resume process itself
+        does not consume the RNG.
+        """
+        if not runtime_state:
+            return
 
-    def resume_from(self, path: str):
+        data_state = runtime_state.get("data", {}) or {}
+        sampler_state = data_state.get("sampler", None)
+        if sampler_state is not None and self.train_dataloader is not None:
+            batch_sampler = getattr(self.train_dataloader, "batch_sampler", None)
+            if batch_sampler is not None and hasattr(batch_sampler, "load_state_dict"):
+                batch_sampler.load_state_dict(sampler_state)
+
+        hooks_state = runtime_state.get("hooks", {}) or {}
+        self.hook_manager.load_state_dict(hooks_state)
+
+        rng_state = runtime_state.get("rng", None)
+        if rng_state is not None:
+            self._pending_rng_state = rng_state
+
+    def resume_from(self, path: str) -> Dict:
         ckpt = self.checkpoint_manager.load(
             path,
             model=self.model,
             optimizer=self.optimizer,
             scaler=self.scaler,
             scheduler=self.lr_scheduler,
-            strict=False,
         )
         self.global_iter = int(ckpt.get("global_iter", 0))
+        self.is_resumed = True
+
+        extra = ckpt.get("extra", {}) or {}
+        if extra.get("val_status") == "pending":
+            self._pending_val_from_resume = True
+
+        self._restore_runtime_state(ckpt.get("runtime_state", {}) or {})
         print(f"Resumed from {path}, starting at iter={self.global_iter}")
         return ckpt
+
+    # ------------------------------------------------------------------
+    # Device helpers
+    # ------------------------------------------------------------------
 
     def _move_to_device(self, obj):
         if isinstance(obj, torch.Tensor):
@@ -147,6 +212,10 @@ class Trainer:
             return tuple(self._move_to_device(v) for v in obj)
 
         return obj
+
+    # ------------------------------------------------------------------
+    # Training step
+    # ------------------------------------------------------------------
 
     def _compute_train_loss(self, batch) -> tuple[Dict[str, torch.Tensor], torch.Tensor]:
         if not hasattr(self.model, "build_encoder_refiner_cache"):
@@ -230,6 +299,21 @@ class Trainer:
                 stats[key] = float(value)
 
         return stats, did_step
+
+    # ------------------------------------------------------------------
+    # Sampler commit
+    # ------------------------------------------------------------------
+
+    def _commit_sampler_batch(self) -> None:
+        if self.train_dataloader is None:
+            return
+        batch_sampler = getattr(self.train_dataloader, "batch_sampler", None)
+        if batch_sampler is not None and hasattr(batch_sampler, "commit_batch"):
+            batch_sampler.commit_batch()
+
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
 
     def _forward_val_outputs(self, batch) -> Dict[str, torch.Tensor]:
         use_amp = self.cfg.use_amp and self.device.type == "cuda"
@@ -341,10 +425,9 @@ class Trainer:
                     out[str(k)] = vv
         return out
 
-    def _estimate_data_cycle(self) -> Optional[int]:
-        if self.iters_per_cycle is None or self.iters_per_cycle <= 0:
-            return None
-        return (self.global_iter // self.iters_per_cycle) + 1
+    # ------------------------------------------------------------------
+    # Log state
+    # ------------------------------------------------------------------
 
     def _update_train_log_state(
         self,
@@ -367,7 +450,7 @@ class Trainer:
             "mode": "train",
             "iter": int(self.global_iter),
             "max_iters": int(self.cfg.max_iters),
-            "data_cycle": self._estimate_data_cycle(),
+            "data_cycle": self._get_sampler_cycle(),
             "iters_per_cycle": self.iters_per_cycle,
             "lrs": self._get_current_lrs(),
             "eta_seconds": eta_seconds,
@@ -411,43 +494,24 @@ class Trainer:
             "extra_log_vars": self._collect_extra_log_vars(),
         }
 
-    def _set_dataloader_cycle(self, cycle_index: int) -> None:
+    # ------------------------------------------------------------------
+    # Data iterator
+    # ------------------------------------------------------------------
+
+    def _get_sampler_cycle(self) -> Optional[int]:
         if self.train_dataloader is None:
-            return
-
-        sampler = getattr(self.train_dataloader, "sampler", None)
-        if sampler is not None and hasattr(sampler, "set_epoch"):
-            sampler.set_epoch(cycle_index)
-
+            return None
         batch_sampler = getattr(self.train_dataloader, "batch_sampler", None)
-        if batch_sampler is not None and hasattr(batch_sampler, "set_epoch"):
-            batch_sampler.set_epoch(cycle_index)
+        if batch_sampler is not None and hasattr(batch_sampler, "cycle"):
+            return int(batch_sampler.cycle)
+        return None
 
     def _build_train_iterator(self) -> None:
         if self.train_dataloader is None:
             self._train_iterator = None
             return
 
-        if self.iters_per_cycle is None or self.iters_per_cycle <= 0:
-            self._data_cycle = 0
-            self._set_dataloader_cycle(self._data_cycle)
-            self._train_iterator = iter(self.train_dataloader)
-            return
-
-        completed_cycles = self.global_iter // self.iters_per_cycle
-        offset_in_cycle = self.global_iter % self.iters_per_cycle
-
-        self._data_cycle = int(completed_cycles)
-        self._set_dataloader_cycle(self._data_cycle)
         self._train_iterator = iter(self.train_dataloader)
-
-        for _ in range(offset_in_cycle):
-            try:
-                next(self._train_iterator)
-            except StopIteration:
-                self._data_cycle += 1
-                self._set_dataloader_cycle(self._data_cycle)
-                self._train_iterator = iter(self.train_dataloader)
 
     def _next_train_batch(self):
         if self.train_dataloader is None:
@@ -459,41 +523,40 @@ class Trainer:
         try:
             return next(self._train_iterator)
         except StopIteration:
-            self._data_cycle += 1
-            self._set_dataloader_cycle(self._data_cycle)
             self._train_iterator = iter(self.train_dataloader)
             return next(self._train_iterator)
 
-    def _save_checkpoint_before_validation(
+    # ------------------------------------------------------------------
+    # Checkpoint helpers
+    # ------------------------------------------------------------------
+
+    def _save_checkpoint(
         self,
         train_stats: Dict[str, float],
+        val_stats: Optional[Dict[str, float]] = None,
+        checkpoint_reason: str = "periodic",
+        val_status: str = "not_due",
     ) -> Path:
-        return self.checkpoint_manager.save_before_validation(
+        return self.checkpoint_manager.save(
             global_iter=self.global_iter,
             model=self.model,
+            checkpoint_reason=checkpoint_reason,
+            val_status=val_status,
+            runtime_state=self.state_dict(),
             optimizer=self.optimizer,
             scaler=self.scaler,
             scheduler=self.lr_scheduler,
             train_stats=train_stats,
+            val_stats=val_stats or {},
             extra={
                 "monitor": self.cfg.monitor,
                 "monitor_mode": self.cfg.monitor_mode,
             },
         )
 
-    def _finalize_checkpoint_after_validation(
-        self,
-        ckpt_path: Path,
-        val_stats: Dict[str, float],
-    ) -> Path:
-        return self.checkpoint_manager.finalize_after_validation(
-            ckpt_path=ckpt_path,
-            val_stats=val_stats,
-            extra={
-                "monitor": self.cfg.monitor,
-                "monitor_mode": self.cfg.monitor_mode,
-            },
-        )
+    # ------------------------------------------------------------------
+    # Validation loop
+    # ------------------------------------------------------------------
 
     @torch.no_grad()
     def val(self) -> Dict[str, float]:
@@ -542,7 +605,7 @@ class Trainer:
                     stage="val",
                 )
 
-            metric_snapshot = evaluator.compute()
+            metric_snapshot = evaluator.compute(eval_class_names=class_names)
             iter_time = time.perf_counter() - end
 
             self._update_val_log_state(
@@ -556,32 +619,98 @@ class Trainer:
 
             end = time.perf_counter()
 
-        stats = evaluator.compute()
+        stats = evaluator.compute(eval_class_names=class_names)
         if class_names is not None:
             stats["_class_names"] = class_names
 
         self.hook_manager.call("after_val", self, self.global_iter, stats)
         return stats
 
+    # ------------------------------------------------------------------
+    # Main training loop
+    # ------------------------------------------------------------------
+
     def train(self):
         if self.train_dataloader is None:
             raise RuntimeError("train_dataloader is None, cannot run train().")
 
-        self.hook_manager.call("before_run", self)
-        self.maybe_resume_latest()
-        self._prepare_text_cache_for_dataloader(self.train_dataloader, force=False)
+        # 1. Build iterator from (possibly restored) sampler state.
         self._build_train_iterator()
+
+        # 2. Call before_run — W&B initializes or resumes here.
+        self.hook_manager.call("before_run", self)
+
+        self._prepare_text_cache_for_dataloader(self.train_dataloader, force=False)
 
         self.model.train()
         self._iter_time_history.clear()
         self._data_time_history.clear()
         self._train_stat_history.clear()
 
+        # 3. Restore RNG *last*, so the resume process itself does not
+        #    consume RNG state.
+        if self._pending_rng_state is not None:
+            restore_rng_state(self._pending_rng_state)
+            self._pending_rng_state = None
+
         train_stats_window: list[Dict[str, float]] = []
 
         end = time.perf_counter()
 
+        try:
+            self._run_training_loop(train_stats_window, end)
+        except BaseException as exc:
+            if not isinstance(exc, KeyboardInterrupt) or not self._stop_requested:
+                self._save_checkpoint(
+                    self._average_stats(train_stats_window),
+                    checkpoint_reason="exception",
+                )
+            self.hook_manager.call("on_exception", self, exc)
+            raise
+
+        if self._stop_requested:
+            return
+
+        self._finish_training(train_stats_window)
+
+    def _run_training_loop(
+        self,
+        train_stats_window: list[Dict[str, float]],
+        end: float,
+    ) -> None:
+        # Replay pending validation that was interrupted before finalization.
+        if self._pending_val_from_resume:
+            self._pending_val_from_resume = False
+            if self.val_dataloader is not None:
+                ckpt_path = self.save_dir / f"iter_{int(self.global_iter):07d}.pth"
+                print(f"Replaying pending validation at iter={self.global_iter}...")
+                val_stats = self.val()
+                self.model.train()
+                if ckpt_path.exists():
+                    self.checkpoint_manager.finalize_after_validation(
+                        ckpt_path=ckpt_path,
+                        val_stats=val_stats,
+                        runtime_state=self.state_dict(),
+                        extra={
+                            "monitor": self.cfg.monitor,
+                            "monitor_mode": self.cfg.monitor_mode,
+                        },
+                    )
+                    print(f"Finalized pending validation checkpoint at iter={self.global_iter}")
+
         while self.global_iter < self.cfg.max_iters:
+            if self._stop_requested:
+                print(
+                    f"\nStop requested at iter={self.global_iter}. "
+                    "Saving checkpoint before exit..."
+                )
+                self._save_checkpoint(
+                    self._average_stats(train_stats_window),
+                    checkpoint_reason="interrupt",
+                )
+                self.hook_manager.call("on_exception", self, KeyboardInterrupt())
+                return
+
             data_time = time.perf_counter() - end
 
             if self.device.type == "cuda":
@@ -592,7 +721,14 @@ class Trainer:
 
             self.hook_manager.call("before_train_iter", self, next_iter, batch)
 
-            stats, _ = self.train_step(batch)
+            stats, did_step = self.train_step(batch)
+
+            self._commit_sampler_batch()
+
+            if not did_step:
+                end = time.perf_counter()
+                continue
+
             train_stats_window.append(stats)
 
             self.global_iter = next_iter
@@ -620,7 +756,11 @@ class Trainer:
             averaged_train_stats = self._average_stats(train_stats_window)
 
             if should_save:
-                ckpt_path = self._save_checkpoint_before_validation(averaged_train_stats)
+                val_status = "pending" if should_eval else "not_due"
+                ckpt_path = self._save_checkpoint(
+                    averaged_train_stats,
+                    val_status=val_status,
+                )
                 print(f"saved training-state checkpoint at iter={self.global_iter}: {ckpt_path}")
             else:
                 ckpt_path = None
@@ -632,11 +772,23 @@ class Trainer:
                 val_stats = {}
 
             if ckpt_path is not None and should_eval:
-                self._finalize_checkpoint_after_validation(ckpt_path, val_stats)
+                self.checkpoint_manager.finalize_after_validation(
+                    ckpt_path=ckpt_path,
+                    val_stats=val_stats,
+                    runtime_state=self.state_dict(),
+                    extra={
+                        "monitor": self.cfg.monitor,
+                        "monitor_mode": self.cfg.monitor_mode,
+                    },
+                )
                 print(f"finalized checkpoint with validation stats at iter={self.global_iter}: {ckpt_path}")
 
             end = time.perf_counter()
 
+    def _finish_training(
+        self,
+        train_stats_window: list[Dict[str, float]],
+    ) -> None:
         final_train_stats = self._average_stats(train_stats_window)
 
         need_final_save = (
@@ -646,7 +798,7 @@ class Trainer:
 
         final_ckpt_path = None
         if need_final_save:
-            final_ckpt_path = self._save_checkpoint_before_validation(final_train_stats)
+            final_ckpt_path = self._save_checkpoint(final_train_stats, checkpoint_reason="final")
             print(f"saved final training-state checkpoint at iter={self.global_iter}: {final_ckpt_path}")
 
         need_final_eval = (
@@ -664,7 +816,15 @@ class Trainer:
             final_val_stats = {}
 
         if final_ckpt_path is not None and need_final_eval:
-            self._finalize_checkpoint_after_validation(final_ckpt_path, final_val_stats)
+            self.checkpoint_manager.finalize_after_validation(
+                ckpt_path=final_ckpt_path,
+                val_stats=final_val_stats,
+                runtime_state=self.state_dict(),
+                extra={
+                    "monitor": self.cfg.monitor,
+                    "monitor_mode": self.cfg.monitor_mode,
+                },
+            )
             print(f"finalized final checkpoint with validation stats at iter={self.global_iter}: {final_ckpt_path}")
 
         self.hook_manager.call("after_run", self)

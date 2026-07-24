@@ -714,11 +714,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         # mode == "attention"
         cls._apply_attention_finetune(clip_text_encoder, attn_scope="transformer")
 
-    # Backward-compatible wrapper kept so other paths don't break.
-    @classmethod
-    def set_openclip_text_finetune_attention(cls, clip_text_encoder: nn.Module) -> None:
-        cls.set_openclip_text_finetune(clip_text_encoder, mode="attention")
-
     @classmethod
     def set_openclip_image_finetune(
         cls,
@@ -940,13 +935,9 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         cls,
         cfg,
         work_dir: str,
-        auto_resume: bool = False,
     ) -> TrainerConfig:
         train_cfg = cls._require_dict(cfg.train_cfg, "train_cfg")
         train_cfg["save_dir"] = str(work_dir)
-        train_cfg["auto_resume"] = bool(
-            auto_resume or train_cfg.get("auto_resume", False)
-        )
         train_cfg["tta_cfg"] = cfg.get("tta_cfg", None)
         train_cfg["eval_cfg"] = cfg.get("eval_cfg", None)
         return TrainerConfig(**train_cfg)
@@ -961,8 +952,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             monitor=str(trainer_cfg.monitor),
             mode=str(trainer_cfg.monitor_mode),
             max_keep=int(trainer_cfg.max_keep_ckpts),
-            save_latest=True,
-            save_best=True,
         )
         return CheckpointManager(checkpoint_cfg)
 
@@ -987,7 +976,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 enabled=metrics_cfg.enabled,
                 filename=metrics_cfg.filename,
                 train_interval=metrics_cfg.train_interval,
-                val_interval=metrics_cfg.val_interval,
                 priority=metrics_cfg.priority,
             ))
 
@@ -1004,7 +992,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 tags=wandb_cfg.tags,
                 mode=wandb_cfg.mode,
                 train_interval=wandb_cfg.train_interval,
-                log_val_iter=wandb_cfg.log_val_iter,
                 priority=wandb_cfg.priority,
                 name_from_config_keys=wandb_cfg.name_from_config_keys,
                 name_prefix=wandb_cfg.name_prefix,
@@ -1042,7 +1029,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         cls,
         cfg,
         work_dir_override: Optional[str] = None,
-        auto_resume: bool = False,
     ) -> tuple[
         str,
         TrainerConfig,
@@ -1057,7 +1043,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         trainer_cfg = cls.build_trainer_config_from_cfg(
             cfg,
             work_dir=work_dir,
-            auto_resume=auto_resume,
         )
         return (
             work_dir,
@@ -1081,10 +1066,8 @@ def build_training_components(**kwargs) -> tuple[nn.Module, nn.Module]:
 def build_train_runtime_components(
     cfg,
     work_dir_override: Optional[str] = None,
-    auto_resume: bool = False,
 ):
     return SAM3ModelBuilder.build_train_runtime_components(
         cfg,
         work_dir_override=work_dir_override,
-        auto_resume=auto_resume,
     )

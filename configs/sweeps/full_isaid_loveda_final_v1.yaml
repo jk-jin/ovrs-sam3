@@ -3,7 +3,7 @@ name: full_isaid_loveda_final_v1
 method: grid
 
 metric:
-  name: val/semantic.miou
+  name: val/semantic.groups.loveda_no_background.miou
   goal: maximize
 
 parameters:

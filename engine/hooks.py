@@ -30,16 +30,68 @@ class Hook:
     def after_val(self, trainer, global_iter: int, val_stats: Dict[str, float]):
         pass
 
+    def on_exception(self, trainer, exception):
+        pass
+
+    def state_dict(self):
+        return {}
+
+    def load_state_dict(self, state):
+        pass
+
+
+def _hook_stable_key(hook) -> str:
+    """Return a stable key for a hook instance based on its class name.
+
+    Falls back to the class hierarchy if the exact class name isn't
+    unique across the registered hooks (e.g. two WandbHook instances).
+    """
+    for cls in type(hook).__mro__:
+        if cls is Hook:
+            break
+        if cls.__name__.endswith("Hook"):
+            return cls.__name__
+    return type(hook).__name__
+
 
 class HookManager:
     def __init__(self, hooks: Optional[Sequence[Hook]] = None):
         self.hooks = sorted(list(hooks or []), key=lambda h: getattr(h, "priority", 50))
+        self._verify_unique_keys()
+
+    def _verify_unique_keys(self) -> None:
+        seen = {}
+        for hook in self.hooks:
+            key = _hook_stable_key(hook)
+            if key in seen:
+                raise ValueError(
+                    f"Duplicate hook key {key!r}: "
+                    f"{type(seen[key]).__name__} and {type(hook).__name__}. "
+                    "Each Hook type must be registered at most once."
+                )
+            seen[key] = hook
 
     def call(self, fn_name: str, *args, **kwargs):
         for hook in self.hooks:
             fn = getattr(hook, fn_name, None)
             if fn is not None:
                 fn(*args, **kwargs)
+
+    def state_dict(self):
+        out = {}
+        for hook in self.hooks:
+            key = _hook_stable_key(hook)
+            sd = hook.state_dict()
+            if sd:
+                out[key] = sd
+        return out
+
+    def load_state_dict(self, state):
+        for hook in self.hooks:
+            key = _hook_stable_key(hook)
+            hook_state = state.get(key, None)
+            if hook_state is not None:
+                hook.load_state_dict(hook_state)
 
 
 class LoggerHook(Hook):

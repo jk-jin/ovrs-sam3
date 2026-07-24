@@ -3,7 +3,10 @@ from __future__ import annotations
 import importlib
 from typing import Any, Dict, Optional
 
+import torch
 from torch.utils.data import DataLoader
+
+from .resumable_sampler import ResumableRandomBatchSampler
 
 
 ConfigDict = Dict[str, Any]
@@ -50,10 +53,47 @@ def build_collate_fn(cfg: Optional[ConfigDict]):
     return instantiate(cfg)
 
 
-def build_dataloader(cfg: ConfigDict):
+def build_dataloader(cfg: ConfigDict, seed: int = 42):
     cfg = dict(cfg)
     dataset_cfg = cfg.pop('dataset')
     collate_fn_cfg = cfg.pop('collate_fn', None)
     dataset = build_dataset(dataset_cfg)
     collate_fn = build_collate_fn(collate_fn_cfg)
-    return DataLoader(dataset=dataset, collate_fn=collate_fn, **cfg)
+
+    batch_size = int(cfg.pop('batch_size', 1))
+    num_workers = int(cfg.pop('num_workers', 0))
+    drop_last = bool(cfg.pop('drop_last', False))
+    pin_memory = bool(cfg.pop('pin_memory', False))
+    persistent_workers = bool(cfg.pop('persistent_workers', False))
+    prefetch_factor = cfg.pop('prefetch_factor', None)
+    shuffle = bool(cfg.pop('shuffle', False))
+
+    dataloader_kwargs: Dict[str, Any] = {
+        "num_workers": num_workers,
+        "collate_fn": collate_fn,
+        "pin_memory": pin_memory,
+        "persistent_workers": persistent_workers if num_workers > 0 else False,
+    }
+    if prefetch_factor is not None and num_workers > 0:
+        dataloader_kwargs["prefetch_factor"] = int(prefetch_factor)
+
+    if shuffle:
+        train_generator = torch.Generator()
+        train_generator.manual_seed(int(seed))
+
+        dataloader_kwargs["batch_sampler"] = ResumableRandomBatchSampler(
+            dataset_size=len(dataset),
+            batch_size=batch_size,
+            drop_last=drop_last,
+            generator=train_generator,
+        )
+    else:
+        val_generator = torch.Generator()
+        val_generator.manual_seed(int(seed) + 1)
+
+        dataloader_kwargs["batch_size"] = batch_size
+        dataloader_kwargs["shuffle"] = False
+        dataloader_kwargs["drop_last"] = drop_last
+        dataloader_kwargs["generator"] = val_generator
+
+    return DataLoader(dataset=dataset, **dataloader_kwargs)

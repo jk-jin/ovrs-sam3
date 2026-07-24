@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -170,7 +171,32 @@ class OVSemanticSegDataset(Dataset):
 
         return out
 
-    def __getitem__(self, index: int):
+    def __getitem__(self, index):
+        if isinstance(index, tuple) and len(index) == 2:
+            dataset_index, aug_seed = int(index[0]), int(index[1])
+            return self._getitem_with_seed(dataset_index, aug_seed)
+        return self._getitem_plain(int(index))
+
+    def _getitem_plain(self, index: int):
+        return self._load_and_transform(index)
+
+    def _getitem_with_seed(self, index: int, aug_seed: int):
+        py_state = random.getstate()
+        np_state = np.random.get_state()
+        cpu_state = torch.get_rng_state()
+
+        try:
+            random.seed(aug_seed)
+            np.random.seed(aug_seed % (2 ** 31 - 1))
+            torch.manual_seed(aug_seed)
+
+            return self._load_and_transform(index)
+        finally:
+            random.setstate(py_state)
+            np.random.set_state(np_state)
+            torch.set_rng_state(cpu_state)
+
+    def _load_and_transform(self, index: int):
         img_path = self.img_paths[index]
         seg_path = self.seg_paths[index]
 

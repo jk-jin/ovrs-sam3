@@ -158,7 +158,6 @@ class TrainerConfig:
     max_keep_ckpts: int = 5
 
     device: str = "cuda"
-    auto_resume: bool = False
 
     tta_cfg: Optional[Dict] = None
     eval_cfg: Optional[Dict] = None
@@ -170,8 +169,6 @@ class CheckpointManagerConfig:
     monitor: str = "total_loss"
     mode: str = "min"
     max_keep: int = 5
-    save_latest: bool = True
-    save_best: bool = True
 
 @dataclass
 class LoggerHookConfig:
@@ -187,7 +184,6 @@ class MetricsJsonlHookConfig:
     enabled: bool = True
     filename: str = "metrics.jsonl"
     train_interval: int = 20
-    val_interval: int = 1  # reserved; currently only after_val is recorded, not after_val_iter
     priority: int = 80
 
 
@@ -200,7 +196,6 @@ class WandbHookConfig:
     tags: list[str] = field(default_factory=list)
     mode: str = "online"
     train_interval: int = 20
-    log_val_iter: bool = False  # reserved; per-batch val logging is skipped when False
     priority: int = 90
 
     name_from_config_keys: list[str] = field(default_factory=list)

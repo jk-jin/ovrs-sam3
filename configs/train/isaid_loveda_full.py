@@ -17,6 +17,20 @@ train_dataloader = dict(
     num_workers=8,
 )
 
+eval_cfg = dict(
+    metric_groups=[
+        dict(
+            name="loveda_no_background",
+            class_ids=[1, 2, 3, 4, 5, 6],
+            metrics=["miou", "macc"],
+        ),
+    ],
+)
+
+train_cfg = dict(
+    monitor="semantic.groups.loveda_no_background.miou",
+)
+
 visualization = dict(
     enabled=True,
     save_raw_final_prediction=False,

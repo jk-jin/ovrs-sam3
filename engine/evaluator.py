@@ -92,6 +92,7 @@ class MulticlassSemanticEvaluator:
         self,
         ignore_index: int = 255,
         prob_thd: Optional[float] = None,
+        metric_groups: Optional[list[dict]] = None,
         **kwargs,
     ):
         for forbidden_key in ("bg_idx", "use_score_map"):
@@ -104,7 +105,77 @@ class MulticlassSemanticEvaluator:
         self.num_classes: Optional[int] = None
         self.ignore_index = int(ignore_index)
         self.prob_thd = prob_thd
+        self.metric_groups = self._validate_metric_groups(metric_groups)
         self.reset()
+
+    @staticmethod
+    def _validate_metric_groups(
+        groups: Optional[list[dict]],
+    ) -> list[dict]:
+        if groups is None:
+            return []
+
+        validated = []
+        seen_names = set()
+
+        for g in groups:
+            g = dict(g)
+            name = str(g.get("name", "")).strip()
+            if not name:
+                raise ValueError("metric_groups: each group must have a non-empty 'name'.")
+            if name in seen_names:
+                raise ValueError(
+                    f"metric_groups: duplicate group name {name!r}."
+                )
+            seen_names.add(name)
+
+            has_ids = "class_ids" in g
+            has_names = "class_names" in g
+            if has_ids and has_names:
+                raise ValueError(
+                    f"metric_groups[{name!r}]: cannot specify both class_ids "
+                    "and class_names."
+                )
+
+            class_ids = None
+            if has_ids:
+                ids = list(g["class_ids"])
+                if len(ids) == 0:
+                    raise ValueError(
+                        f"metric_groups[{name!r}]: class_ids must not be empty."
+                    )
+                if len(set(ids)) != len(ids):
+                    raise ValueError(
+                        f"metric_groups[{name!r}]: class_ids must not contain duplicates."
+                    )
+                class_ids = [int(x) for x in ids]
+
+            class_names = None
+            if has_names:
+                names_list = list(g.get("class_names", []))
+                if len(names_list) == 0:
+                    raise ValueError(
+                        f"metric_groups[{name!r}]: class_names must not be empty."
+                    )
+                class_names = [str(x) for x in names_list]
+
+            metrics = list(g.get("metrics", ["miou", "macc"]))
+            allowed = {"miou", "macc"}
+            for m in metrics:
+                if m not in allowed:
+                    raise ValueError(
+                        f"metric_groups[{name!r}]: unsupported metric {m!r}. "
+                        f"Allowed: {sorted(allowed)}."
+                    )
+
+            validated.append({
+                "name": name,
+                "class_ids": class_ids,
+                "class_names": class_names,
+                "metrics": metrics,
+            })
+
+        return validated
 
     def reset(self):
         self.intersection = None
@@ -196,7 +267,42 @@ class MulticlassSemanticEvaluator:
             self.union[cls_id] += union.double()
             self.target_count[cls_id] += tgt_count.double()
 
-    def compute(self) -> Dict[str, float]:
+    def _resolve_group_class_ids(
+        self, group: dict, eval_class_names: Optional[list[str]]
+    ) -> list[int]:
+        if group["class_ids"] is not None:
+            ids = list(group["class_ids"])
+            # Validate bounds.
+            for cid in ids:
+                if cid < 0 or cid >= self.num_classes:
+                    raise ValueError(
+                        f"metric_groups[{group['name']!r}]: class_id {cid} "
+                        f"is out of range [0, {self.num_classes - 1}]."
+                    )
+            return ids
+
+        if group["class_names"] is not None:
+            if eval_class_names is None:
+                raise ValueError(
+                    f"metric_groups[{group['name']!r}]: class_names specified "
+                    "but eval_class_names are not available."
+                )
+            name_to_id = {str(n): i for i, n in enumerate(eval_class_names)}
+            ids = []
+            for name in group["class_names"]:
+                if name not in name_to_id:
+                    raise ValueError(
+                        f"metric_groups[{group['name']!r}]: class_name {name!r} "
+                        f"not found in eval_class_names."
+                    )
+                ids.append(name_to_id[name])
+            return ids
+
+        raise ValueError(
+            f"metric_groups[{group['name']!r}]: must have class_ids or class_names."
+        )
+
+    def compute(self, eval_class_names: Optional[list[str]] = None) -> Dict[str, float]:
         if self.num_classes is None:
             return {}
 
@@ -219,6 +325,25 @@ class MulticlassSemanticEvaluator:
         for i in range(self.num_classes):
             out[f"semantic.iou_class_{i}"] = float(per_class_iou[i].item())
             out[f"semantic.acc_class_{i}"] = float(per_class_acc[i].item())
+
+        # Group metrics.
+        for group in self.metric_groups:
+            group_ids = self._resolve_group_class_ids(group, eval_class_names)
+            prefix = f"semantic.groups.{group['name']}"
+
+            if "miou" in group["metrics"]:
+                group_iou = per_class_iou[group_ids]
+                group_valid = self.union[group_ids] > 0
+                val = group_iou[group_valid].mean().item() if group_valid.any() else 0.0
+                out[f"{prefix}.miou"] = float(val)
+                out[f"{prefix}.valid_iou_classes"] = int(group_valid.sum().item())
+
+            if "macc" in group["metrics"]:
+                group_acc = per_class_acc[group_ids]
+                group_valid = self.target_count[group_ids] > 0
+                val = group_acc[group_valid].mean().item() if group_valid.any() else 0.0
+                out[f"{prefix}.macc"] = float(val)
+                out[f"{prefix}.valid_acc_classes"] = int(group_valid.sum().item())
 
         return out
 

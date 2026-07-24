@@ -35,9 +35,11 @@ if __package__ in (None, ""):
     _builder_mod = import_module(f"{package_name}.model_builder")
     build_training_components = _builder_mod.build_training_components
     build_train_runtime_components = _builder_mod.build_train_runtime_components
+    load_checkpoint_file = import_module(f"{package_name}.engine.checkpoint").load_checkpoint_file
 else:
     from ..data.build import build_dataloader
     from ..engine.config import Config
+    from ..engine.checkpoint import load_checkpoint_file
     from ..engine.optimizer_builder import build_optimizer, build_scheduler
     from ..engine.trainer import Trainer
     from ..model_builder import (
@@ -329,7 +331,7 @@ def load_model_weights_only(
     path: str,
     strict: bool = False,
 ) -> Dict[str, Any]:
-    ckpt = torch.load(path, map_location="cpu")
+    ckpt = load_checkpoint_file(path)
     state_dict = _unwrap_state_dict(ckpt)
     state_dict = _strip_prefix_if_present(state_dict, "module.")
 
@@ -355,7 +357,6 @@ def main():
     parser.add_argument("--work-dir", type=str, default=None)
     parser.add_argument("--resume-from", type=str, default=None)
     parser.add_argument("--load-model-from", type=str, default=None)
-    parser.add_argument("--auto-resume", action="store_true")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--eval-only", action="store_true", help="only run validation")
     parser.add_argument(
@@ -421,6 +422,21 @@ def main():
     seed = args.seed if args.seed is not None else int(cfg.get("seed", 42))
     set_seed(seed)
 
+    # ------------------------------------------------------------------
+    # Work-dir guard: prevent mixing new training with old checkpoints
+    # ------------------------------------------------------------------
+    if not args.eval_only and args.resume_from is None:
+        work_dir_for_check = Path(work_dir_override or cfg.get("work_dir", ""))
+        if work_dir_for_check.is_dir():
+            existing = sorted(work_dir_for_check.glob("iter_*.pth"))
+            latest = work_dir_for_check / "latest.pth"
+            best = work_dir_for_check / "best.pth"
+            if existing or latest.exists() or best.exists():
+                raise RuntimeError(
+                    f"work_dir already contains training checkpoints: {work_dir_for_check}\n"
+                    "Use a new --work-dir or explicitly resume with --resume-from."
+                )
+
     model, criterion = build_training_components(**dict(cfg.model))
 
     if args.load_model_from is not None:
@@ -435,7 +451,6 @@ def main():
     ) = build_train_runtime_components(
         cfg,
         work_dir_override=work_dir_override,
-        auto_resume=args.auto_resume,
     )
 
     print(f"Resolved work_dir: {work_dir}")
@@ -446,7 +461,7 @@ def main():
             raise ValueError("val_dataloader is None, cannot run eval-only mode.")
 
         print("Building val_dataloader (eval-only)...")
-        val_loader = build_dataloader(cfg.val_dataloader)
+        val_loader = build_dataloader(cfg.val_dataloader, seed=seed)
 
         trainer = Trainer(
             model=model,
@@ -476,10 +491,10 @@ def main():
         return
 
     print("Building train_dataloader...")
-    train_loader = build_dataloader(cfg.train_dataloader)
+    train_loader = build_dataloader(cfg.train_dataloader, seed=seed)
 
     print("Building val_dataloader...")
-    val_loader = build_dataloader(cfg.val_dataloader) if cfg.get("val_dataloader") else None
+    val_loader = build_dataloader(cfg.val_dataloader, seed=seed) if cfg.get("val_dataloader") else None
 
     optimizer = build_optimizer(model, cfg)
     scheduler = build_scheduler(optimizer, cfg)
