@@ -217,31 +217,77 @@ def print_config_as_json(cfg) -> None:
 
 
 def build_log_getters(cfg) -> List[object]:
-    def project_log_getter(trainer):
-        out = {}
+    def summarize_residual_scales(prefix, params):
+        params = [
+            param.detach().reshape(-1).float()
+            for param in params
+            if isinstance(param, torch.Tensor) and param.requires_grad
+        ]
+        if not params:
+            return {}
 
+        values = torch.cat(params)
+        return {
+            f"residual/{prefix}/count": int(values.numel()),
+            f"residual/{prefix}/mean": float(values.mean().item()),
+            f"residual/{prefix}/abs_mean": float(values.abs().mean().item()),
+            f"residual/{prefix}/min": float(values.min().item()),
+            f"residual/{prefix}/max": float(values.max().item()),
+            f"residual/{prefix}/negative_ratio": float(
+                (values < 0).float().mean().item()
+            ),
+        }
+
+    def project_log_getter(trainer):
         model = trainer.model
         model = getattr(model, "module", model)
         core = getattr(model, "core", None)
+        refiner = getattr(core, "encoder_refiner", None)
 
-        if core is None:
-            return out
+        if refiner is None:
+            return {}
 
-        feature_builder = getattr(
-            core,
-            "global_clip_sam_feature_builder",
+        # FPN injection residual scale.
+        fpn_params = [
+            getattr(refiner, "feature_fpn_res_scale", None),
+        ]
+
+        # Refiner internal LayerScale parameters (8 per layer).
+        internal_names = (
+            "class_feature_scale",
+            "class_score_scale",
+            "regular_feature_scale",
+            "regular_score_scale",
+            "shifted_feature_scale",
+            "shifted_score_scale",
+            "ffn_feature_scale",
+            "ffn_score_scale",
+        )
+
+        internal_params = [
+            getattr(layer, name, None)
+            for layer in refiner.layers
+            for name in internal_names
+        ]
+
+        # Upsample module residual scale.
+        feature_upsampler = getattr(
+            refiner,
+            "feature_upsampler",
             None,
         )
-        if feature_builder is None:
-            return out
+        upsample_params = [
+            getattr(
+                feature_upsampler,
+                "upsample_res_scale",
+                None,
+            ),
+        ]
 
-        alpha = getattr(feature_builder, "alpha", None)
-        if alpha is not None:
-            alpha = alpha.detach()
-            if alpha.numel() == 1:
-                out["clip_sam_feature_alpha"] = float(alpha.item())
-            else:
-                out["clip_sam_feature_alpha_mean"] = float(alpha.float().mean().item())
+        out = {}
+        out.update(summarize_residual_scales("fpn", fpn_params))
+        out.update(summarize_residual_scales("refiner_internal", internal_params))
+        out.update(summarize_residual_scales("upsample", upsample_params))
 
         return out
 

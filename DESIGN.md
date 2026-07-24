@@ -58,8 +58,11 @@ SAM3原生encoder feature具有较强的图像结构信息，但不一定能直�
   → 多尺度卷积编码器把32通道相似度图编码成256通道clip_score_embed_36
   → SAM3 FPN下采样到36×36，与encoder feature 36拼接后卷积产生残差更新
   → encoder refiner联合更新feature_36与score_embed_36
-  → 计算36×36总更新量（refined feature - baseline feature），双线性插值到72×72
-  → 直接加到原始72×72 encoder feature
+  → 完整refiner feature双线性插值到72×72
+  → 与原始encoder feature相减得到raw_delta_72
+  → 与按类别扩展的SAM3 FPN 72拼接，1×1卷积融合
+  → depthwise 3×3细节分支提取空间信息，内部残差相加
+  → 可学习残差系数调制后加回原始encoder feature
   → 写回SAM3 encoder_hidden_states的图像token区域
   → 冻结的SAM3 segmentation head输出final_logits
 ```
@@ -181,6 +184,7 @@ trainable_modules=["core.encoder_refiner"]
 * regular和shifted WindowScoreAttention。
 * feature与score两路FFN和LayerNorm。
 * 各层可学习残差系数（LayerScale）和FPN残差系数（feature_fpn_res_scale）。
+* `RefinerFeatureUpsampler`（72×72上采样融合模块）及其 `upsample_res_scale`。
 * final_score_norm（score embedding的最终LayerNorm）。
 
 ### 5.3 RemoteCLIP微调模式
@@ -476,7 +480,7 @@ feature_36 = base_feature_36
            + feature_fpn_res_scale × feature_fpn_delta_36
 ```
 
-`feature_fpn_res_scale`是初始值为0的可训练标量。因此当所有refiner残差系数为0时，`feature_36 == base_feature_36`，确保初始化时的恒等路径。
+`feature_fpn_res_scale`是初始值为0的可训练标量。初始化时`feature_36 == base_feature_36`。
 
 FPN不再注入score_embed。score_embed_36直接等于clip_score_embed_36，保持纯净。
 
@@ -538,7 +542,7 @@ shifted_feature_scale    shifted_score_scale
 ffn_feature_scale        ffn_score_scale
 ```
 
-LayerScale默认初始值为0.1。更新形式为：
+LayerScale默认初始值为0.0。更新形式为：
 
 ```text
 feature = feature + scale * feature_update
@@ -612,27 +616,76 @@ relative_position_bias_table
 
 attention score由query-key点积、缩放、相对位置偏置以及shift mask共同决定，随后经过softmax变成权重。
 
-## 13. 36×36更新量上采样到72×72
+## 13. Refiner feature 上采样到 72×72
 
-上采样采用纯更新量残差方式，不含任何卷积、归一化或激活：
+上采样由独立的 `RefinerFeatureUpsampler` 模块完成，将 refiner 最终 feature 从 36×36 提升到 72×72 并融合 SAM3 FPN 高分辨率纹理信息。
+
+### 13.1 输入
+
+| 输入 | 形状 | 含义 |
+|---|---|---|
+| `feature_36` | `[B, C, 256, 36, 36]` | 经过 FPN 注入和全部 refiner 层更新后的特征 |
+| `encoder_features_72` | `[B, C, 256, 72, 72]` | SAM3 原始类别相关 encoder feature |
+| `sam_fpn_72` | `[B, 256, 72, 72]` | SAM3 共享的高分辨率 FPN 纹理特征 |
+
+### 13.2 处理流程
 
 ```text
-feature_delta_36 = feature_36 - base_feature_36
-  → bilinear上采样到72×72
-  → feature_delta_72 [B, C, 256, 72, 72]
+feature_36 [B, C, 256, 36, 36]
+  → reshape 为 [B*C, 256, 36, 36]
+  → bilinear 上采样到 72×72
+  → 与 reshape 后的 encoder_features_72 相减
+  → raw_delta_72 [B*C, 256, 72, 72]
 
-refined_encoder_features_72 = encoder_features_72 + feature_delta_72
+sam_fpn_72 [B, 256, 72, 72]
+  → unsqueeze + expand 扩展类别维
+  → reshape 为 [B*C, 256, 72, 72]
+  → 与 raw_delta_72 沿通道维拼接
+  → fusion_input [B*C, 512, 72, 72]
+
+fusion_input
+  → 1×1 Conv: 512 → 256 + GroupNorm + GELU
+  → fused_delta_72 [B*C, 256, 72, 72]
+  → depthwise 3×3 Conv + GroupNorm + GELU + 1×1 Conv
+  → detail_delta_72 [B*C, 256, 72, 72]
+  → processed_delta_72 = fused_delta_72 + detail_delta_72
+  → upsample_res_scale × processed_delta_72
+  → 加回 encoder_features_72_flat
+
+  → reshape 回 [B, C, 256, 72, 72]
+  → refined_encoder_features_72
 ```
 
-这里`base_feature_36`是进入refiner前的encoder feature 36基线（即`encoder_features_72`下采样后的张量），不是FPN注入后的feature。以`base_feature_36`为差分基线，保证FPN的直接残差更新也会被包含在`feature_delta_36`中并传递到72×72输出。
+### 13.3 关键设计
 
-当所有refiner残差系数为0时：
-- `feature_36 == base_feature_36`
-- `feature_delta_36 == 0`
-- `feature_delta_72 == 0`
-- `refined_encoder_features_72 == encoder_features_72`
+**为什么用完整 feature 而非 delta**
 
-即初始化时refiner输出严格等于原始encoder feature。
+`raw_delta_72 = upsampled_feature_72 - encoder_features_72` 同时包含：
+* 72→36→72 造成的重建差异；
+* 36×36 FPN 注入产生的变化；
+* refiner attention 和 FFN 产生的变化。
+
+这是预期行为。旧方案中 `feature_delta_36 = feature_36 - base_feature_36` 的差分基线被替换，因为新模块在 72×72 尺度直接计算差值，能以更高分辨率融合 FPN 纹理。
+
+**两级残差结构**
+
+1. `fused_delta_72 + detail_delta_72` 是模块内部固定残差，防止空间卷积分支覆盖或过度平滑 1×1 融合结果。此残差没有可学习系数。
+2. `upsample_res_scale` 是模块输出到原始 SAM3 feature 时的可学习残差调制系数。
+
+**深度可分离细节分支**
+
+细节分支只使用一个 `groups=hidden_dim` 的 depthwise 3×3 卷积混合空间邻域，后接 1×1 卷积做通道混合。不增加第二个普通 3×3 卷积、多尺度空洞卷积分支或 attention。
+
+**初始化恒等关系**
+
+`upsample_res_scale` 初始值为 0，因此初始化时：
+
+```text
+refined_encoder_features_72 == encoder_features_72
+```
+
+注意 `raw_delta_72` 即使在其他 refiner 残差系数为 0 时也可能非零（因为下采样再上采样不能精确恢复高频细节），但 `upsample_res_scale = 0` 确保最终输出恒等。
+
 
 ## 14. 写回SAM3并生成最终logits
 
@@ -945,9 +998,40 @@ Debug分支中的detach只用于返回诊断副本，不应提前作用于参与
 18. 推理中`raw_final_score_map`不得被原地修改；逐类别过滤必须用非原地操作生成`final_score_map`。
 19. 相对过滤保留区域必须保留原始sigmoid分数，不得用缩放后的relative_score替换。
 20. TTA必须先平均`raw_final_score_map`再统一过滤一次，不能平均各视图已过滤的`final_score_map`。
-21. 所有refiner残差系数（feature_fpn_res_scale和八个LayerScale）初始值必须为0，确保初始化时refiner输出严格等于原始encoder feature。
+21. feature_fpn_res_scale、每层八个内部LayerScale、upsample_res_scale 全部初始化为 0。最终 72×72 恒等输出由 upsample_res_scale=0 直接保证。
 
-## 21. 已知限制与当前非目标
+## 21. 残差系数日志统计
+
+训练时每 `log_interval` 迭代通过 `extra_log_vars` 输出残差系数统计，不混入 loss。
+
+### 21.1 统计分类
+
+| 类别 | 日志前缀 | 参数来源 | 数量 |
+|---|---|---|---|
+| FPN 信息注入 | `residual/fpn/` | `feature_fpn_res_scale` | 1 |
+| refiner 内部残差 | `residual/refiner_internal/` | 每层 8 个 LayerScale × 4 层 | 32 |
+| 上采样模块 | `residual/upsample/` | `upsample_res_scale` | 1 |
+| 其他（仅存在时） | `residual/other/` | 审计发现的其余残差系数 | — |
+
+### 21.2 每类统计量
+
+| 字段 | 含义 |
+|---|---|
+| `count` | 该类系数包含的标量数量 |
+| `mean` | 所有系数的有符号平均值 |
+| `abs_mean` | 所有系数绝对值的平均值 |
+| `min` | 最小系数 |
+| `max` | 最大系数 |
+| `negative_ratio` | 小于 0 的系数占比（0~1） |
+
+### 21.3 显示格式
+
+控制台日志对 `residual/` 前缀使用科学计数法（`:.4e`），其他统计保持固定小数（`:.4f`）。JSONL 和 W&B 得到的残差统计仍是数值，不是字符串。
+
+统计在 optimizer step 之后采集，显示的是当前迭代更新完成后的系数。
+
+
+## 22. 已知限制与当前非目标
 
 * 当前只支持semantic task mode；hybrid模式会抛出`NotImplementedError`。
 * 一个batch不能混用不同类别列表或类别顺序。
@@ -959,7 +1043,7 @@ Debug分支中的detach只用于返回诊断副本，不应提前作用于参与
 * 默认Dice权重为0，当前主要研究对象是加权BCE下的refiner与RemoteCLIP微调。
 * 默认训练是iSAID、验证是LoveDA，属于跨数据集开放词汇评估设置。
 
-## 22. 配置结构说明
+## 23. 配置结构说明
 
 ### 22.1 设计原则
 
@@ -1010,7 +1094,7 @@ python tools/train.py configs/test/loveda.py \
 - 推荐使用`--load-model-from`进行纯模型权重测试。
 - 测试输出按`work_dirs/test/<dataset>`分目录保存。
 
-## 23. 语法检查
+## 24. 语法检查
 
 ```bash
 python -m py_compile config_dataclasses.py
@@ -1038,7 +1122,7 @@ python -m py_compile $(find configs -name "*.py" -type f)
 git diff --check
 ```
 
-## 24. 修改本文的规则
+## 25. 修改本文的规则
 
 出现以下变化时必须同步更新本文：
 

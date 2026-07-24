@@ -76,14 +76,16 @@ class LoggerHook(Hook):
         return f"{lr_min:.3e}~{lr_max:.3e}"
 
     @staticmethod
-    def _format_extra_value(v) -> str:
-        if isinstance(v, bool):
-            return str(v)
-        if isinstance(v, int):
-            return str(v)
-        if isinstance(v, float):
-            return f"{v:.4f}"
-        return str(v)
+    def _format_extra_value(key, value) -> str:
+        if isinstance(value, bool):
+            return str(value)
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, float):
+            if str(key).startswith("residual/"):
+                return f"{value:.4e}"
+            return f"{value:.4f}"
+        return str(value)
 
     @staticmethod
     def _get_class_names_from_trainer(trainer):
@@ -155,7 +157,7 @@ class LoggerHook(Hook):
             msg += f" {k}: {v:.4f}"
 
         for k, v in sorted(extra_log_vars.items()):
-            msg += f" {k}: {self._format_extra_value(v)}"
+            msg += f" {k}: {self._format_extra_value(k, v)}"
 
         print(msg)
 
@@ -197,7 +199,7 @@ class LoggerHook(Hook):
             msg += f" {k}: {v:.4f}"
 
         for k, v in sorted(extra_log_vars.items()):
-            msg += f" {k}: {self._format_extra_value(v)}"
+            msg += f" {k}: {self._format_extra_value(k, v)}"
 
         print(msg)
 

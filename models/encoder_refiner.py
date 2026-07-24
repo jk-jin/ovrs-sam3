@@ -22,6 +22,168 @@ def _safe_group_norm(num_channels: int) -> nn.GroupNorm:
 
 
 # ---------------------------------------------------------------------------
+# RefinerFeatureUpsampler
+# ---------------------------------------------------------------------------
+
+
+class RefinerFeatureUpsampler(nn.Module):
+    """Upsample refiner features from 36×36 to 72×72 with FPN-guided detail refinement.
+
+    Process:
+        1. Bilinear upsample full refiner feature_36 to 72×72.
+        2. Subtract original encoder_features_72 to get raw_delta_72.
+        3. Concatenate with class-expanded sam_fpn_72 → [B*C, 512, 72, 72].
+        4. 1×1 conv fusion: 512 → 256.
+        5. Lightweight depthwise detail branch with internal residual.
+        6. Learnable residual scale (init=0) modulates processed_delta_72.
+        7. Add back to original encoder_features_72.
+    """
+
+    def __init__(self, hidden_dim: int = 256):
+        super().__init__()
+        self.hidden_dim = int(hidden_dim)
+
+        self.fusion_proj = nn.Sequential(
+            nn.Conv2d(
+                self.hidden_dim * 2,
+                self.hidden_dim,
+                kernel_size=1,
+                bias=False,
+            ),
+            _safe_group_norm(self.hidden_dim),
+            nn.GELU(),
+        )
+
+        self.detail_branch = nn.Sequential(
+            nn.Conv2d(
+                self.hidden_dim,
+                self.hidden_dim,
+                kernel_size=3,
+                padding=1,
+                groups=self.hidden_dim,
+                bias=False,
+            ),
+            _safe_group_norm(self.hidden_dim),
+            nn.GELU(),
+            nn.Conv2d(
+                self.hidden_dim,
+                self.hidden_dim,
+                kernel_size=1,
+                bias=False,
+            ),
+        )
+
+        self.upsample_res_scale = nn.Parameter(torch.zeros(1))
+
+    def forward(
+        self,
+        feature_36: torch.Tensor,
+        encoder_features_72: torch.Tensor,
+        sam_fpn_72: torch.Tensor,
+    ) -> torch.Tensor:
+        batch_size, num_classes, hidden_dim, height, width = (
+            encoder_features_72.shape
+        )
+
+        if hidden_dim != self.hidden_dim:
+            raise ValueError(
+                f"RefinerFeatureUpsampler expects hidden_dim={self.hidden_dim}, "
+                f"got {hidden_dim}."
+            )
+        if (height, width) != (72, 72):
+            raise ValueError(
+                f"RefinerFeatureUpsampler expects 72×72 encoder features, "
+                f"got {(height, width)}."
+            )
+        if tuple(feature_36.shape) != (batch_size, num_classes, hidden_dim, 36, 36):
+            raise ValueError(
+                f"feature_36 must be [{batch_size}, {num_classes}, {hidden_dim}, 36, 36], "
+                f"got {tuple(feature_36.shape)}."
+            )
+        if tuple(sam_fpn_72.shape) != (batch_size, hidden_dim, 72, 72):
+            raise ValueError(
+                f"sam_fpn_72 must be [{batch_size}, {hidden_dim}, 72, 72], "
+                f"got {tuple(sam_fpn_72.shape)}."
+            )
+
+        # Step 2: bilinear upsample full refiner feature to 72×72.
+        feature_36_flat = feature_36.reshape(
+            batch_size * num_classes,
+            hidden_dim,
+            36,
+            36,
+        )
+
+        upsampled_feature_72 = F.interpolate(
+            feature_36_flat,
+            size=(72, 72),
+            mode="bilinear",
+            align_corners=False,
+        )
+
+        # Step 3: compute raw delta at 72×72.
+        encoder_features_72_flat = encoder_features_72.reshape(
+            batch_size * num_classes,
+            hidden_dim,
+            72,
+            72,
+        )
+
+        raw_delta_72 = (
+            upsampled_feature_72
+            - encoder_features_72_flat
+        )
+
+        # Step 4: expand and concatenate SAM3 FPN 72.
+        sam_fpn_72 = sam_fpn_72.to(
+            device=raw_delta_72.device,
+            dtype=raw_delta_72.dtype,
+        )
+
+        sam_fpn_72_flat = (
+            sam_fpn_72
+            .unsqueeze(1)
+            .expand(
+                batch_size,
+                num_classes,
+                hidden_dim,
+                72,
+                72,
+            )
+            .reshape(
+                batch_size * num_classes,
+                hidden_dim,
+                72,
+                72,
+            )
+        )
+
+        fusion_input = torch.cat(
+            [raw_delta_72, sam_fpn_72_flat],
+            dim=1,
+        )
+
+        # Step 5: fusion projection + detail branch with internal residual.
+        fused_delta_72 = self.fusion_proj(fusion_input)
+        detail_delta_72 = self.detail_branch(fused_delta_72)
+        processed_delta_72 = fused_delta_72 + detail_delta_72
+
+        # Step 6: residual back to original 72×72 encoder feature.
+        refined_encoder_features_72 = (
+            encoder_features_72_flat
+            + self.upsample_res_scale * processed_delta_72
+        )
+
+        return refined_encoder_features_72.reshape(
+            batch_size,
+            num_classes,
+            hidden_dim,
+            72,
+            72,
+        ).contiguous()
+
+
+# ---------------------------------------------------------------------------
 # ClassConditionedEncoderRefiner
 # ---------------------------------------------------------------------------
 
@@ -130,6 +292,10 @@ class ClassConditionedEncoderRefiner(nn.Module):
             for _ in range(int(fusion_layers))
         ])
 
+        self.feature_upsampler = RefinerFeatureUpsampler(
+            hidden_dim=self.hidden_dim,
+        )
+
         self.final_score_norm = nn.LayerNorm(self.score_embed_dim)
 
     # ------------------------------------------------------------------
@@ -165,8 +331,9 @@ class ClassConditionedEncoderRefiner(nn.Module):
             2. Downsample encoder features from 72×72 to base_feature_36.
             3. Inject SAM3 FPN into encoder feature via conv residual with learnable scale.
             4. Run refiner layers.
-            5. Compute total delta at 36×36, bilinear upsample to 72×72,
-               and add to original encoder feature.
+            5. Upsample full refiner feature to 72×72, fuse with SAM3 FPN 72,
+               compute processed delta, and add back to encoder feature
+               with learnable residual scale.
         """
         batch_size, num_classes, hidden_dim, H, W = encoder_features_72.shape
 
@@ -304,30 +471,21 @@ class ClassConditionedEncoderRefiner(nn.Module):
             self.final_score_norm,
         )
 
-        # 5. Compute total delta at 36×36, upsample to 72×72, add to original.
-        feature_delta_36 = feature_36 - base_feature_36
-
-        feature_delta_72 = F.interpolate(
-            feature_delta_36.reshape(
-                batch_size * num_classes,
-                hidden_dim,
-                36,
-                36,
-            ),
-            size=(72, 72),
-            mode="bilinear",
-            align_corners=False,
-        ).reshape(
-            batch_size,
-            num_classes,
-            hidden_dim,
-            72,
-            72,
-        )
-
-        refined_encoder_features_72 = (
-            encoder_features_72 + feature_delta_72
-        ).contiguous()
+        # 5. Upsample refiner feature to 72×72 with FPN-guided detail refinement.
+        if self.use_checkpoint and self.training:
+            refined_encoder_features_72 = checkpoint(
+                self.feature_upsampler,
+                feature_36,
+                encoder_features_72,
+                sam_fpn_72,
+                use_reentrant=False,
+            )
+        else:
+            refined_encoder_features_72 = self.feature_upsampler(
+                feature_36=feature_36,
+                encoder_features_72=encoder_features_72,
+                sam_fpn_72=sam_fpn_72,
+            )
 
         return {
             "refined_encoder_features_72": refined_encoder_features_72,
