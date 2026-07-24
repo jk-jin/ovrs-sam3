@@ -484,7 +484,7 @@ class EncoderRefinerLayer(nn.Module):
         window_size: int = 12,
         shift_size: int = 6,
         dropout: float = 0.1,
-        layer_scale_init: float = 0.1,
+        layer_scale_init: float = 0.0,
     ):
         super().__init__()
 

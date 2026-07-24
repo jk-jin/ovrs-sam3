@@ -63,7 +63,7 @@ model = dict(
         hidden_dim=256,
 
         score_embed_dim=256,
-        layer_scale_init=0.1,
+        layer_scale_init=0.0,
 
         refiner_hw=36,
         encoder_hw=72,
