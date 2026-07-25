@@ -231,6 +231,7 @@ class WandbHook(Hook):
         self._wandb = None
         self._run = None
         self._metric_defined = False
+        self._defined_extra_metrics: set[str] = set()
 
         self._resume_project: Optional[str] = None
         self._resume_entity: Optional[str] = None
@@ -339,11 +340,33 @@ class WandbHook(Hook):
     def _define_metrics(self) -> None:
         if self._metric_defined or self._run is None:
             return
+
         self._run.define_metric("trainer/global_iter")
-        self._run.define_metric("train/*", step_metric="trainer/global_iter")
-        self._run.define_metric("val/*", step_metric="trainer/global_iter")
-        self._run.define_metric("extra/*", step_metric="trainer/global_iter")
+        self._run.define_metric(
+            "train/*",
+            step_metric="trainer/global_iter",
+            step_sync=True,
+        )
+        self._run.define_metric(
+            "val/*",
+            step_metric="trainer/global_iter",
+            step_sync=True,
+        )
         self._metric_defined = True
+
+    def _define_extra_metric(self, metric_name: str) -> None:
+        if self._run is None:
+            return
+        if metric_name in self._defined_extra_metrics:
+            return
+
+        self._run.define_metric(
+            metric_name,
+            step_metric="trainer/global_iter",
+            step_sync=True,
+            overwrite=True,
+        )
+        self._defined_extra_metrics.add(metric_name)
 
     def after_train_iter(self, trainer, global_iter: int, batch, outputs: Dict[str, float]):
         if not self.enabled or self._wandb is None:
@@ -374,9 +397,13 @@ class WandbHook(Hook):
             payload[f"train/{k}"] = v
 
         for k, v in extra_log_vars.items():
-            payload[f"extra/{k}"] = v
+            if _jsonable(v) is None:
+                continue
 
-        payload = {k: v for k, v in payload.items() if _jsonable(v) is not None}
+            metric_name = f"extra/{k}"
+            self._define_extra_metric(metric_name)
+            payload[metric_name] = v
+
         self._run.log(payload)
 
     def after_val(self, trainer, global_iter: int, val_stats: Dict[str, float]):

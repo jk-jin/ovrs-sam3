@@ -328,6 +328,17 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 f"even integer, got {cfg.score_embed_dim}."
             )
 
+        insert_after = cfg.insert_after_encoder_layer
+        if (
+            isinstance(insert_after, bool)
+            or not isinstance(insert_after, int)
+            or not 1 <= insert_after < 6
+        ):
+            raise ValueError(
+                "encoder_refiner_cfg.insert_after_encoder_layer must be an integer "
+                f"in [1, 5] for the fixed 6-layer encoder, got {insert_after!r}."
+            )
+
         return cfg
 
     @staticmethod
@@ -803,8 +814,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             encoder_refiner_window_size=int(refiner_cfg.window_size),
             encoder_refiner_shift_size=int(refiner_cfg.shift_size),
             encoder_refiner_use_checkpoint=bool(refiner_cfg.use_checkpoint),
-            encoder_refiner_early_prompt_attention=bool(
-                refiner_cfg.early_prompt_attention
+            encoder_refiner_insert_after_layer=int(
+                refiner_cfg.insert_after_encoder_layer
             ),
             task_mode=TASK_MODE_SEMANTIC,
         )

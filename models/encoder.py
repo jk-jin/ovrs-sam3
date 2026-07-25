@@ -377,6 +377,52 @@ class TransformerEncoder(nn.Module):
             spatial_shapes,
         )
 
+    def _run_layer_range(
+        self,
+        output: Tensor,
+        prompt: Optional[Tensor],
+        prompt_key_padding_mask: Optional[Tensor],
+        key_padding_masks_flatten: Optional[Tensor],
+        lvl_pos_embed_flatten: Tensor,
+        start_layer: int,
+        end_layer: int,
+        encoder_extra_kwargs: Optional[Dict] = None,
+        act_ckpt_enable: bool = False,
+    ) -> Tensor:
+        if (
+            isinstance(start_layer, bool)
+            or isinstance(end_layer, bool)
+            or not isinstance(start_layer, int)
+            or not isinstance(end_layer, int)
+            or not 0 <= start_layer <= end_layer <= self.num_layers
+        ):
+            raise ValueError(
+                "Invalid encoder layer range: "
+                f"start={start_layer!r}, end={end_layer!r}, "
+                f"num_layers={self.num_layers}."
+            )
+
+        for layer_idx in range(start_layer, end_layer):
+            layer = self.layers[layer_idx]
+            assert isinstance(layer, TransformerEncoderLayer)
+
+            layer_kwargs = {
+                "memory": prompt,
+                "memory_key_padding_mask": prompt_key_padding_mask,
+                "query_pos": lvl_pos_embed_flatten,
+                "tgt": output,
+                "tgt_key_padding_mask": key_padding_masks_flatten,
+            }
+            if encoder_extra_kwargs is not None:
+                layer_kwargs.update(encoder_extra_kwargs)
+
+            output = activation_ckpt_wrapper(layer)(
+                **layer_kwargs,
+                act_ckpt_enable=act_ckpt_enable,
+            )
+
+        return output
+
     def forward(
         self,
         src: List[Tensor],
@@ -427,25 +473,21 @@ class TransformerEncoder(nn.Module):
             spatial_shapes, valid_ratios, device=src_flatten.device
         )
 
-        output = src_flatten
-        for layer in self.layers:
-            layer_kwargs = {}
+        if self.training:
+            assert self.use_act_checkpoint, "activation ckpt not enabled in encoder"
 
-            assert isinstance(layer, TransformerEncoderLayer)
-            layer_kwargs["memory"] = prompt
-            layer_kwargs["memory_key_padding_mask"] = prompt_key_padding_mask
-            layer_kwargs["query_pos"] = lvl_pos_embed_flatten
-            layer_kwargs["tgt"] = output
-            layer_kwargs["tgt_key_padding_mask"] = key_padding_masks_flatten
+        output = self._run_layer_range(
+            output=src_flatten,
+            prompt=prompt,
+            prompt_key_padding_mask=prompt_key_padding_mask,
+            key_padding_masks_flatten=key_padding_masks_flatten,
+            lvl_pos_embed_flatten=lvl_pos_embed_flatten,
+            start_layer=0,
+            end_layer=self.num_layers,
+            encoder_extra_kwargs=encoder_extra_kwargs,
+            act_ckpt_enable=self.training and self.use_act_checkpoint,
+        )
 
-            if self.training:
-                assert self.use_act_checkpoint, "activation ckpt not enabled in encoder"
-            if encoder_extra_kwargs is not None:
-                layer_kwargs.update(encoder_extra_kwargs)
-            output = activation_ckpt_wrapper(layer)(
-                **layer_kwargs,
-                act_ckpt_enable=self.training and self.use_act_checkpoint,
-            )
         # return as seq first
         return (
             output.transpose(0, 1),
@@ -512,6 +554,160 @@ class TransformerEncoderFusion(TransformerEncoder):
         # Not needed here
         return None
 
+    def _prepare_fusion_inputs(
+        self,
+        src: List[Tensor],
+        prompt: Tensor,
+        src_key_padding_mask: Optional[List[Tensor]],
+        src_pos: Optional[List[Tensor]],
+        prompt_key_padding_mask: Optional[Tensor],
+        feat_sizes: Optional[List[int]],
+    ):
+        src = list(src)
+        src_pos = None if src_pos is None else list(src_pos)
+        src_key_padding_mask = (
+            [None] * len(src)
+            if src_key_padding_mask is None
+            else list(src_key_padding_mask)
+        )
+
+        bs = src[0].shape[1]  # incoming tensors are sequence-first
+        if feat_sizes is not None:
+            if src_pos is None:
+                raise ValueError("src_pos is required when feat_sizes is provided.")
+            if len(feat_sizes) != len(src):
+                raise ValueError(
+                    f"feat_sizes length {len(feat_sizes)} != src length {len(src)}."
+                )
+
+            for i, (h, w) in enumerate(feat_sizes):
+                src[i] = src[i].reshape(h, w, bs, -1).permute(2, 3, 0, 1)
+                src_pos[i] = (
+                    src_pos[i].reshape(h, w, bs, -1).permute(2, 3, 0, 1)
+                )
+                src_key_padding_mask[i] = (
+                    src_key_padding_mask[i]
+                    .reshape(h, w, bs)
+                    .permute(2, 0, 1)
+                    if src_key_padding_mask[i] is not None
+                    else None
+                )
+        else:
+            if src_pos is None:
+                raise ValueError("src_pos is required.")
+            if not all(x.dim() == 4 for x in src):
+                raise ValueError("Expected [B, C, H, W] feature tensors.")
+
+        if self.add_pooled_text_to_img_feat:
+            pooled_text = pool_text_feat(
+                prompt,
+                prompt_key_padding_mask,
+                self.pool_text_with_mask,
+            )
+            pooled_text = self.text_pooling_proj(pooled_text)[..., None, None]
+            src = [x.add(pooled_text) for x in src]
+
+        return self._prepare_multilevel_features(
+            src,
+            src_key_padding_mask,
+            src_pos,
+        )
+
+    def forward_until(
+        self,
+        src: List[Tensor],
+        prompt: Tensor,
+        end_layer: int,
+        src_key_padding_mask: Optional[List[Tensor]] = None,
+        src_pos: Optional[List[Tensor]] = None,
+        prompt_key_padding_mask: Optional[Tensor] = None,
+        prompt_pos: Optional[Tensor] = None,
+        feat_sizes: Optional[List[int]] = None,
+        encoder_extra_kwargs: Optional[Dict] = None,
+    ):
+        (
+            src_flatten,
+            key_padding_masks_flatten,
+            lvl_pos_embed_flatten,
+            level_start_index,
+            valid_ratios,
+            spatial_shapes,
+        ) = self._prepare_fusion_inputs(
+            src=src,
+            prompt=prompt,
+            src_key_padding_mask=src_key_padding_mask,
+            src_pos=src_pos,
+            prompt_key_padding_mask=prompt_key_padding_mask,
+            feat_sizes=feat_sizes,
+        )
+
+        output = self._run_layer_range(
+            output=src_flatten,
+            prompt=prompt.transpose(0, 1),
+            prompt_key_padding_mask=prompt_key_padding_mask,
+            key_padding_masks_flatten=key_padding_masks_flatten,
+            lvl_pos_embed_flatten=lvl_pos_embed_flatten,
+            start_layer=0,
+            end_layer=end_layer,
+            encoder_extra_kwargs=encoder_extra_kwargs,
+            act_ckpt_enable=(
+                self.training
+                and self.use_act_checkpoint
+                and torch.is_grad_enabled()
+            ),
+        )
+
+        return {
+            "memory": output.transpose(0, 1),
+            "padding_mask": (
+                key_padding_masks_flatten.transpose(0, 1)
+                if key_padding_masks_flatten is not None
+                else None
+            ),
+            "pos_embed": lvl_pos_embed_flatten.transpose(0, 1),
+            "memory_text": prompt,
+            "level_start_index": level_start_index,
+            "spatial_shapes": spatial_shapes,
+            "valid_ratios": valid_ratios,
+        }
+
+    def forward_from(
+        self,
+        memory: Tensor,
+        pos_embed: Tensor,
+        padding_mask: Optional[Tensor],
+        prompt: Tensor,
+        prompt_key_padding_mask: Optional[Tensor],
+        start_layer: int,
+        encoder_extra_kwargs: Optional[Dict] = None,
+    ) -> Tensor:
+        output = memory.transpose(0, 1)
+        lvl_pos_embed_flatten = pos_embed.transpose(0, 1)
+        key_padding_masks_flatten = (
+            padding_mask.transpose(0, 1)
+            if padding_mask is not None
+            else None
+        )
+
+        use_checkpoint = (
+            self.use_act_checkpoint
+            and torch.is_grad_enabled()
+            and memory.requires_grad
+        )
+
+        output = self._run_layer_range(
+            output=output,
+            prompt=prompt.transpose(0, 1),
+            prompt_key_padding_mask=prompt_key_padding_mask,
+            key_padding_masks_flatten=key_padding_masks_flatten,
+            lvl_pos_embed_flatten=lvl_pos_embed_flatten,
+            start_layer=start_layer,
+            end_layer=self.num_layers,
+            encoder_extra_kwargs=encoder_extra_kwargs,
+            act_ckpt_enable=use_checkpoint,
+        )
+        return output.transpose(0, 1)
+
     def forward(
         self,
         src: List[Tensor],
@@ -523,60 +719,17 @@ class TransformerEncoderFusion(TransformerEncoder):
         feat_sizes: Optional[List[int]] = None,
         encoder_extra_kwargs: Optional[Dict] = None,
     ):
-        # Restore spatial shapes of vision
-        bs = src[0].shape[1]  # seq first
-        if feat_sizes is not None:
-            assert len(feat_sizes) == len(src)
-            if src_key_padding_mask is None:
-                src_key_padding_mask = [None] * len(src)
-            for i, (h, w) in enumerate(feat_sizes):
-                src[i] = src[i].reshape(h, w, bs, -1).permute(2, 3, 0, 1)
-                src_pos[i] = src_pos[i].reshape(h, w, bs, -1).permute(2, 3, 0, 1)
-                src_key_padding_mask[i] = (
-                    src_key_padding_mask[i].reshape(h, w, bs).permute(2, 0, 1)
-                    if src_key_padding_mask[i] is not None
-                    else None
-                )
-        else:
-            assert all(x.dim == 4 for x in src), (
-                "expected list of (bs, c, h, w) tensors"
-            )
-
-        if self.add_pooled_text_to_img_feat:
-            # Fusion: Add mean pooled text to image features
-            pooled_text = pool_text_feat(
-                prompt, prompt_key_padding_mask, self.pool_text_with_mask
-            )
-            pooled_text = self.text_pooling_proj(pooled_text)[
-                ..., None, None
-            ]  # prompt is seq first
-            src = [x.add_(pooled_text) for x in src]
-
-        (
-            out,
-            key_padding_masks_flatten,
-            lvl_pos_embed_flatten,
-            level_start_index,
-            spatial_shapes,
-            valid_ratios,
-        ) = super().forward(
-            src,
-            src_key_padding_masks=src_key_padding_mask,
-            pos=src_pos,
-            prompt=prompt.transpose(0, 1),
+        return self.forward_until(
+            src=src,
+            prompt=prompt,
+            end_layer=self.num_layers,
+            src_key_padding_mask=src_key_padding_mask,
+            src_pos=src_pos,
             prompt_key_padding_mask=prompt_key_padding_mask,
+            prompt_pos=prompt_pos,
+            feat_sizes=feat_sizes,
             encoder_extra_kwargs=encoder_extra_kwargs,
         )
-
-        return {
-            "memory": out,
-            "padding_mask": key_padding_masks_flatten,
-            "pos_embed": lvl_pos_embed_flatten,
-            "memory_text": prompt,
-            "level_start_index": level_start_index,
-            "spatial_shapes": spatial_shapes,
-            "valid_ratios": valid_ratios,
-        }
 
 
 def pool_text_feat(prompt, prompt_mask, pool_with_mask):

@@ -21,8 +21,8 @@ OVRS-SAM3 接收一批遥感图像和当前数据集的类别名称，输出每�
 ```text
 图像与类别名称
   ├─ SAM3 图像 backbone → 288/144/72 多尺度 FPN
-  ├─ SAM3 文本编码器与 transformer encoder
-  │    → 每个图像-类别对的 72×72 encoder feature
+  ├─ SAM3 文本编码器与 transformer encoder layer 1..n
+  │    → 每个图像-类别对的第 n 层 encoder feature
   │    → SAM 文本 token 的 masked mean
   └─ RemoteCLIP
        ├─ 504×504 图像 → 36×36 dense image feature
@@ -34,8 +34,11 @@ RemoteCLIP 局部相似度图
   → SAM3 FPN 残差注入
   → 4 层双流 encoder refiner
   → FPN 引导的 36→72 细节上采样
-  → 写回 SAM3 encoder visual tokens
-  → 冻结的 SAM3 pixel decoder 与 semantic head
+  → 写回第 n 层 visual tokens
+  → SAM3 encoder layer n+1..6
+  → prompt cross-attention
+  → pixel decoder
+  → semantic head
   → final logits
 ```
 
@@ -54,7 +57,7 @@ RemoteCLIP 局部相似度图
 | 张量                            | 形状                                 | 说明                             |
 | ----------------------------- | ---------------------------------- | ------------------------------ |
 | `backbone_fpn`                | `[B, 256, 288/144/72, 288/144/72]` | SAM3 多尺度图像特征                   |
-| `encoder_features_72`         | `[B, C, 256, 72, 72]`              | SAM3 类条件 encoder feature       |
+| `encoder_features_72`         | `[B, C, 256, 72, 72]`              | 第 n 层 encoder feature           |
 | `sam_text_mean`               | `[B, C, 256]`                      | SAM 文本 token 的 masked mean     |
 | `remoteclip_feat_map`         | `[B, 768, 36, 36]`                 | RemoteCLIP dense image feature |
 | `template_clip_text`          | `[C, 32, 768]`                     | 每类 32 个模板的文本特征                 |
@@ -80,13 +83,13 @@ SAM3 图像 backbone 在训练中冻结并运行于 `eval()`。图像特征使�
 
 每个图像与每个类别组成一个 prompt pair。冻结的 SAM3 文本编码器和 6 层 transformer encoder 为每个 pair 生成：
 
-* 72×72 类条件图像特征；
+* 类条件图像特征（前 n 层输出，n 由 `insert_after_encoder_layer` 控制）；
 * prompt token；
 * prompt mask。
 
-所有类别块按原始顺序重新拼接。SAM 文本向量通过有效 token 的 masked mean 得到，padding token 不参与平均。
+默认在第 4 层后插入 Refiner：前 4 层在 `torch.no_grad()` 中运行，第 5～6 层保留输入梯度并以逐层 activation checkpoint 执行。所有类别块按原始顺序重新拼接。SAM 文本向量通过有效 token 的 masked mean 得到，padding token 不参与平均。
 
-默认 `early_prompt_attention=False`，因此 segmentation head 的 prompt cross-attention 位于 refiner 之后。若显式开启 early 模式，同一次前向中不得再次应用该注意力。
+Refiner 对所有类别拼接后的 feature 只运行一次，输出按原 chunk 切分后写回第 n 层 visual tokens，再分别运行剩余 encoder 层和分割头。
 
 ## 4. RemoteCLIP 分支
 
@@ -175,7 +178,7 @@ Refiner 在 36×36 上同时维护图像 feature 流和 score embedding 流。�
 
 这里只使用一个 depthwise 3×3 空间卷积，避免连续普通卷积过度平滑边界；1×1 卷积负责通道融合和容量控制。零初始化外层残差保证模型初始化时的最终 72×72 输出与原始 encoder feature 完全一致。
 
-Refiner 层和上采样模块在训练时支持 activation checkpoint。
+Refiner 层和上采样模块在训练时支持 activation checkpoint。Refiner 输出写回第 n 层 encoder feature，再经过第 n+1..6 层 encoder（逐层 activation checkpoint），然后进入分割头。
 
 ### 5.4 残差系数日志
 
@@ -191,13 +194,13 @@ Refiner 层和上采样模块在训练时支持 activation checkpoint。
 
 ## 6. SAM3 分割头
 
-Refiner 输出按原类别 chunk 切分，并写回对应 `encoder_hidden_states` 的图像 token 区域。默认随后执行一次 prompt cross-attention。
+分割头按 SAM3 官方控制流固定执行一次 prompt cross-attention（当 `cross_attend_prompt` 不为 None 时），不再有开关控制。
 
 Pixel decoder 用更新后的 72×72 类条件特征替换 FPN 最后一层，再依次与 144×144、288×288 的 SAM3 FPN 融合。每次融合包含最近邻上采样、逐元素相加、3×3 Conv、GroupNorm 和 ReLU。1×1 semantic head 为每个图像-类别 pair 输出一个 logit map，最终拼接为 `[B, C, 288, 288]`。
 
 SAM3 segmentation head 的参数保持冻结，但前向不能放入 `no_grad()`，因为损失梯度仍需穿过该头回到 refiner。
 
-语义主路径只消费 `semantic_seg`。当前通用 segmentation head 仍额外计算未被使用的 instance `pred_masks`；这属于实现冗余，不是模型设计的一部分，应在 semantic-only 清理中移除。
+语义主路径只消费 `semantic_seg`。当前通用 segmentation head 按 SAM3 官方控制流仍计算 `pred_masks`，语义主路径只消费 `semantic_seg`；本次不额外裁剪该官方分支。
 
 ## 7. 训练设计
 
@@ -338,6 +341,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 9. TTA 必须先平均原始分数，再进行相对阈值过滤。
 10. `reduce_zero_label` 与 `background_cfg` 各自只执行其定义的一次标签空间变换。
 11. 完整恢复必须严格校验 checkpoint schema；模型权重迁移必须走独立入口。
+12. `1 <= insert_after_encoder_layer < 6`，前 n 层在 `no_grad()` 中，后 6-n 层保留输入梯度。
 
 当前限制：
 

@@ -72,7 +72,7 @@ model = dict(
         shift_size=6,
 
         use_checkpoint=True,
-        early_prompt_attention=False,
+        insert_after_encoder_layer=4,
     ),
 
     freeze_cfg=dict(

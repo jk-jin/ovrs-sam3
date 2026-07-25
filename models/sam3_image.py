@@ -47,7 +47,7 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_window_size: int = 12,
         encoder_refiner_shift_size: int = 6,
         encoder_refiner_use_checkpoint: bool = True,
-        encoder_refiner_early_prompt_attention: bool = False,
+        encoder_refiner_insert_after_layer: int = 4,
         task_mode: str = TASK_MODE_SEMANTIC,
         **kwargs,
     ):
@@ -125,9 +125,17 @@ class Sam3Image(torch.nn.Module):
             text_prompt_use_checkpoint=bool(text_prompt_use_checkpoint),
         )
 
-        self.encoder_refiner_early_prompt_attention = bool(
-            encoder_refiner_early_prompt_attention
+        self.encoder_refiner_insert_after_layer = int(
+            encoder_refiner_insert_after_layer
         )
+        num_encoder_layers = int(self.transformer.encoder.num_layers)
+        if not 1 <= self.encoder_refiner_insert_after_layer < num_encoder_layers:
+            raise ValueError(
+                "encoder_refiner_insert_after_layer must leave at least one "
+                "encoder layer after the refiner; got "
+                f"{self.encoder_refiner_insert_after_layer} for "
+                f"{num_encoder_layers} layers."
+            )
 
         self.prompt_chunk_size = None
         self._text_cache: Optional[Dict[str, torch.Tensor]] = None
@@ -317,32 +325,6 @@ class Sam3Image(torch.nn.Module):
             "clip_mid_layer_indices": tuple(int(x) for x in clip_mid_layer_indices),
         }
 
-    def _maybe_apply_early_prompt_attention(
-        self,
-        encoder_out: Dict[str, torch.Tensor],
-        prompt: torch.Tensor,
-        prompt_mask: torch.Tensor,
-    ) -> Dict[str, torch.Tensor]:
-        if not self.encoder_refiner_early_prompt_attention:
-            return encoder_out
-
-        if self.segmentation_head is None:
-            raise RuntimeError("segmentation_head is required for early prompt attention.")
-
-        if not hasattr(self.segmentation_head, "apply_prompt_attention"):
-            raise RuntimeError(
-                "segmentation_head must expose apply_prompt_attention() "
-                "when encoder_refiner_early_prompt_attention=True."
-            )
-
-        out = dict(encoder_out)
-        out["encoder_hidden_states"] = self.segmentation_head.apply_prompt_attention(
-            encoder_hidden_states=encoder_out["encoder_hidden_states"],
-            prompt=prompt,
-            prompt_mask=prompt_mask,
-        )
-        return out
-
     def build_encoder_refiner_cache(
         self,
         input: BatchedDatapoint,
@@ -424,7 +406,7 @@ class Sam3Image(torch.nn.Module):
                 box_labels=chunk_find_input.input_boxes_label,
             )
 
-            raw_outputs = self.forward_grounding_encoder_only(
+            raw_outputs = self.forward_grounding_encoder_until_refiner(
                 backbone_out=chunk_backbone_out,
                 find_input=chunk_find_input,
                 geometric_prompt=geometric_prompt,
@@ -434,27 +416,21 @@ class Sam3Image(torch.nn.Module):
             prompt = raw_outputs["prompt"]
             prompt_mask = raw_outputs["prompt_mask"]
 
-            encoder_out_for_refiner = self._maybe_apply_early_prompt_attention(
+            encoder_feature_chunk = self._extract_encoder_visual_feature(
                 encoder_out=encoder_out,
-                prompt=prompt,
-                prompt_mask=prompt_mask,
-            )
-
-            encoder_feature_chunk = self._extract_encoder_last_feature(
-                encoder_out=encoder_out_for_refiner,
                 batch_size=batch_size,
                 num_chunk_classes=num_chunk_classes,
             )
 
             sam_text_mean_chunk = self._extract_sam_text_mean(
-                encoder_out=encoder_out_for_refiner,
+                encoder_out=encoder_out,
                 batch_size=batch_size,
                 num_chunk_classes=num_chunk_classes,
             )
             sam_text_mean_chunks.append(sam_text_mean_chunk)
 
             encoder_feature_chunks.append(encoder_feature_chunk)
-            encoder_out_chunks.append(encoder_out_for_refiner)
+            encoder_out_chunks.append(encoder_out)
             chunk_prompts.append(prompt)
             chunk_prompt_masks.append(prompt_mask)
             merged_class_ids.extend(chunk_class_ids)
@@ -548,14 +524,14 @@ class Sam3Image(torch.nn.Module):
             hidden_dim,
         ).contiguous()
 
-    def _extract_encoder_last_feature(
+    def _extract_encoder_visual_feature(
         self,
         encoder_out: Dict[str, torch.Tensor],
         batch_size: int,
         num_chunk_classes: int,
     ) -> torch.Tensor:
         """
-        Extract last-layer visual tokens from encoder_hidden_states
+        Extract visual tokens from encoder_hidden_states
         and reshape to [B, C_chunk, D, H, W].
 
         Takes the highest-res image tokens only (first spatial_shapes level).
@@ -653,6 +629,22 @@ class Sam3Image(torch.nn.Module):
             input_points_mask=torch.zeros((num_pairs, 0), dtype=torch.bool, device=device),
         )
 
+    def _run_encoder_after_refiner(
+        self,
+        encoder_out: Dict[str, torch.Tensor],
+        refined_hidden_states: torch.Tensor,
+        prompt: torch.Tensor,
+        prompt_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        return self.transformer.encoder.forward_from(
+            memory=refined_hidden_states,
+            pos_embed=encoder_out["pos_embed"],
+            padding_mask=encoder_out["padding_mask"],
+            prompt=prompt,
+            prompt_key_padding_mask=prompt_mask,
+            start_layer=self.encoder_refiner_insert_after_layer,
+        )
+
     def run_encoder_refiner(
         self,
         encoder_features_72: torch.Tensor,
@@ -702,6 +694,13 @@ class Sam3Image(torch.nn.Module):
                 num_chunk_classes=C_chunk,
             )
 
+            post_encoder_hidden_states = self._run_encoder_after_refiner(
+                encoder_out=encoder_out,
+                refined_hidden_states=refined_hidden_states,
+                prompt=chunk_prompts[chunk_idx],
+                prompt_mask=chunk_prompt_masks[chunk_idx],
+            )
+
             chunk_find_input = self._build_prompt_expanded_find_stage(
                 batch_size=B,
                 num_chunk_classes=C_chunk,
@@ -712,10 +711,9 @@ class Sam3Image(torch.nn.Module):
                 backbone_feats=backbone_fpn,
                 obj_queries=torch.empty(0, device=refined_encoder_features_72.device),
                 image_ids=chunk_find_input.img_ids,
-                encoder_hidden_states=refined_hidden_states,
+                encoder_hidden_states=post_encoder_hidden_states,
                 prompt=chunk_prompts[chunk_idx],
                 prompt_mask=chunk_prompt_masks[chunk_idx],
-                apply_prompt_attention=not self.encoder_refiner_early_prompt_attention,
             )
 
             chunk_logits = seg_outputs["semantic_seg"]
@@ -859,7 +857,7 @@ class Sam3Image(torch.nn.Module):
 
         return torch.cat(prompt_list, dim=0), torch.cat(prompt_mask_list, dim=1), backbone_out
 
-    def _run_encoder(
+    def _run_encoder_until_refiner(
         self,
         backbone_out,
         find_input,
@@ -870,7 +868,7 @@ class Sam3Image(torch.nn.Module):
         feat_tuple = self._get_img_feats(backbone_out, find_input.img_ids)
         backbone_out, img_feats, img_pos_embeds, vis_feat_sizes = feat_tuple
 
-        memory = self.transformer.encoder(
+        memory = self.transformer.encoder.forward_until(
             src=img_feats.copy(),
             src_key_padding_mask=None,
             src_pos=img_pos_embeds.copy(),
@@ -879,6 +877,7 @@ class Sam3Image(torch.nn.Module):
             prompt_key_padding_mask=prompt_mask,
             feat_sizes=vis_feat_sizes,
             encoder_extra_kwargs=encoder_extra_kwargs,
+            end_layer=self.encoder_refiner_insert_after_layer,
         )
 
         encoder_out = {
@@ -895,7 +894,7 @@ class Sam3Image(torch.nn.Module):
         }
         return backbone_out, encoder_out, feat_tuple
 
-    def forward_grounding_encoder_only(
+    def forward_grounding_encoder_until_refiner(
         self,
         backbone_out: Dict[str, torch.Tensor],
         find_input,
@@ -909,8 +908,8 @@ class Sam3Image(torch.nn.Module):
                     geometric_prompt,
                 )
 
-            with torch.profiler.record_function("Sam3Image._run_encoder"):
-                backbone_out, encoder_out, _ = self._run_encoder(
+            with torch.profiler.record_function("Sam3Image._run_encoder_until_refiner"):
+                backbone_out, encoder_out, _ = self._run_encoder_until_refiner(
                     backbone_out,
                     find_input,
                     prompt,
