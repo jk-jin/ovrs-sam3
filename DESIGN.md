@@ -33,7 +33,9 @@ RemoteCLIP 局部相似度图
   → 36×36 score embedding
   → SAM3 FPN 残差注入
   → 4 层双流 encoder refiner
-  → FPN 引导的 36→72 细节上采样
+  → Refiner feature 双线性插值到 72×72
+  → 与原始第 n 层 encoder feature 拼接
+  → 1×1 Conv + 3×3 Conv 输出融合
   → 写回第 n 层 visual tokens
   → SAM3 encoder layer n+1..6
   → prompt cross-attention
@@ -146,9 +148,9 @@ Refiner 在 36×36 上同时维护图像 feature 流和 score embedding 流。�
 
 原始 72×72 encoder feature 双线性下采样到 36×36。SAM3 的 72×72 FPN 同样下采样，并沿类别维广播。
 
-两者在通道维拼接为 512 通道，经过两层 3×3 Conv、GroupNorm 和 GELU，产生 256 通道更新量。更新量由零初始化标量 `feature_fpn_res_scale` 调制后加到下采样 encoder feature。
+两者在通道维拼接为 512 通道，经过两层 3×3 Conv、GroupNorm 和 GELU，产生 256 通道更新量。更新量由残差系数 `feature_fpn_res_scale`（初始化为 0.1）调制后加到下采样 encoder feature。
 
-该设计让 refiner 初始时保持原始 encoder 基线，同时允许训练逐步引入共享的 SAM3 高频信息。
+该设计允许训练从第一步即引入共享的 SAM3 高频信息。
 
 ### 5.2 单层 refiner
 
@@ -160,37 +162,38 @@ Refiner 在 36×36 上同时维护图像 feature 流和 score embedding 流。�
 4. **Feature FFN**：逐 token 更新图像流。
 5. **Score FFN**：逐 token 更新分数流。
 
-三个 attention 子层分别为 feature 和 score 使用独立残差系数，两个 FFN 也分别使用独立系数，因此每层共有 8 个 LayerScale 标量。所有标量默认初始化为 0。
+三个 attention 子层分别为 feature 和 score 使用独立残差系数，两个 FFN 也分别使用独立系数，因此每层共有 8 个 LayerScale 标量。所有标量统一初始化为 0.1。
 
 层内不使用 post-norm。全部 refiner 层结束后，只对 score embedding 执行一次最终 LayerNorm；feature 流不做最终 LayerNorm。
 
-### 5.3 36→72 细节上采样
+### 5.3 36→72 输出融合
 
-上采样模块不在进入模块前预先计算更新量，而是执行完整流程：
+完整 `refiner_features_36` 首先双线性插值到 72×72，并与原始第 n 层
+`encoder_features_72` 在通道维拼接。对每个图像-类别 pair，拼接后的张量
+形状为 `[B*C, 512, 72, 72]`。
 
-1. 将完整 `refiner_features_36` 双线性插值到 72×72。
-2. 与原始 `encoder_features_72` 相减，得到原始更新量。
-3. 将更新量与按类别广播的 `sam_fpn_72` 在通道维拼接为 512 通道。
-4. 使用 1×1 Conv、GroupNorm 和 GELU 压回 256 通道，避免拼接扩大最终特征尺度。
-5. 通过轻量细节分支提取局部高分辨率信息：depthwise 3×3 Conv、GroupNorm、GELU、pointwise 1×1 Conv。
-6. 将细节分支输出残差加到 1×1 融合结果。
-7. 使用零初始化 `upsample_res_scale` 调制处理后的更新量，再加回原始 72×72 encoder feature。
+拼接特征先经过一个 1×1 Conv，从 512 通道压缩到 256 通道；再经过一个
+padding 为 1 的普通 3×3 Conv，保持 256 通道和 72×72 空间尺寸。卷积输出
+直接作为 `refined_encoder_features_72`，不再计算 feature delta，不再与
+原始 encoder feature 做外层残差相加，也不再使用 `upsample_res_scale`。
 
-这里只使用一个 depthwise 3×3 空间卷积，避免连续普通卷积过度平滑边界；1×1 卷积负责通道融合和容量控制。零初始化外层残差保证模型初始化时的最终 72×72 输出与原始 encoder feature 完全一致。
-
-Refiner 层和上采样模块在训练时支持 activation checkpoint。Refiner 输出写回第 n 层 encoder feature，再经过第 n+1..6 层 encoder（逐层 activation checkpoint），然后进入分割头。
+`sam_fpn_72` 仍参与前面的 36×36 FPN 信息注入，但不再进入 72×72 输出融合。
+输出融合训练时继续使用 non-reentrant activation checkpoint。融合后的特征
+写回第 n 层 visual tokens，再经过第 n+1..6 层 encoder 和官方分割头。
 
 ### 5.4 残差系数日志
 
-训练日志、JSONL 和 W&B 分三类记录可学习残差系数：
+训练日志、JSONL 和 W&B 记录两类可学习残差系数：
 
-| 类别         | 前缀                           | 参数                      |
-| ---------- | ---------------------------- | ----------------------- |
-| FPN 信息注入   | `residual/fpn/`              | `feature_fpn_res_scale` |
-| Refiner 内部 | `residual/refiner_internal/` | 每层 8 个 LayerScale       |
-| 上采样模块      | `residual/upsample/`         | `upsample_res_scale`    |
+| 类别 | 前缀 | 参数 |
+| --- | --- | --- |
+| FPN 信息注入 | `residual/fpn/` | `feature_fpn_res_scale` |
+| Refiner 内部 | `residual/refiner_internal/` | 每层 8 个 LayerScale |
 
-每类记录 `count`、`mean`、`abs_mean`、`min`、`max` 和 `negative_ratio`。当前模型未发现第四类可学习残差系数。
+每类记录 `count`、`mean`、`abs_mean`、`min`、`max` 和
+`negative_ratio`。修改后 `residual/fpn/mean` 和 `residual/refiner_internal/mean`
+初始均应为 0.1，`residual/refiner_internal/count` 仍为 32。
+72×72 输出融合没有残差系数，也不产生对应日志。
 
 ## 6. SAM3 分割头
 
@@ -221,7 +224,10 @@ OpenCLIP 常把 Q/K/V 存在同一个融合参数中。项目对该参数注册�
 
 * encoder refiner 使用 1.0 倍学习率；
 * RemoteCLIP text/image 使用 0.01 倍学习率，即 `1e-6`；
-* normalization 参数不使用 weight decay。
+* normalization 参数不使用 weight decay；
+* 所有残差系数（FPN 注入 + Refiner 内部 32 个 LayerScale）使用 `_ovrs_disable_weight_decay` 标记，weight decay 强制为 0；
+* 梯度裁剪上限为 0.1；
+* warmup 保持前 1000 步，线性从 0.1 倍到全额学习率，后续余弦衰减。
 
 ### 7.2 损失
 
@@ -317,7 +323,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 | `models/openclip_text_encoder.py`     | 模板文本编码、micro-batch 与梯度控制                 |
 | `models/score_embeddings.py`          | 32 模板相似度图和多尺度 score encoder              |
 | `models/encoder_refiner_attention.py` | 跨类别/窗口注意力、双流 FFN 与 LayerScale            |
-| `models/encoder_refiner.py`           | FPN 注入、refiner 主体和细节上采样                  |
+| `models/encoder_refiner.py`           | FPN 注入、refiner 主体和 72×72 输出融合                  |
 | `models/maskformer_segmentation.py`   | prompt attention、pixel decoder 与语义 head  |
 | `losses/semantic_criterion.py`        | present/absent 加权 BCE 与可选 Dice           |
 | `engine/checkpoint.py`                | 安全、原子、严格的 checkpoint 保存与加载               |
@@ -337,7 +343,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 5. 可训练 RemoteCLIP 文本特征不能跨 optimizer step 缓存。
 6. 验证不得重新开启 RemoteCLIP 图像分支的 autograd。
 7. 冻结的 segmentation head 必须允许梯度穿过。
-8. FPN、refiner 内部和上采样的外层残差系数均零初始化。
+8. FPN 注入和 Refiner 内部残差系数统一由 `residual_scale_init` 控制，默认值为 0.1；这些标量不使用 weight decay。72×72 输出融合没有残差系数。
 9. TTA 必须先平均原始分数，再进行相对阈值过滤。
 10. `reduce_zero_label` 与 `background_cfg` 各自只执行其定义的一次标签空间变换。
 11. 完整恢复必须严格校验 checkpoint schema；模型权重迁移必须走独立入口。

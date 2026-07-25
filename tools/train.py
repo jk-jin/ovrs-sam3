@@ -249,12 +249,10 @@ def build_log_getters(cfg) -> List[object]:
         if refiner is None:
             return {}
 
-        # FPN injection residual scale.
         fpn_params = [
             getattr(refiner, "feature_fpn_res_scale", None),
         ]
 
-        # Refiner internal LayerScale parameters (8 per layer).
         internal_names = (
             "class_feature_scale",
             "class_score_scale",
@@ -265,32 +263,20 @@ def build_log_getters(cfg) -> List[object]:
             "ffn_feature_scale",
             "ffn_score_scale",
         )
-
         internal_params = [
             getattr(layer, name, None)
             for layer in refiner.layers
             for name in internal_names
         ]
 
-        # Upsample module residual scale.
-        feature_upsampler = getattr(
-            refiner,
-            "feature_upsampler",
-            None,
-        )
-        upsample_params = [
-            getattr(
-                feature_upsampler,
-                "upsample_res_scale",
-                None,
-            ),
-        ]
-
         out = {}
         out.update(summarize_residual_scales("fpn", fpn_params))
-        out.update(summarize_residual_scales("refiner_internal", internal_params))
-        out.update(summarize_residual_scales("upsample", upsample_params))
-
+        out.update(
+            summarize_residual_scales(
+                "refiner_internal",
+                internal_params,
+            )
+        )
         return out
 
     return [project_log_getter]

@@ -6,7 +6,7 @@ train_cfg = dict(
 
     log_window_size=20,
     use_amp=True,
-    grad_clip_norm=0.01,
+    grad_clip_norm=0.1,
     monitor="semantic.miou",
     monitor_mode="max",
     max_keep_ckpts=10,

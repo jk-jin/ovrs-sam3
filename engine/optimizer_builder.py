@@ -147,7 +147,7 @@ def enforce_optimizer_param_group_invariants(
 
     When an optimizer is restored from checkpoint, load_state_dict() may
     overwrite per-group hyperparameters (e.g. weight_decay).  This function
-    ensures that fused QKV parameters marked with _ovrs_disable_weight_decay
+    ensures that parameters marked with _ovrs_disable_weight_decay
     always have weight_decay=0.0, regardless of what the checkpoint contains.
     """
     for group in optimizer.param_groups:

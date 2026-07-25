@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,6 +10,22 @@ import torch.nn.functional as F
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+
+
+def make_residual_scale(init_value: float) -> nn.Parameter:
+    value = float(init_value)
+
+    if not math.isfinite(value) or value < 0.0:
+        raise ValueError(
+            "Residual scale initialization must be finite and "
+            f"non-negative, got {init_value!r}."
+        )
+
+    scale = nn.Parameter(
+        torch.tensor(value, dtype=torch.float32)
+    )
+    scale._ovrs_disable_weight_decay = True
+    return scale
 
 
 def flatten_batch_class(
@@ -484,14 +502,9 @@ class EncoderRefinerLayer(nn.Module):
         window_size: int = 12,
         shift_size: int = 6,
         dropout: float = 0.1,
-        layer_scale_init: float = 0.0,
+        residual_scale_init: float = 0.1,
     ):
         super().__init__()
-
-        if layer_scale_init < 0:
-            raise ValueError(
-                f"layer_scale_init must be non-negative, got {layer_scale_init}."
-            )
 
         self.class_attn = ClassScoreAttention(
             hidden_dim=hidden_dim,
@@ -546,19 +559,33 @@ class EncoderRefinerLayer(nn.Module):
         self.ffn_dropout_score = nn.Dropout(float(dropout))
 
         # Eight independent LayerScale parameters.
-        init = float(layer_scale_init)
+        self.class_feature_scale = make_residual_scale(
+            residual_scale_init
+        )
+        self.class_score_scale = make_residual_scale(
+            residual_scale_init
+        )
 
-        self.class_feature_scale = nn.Parameter(torch.tensor(init))
-        self.class_score_scale = nn.Parameter(torch.tensor(init))
+        self.regular_feature_scale = make_residual_scale(
+            residual_scale_init
+        )
+        self.regular_score_scale = make_residual_scale(
+            residual_scale_init
+        )
 
-        self.regular_feature_scale = nn.Parameter(torch.tensor(init))
-        self.regular_score_scale = nn.Parameter(torch.tensor(init))
+        self.shifted_feature_scale = make_residual_scale(
+            residual_scale_init
+        )
+        self.shifted_score_scale = make_residual_scale(
+            residual_scale_init
+        )
 
-        self.shifted_feature_scale = nn.Parameter(torch.tensor(init))
-        self.shifted_score_scale = nn.Parameter(torch.tensor(init))
-
-        self.ffn_feature_scale = nn.Parameter(torch.tensor(init))
-        self.ffn_score_scale = nn.Parameter(torch.tensor(init))
+        self.ffn_feature_scale = make_residual_scale(
+            residual_scale_init
+        )
+        self.ffn_score_scale = make_residual_scale(
+            residual_scale_init
+        )
 
     def _ffn_feature_update(
         self,

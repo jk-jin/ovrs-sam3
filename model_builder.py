@@ -314,12 +314,13 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             )
 
         if (
-            not math.isfinite(float(cfg.layer_scale_init))
-            or float(cfg.layer_scale_init) < 0.0
+            not math.isfinite(float(cfg.residual_scale_init))
+            or float(cfg.residual_scale_init) < 0.0
         ):
             raise ValueError(
-                "encoder_refiner_cfg.layer_scale_init must be finite "
-                f"and non-negative, got {cfg.layer_scale_init!r}."
+                "encoder_refiner_cfg.residual_scale_init must be "
+                "finite and non-negative, got "
+                f"{cfg.residual_scale_init!r}."
             )
 
         if cfg.score_embed_dim <= 0 or cfg.score_embed_dim % 2 != 0:
@@ -808,8 +809,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             encoder_refiner_dropout=float(refiner_cfg.dropout),
             encoder_refiner_hidden_dim=int(refiner_cfg.hidden_dim),
             encoder_refiner_score_embed_dim=int(refiner_cfg.score_embed_dim),
-            encoder_refiner_layer_scale_init=float(
-                refiner_cfg.layer_scale_init
+            encoder_refiner_residual_scale_init=float(
+                refiner_cfg.residual_scale_init
             ),
             encoder_refiner_window_size=int(refiner_cfg.window_size),
             encoder_refiner_shift_size=int(refiner_cfg.shift_size),
