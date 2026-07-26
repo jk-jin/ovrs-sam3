@@ -48,7 +48,8 @@ class MaskPromptEncoder36(nn.Module):
         )
         self.proj = nn.Conv2d(64, self.hidden_dim, kernel_size=1)
 
-        # Zero-initialise so old checkpoints start with a clean mask prompt.
+        # Start from a zero mask embedding. The non-zero mask block in the
+        # score fusion layer still allows gradients to reach this projection.
         nn.init.zeros_(self.proj.weight)
         nn.init.zeros_(self.proj.bias)
 
@@ -89,11 +90,12 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
     Takes the full 6-layer SAM3 encoder output after prompt cross-attention
     as input. Original logits from a first-pass Pixel Decoder + Semantic Head
-    are encoded via MaskPromptEncoder36 and added to the downsampled encoder
-    feature as the initial refiner feature stream.
+    are encoded via MaskPromptEncoder36 into a mask prompt embedding. The mask
+    prompt is fused into the score stream via channel concat followed by a
+    1×1 convolution, instead of being added to the feature stream.
 
-    A shared 1×1 Conv produces per-layer auxiliary logits at 36×36 for
-    distillation supervision.
+    A shared 1×1 Conv produces per-layer score-stream auxiliary logits at
+    36×36 for distillation supervision.
 
     Forward inputs:
         encoder_features_72:  [B, C, 256, 72, 72]  (full encoder + cross-attention)
@@ -159,6 +161,21 @@ class ClassConditionedEncoderRefiner(nn.Module):
             hidden_dim=self.hidden_dim,
         )
 
+        if self.hidden_dim != self.score_embed_dim:
+            raise ValueError(
+                "Mask-score fusion requires hidden_dim and score_embed_dim "
+                f"to be equal, got {self.hidden_dim} and {self.score_embed_dim}."
+            )
+
+        self.mask_score_fusion_36 = nn.Conv2d(
+            self.score_embed_dim + self.hidden_dim,
+            self.score_embed_dim,
+            kernel_size=1,
+            bias=True,
+        )
+
+        self._init_mask_score_fusion_36()
+
         self.layers = nn.ModuleList([
             EncoderRefinerLayer(
                 hidden_dim=self.hidden_dim,
@@ -172,8 +189,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
             for _ in range(self.num_fusion_layers)
         ])
 
-        self.layer_mask_head = nn.Conv2d(
-            self.hidden_dim,
+        self.score_aux_mask_head = nn.Conv2d(
+            self.score_embed_dim,
             1,
             kernel_size=1,
         )
@@ -197,8 +214,88 @@ class ClassConditionedEncoderRefiner(nn.Module):
         self.final_score_norm = nn.LayerNorm(self.score_embed_dim)
 
     # ------------------------------------------------------------------
+    # Initialisation helpers
+    # ------------------------------------------------------------------
+
+    def _init_mask_score_fusion_36(self) -> None:
+        fusion = self.mask_score_fusion_36
+
+        with torch.no_grad():
+            fusion.weight.zero_()
+            fusion.bias.zero_()
+
+            identity = torch.eye(
+                self.score_embed_dim,
+                device=fusion.weight.device,
+                dtype=fusion.weight.dtype,
+            )
+
+            fusion.weight[
+                :, :self.score_embed_dim, 0, 0
+            ].copy_(identity)
+
+            fusion.weight[
+                :, self.score_embed_dim:, 0, 0
+            ].copy_(0.1 * identity)
+
+    # ------------------------------------------------------------------
     # Forward
     # ------------------------------------------------------------------
+
+    def _fuse_mask_prompt_into_score_36(
+        self,
+        clip_score_embed_36: torch.Tensor,
+        mask_prompt_embed_36: torch.Tensor,
+    ) -> torch.Tensor:
+        batch_size, num_classes, score_dim, height, width = (
+            clip_score_embed_36.shape
+        )
+
+        expected_score_shape = (
+            batch_size,
+            num_classes,
+            self.score_embed_dim,
+            36,
+            36,
+        )
+        if tuple(clip_score_embed_36.shape) != expected_score_shape:
+            raise ValueError(
+                f"clip_score_embed_36 must be {expected_score_shape}, "
+                f"got {tuple(clip_score_embed_36.shape)}."
+            )
+
+        expected_mask_shape = (
+            batch_size,
+            num_classes,
+            self.hidden_dim,
+            36,
+            36,
+        )
+        if tuple(mask_prompt_embed_36.shape) != expected_mask_shape:
+            raise ValueError(
+                f"mask_prompt_embed_36 must be {expected_mask_shape}, "
+                f"got {tuple(mask_prompt_embed_36.shape)}."
+            )
+
+        fusion_input = torch.cat(
+            [clip_score_embed_36, mask_prompt_embed_36],
+            dim=2,
+        ).reshape(
+            batch_size * num_classes,
+            self.score_embed_dim + self.hidden_dim,
+            36,
+            36,
+        )
+
+        fused_score_embed_36 = self.mask_score_fusion_36(fusion_input)
+
+        return fused_score_embed_36.reshape(
+            batch_size,
+            num_classes,
+            self.score_embed_dim,
+            36,
+            36,
+        ).contiguous()
 
     def _fuse_refiner_and_encoder_features_72(
         self,
@@ -296,12 +393,15 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
         Process:
             1. Build CLIP score embedding at 36×36.
-            2. Downsample cross-attended full-encoder features from 72×72 to base_feature_36.
-            3. Encode original logits via MaskPromptEncoder36 and add to base_feature_36.
-            4. Run refiner layers with shared 1×1 Conv aux predictions.
-            5. Bilinearly upsample the full refiner feature to 72×72,
-               concatenate it with the original cross-attended encoder feature, and fuse
-               them with one 1×1 convolution followed by one 3×3 convolution.
+            2. Downsample encoder features from 72×72 to 36×36 as the feature stream.
+            3. Encode original logits into mask prompt embedding.
+            4. Fuse score embedding and mask prompt embedding via channel concat
+               followed by 1×1 convolution to produce the initial score stream.
+            5. Run refiner layers and produce per-layer score-stream auxiliary logits
+               via the shared score_aux_mask_head.
+            6. Bilinearly upsample the refiner feature to 72×72, concatenate it
+               with the original cross-attended encoder feature, and fuse with
+               1×1 + 3×3 convolutions.
         """
         batch_size, num_classes, hidden_dim, H, W = encoder_features_72.shape
 
@@ -338,9 +438,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
             remoteclip_feat_map=clip_image_feat_map,
         )
 
-        score_embed_36 = clip_score_embed_36
-
-        # 2. Downsample encoder features from 72×72 to 36×36 (baseline).
+        # 2. Downsample encoder features from 72×72 to 36×36 as the feature stream.
         base_feature_36 = F.interpolate(
             encoder_features_72.reshape(
                 batch_size * num_classes,
@@ -359,13 +457,20 @@ class ClassConditionedEncoderRefiner(nn.Module):
             36,
         )
 
-        # 3. Encode original logits into mask prompt and add to base feature.
+        feature_36 = base_feature_36
+
+        # 3. Encode original logits into mask prompt embedding.
         mask_prompt_logits = original_logits_288.detach().clamp(-32.0, 32.0)
         mask_prompt_embed_36 = self.mask_prompt_encoder(mask_prompt_logits)
 
-        feature_36 = base_feature_36 + mask_prompt_embed_36
+        # 4. Fuse score embedding and mask prompt embedding to produce the
+        # initial score stream.
+        score_embed_36 = self._fuse_mask_prompt_into_score_36(
+            clip_score_embed_36=clip_score_embed_36,
+            mask_prompt_embed_36=mask_prompt_embed_36,
+        )
 
-        # 4. Run refiner layers and collect per-layer aux logits (training only).
+        # 5. Run refiner layers and collect per-layer aux logits (training only).
         aux_logits_per_layer: list[torch.Tensor] = []
 
         for layer in self.layers:
@@ -385,14 +490,19 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 )
 
             if self.training:
-                aux_logit = self.layer_mask_head(
-                    feature_36.reshape(
+                aux_logit = self.score_aux_mask_head(
+                    score_embed_36.reshape(
                         batch_size * num_classes,
-                        hidden_dim,
+                        self.score_embed_dim,
                         36,
                         36,
                     )
-                ).reshape(batch_size, num_classes, 36, 36)
+                ).reshape(
+                    batch_size,
+                    num_classes,
+                    36,
+                    36,
+                )
                 aux_logits_per_layer.append(aux_logit)
 
         refiner_aux_logits_36 = torch.stack(
@@ -410,7 +520,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
             self.final_score_norm,
         )
 
-        # 5. Upsample the refiner feature and directly fuse it with the
+        # 6. Upsample the refiner feature and directly fuse it with the
         # original encoder feature at 72×72.
         if self.use_checkpoint and self.training:
             refined_encoder_features_72 = checkpoint(

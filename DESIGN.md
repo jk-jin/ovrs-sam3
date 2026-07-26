@@ -38,19 +38,21 @@ OVRS-SAM3 接收一批遥感图像和当前数据集的类别名称，输出每�
   │    → MaskPromptEncoder36
   │    → mask_prompt_embed_36 [B, C, 256, 36, 36]
   │
-  └─ 双线性下采样 → base_feature_36
-
-base_feature_36 + mask_prompt_embed_36 → 初始 feature_36
+  └─ 双线性下采样 → base_feature_36 → 初始 feature_36
 
 RemoteCLIP 局部相似度图
   → 多尺度 score encoder
-  → 36×36 score embedding
+  → clip_score_embed_36 [B, C, 256, 36, 36]
+
+mask_prompt_embed_36 + clip_score_embed_36
+  → 通道拼接 → 1×1 Conv 512→256
+  → 初始 score_embed_36
 
 feature_36 + score_embed_36
-  → Refiner layer 1 → shared 1×1 Conv → aux logit 1
-  → Refiner layer 2 → shared 1×1 Conv → aux logit 2
-  → Refiner layer 3 → shared 1×1 Conv → aux logit 3
-  → Refiner layer 4 → shared 1×1 Conv → aux logit 4
+  → Refiner layer 1 → score_aux_mask_head(score_embed_36) → aux logit 1
+  → Refiner layer 2 → score_aux_mask_head(score_embed_36) → aux logit 2
+  → Refiner layer 3 → score_aux_mask_head(score_embed_36) → aux logit 3
+  → Refiner layer 4 → score_aux_mask_head(score_embed_36) → aux logit 4
   → refiner_aux_logits_36 [4, B, C, 36, 36]
 
 最终 refiner feature 双线性插值到 72×72
@@ -79,14 +81,14 @@ feature_36 + score_embed_36
 | `backbone_fpn`                | `[B, 256, 288/144/72, 288/144/72]` | SAM3 多尺度图像特征                   |
 | `cross_attended_encoder_features_72` | `[B, C, 256, 72, 72]`       | 完整 6 层 encoder 与 prompt cross-attention 后的类条件特征 |
 | `original_logits`             | `[B, C, 288, 288]`                 | 第一次分割头的 detached raw logits，用作 mask prompt 输入 |
-| `mask_prompt_embed_36`        | `[B, C, 256, 36, 36]`              | MaskPromptEncoder36 输出的 dense mask embedding |
+| `mask_prompt_embed_36`        | `[B, C, 256, 36, 36]`              | MaskPromptEncoder36 输出的 dense mask embedding，用于构造初始 score stream |
 | `sam_text_mean`               | `[B, C, 256]`                      | SAM 文本 token 的 masked mean     |
 | `remoteclip_feat_map`         | `[B, 768, 36, 36]`                 | RemoteCLIP dense image feature |
 | `template_clip_text`          | `[C, 32, 768]`                     | 每类 32 个模板的文本特征                 |
 | `clip_score_maps_36`          | `[B, C, 32, 36, 36]`               | 局部图文相似度图                       |
-| `score_embed_36`              | `[B, C, 256, 36, 36]`              | refiner 的语义分数流                 |
+| `score_embed_36`              | `[B, C, 256, 36, 36]`              | RemoteCLIP score 与 mask prompt 融合后的语义分数流 |
 | `refiner_features_36`         | `[B, C, 256, 36, 36]`              | refiner 的图像特征流                 |
-| `refiner_aux_logits_36`       | `[4, B, C, 36, 36]`                | 四层 Refiner 共享 1×1 Conv 的辅助 logits |
+| `refiner_aux_logits_36`       | `[4, B, C, 36, 36]`                | 由四层 score stream 共享 1×1 Conv 产生的辅助 logits |
 | `refined_encoder_features_72` | `[B, C, 256, 72, 72]`              | Refiner 输出的更新特征               |
 | `final_logits`                | `[B, C, 288, 288]`                 | 最终语义分割 logits                  |
 
@@ -169,16 +171,22 @@ RemoteCLIP 使用 ViT-L/14。原始图像单独缩放到 504×504，并使用 CL
   → GroupNorm + GELU
 ```
 
-输出 `clip_score_embed_36`，并直接作为 refiner 的初始 score 流。
+输出 `clip_score_embed_36`，随后与 mask prompt embedding 在通道维拼接，经 1×1 卷积融合为 refiner 的初始 score 流。
 
 ## 5. Class-conditioned encoder refiner
 
 Refiner 在 36×36 上同时维护图像 feature 流和 score embedding 流。默认使用 4 层、8 个 attention heads、12×12 窗口和 6 像素 shift。
 
-### 5.1 Mask prompt 注入
+### 5.1 Mask prompt 与 score 融合
 
-Cross-attended full-encoder feature（72×72）双线性下采样到 36×36，作为
-`base_feature_36`。
+Cross-attended full-encoder feature（72×72）双线性下采样到 36×36，直接作为
+初始 feature stream：
+
+```python
+feature_36 = base_feature_36
+```
+
+Mask prompt 不再直接注入 feature stream。
 
 第一次分割头输出的 `original_logits [B, C, 288, 288]` 经过 detach 和
 `clamp(-32, 32)` 后，由 `MaskPromptEncoder36` 编码为
@@ -193,16 +201,31 @@ Conv2d(16→64, k=2, s=2) + LayerNorm2d + GELU →  36×36
 Conv2d(64→256, k=1)                           →  36×36×256
 ```
 
-最后一层 `Conv2d(64→256, k=1)` 权重和 bias 初始化为 0，因此旧 checkpoint
-加载后 mask prompt 初始为 0，不污染已有 encoder feature。
+最后一层 `Conv2d(64→256, k=1)` 权重和 bias 初始化为 0，训练开始时 mask
+embedding 为全零。score 融合层中非零的 mask 权重块仍然允许梯度到达此投影。
 
-Refiner 初始 feature 流固定为：
+mask prompt embedding 进入 score stream：与 `clip_score_embed_36` 在通道维拼接
+（score 在前、mask prompt 在后），经过 `mask_score_fusion_36`（1×1 Conv，
+512→256）产生初始 score stream：
 
 ```python
-feature_36 = base_feature_36 + mask_prompt_embed_36
+score_embed_36 = self._fuse_mask_prompt_into_score_36(
+    clip_score_embed_36=clip_score_embed_36,
+    mask_prompt_embed_36=mask_prompt_embed_36,
+)
 ```
 
-这里没有额外的残差系数。Refiner 入口不再接收 SAM3 FPN。
+融合卷积初始化方式：
+
+- 前256个输入通道（score）：初始化为256×256单位矩阵，即原样保留 score。
+- 后256个输入通道（mask prompt）：初始化为单位矩阵的0.1倍。
+- bias 初始化为0。
+
+由于 mask prompt encoder 初始输出为0，训练开始时融合结果与原始
+`clip_score_embed_36` 完全一致。mask 权重块非零，保证梯度可以立即传入
+零初始化的 `MaskPromptEncoder36.proj`。
+
+这里没有额外的归一化层、激活函数、残差系数或配置项。
 
 ### 5.2 单层 refiner
 
@@ -216,7 +239,7 @@ feature_36 = base_feature_36 + mask_prompt_embed_36
 
 每层共 8 个 LayerScale 标量，统一初始化为 0.1。
 
-每层结束后，对 `feature_36` 使用共享的 `layer_mask_head`（`Conv2d(256→1, k=1)`）产生该层的辅助 logit `[B, C, 36, 36]`。四层 logit 堆叠为
+每层结束后，对 `score_embed_36` 使用共享的 `score_aux_mask_head`（`Conv2d(256→1, k=1)`）产生该层的辅助 logit `[B, C, 36, 36]`。四层 logit 堆叠为
 `refiner_aux_logits_36 [4, B, C, 36, 36]`。
 
 层内不使用 post-norm。全部 refiner 层结束后，只对 score embedding 执行一次最终 LayerNorm；feature 流不做最终 LayerNorm。
@@ -264,7 +287,7 @@ SAM3 segmentation head 的参数保持冻结，但前向不能放入 `no_grad()`
 
 完整 SAM3 encoder 和前置 prompt cross-attention 不保留计算图，均在 `torch.no_grad()` 中执行。
 
-`core.encoder_refiner` 完整训练。其内部的 `MaskPromptEncoder36`、`layer_mask_head` 和 Refiner 层同属一个参数组，由现有 `trainable_modules=["core.encoder_refiner"]` 自动覆盖，使用基础学习率 `1e-4`。
+`core.encoder_refiner` 完整训练。其内部的 `MaskPromptEncoder36`、`mask_score_fusion_36`、`score_aux_mask_head` 和 Refiner 层同属一个参数组，由现有 `trainable_modules=["core.encoder_refiner"]` 自动覆盖，使用基础学习率 `1e-4`。
 
 RemoteCLIP 图像和文本分支默认使用 `attention` 微调模式，仅训练注意力 Q/V 与位置嵌入，同时保持 `eval()` 以关闭 dropout 和 patch dropout。
 
@@ -366,11 +389,27 @@ python tools/train.py configs/test/loveda.py \
 
 旧格式或缺少完整运行状态的权重不能用于 `--resume-from`，但可以通过 `--load-model-from` 只加载模型参数。
 
-本次模型参数结构发生了非兼容变化（删除 `feature_fpn_fusion.*` 和 `feature_fpn_res_scale`，新增 `mask_prompt_encoder.*` 和 `layer_mask_head.*`）：
+本次模型参数结构发生了非兼容变化：
 
-* 不得使用旧 checkpoint 做 `--resume-from` 精确续训；
-* 如需复用旧模型权重，只能使用 `--load-model-from` 并创建新的 `work_dir`；
-* 非严格加载时旧 FPN 参数显示为 unexpected keys，新模块显示为 missing keys。这是预期行为。
+* 新增 `mask_score_fusion_36.*`。
+* 删除 `layer_mask_head.*`。
+* 新增 `score_aux_mask_head.*`。
+
+相对旧 checkpoint，预期显示：
+
+```text
+unexpected keys:
+  layer_mask_head.weight
+  layer_mask_head.bias
+
+missing keys:
+  mask_score_fusion_36.weight
+  mask_score_fusion_36.bias
+  score_aux_mask_head.weight
+  score_aux_mask_head.bias
+```
+
+旧 checkpoint 不允许通过 `--resume-from` 严格恢复。如需复用其他模型权重，只能使用 `--load-model-from` 并创建新的 `work_dir`。不提供旧权重转换、属性别名或 state-dict remapping。
 
 ## 10. 配置与主要文件
 
@@ -396,7 +435,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 | 文件                                    | 职责                                       |
 | ------------------------------------- | ---------------------------------------- |
 | `models/sam3_image.py`                | 类别 chunk、缓存、SAM3 encoder、两遍分割头、refiner 调用 |
-| `models/encoder_refiner.py`           | MaskPromptEncoder36、mask prompt 注入、refiner 主体、逐层辅助预测和 72×72 输出融合 |
+| `models/encoder_refiner.py`           | MaskPromptEncoder36、mask-score 融合、refiner 主体、score-stream 逐层辅助预测和 72×72 输出融合 |
 | `models/encoder_refiner_attention.py` | 跨类别/窗口注意力、双流 FFN 与 LayerScale            |
 | `models/maskformer_segmentation.py`   | prompt attention、pixel decoder 与语义 head  |
 | `models/score_embeddings.py`          | 32 模板相似度图和多尺度 score encoder              |
@@ -420,13 +459,14 @@ python tools/train.py configs/train/isaid_loveda_full.py
 5. 可训练 RemoteCLIP 文本特征不能跨 optimizer step 缓存。
 6. 验证不得重新开启 RemoteCLIP 图像分支的 autograd。
 7. 冻结的 segmentation head 第二次调用时必须允许梯度穿过。
-8. Refiner 内部残差系数统一由 `residual_scale_init` 控制，默认值为 0.1；这些标量不使用 weight decay。72×72 输出融合和 mask prompt 注入没有残差系数。
+8. Refiner 内部残差系数统一由 `residual_scale_init` 控制，默认值为 0.1；这些标量不使用 weight decay。72×72 输出融合和 mask-score 融合没有残差系数。
 9. TTA 必须先平均原始分数，再进行相对阈值过滤。
 10. `reduce_zero_label` 与 `background_cfg` 各自只执行其定义的一次标签空间变换。
 11. 完整恢复必须严格校验 checkpoint schema；模型权重迁移必须走独立入口。
-12. 完整 6 层 encoder → 一次 prompt cross-attention → 第一遍分割头（no_grad）→ MaskPromptEncoder → Refiner + 逐层辅助 logits → 第二遍分割头（保留梯度）。
+12. 完整 6 层 encoder → 一次 prompt cross-attention → 第一遍分割头（no_grad）→ MaskPromptEncoder → mask-score 融合产生初始 score stream → Refiner + score-stream 逐层辅助 logits → 第二遍分割头（保留梯度）。
 13. Pixel Decoder 内部 144/288 FPN 融合仍然保留。
-14. 四层 Refiner 共用一个 `layer_mask_head`（`Conv2d(256→1, k=1)`）。
+14. 四层 Refiner 共用一个 `score_aux_mask_head`（`Conv2d(256→1, k=1)`），作用于 score stream。
+15. feature stream 不直接接收 mask prompt embedding，mask prompt 仅通过 score 融合层间接影响 feature stream（经由 Refiner attention 的注意力权重）。
 
 当前限制：
 
