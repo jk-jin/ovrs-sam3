@@ -269,59 +269,38 @@ class UniversalSegmentationHead(SegmentationHead):
             self.pixel_decoder.out_dim, self.d_model, kernel_size=1
         )
 
+    def apply_prompt_cross_attention(
+        self,
+        encoder_hidden_states: torch.Tensor,
+        prompt: torch.Tensor,
+        prompt_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.cross_attend_prompt is None:
+            raise RuntimeError(
+                "Prompt cross-attention is required by the semantic pipeline."
+            )
+
+        update = self.cross_attn_norm(encoder_hidden_states)
+        update = self.cross_attend_prompt(
+            query=update,
+            key=prompt,
+            value=prompt,
+            key_padding_mask=prompt_mask,
+        )[0]
+        return encoder_hidden_states + update
+
     def forward(
         self,
         backbone_feats: List[torch.Tensor],
-        obj_queries: torch.Tensor,
-        image_ids,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        prompt: Optional[torch.Tensor] = None,
-        prompt_mask: Optional[torch.Tensor] = None,
-        **kwargs,
-    ) -> Dict[str, Optional[torch.Tensor]]:
-        assert encoder_hidden_states is not None
-        bs = encoder_hidden_states.shape[1]
-
-        if self.cross_attend_prompt is not None:
-            tgt2 = self.cross_attn_norm(encoder_hidden_states)
-            tgt2 = self.cross_attend_prompt(
-                query=tgt2,
-                key=prompt,
-                value=prompt,
-                key_padding_mask=prompt_mask,
-            )[0]
-            encoder_hidden_states = tgt2 + encoder_hidden_states
-
-        presence_logit = None
-        if self.presence_head is not None:
-            pooled_enc = encoder_hidden_states.mean(0)
-            presence_logit = (
-                self.presence_head(
-                    pooled_enc.view(1, bs, 1, self.d_model),
-                    prompt=prompt,
-                    prompt_mask=prompt_mask,
-                )
-                .squeeze(0)
-                .squeeze(1)
-            )
-
+        image_ids: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
         pixel_embed = self._embed_pixels(
             backbone_feats=backbone_feats,
             image_ids=image_ids,
             encoder_hidden_states=encoder_hidden_states,
         )
 
-        instance_embeds = self.instance_seg_head(pixel_embed)
-
-        if self.no_dec:
-            mask_pred = self.mask_predictor(instance_embeds)
-        elif self.aux_masks:
-            mask_pred = self.mask_predictor(obj_queries, instance_embeds)
-        else:
-            mask_pred = self.mask_predictor(obj_queries[-1], instance_embeds)
-
         return {
-            "pred_masks": mask_pred,
             "semantic_seg": self.semantic_seg_head(pixel_embed),
-            "presence_logit": presence_logit,
         }

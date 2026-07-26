@@ -377,35 +377,18 @@ class TransformerEncoder(nn.Module):
             spatial_shapes,
         )
 
-    def _run_layer_range(
+    def _run_layers(
         self,
         output: Tensor,
         prompt: Optional[Tensor],
         prompt_key_padding_mask: Optional[Tensor],
         key_padding_masks_flatten: Optional[Tensor],
         lvl_pos_embed_flatten: Tensor,
-        start_layer: int,
-        end_layer: int,
         encoder_extra_kwargs: Optional[Dict] = None,
         act_ckpt_enable: bool = False,
     ) -> Tensor:
-        if (
-            isinstance(start_layer, bool)
-            or isinstance(end_layer, bool)
-            or not isinstance(start_layer, int)
-            or not isinstance(end_layer, int)
-            or not 0 <= start_layer <= end_layer <= self.num_layers
-        ):
-            raise ValueError(
-                "Invalid encoder layer range: "
-                f"start={start_layer!r}, end={end_layer!r}, "
-                f"num_layers={self.num_layers}."
-            )
-
-        for layer_idx in range(start_layer, end_layer):
-            layer = self.layers[layer_idx]
+        for layer in self.layers:
             assert isinstance(layer, TransformerEncoderLayer)
-
             layer_kwargs = {
                 "memory": prompt,
                 "memory_key_padding_mask": prompt_key_padding_mask,
@@ -476,14 +459,12 @@ class TransformerEncoder(nn.Module):
         if self.training:
             assert self.use_act_checkpoint, "activation ckpt not enabled in encoder"
 
-        output = self._run_layer_range(
+        output = self._run_layers(
             output=src_flatten,
             prompt=prompt,
             prompt_key_padding_mask=prompt_key_padding_mask,
             key_padding_masks_flatten=key_padding_masks_flatten,
             lvl_pos_embed_flatten=lvl_pos_embed_flatten,
-            start_layer=0,
-            end_layer=self.num_layers,
             encoder_extra_kwargs=encoder_extra_kwargs,
             act_ckpt_enable=self.training and self.use_act_checkpoint,
         )
@@ -613,15 +594,13 @@ class TransformerEncoderFusion(TransformerEncoder):
             src_pos,
         )
 
-    def forward_until(
+    def forward(
         self,
         src: List[Tensor],
         prompt: Tensor,
-        end_layer: int,
         src_key_padding_mask: Optional[List[Tensor]] = None,
         src_pos: Optional[List[Tensor]] = None,
         prompt_key_padding_mask: Optional[Tensor] = None,
-        prompt_pos: Optional[Tensor] = None,
         feat_sizes: Optional[List[int]] = None,
         encoder_extra_kwargs: Optional[Dict] = None,
     ):
@@ -641,14 +620,12 @@ class TransformerEncoderFusion(TransformerEncoder):
             feat_sizes=feat_sizes,
         )
 
-        output = self._run_layer_range(
+        output = self._run_layers(
             output=src_flatten,
             prompt=prompt.transpose(0, 1),
             prompt_key_padding_mask=prompt_key_padding_mask,
             key_padding_masks_flatten=key_padding_masks_flatten,
             lvl_pos_embed_flatten=lvl_pos_embed_flatten,
-            start_layer=0,
-            end_layer=end_layer,
             encoder_extra_kwargs=encoder_extra_kwargs,
             act_ckpt_enable=(
                 self.training
@@ -670,66 +647,6 @@ class TransformerEncoderFusion(TransformerEncoder):
             "spatial_shapes": spatial_shapes,
             "valid_ratios": valid_ratios,
         }
-
-    def forward_from(
-        self,
-        memory: Tensor,
-        pos_embed: Tensor,
-        padding_mask: Optional[Tensor],
-        prompt: Tensor,
-        prompt_key_padding_mask: Optional[Tensor],
-        start_layer: int,
-        encoder_extra_kwargs: Optional[Dict] = None,
-    ) -> Tensor:
-        output = memory.transpose(0, 1)
-        lvl_pos_embed_flatten = pos_embed.transpose(0, 1)
-        key_padding_masks_flatten = (
-            padding_mask.transpose(0, 1)
-            if padding_mask is not None
-            else None
-        )
-
-        use_checkpoint = (
-            self.use_act_checkpoint
-            and torch.is_grad_enabled()
-            and memory.requires_grad
-        )
-
-        output = self._run_layer_range(
-            output=output,
-            prompt=prompt.transpose(0, 1),
-            prompt_key_padding_mask=prompt_key_padding_mask,
-            key_padding_masks_flatten=key_padding_masks_flatten,
-            lvl_pos_embed_flatten=lvl_pos_embed_flatten,
-            start_layer=start_layer,
-            end_layer=self.num_layers,
-            encoder_extra_kwargs=encoder_extra_kwargs,
-            act_ckpt_enable=use_checkpoint,
-        )
-        return output.transpose(0, 1)
-
-    def forward(
-        self,
-        src: List[Tensor],
-        prompt: Tensor,
-        src_key_padding_mask: Optional[List[Tensor]] = None,
-        src_pos: Optional[List[Tensor]] = None,
-        prompt_key_padding_mask: Optional[Tensor] = None,
-        prompt_pos: Optional[Tensor] = None,
-        feat_sizes: Optional[List[int]] = None,
-        encoder_extra_kwargs: Optional[Dict] = None,
-    ):
-        return self.forward_until(
-            src=src,
-            prompt=prompt,
-            end_layer=self.num_layers,
-            src_key_padding_mask=src_key_padding_mask,
-            src_pos=src_pos,
-            prompt_key_padding_mask=prompt_key_padding_mask,
-            prompt_pos=prompt_pos,
-            feat_sizes=feat_sizes,
-            encoder_extra_kwargs=encoder_extra_kwargs,
-        )
 
 
 def pool_text_feat(prompt, prompt_mask, pool_with_mask):

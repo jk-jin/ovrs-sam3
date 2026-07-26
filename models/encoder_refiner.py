@@ -31,13 +31,14 @@ class ClassConditionedEncoderRefiner(nn.Module):
     """
     Encoder feature refiner operating at 36×36.
 
-    SAM3 FPN is concatenated with downsampled encoder feature at 36×36,
-    then convolved to produce a residual delta with learnable scale.
+    Takes the full 6-layer SAM3 encoder output after prompt cross-attention
+    as input. SAM3 FPN is concatenated with downsampled encoder feature at
+    36×36, then convolved to produce a residual delta with learnable scale.
     SAM text prompt tokens are reduced to a masked mean before entering
     the refiner. The refiner receives sam_text_mean directly.
 
     Forward inputs:
-        encoder_features_72:  [B, C, 256, 72, 72]
+        encoder_features_72:  [B, C, 256, 72, 72]  (full encoder + cross-attention)
         clip_image_feat_map:  [B, D_clip, 36, 36]
         sam_text_mean:        [B, C, 256]
         class_names:          list of C class names
@@ -234,6 +235,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         """
         Args:
             encoder_features_72:  [B, C, 256, 72, 72]
+                Full 6-layer encoder output after prompt cross-attention.
             clip_image_feat_map:  [B, D_clip, 36, 36]
             sam_text_mean:        [B, C, 256]
             class_names:          list of C class names
@@ -249,11 +251,11 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
         Process:
             1. Build CLIP score embedding at 36×36.
-            2. Downsample encoder features from 72×72 to base_feature_36.
+            2. Downsample cross-attended full-encoder features from 72×72 to base_feature_36.
             3. Inject SAM3 FPN into encoder feature via conv residual with learnable scale.
             4. Run refiner layers.
             5. Bilinearly upsample the full refiner feature to 72×72,
-               concatenate it with the original encoder feature, and fuse
+               concatenate it with the original cross-attended encoder feature, and fuse
                them with one 1×1 convolution followed by one 3×3 convolution.
         """
         batch_size, num_classes, hidden_dim, H, W = encoder_features_72.shape

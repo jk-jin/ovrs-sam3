@@ -47,7 +47,6 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_window_size: int = 12,
         encoder_refiner_shift_size: int = 6,
         encoder_refiner_use_checkpoint: bool = True,
-        encoder_refiner_insert_after_layer: int = 4,
         task_mode: str = TASK_MODE_SEMANTIC,
         **kwargs,
     ):
@@ -124,18 +123,6 @@ class Sam3Image(torch.nn.Module):
             text_prompt_batch_size=int(text_prompt_batch_size),
             text_prompt_use_checkpoint=bool(text_prompt_use_checkpoint),
         )
-
-        self.encoder_refiner_insert_after_layer = int(
-            encoder_refiner_insert_after_layer
-        )
-        num_encoder_layers = int(self.transformer.encoder.num_layers)
-        if not 1 <= self.encoder_refiner_insert_after_layer < num_encoder_layers:
-            raise ValueError(
-                "encoder_refiner_insert_after_layer must leave at least one "
-                "encoder layer after the refiner; got "
-                f"{self.encoder_refiner_insert_after_layer} for "
-                f"{num_encoder_layers} layers."
-            )
 
         self.prompt_chunk_size = None
         self._text_cache: Optional[Dict[str, torch.Tensor]] = None
@@ -367,9 +354,6 @@ class Sam3Image(torch.nn.Module):
             raise ValueError("CLIP image cache is required.")
 
         encoder_feature_chunks: list[torch.Tensor] = []
-        encoder_out_chunks: list[Dict] = []
-        chunk_prompts: list[torch.Tensor] = []
-        chunk_prompt_masks: list[torch.Tensor] = []
         chunk_class_counts: list[int] = []
         merged_class_ids: list[int] = []
         sam_text_mean_chunks: list[torch.Tensor] = []
@@ -406,33 +390,16 @@ class Sam3Image(torch.nn.Module):
                 box_labels=chunk_find_input.input_boxes_label,
             )
 
-            raw_outputs = self.forward_grounding_encoder_until_refiner(
+            chunk_out = self._encode_sam3_chunk(
                 backbone_out=chunk_backbone_out,
                 find_input=chunk_find_input,
                 geometric_prompt=geometric_prompt,
-            )
-
-            encoder_out = raw_outputs["encoder_out"]
-            prompt = raw_outputs["prompt"]
-            prompt_mask = raw_outputs["prompt_mask"]
-
-            encoder_feature_chunk = self._extract_encoder_visual_feature(
-                encoder_out=encoder_out,
                 batch_size=batch_size,
                 num_chunk_classes=num_chunk_classes,
             )
 
-            sam_text_mean_chunk = self._extract_sam_text_mean(
-                encoder_out=encoder_out,
-                batch_size=batch_size,
-                num_chunk_classes=num_chunk_classes,
-            )
-            sam_text_mean_chunks.append(sam_text_mean_chunk)
-
-            encoder_feature_chunks.append(encoder_feature_chunk)
-            encoder_out_chunks.append(encoder_out)
-            chunk_prompts.append(prompt)
-            chunk_prompt_masks.append(prompt_mask)
+            encoder_feature_chunks.append(chunk_out["encoder_features_72"])
+            sam_text_mean_chunks.append(chunk_out["sam_text_mean"])
             merged_class_ids.extend(chunk_class_ids)
             chunk_class_counts.append(num_chunk_classes)
 
@@ -446,20 +413,17 @@ class Sam3Image(torch.nn.Module):
                 f"Got {merged_class_ids}, expected {expected_class_ids}."
             )
 
-        encoder_features_72 = torch.cat(encoder_feature_chunks, dim=1)
+        cross_attended_encoder_features_72 = torch.cat(encoder_feature_chunks, dim=1)
 
-        if tuple(encoder_features_72.shape[:2]) != (batch_size, num_classes):
+        if tuple(cross_attended_encoder_features_72.shape[:2]) != (batch_size, num_classes):
             raise ValueError(
                 "Merged encoder features shape mismatch: expected "
                 f"{(batch_size, num_classes)}, "
-                f"got {tuple(encoder_features_72.shape[:2])}."
+                f"got {tuple(cross_attended_encoder_features_72.shape[:2])}."
             )
 
         return {
-            "encoder_features_72": encoder_features_72,
-            "encoder_out_chunks": encoder_out_chunks,
-            "chunk_prompts": chunk_prompts,
-            "chunk_prompt_masks": chunk_prompt_masks,
+            "cross_attended_encoder_features_72": cross_attended_encoder_features_72,
             "backbone_fpn": backbone_fpn,
             "clip_image_feat_map": clip_image_cache["clip_image_feat_map_native"],
             "sam_text_mean": torch.cat(sam_text_mean_chunks, dim=1),
@@ -471,37 +435,27 @@ class Sam3Image(torch.nn.Module):
         }
 
     @staticmethod
-    def _extract_sam_text_mean(
-        encoder_out: Dict[str, torch.Tensor],
+    def _masked_mean_prompt_tokens(
+        prompt: torch.Tensor,
+        prompt_mask: torch.Tensor,
         batch_size: int,
         num_chunk_classes: int,
     ) -> torch.Tensor:
-        prompt_tokens = encoder_out.get(
-            "prompt_after_enc",
-            encoder_out.get("prompt_before_enc"),
-        )
-        prompt_mask = encoder_out.get("prompt_mask")
-
-        if prompt_tokens is None:
-            raise ValueError("encoder_out must contain prompt_after_enc or prompt_before_enc.")
-        if prompt_mask is None:
-            raise ValueError("encoder_out must contain prompt_mask.")
-
-        if prompt_tokens.ndim != 3:
+        if prompt.ndim != 3:
             raise ValueError(
-                f"prompt_tokens must be [T, B*C, D], got {tuple(prompt_tokens.shape)}."
+                f"prompt must be [T, B*C_chunk, D], got {tuple(prompt.shape)}."
             )
         if prompt_mask.ndim != 2:
             raise ValueError(
-                f"prompt_mask must be [B*C, T], got {tuple(prompt_mask.shape)}."
+                f"prompt_mask must be [B*C_chunk, T], got {tuple(prompt_mask.shape)}."
             )
 
-        token_len, pair_count, hidden_dim = prompt_tokens.shape
+        token_len, pair_count, hidden_dim = prompt.shape
         expected_pairs = batch_size * num_chunk_classes
 
         if pair_count != expected_pairs:
             raise ValueError(
-                f"prompt_tokens pair count mismatch: expected {expected_pairs}, "
+                f"prompt pair count mismatch: expected {expected_pairs}, "
                 f"got {pair_count}."
             )
 
@@ -511,7 +465,7 @@ class Sam3Image(torch.nn.Module):
                 f"got {tuple(prompt_mask.shape)}."
             )
 
-        tokens = prompt_tokens.transpose(0, 1)  # [B*C_chunk, T, D]
+        tokens = prompt.transpose(0, 1)  # [B*C_chunk, T, D]
 
         valid = (~prompt_mask.bool()).to(device=tokens.device, dtype=tokens.dtype).unsqueeze(-1)
         denom = valid.sum(dim=1).clamp_min(1.0)
@@ -524,74 +478,51 @@ class Sam3Image(torch.nn.Module):
             hidden_dim,
         ).contiguous()
 
-    def _extract_encoder_visual_feature(
+    def _hidden_states_to_feature_72(
         self,
-        encoder_out: Dict[str, torch.Tensor],
+        encoder_hidden_states: torch.Tensor,
         batch_size: int,
         num_chunk_classes: int,
     ) -> torch.Tensor:
-        """
-        Extract visual tokens from encoder_hidden_states
-        and reshape to [B, C_chunk, D, H, W].
+        expected_pairs = batch_size * num_chunk_classes
+        expected_tokens = 72 * 72
 
-        Takes the highest-res image tokens only (first spatial_shapes level).
-        """
-        encoder_hidden_states = encoder_out["encoder_hidden_states"]
-        spatial_shapes = encoder_out["spatial_shapes"]
+        if tuple(encoder_hidden_states.shape) != (
+            expected_tokens,
+            expected_pairs,
+            self.hidden_dim,
+        ):
+            raise ValueError(
+                f"encoder_hidden_states shape mismatch: expected "
+                f"({expected_tokens}, {expected_pairs}, {self.hidden_dim}), "
+                f"got {tuple(encoder_hidden_states.shape)}."
+            )
 
-        if len(spatial_shapes) > 0:
-            h_feat, w_feat = int(spatial_shapes[0][0]), int(spatial_shapes[0][1])
-            num_img_tokens = h_feat * w_feat
-        else:
-            raise ValueError("spatial_shapes is empty")
-
-        num_pairs = batch_size * num_chunk_classes
-
-        mem = encoder_hidden_states[:num_img_tokens]  # [N_img, num_pairs, D]
-        mem = mem.transpose(0, 1)  # [num_pairs, N_img, D]
-        mem = mem.transpose(1, 2)  # [num_pairs, D, N_img]
-        mem = mem.reshape(num_pairs, self.hidden_dim, h_feat, w_feat)
-
-        return mem.reshape(
-            batch_size, num_chunk_classes, self.hidden_dim, h_feat, w_feat
-        ).contiguous()
-
-    @staticmethod
-    def _write_refined_encoder_features_to_encoder_hidden_states(
-        encoder_out: Dict[str, torch.Tensor],
-        refined_encoder_features_chunk: torch.Tensor,
-        batch_size: int,
-        num_chunk_classes: int,
-    ) -> torch.Tensor:
-        """
-        Write refined encoder features back into encoder_hidden_states visual token region.
-
-        Args:
-            encoder_out: original encoder output dict
-            refined_encoder_features_chunk: [B, C_chunk, D, H, W]
-            batch_size: B
-            num_chunk_classes: C_chunk
-
-        Returns:
-            new encoder_hidden_states with visual tokens replaced
-        """
-        encoder_hidden_states = encoder_out["encoder_hidden_states"].clone()
-        spatial_shapes = encoder_out["spatial_shapes"]
-
-        h_feat, w_feat = int(spatial_shapes[0][0]), int(spatial_shapes[0][1])
-        num_img_tokens = h_feat * w_feat
-
-        B, C_chunk, D, H, W = refined_encoder_features_chunk.shape
-
-        refined_flat = refined_encoder_features_chunk.reshape(B * C_chunk, D, H * W)
-        refined_flat = refined_flat.permute(2, 0, 1)  # [H*W, B*C_chunk, D]
-
-        encoder_hidden_states[:num_img_tokens] = refined_flat.to(
-            device=encoder_hidden_states.device,
-            dtype=encoder_hidden_states.dtype,
+        return (
+            encoder_hidden_states
+            .permute(1, 2, 0)
+            .reshape(
+                batch_size,
+                num_chunk_classes,
+                self.hidden_dim,
+                72,
+                72,
+            )
+            .contiguous()
         )
 
-        return encoder_hidden_states
+    @staticmethod
+    def _feature_72_to_hidden_states(
+        feature_72: torch.Tensor,
+    ) -> torch.Tensor:
+        # [B, C_chunk, D, 72, 72] → [72*72, B*C_chunk, D]
+        B, C_chunk, D, H, W = feature_72.shape
+        return (
+            feature_72
+            .reshape(B * C_chunk, D, H * W)
+            .permute(2, 0, 1)
+            .contiguous()
+        )
 
     @staticmethod
     def _has_nonempty_geometric_prompt(find_input: Optional[FindStage]) -> bool:
@@ -629,28 +560,9 @@ class Sam3Image(torch.nn.Module):
             input_points_mask=torch.zeros((num_pairs, 0), dtype=torch.bool, device=device),
         )
 
-    def _run_encoder_after_refiner(
-        self,
-        encoder_out: Dict[str, torch.Tensor],
-        refined_hidden_states: torch.Tensor,
-        prompt: torch.Tensor,
-        prompt_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        return self.transformer.encoder.forward_from(
-            memory=refined_hidden_states,
-            pos_embed=encoder_out["pos_embed"],
-            padding_mask=encoder_out["padding_mask"],
-            prompt=prompt,
-            prompt_key_padding_mask=prompt_mask,
-            start_layer=self.encoder_refiner_insert_after_layer,
-        )
-
     def run_encoder_refiner(
         self,
-        encoder_features_72: torch.Tensor,
-        encoder_out_chunks: List[Dict],
-        chunk_prompts: List[torch.Tensor],
-        chunk_prompt_masks: List[torch.Tensor],
+        cross_attended_encoder_features_72: torch.Tensor,
         chunk_class_counts: List[int],
         backbone_fpn: List[torch.Tensor],
         clip_image_feat_map: torch.Tensor,
@@ -660,14 +572,15 @@ class Sam3Image(torch.nn.Module):
         clip_mid_layer_indices: tuple[int, ...],
         return_debug: bool = False,
     ) -> Dict[str, torch.Tensor]:
-        B, C, D, H, W = encoder_features_72.shape
+        B, C, D, H, W = cross_attended_encoder_features_72.shape
 
         sam_fpn_72 = backbone_fpn[-1].detach()
 
         # 1. Run encoder refiner:
-        #    CLIP score + SAM FPN injection → refiner layers → output fusion with original encoder feature.
+        #    CLIP score + SAM FPN injection → refiner layers → output fusion
+        #    with cross-attended full-encoder feature.
         refiner_out = self.encoder_refiner(
-            encoder_features_72=encoder_features_72,
+            encoder_features_72=cross_attended_encoder_features_72,
             clip_image_feat_map=clip_image_feat_map,
             sam_text_mean=sam_text_mean,
             class_names=class_names,
@@ -676,52 +589,35 @@ class Sam3Image(torch.nn.Module):
 
         refined_encoder_features_72 = refiner_out["refined_encoder_features_72"]
 
-        # 2. Write refined features back and get final logits from segmentation_head.
+        # 2. Feed refined features through Pixel Decoder and Semantic Head.
         final_logits_chunks: list[torch.Tensor] = []
         chunk_start = 0
 
-        for chunk_idx, encoder_out in enumerate(encoder_out_chunks):
-            C_chunk = chunk_class_counts[chunk_idx]
-
+        for num_chunk_classes in chunk_class_counts:
             refined_chunk = refined_encoder_features_72[
-                :, chunk_start:chunk_start + C_chunk
+                :, chunk_start:chunk_start + num_chunk_classes
             ]
 
-            refined_hidden_states = self._write_refined_encoder_features_to_encoder_hidden_states(
-                encoder_out=encoder_out,
-                refined_encoder_features_chunk=refined_chunk,
-                batch_size=B,
-                num_chunk_classes=C_chunk,
-            )
+            refined_hidden_states = self._feature_72_to_hidden_states(refined_chunk)
 
-            post_encoder_hidden_states = self._run_encoder_after_refiner(
-                encoder_out=encoder_out,
-                refined_hidden_states=refined_hidden_states,
-                prompt=chunk_prompts[chunk_idx],
-                prompt_mask=chunk_prompt_masks[chunk_idx],
-            )
-
-            chunk_find_input = self._build_prompt_expanded_find_stage(
-                batch_size=B,
-                num_chunk_classes=C_chunk,
-                device=refined_encoder_features_72.device,
-            )
+            image_ids = torch.arange(
+                B,
+                device=refined_chunk.device,
+                dtype=torch.long,
+            ).repeat_interleave(num_chunk_classes)
 
             seg_outputs = self.segmentation_head(
                 backbone_feats=backbone_fpn,
-                obj_queries=torch.empty(0, device=refined_encoder_features_72.device),
-                image_ids=chunk_find_input.img_ids,
-                encoder_hidden_states=post_encoder_hidden_states,
-                prompt=chunk_prompts[chunk_idx],
-                prompt_mask=chunk_prompt_masks[chunk_idx],
+                image_ids=image_ids,
+                encoder_hidden_states=refined_hidden_states,
             )
 
             chunk_logits = seg_outputs["semantic_seg"]
-            if chunk_logits.dim() == 4 and chunk_logits.shape[0] == B * C_chunk:
+            if chunk_logits.dim() == 4 and chunk_logits.shape[0] == B * num_chunk_classes:
                 chunk_logits = chunk_logits.reshape(
-                    B, C_chunk, *chunk_logits.shape[-2:]
+                    B, num_chunk_classes, *chunk_logits.shape[-2:]
                 )
-            elif chunk_logits.dim() == 4 and chunk_logits.shape[0] == B and chunk_logits.shape[1] == C_chunk:
+            elif chunk_logits.dim() == 4 and chunk_logits.shape[0] == B and chunk_logits.shape[1] == num_chunk_classes:
                 pass
             elif chunk_logits.dim() == 4 and chunk_logits.shape[1] == 1:
                 chunk_logits = chunk_logits.squeeze(1)
@@ -732,7 +628,7 @@ class Sam3Image(torch.nn.Module):
                 )
 
             final_logits_chunks.append(chunk_logits)
-            chunk_start += C_chunk
+            chunk_start += num_chunk_classes
 
         final_logits = torch.cat(final_logits_chunks, dim=1)
 
@@ -748,7 +644,7 @@ class Sam3Image(torch.nn.Module):
 
         if return_debug:
             result.update({
-                OUTPUT_KEYS.encoder_features: encoder_features_72.detach().contiguous(),
+                OUTPUT_KEYS.encoder_features: cross_attended_encoder_features_72.detach().contiguous(),
                 OUTPUT_KEYS.refined_encoder_features: refined_encoder_features_72.detach().contiguous(),
                 OUTPUT_KEYS.refiner_features_36: refiner_out["refiner_features_36"].detach().contiguous(),
                 OUTPUT_KEYS.score_embed_36: refiner_out["score_embed_36"].detach().contiguous(),
@@ -771,10 +667,9 @@ class Sam3Image(torch.nn.Module):
         if batch is None:
             raise ValueError("batch must be provided.")
 
-        encoder_features_72 = encoder_refiner_cache["encoder_features_72"]
-        encoder_out_chunks = encoder_refiner_cache["encoder_out_chunks"]
-        chunk_prompts = encoder_refiner_cache["chunk_prompts"]
-        chunk_prompt_masks = encoder_refiner_cache["chunk_prompt_masks"]
+        cross_attended_encoder_features_72 = encoder_refiner_cache[
+            "cross_attended_encoder_features_72"
+        ]
         chunk_class_counts = encoder_refiner_cache["chunk_class_counts"]
         backbone_fpn = encoder_refiner_cache["backbone_fpn"]
         clip_image_feat_map = encoder_refiner_cache["clip_image_feat_map"]
@@ -793,10 +688,7 @@ class Sam3Image(torch.nn.Module):
             )
 
         return self.run_encoder_refiner(
-            encoder_features_72=encoder_features_72,
-            encoder_out_chunks=encoder_out_chunks,
-            chunk_prompts=chunk_prompts,
-            chunk_prompt_masks=chunk_prompt_masks,
+            cross_attended_encoder_features_72=cross_attended_encoder_features_72,
             chunk_class_counts=chunk_class_counts,
             backbone_fpn=backbone_fpn,
             clip_image_feat_map=clip_image_feat_map,
@@ -857,69 +749,75 @@ class Sam3Image(torch.nn.Module):
 
         return torch.cat(prompt_list, dim=0), torch.cat(prompt_mask_list, dim=1), backbone_out
 
-    def _run_encoder_until_refiner(
+    def _run_full_encoder(
         self,
         backbone_out,
         find_input,
         prompt,
         prompt_mask,
-        encoder_extra_kwargs: Optional[Dict] = None,
+        encoder_extra_kwargs=None,
     ):
-        feat_tuple = self._get_img_feats(backbone_out, find_input.img_ids)
-        backbone_out, img_feats, img_pos_embeds, vis_feat_sizes = feat_tuple
+        _, img_feats, img_pos_embeds, vis_feat_sizes = self._get_img_feats(
+            backbone_out,
+            find_input.img_ids,
+        )
 
-        memory = self.transformer.encoder.forward_until(
+        return self.transformer.encoder(
             src=img_feats.copy(),
             src_key_padding_mask=None,
             src_pos=img_pos_embeds.copy(),
             prompt=prompt,
-            prompt_pos=torch.zeros_like(prompt),
             prompt_key_padding_mask=prompt_mask,
             feat_sizes=vis_feat_sizes,
             encoder_extra_kwargs=encoder_extra_kwargs,
-            end_layer=self.encoder_refiner_insert_after_layer,
         )
 
-        encoder_out = {
-            "encoder_hidden_states": memory["memory"],
-            "pos_embed": memory["pos_embed"],
-            "padding_mask": memory["padding_mask"],
-            "level_start_index": memory["level_start_index"],
-            "spatial_shapes": memory["spatial_shapes"],
-            "valid_ratios": memory["valid_ratios"],
-            "vis_feat_sizes": vis_feat_sizes,
-            "prompt_before_enc": prompt,
-            "prompt_after_enc": memory.get("memory_text", prompt),
-            "prompt_mask": prompt_mask,
-        }
-        return backbone_out, encoder_out, feat_tuple
-
-    def forward_grounding_encoder_until_refiner(
+    def _encode_sam3_chunk(
         self,
         backbone_out: Dict[str, torch.Tensor],
-        find_input,
+        find_input: FindStage,
         geometric_prompt: Prompt,
+        batch_size: int,
+        num_chunk_classes: int,
     ) -> Dict[str, torch.Tensor]:
         with torch.no_grad():
-            with torch.profiler.record_function("Sam3Image._encode_prompt"):
-                prompt, prompt_mask, backbone_out = self._encode_prompt(
-                    backbone_out,
-                    find_input,
-                    geometric_prompt,
-                )
+            prompt, prompt_mask, backbone_out = self._encode_prompt(
+                backbone_out,
+                find_input,
+                geometric_prompt,
+            )
 
-            with torch.profiler.record_function("Sam3Image._run_encoder_until_refiner"):
-                backbone_out, encoder_out, _ = self._run_encoder_until_refiner(
-                    backbone_out,
-                    find_input,
-                    prompt,
-                    prompt_mask,
+            encoder_out = self._run_full_encoder(
+                backbone_out=backbone_out,
+                find_input=find_input,
+                prompt=prompt,
+                prompt_mask=prompt_mask,
+            )
+
+            cross_attended_hidden_states = (
+                self.segmentation_head.apply_prompt_cross_attention(
+                    encoder_hidden_states=encoder_out["memory"],
+                    prompt=prompt,
+                    prompt_mask=prompt_mask,
                 )
+            )
+
+            encoder_features_72 = self._hidden_states_to_feature_72(
+                cross_attended_hidden_states,
+                batch_size=batch_size,
+                num_chunk_classes=num_chunk_classes,
+            )
+
+            sam_text_mean = self._masked_mean_prompt_tokens(
+                prompt=prompt,
+                prompt_mask=prompt_mask,
+                batch_size=batch_size,
+                num_chunk_classes=num_chunk_classes,
+            )
 
         return {
-            "encoder_out": encoder_out,
-            "prompt": prompt,
-            "prompt_mask": prompt_mask,
+            "encoder_features_72": encoder_features_72,
+            "sam_text_mean": sam_text_mean,
         }
 
     def forward(self, input: BatchedDatapoint) -> Dict[str, torch.Tensor]:

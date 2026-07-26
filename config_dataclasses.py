@@ -88,9 +88,6 @@ class EncoderRefinerConfig:
 
     use_checkpoint: bool = True
 
-    # 1-based: refine the output of this encoder layer, then run later layers.
-    insert_after_encoder_layer: int = 4
-
 
 @dataclass
 class SemanticCriterionConfig:

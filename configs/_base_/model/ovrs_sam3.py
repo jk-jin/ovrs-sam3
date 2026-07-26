@@ -72,7 +72,6 @@ model = dict(
         shift_size=6,
 
         use_checkpoint=True,
-        insert_after_encoder_layer=4,
     ),
 
     freeze_cfg=dict(
