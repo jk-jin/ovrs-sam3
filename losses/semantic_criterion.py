@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Dict, Optional, Sequence
 
 import torch
@@ -52,7 +53,63 @@ class SemanticCriterion(nn.Module):
                 f"SemanticCriterion requires outputs[{OUTPUT_KEYS.final_logits!r}]."
             )
 
+        # Validate refiner_aux_distill_weight early.
+        aux_weight = float(self.cfg.refiner_aux_distill_weight)
+        if not math.isfinite(aux_weight) or aux_weight < 0.0:
+            raise ValueError(
+                "criterion_cfg.refiner_aux_distill_weight must be finite "
+                f"and >= 0, got {aux_weight!r}."
+            )
+
         return self._forward_final(outputs=outputs, targets=targets)
+
+    def _refiner_aux_distill_loss(
+        self,
+        original_logits: torch.Tensor,
+        refiner_aux_logits_36: torch.Tensor,
+    ) -> torch.Tensor:
+        if original_logits.ndim != 4:
+            raise ValueError(
+                f"original_logits must be [B, C, H, W], got {tuple(original_logits.shape)}."
+            )
+        if refiner_aux_logits_36.ndim != 5:
+            raise ValueError(
+                f"refiner_aux_logits_36 must be [L, B, C, H, W], "
+                f"got {tuple(refiner_aux_logits_36.shape)}."
+            )
+
+        num_layers = refiner_aux_logits_36.shape[0]
+        if num_layers <= 0:
+            raise ValueError("refiner_aux_logits_36 must have at least one layer.")
+
+        if tuple(original_logits.shape[:2]) != tuple(refiner_aux_logits_36.shape[1:3]):
+            raise ValueError(
+                "Batch/class mismatch between original_logits "
+                f"{tuple(original_logits.shape[:2])} and "
+                f"refiner_aux_logits_36 {tuple(refiner_aux_logits_36.shape[1:3])}."
+            )
+
+        if tuple(refiner_aux_logits_36.shape[-2:]) != (36, 36):
+            raise ValueError(
+                f"refiner_aux_logits_36 spatial size must be 36×36, "
+                f"got {tuple(refiner_aux_logits_36.shape[-2:])}."
+            )
+
+        teacher_prob_36 = F.interpolate(
+            original_logits.detach().sigmoid(),
+            size=(36, 36),
+            mode="area",
+        )
+
+        teacher_prob_36 = teacher_prob_36.unsqueeze(0).expand_as(
+            refiner_aux_logits_36
+        )
+
+        return F.binary_cross_entropy_with_logits(
+            refiner_aux_logits_36,
+            teacher_prob_36,
+            reduction="mean",
+        )
 
     def _forward_final(
         self,
@@ -96,6 +153,7 @@ class SemanticCriterion(nn.Module):
             return {
                 "loss_final_bce": zero,
                 "loss_final_dice": zero,
+                "loss_refiner_aux_distill_bce": zero,
                 "total_loss": zero,
                 "num_valid": torch.tensor(
                     0,
@@ -126,14 +184,50 @@ class SemanticCriterion(nn.Module):
         else:
             loss_final_dice = zero
 
+        has_aux = (
+            OUTPUT_KEYS.original_logits in outputs
+            and OUTPUT_KEYS.refiner_aux_logits_36 in outputs
+        )
+
+        aux_weight = float(self.cfg.refiner_aux_distill_weight)
+
+        if aux_weight > 0.0:
+            if not has_aux:
+                missing = []
+                if OUTPUT_KEYS.original_logits not in outputs:
+                    missing.append(OUTPUT_KEYS.original_logits)
+                if OUTPUT_KEYS.refiner_aux_logits_36 not in outputs:
+                    missing.append(OUTPUT_KEYS.refiner_aux_logits_36)
+                raise ValueError(
+                    "criterion_cfg.refiner_aux_distill_weight > 0 "
+                    f"({aux_weight}), but the following required keys "
+                    f"are missing from outputs: {missing}. "
+                    "Ensure the model forward returns raw outputs "
+                    "in training mode."
+                )
+
+            loss_refiner_aux_distill_bce = self._refiner_aux_distill_loss(
+                original_logits=outputs[OUTPUT_KEYS.original_logits],
+                refiner_aux_logits_36=outputs[OUTPUT_KEYS.refiner_aux_logits_36],
+            )
+        elif has_aux:
+            loss_refiner_aux_distill_bce = self._refiner_aux_distill_loss(
+                original_logits=outputs[OUTPUT_KEYS.original_logits],
+                refiner_aux_logits_36=outputs[OUTPUT_KEYS.refiner_aux_logits_36],
+            )
+        else:
+            loss_refiner_aux_distill_bce = zero
+
         total_loss = (
             float(self.cfg.final_bce_weight) * loss_final_bce
             + float(self.cfg.final_dice_weight) * loss_final_dice
+            + aux_weight * loss_refiner_aux_distill_bce
         )
 
         return {
             "loss_final_bce": loss_final_bce,
             "loss_final_dice": loss_final_dice,
+            "loss_refiner_aux_distill_bce": loss_refiner_aux_distill_bce,
             "total_loss": total_loss,
             "num_valid": torch.tensor(
                 num_valid_pixels,

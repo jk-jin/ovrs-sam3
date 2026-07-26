@@ -1,25 +1,81 @@
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import List
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
+from .model_misc import LayerNorm2d
 from .score_embeddings import ClipScoreEmbedding
 from .encoder_refiner_attention import (
     EncoderRefinerLayer,
     apply_layer_norm_bcdhw,
-    make_residual_scale,
 )
 
 
-def _safe_group_norm(num_channels: int) -> nn.GroupNorm:
-    num_groups = min(8, int(num_channels))
-    if int(num_channels) % num_groups != 0:
-        num_groups = 1
-    return nn.GroupNorm(num_groups, int(num_channels))
+# ---------------------------------------------------------------------------
+# MaskPromptEncoder36
+# ---------------------------------------------------------------------------
+
+
+class MaskPromptEncoder36(nn.Module):
+    """Encodes 288×288 raw logits into a 36×36 dense mask prompt embedding.
+
+    Input:  [B, C, 288, 288]
+    Output: [B, C, 256, 36, 36]
+    """
+
+    def __init__(self, hidden_dim: int = 256):
+        super().__init__()
+        self.hidden_dim = int(hidden_dim)
+
+        self.stem = nn.Sequential(
+            nn.Conv2d(1, 4, kernel_size=2, stride=2),
+            LayerNorm2d(4),
+            nn.GELU(),
+        )
+        self.block1 = nn.Sequential(
+            nn.Conv2d(4, 16, kernel_size=2, stride=2),
+            LayerNorm2d(16),
+            nn.GELU(),
+        )
+        self.block2 = nn.Sequential(
+            nn.Conv2d(16, 64, kernel_size=2, stride=2),
+            LayerNorm2d(64),
+            nn.GELU(),
+        )
+        self.proj = nn.Conv2d(64, self.hidden_dim, kernel_size=1)
+
+        # Zero-initialise so old checkpoints start with a clean mask prompt.
+        nn.init.zeros_(self.proj.weight)
+        nn.init.zeros_(self.proj.bias)
+
+    def forward(self, logits_288: torch.Tensor) -> torch.Tensor:
+        if logits_288.dim() != 4:
+            raise ValueError(
+                f"MaskPromptEncoder36 expects [B, C, H, W], got {tuple(logits_288.shape)}."
+            )
+        B, C, H, W = logits_288.shape
+        if H != 288 or W != 288:
+            raise ValueError(
+                f"MaskPromptEncoder36 expects 288×288 input, got {H}×{W}."
+            )
+
+        x = logits_288.reshape(B * C, 1, 288, 288)
+        x = self.stem(x)
+        x = self.block1(x)
+        x = self.block2(x)
+        x = self.proj(x)
+
+        if tuple(x.shape[-2:]) != (36, 36):
+            raise ValueError(
+                f"MaskPromptEncoder36 output spatial size mismatch: "
+                f"expected 36×36, got {x.shape[-2]}×{x.shape[-1]}."
+            )
+
+        return x.reshape(B, C, self.hidden_dim, 36, 36).contiguous()
 
 
 # ---------------------------------------------------------------------------
@@ -32,17 +88,19 @@ class ClassConditionedEncoderRefiner(nn.Module):
     Encoder feature refiner operating at 36×36.
 
     Takes the full 6-layer SAM3 encoder output after prompt cross-attention
-    as input. SAM3 FPN is concatenated with downsampled encoder feature at
-    36×36, then convolved to produce a residual delta with learnable scale.
-    SAM text prompt tokens are reduced to a masked mean before entering
-    the refiner. The refiner receives sam_text_mean directly.
+    as input. Original logits from a first-pass Pixel Decoder + Semantic Head
+    are encoded via MaskPromptEncoder36 and added to the downsampled encoder
+    feature as the initial refiner feature stream.
+
+    A shared 1×1 Conv produces per-layer auxiliary logits at 36×36 for
+    distillation supervision.
 
     Forward inputs:
         encoder_features_72:  [B, C, 256, 72, 72]  (full encoder + cross-attention)
         clip_image_feat_map:  [B, D_clip, 36, 36]
         sam_text_mean:        [B, C, 256]
         class_names:          list of C class names
-        sam_fpn_72:           [B, 256, 72, 72]
+        original_logits_288:  [B, C, 288, 288]
 
     Forward outputs:
         refined_encoder_features_72: [B, C, 256, 72, 72]
@@ -51,6 +109,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         clip_score_embed_36:         [B, C, 256, 36, 36]
         clip_score_maps_36:          [B, C,  32, 36, 36]
         template_clip_text:          [C, 32, D_clip]
+        refiner_aux_logits_36:       [L, B, C, 36, 36]
     """
 
     def __init__(
@@ -75,6 +134,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         self.hidden_dim = int(hidden_dim)
         self.score_embed_dim = int(score_embed_dim)
         self.use_checkpoint = bool(use_checkpoint)
+        self.num_fusion_layers = int(fusion_layers)
 
         if prompt_templates is None:
             raise ValueError(
@@ -95,30 +155,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
             text_prompt_use_checkpoint=bool(text_prompt_use_checkpoint),
         )
 
-        # FPN-to-feature convolution fusion: concatenate
-        # [encoder_feature_36, sam_fpn_36] and produce a residual delta.
-        self.feature_fpn_fusion = nn.Sequential(
-            nn.Conv2d(
-                self.hidden_dim * 2,
-                self.hidden_dim,
-                kernel_size=3,
-                padding=1,
-                bias=False,
-            ),
-            _safe_group_norm(self.hidden_dim),
-            nn.GELU(),
-            nn.Conv2d(
-                self.hidden_dim,
-                self.hidden_dim,
-                kernel_size=3,
-                padding=1,
-                bias=False,
-            ),
-            _safe_group_norm(self.hidden_dim),
-            nn.GELU(),
-        )
-        self.feature_fpn_res_scale = make_residual_scale(
-            residual_scale_init
+        self.mask_prompt_encoder = MaskPromptEncoder36(
+            hidden_dim=self.hidden_dim,
         )
 
         self.layers = nn.ModuleList([
@@ -131,8 +169,14 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 dropout=float(dropout),
                 residual_scale_init=float(residual_scale_init),
             )
-            for _ in range(int(fusion_layers))
+            for _ in range(self.num_fusion_layers)
         ])
+
+        self.layer_mask_head = nn.Conv2d(
+            self.hidden_dim,
+            1,
+            kernel_size=1,
+        )
 
         self.encoder_feature_fusion_72 = nn.Sequential(
             nn.Conv2d(
@@ -230,7 +274,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         clip_image_feat_map: torch.Tensor,
         sam_text_mean: torch.Tensor,
         class_names: List[str],
-        sam_fpn_72: torch.Tensor,
+        original_logits_288: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
         """
         Args:
@@ -239,7 +283,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
             clip_image_feat_map:  [B, D_clip, 36, 36]
             sam_text_mean:        [B, C, 256]
             class_names:          list of C class names
-            sam_fpn_72:           [B, 256, 72, 72]
+            original_logits_288:  [B, C, 288, 288]
 
         Returns dict with keys:
             refined_encoder_features_72
@@ -248,12 +292,13 @@ class ClassConditionedEncoderRefiner(nn.Module):
             clip_score_embed_36
             clip_score_maps_36
             template_clip_text
+            refiner_aux_logits_36
 
         Process:
             1. Build CLIP score embedding at 36×36.
             2. Downsample cross-attended full-encoder features from 72×72 to base_feature_36.
-            3. Inject SAM3 FPN into encoder feature via conv residual with learnable scale.
-            4. Run refiner layers.
+            3. Encode original logits via MaskPromptEncoder36 and add to base_feature_36.
+            4. Run refiner layers with shared 1×1 Conv aux predictions.
             5. Bilinearly upsample the full refiner feature to 72×72,
                concatenate it with the original cross-attended encoder feature, and fuse
                them with one 1×1 convolution followed by one 3×3 convolution.
@@ -277,6 +322,12 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 f"got {tuple(sam_text_mean.shape)}."
             )
 
+        if tuple(original_logits_288.shape) != (batch_size, num_classes, 288, 288):
+            raise ValueError(
+                f"original_logits_288 must be [{batch_size}, {num_classes}, 288, 288], "
+                f"got {tuple(original_logits_288.shape)}."
+            )
+
         # 1. CLIP score embedding at 36×36.
         (
             clip_score_embed_36,
@@ -287,7 +338,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
             remoteclip_feat_map=clip_image_feat_map,
         )
 
-        # score_embed_36 starts clean — FPN no longer injects into it.
         score_embed_36 = clip_score_embed_36
 
         # 2. Downsample encoder features from 72×72 to 36×36 (baseline).
@@ -309,69 +359,15 @@ class ClassConditionedEncoderRefiner(nn.Module):
             36,
         )
 
-        # 3. Inject SAM3 FPN into encoder feature via conv residual.
-        if tuple(sam_fpn_72.shape) != (batch_size, hidden_dim, 72, 72):
-            raise ValueError(
-                f"sam_fpn_72 must be [{batch_size}, {hidden_dim}, 72, 72], "
-                f"got {tuple(sam_fpn_72.shape)}."
-            )
+        # 3. Encode original logits into mask prompt and add to base feature.
+        mask_prompt_logits = original_logits_288.detach().clamp(-32.0, 32.0)
+        mask_prompt_embed_36 = self.mask_prompt_encoder(mask_prompt_logits)
 
-        base_feature_flat = base_feature_36.reshape(
-            batch_size * num_classes,
-            hidden_dim,
-            36,
-            36,
-        )
+        feature_36 = base_feature_36 + mask_prompt_embed_36
 
-        sam_fpn_36 = F.interpolate(
-            sam_fpn_72.to(
-                device=base_feature_flat.device,
-                dtype=base_feature_flat.dtype,
-            ),
-            size=(36, 36),
-            mode="bilinear",
-            align_corners=False,
-        )
+        # 4. Run refiner layers and collect per-layer aux logits (training only).
+        aux_logits_per_layer: list[torch.Tensor] = []
 
-        sam_fpn_36 = (
-            sam_fpn_36
-            .unsqueeze(1)
-            .expand(
-                batch_size,
-                num_classes,
-                hidden_dim,
-                36,
-                36,
-            )
-            .reshape(
-                batch_size * num_classes,
-                hidden_dim,
-                36,
-                36,
-            )
-        )
-
-        feature_fpn_input = torch.cat(
-            [base_feature_flat, sam_fpn_36],
-            dim=1,
-        )
-
-        feature_fpn_delta_36 = self.feature_fpn_fusion(
-            feature_fpn_input
-        ).reshape(
-            batch_size,
-            num_classes,
-            hidden_dim,
-            36,
-            36,
-        )
-
-        feature_36 = (
-            base_feature_36
-            + self.feature_fpn_res_scale * feature_fpn_delta_36
-        )
-
-        # 4. Run refiner layers.
         for layer in self.layers:
             if self.use_checkpoint and self.training:
                 feature_36, score_embed_36 = checkpoint(
@@ -387,6 +383,26 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     score_embed_36=score_embed_36,
                     sam_text_mean=sam_text_mean,
                 )
+
+            if self.training:
+                aux_logit = self.layer_mask_head(
+                    feature_36.reshape(
+                        batch_size * num_classes,
+                        hidden_dim,
+                        36,
+                        36,
+                    )
+                ).reshape(batch_size, num_classes, 36, 36)
+                aux_logits_per_layer.append(aux_logit)
+
+        refiner_aux_logits_36 = torch.stack(
+            aux_logits_per_layer,
+            dim=0,
+        ) if aux_logits_per_layer else torch.empty(
+            0, batch_size, num_classes, 36, 36,
+            device=feature_36.device,
+            dtype=feature_36.dtype,
+        )
 
         # Final LayerNorm for score_embed only.
         score_embed_36 = apply_layer_norm_bcdhw(
@@ -418,4 +434,5 @@ class ClassConditionedEncoderRefiner(nn.Module):
             "clip_score_embed_36": clip_score_embed_36,
             "clip_score_maps_36": clip_score_maps_36,
             "template_clip_text": template_clip_text,
+            "refiner_aux_logits_36": refiner_aux_logits_36,
         }

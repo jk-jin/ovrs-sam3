@@ -31,6 +31,10 @@ class ModelOutputKeys:
     clip_score_embed: str = "clip_score_embed"
     clip_mid_features: str = "clip_mid_features"
 
+    # First-pass mask logits (detached) and per-layer aux logits
+    original_logits: str = "original_logits"
+    refiner_aux_logits_36: str = "refiner_aux_logits_36"
+
 
 OUTPUT_KEYS = ModelOutputKeys()
 

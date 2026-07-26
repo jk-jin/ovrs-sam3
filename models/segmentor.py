@@ -98,11 +98,15 @@ class SAM3Segmentor(nn.Module):
             batch=batch,
         )
 
-        output_mode = "final" if self.training else "infer"
+        # Training: return raw outputs directly so the criterion can access
+        # original_logits and refiner_aux_logits_36.
+        if self.training:
+            return final_raw_outputs
 
+        # Inference: go through adapter for sigmoid, relative threshold, argmax.
         return self.adapter(
             raw_outputs=final_raw_outputs,
             batch=batch,
             expected_num_classes=None,
-            output_mode=output_mode,
+            output_mode="infer",
         )

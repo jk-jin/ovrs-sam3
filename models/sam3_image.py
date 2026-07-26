@@ -560,56 +560,34 @@ class Sam3Image(torch.nn.Module):
             input_points_mask=torch.zeros((num_pairs, 0), dtype=torch.bool, device=device),
         )
 
-    def run_encoder_refiner(
+    def _decode_semantic_logits(
         self,
-        cross_attended_encoder_features_72: torch.Tensor,
+        encoder_features_72: torch.Tensor,
         chunk_class_counts: List[int],
         backbone_fpn: List[torch.Tensor],
-        clip_image_feat_map: torch.Tensor,
-        sam_text_mean: torch.Tensor,
-        class_names: List[str],
-        clip_mid_features: List[torch.Tensor],
-        clip_mid_layer_indices: tuple[int, ...],
-        return_debug: bool = False,
-    ) -> Dict[str, torch.Tensor]:
-        B, C, D, H, W = cross_attended_encoder_features_72.shape
+    ) -> torch.Tensor:
+        B, C, D, H, W = encoder_features_72.shape
 
-        sam_fpn_72 = backbone_fpn[-1].detach()
-
-        # 1. Run encoder refiner:
-        #    CLIP score + SAM FPN injection → refiner layers → output fusion
-        #    with cross-attended full-encoder feature.
-        refiner_out = self.encoder_refiner(
-            encoder_features_72=cross_attended_encoder_features_72,
-            clip_image_feat_map=clip_image_feat_map,
-            sam_text_mean=sam_text_mean,
-            class_names=class_names,
-            sam_fpn_72=sam_fpn_72,
-        )
-
-        refined_encoder_features_72 = refiner_out["refined_encoder_features_72"]
-
-        # 2. Feed refined features through Pixel Decoder and Semantic Head.
-        final_logits_chunks: list[torch.Tensor] = []
+        logits_chunks: list[torch.Tensor] = []
         chunk_start = 0
 
         for num_chunk_classes in chunk_class_counts:
-            refined_chunk = refined_encoder_features_72[
+            chunk = encoder_features_72[
                 :, chunk_start:chunk_start + num_chunk_classes
             ]
 
-            refined_hidden_states = self._feature_72_to_hidden_states(refined_chunk)
+            hidden_states = self._feature_72_to_hidden_states(chunk)
 
             image_ids = torch.arange(
                 B,
-                device=refined_chunk.device,
+                device=chunk.device,
                 dtype=torch.long,
             ).repeat_interleave(num_chunk_classes)
 
             seg_outputs = self.segmentation_head(
                 backbone_feats=backbone_fpn,
                 image_ids=image_ids,
-                encoder_hidden_states=refined_hidden_states,
+                encoder_hidden_states=hidden_states,
             )
 
             chunk_logits = seg_outputs["semantic_seg"]
@@ -627,10 +605,10 @@ class Sam3Image(torch.nn.Module):
                     f"expected [B*C_chunk, 1, H, W] or [B, C_chunk, H, W]."
                 )
 
-            final_logits_chunks.append(chunk_logits)
+            logits_chunks.append(chunk_logits)
             chunk_start += num_chunk_classes
 
-        final_logits = torch.cat(final_logits_chunks, dim=1)
+        final_logits = torch.cat(logits_chunks, dim=1)
 
         if tuple(final_logits.shape[:2]) != (B, C):
             raise ValueError(
@@ -638,9 +616,60 @@ class Sam3Image(torch.nn.Module):
                 f"got {tuple(final_logits.shape[:2])}."
             )
 
+        return final_logits.contiguous()
+
+    def run_encoder_refiner(
+        self,
+        cross_attended_encoder_features_72: torch.Tensor,
+        chunk_class_counts: List[int],
+        backbone_fpn: List[torch.Tensor],
+        clip_image_feat_map: torch.Tensor,
+        sam_text_mean: torch.Tensor,
+        class_names: List[str],
+        clip_mid_features: List[torch.Tensor],
+        clip_mid_layer_indices: tuple[int, ...],
+        return_debug: bool = False,
+    ) -> Dict[str, torch.Tensor]:
+        B, C, D, H, W = cross_attended_encoder_features_72.shape
+
+        # 1. First pass: Pixel Decoder + Semantic Head in no_grad
+        #    to produce original logits for mask prompt encoding.
+        with torch.no_grad():
+            original_logits = self._decode_semantic_logits(
+                encoder_features_72=cross_attended_encoder_features_72,
+                chunk_class_counts=chunk_class_counts,
+                backbone_fpn=backbone_fpn,
+            )
+
+        original_logits = original_logits.detach().contiguous()
+
+        # 2. Run encoder refiner with mask prompt from original logits.
+        refiner_out = self.encoder_refiner(
+            encoder_features_72=cross_attended_encoder_features_72,
+            clip_image_feat_map=clip_image_feat_map,
+            sam_text_mean=sam_text_mean,
+            class_names=class_names,
+            original_logits_288=original_logits,
+        )
+
+        refined_encoder_features_72 = refiner_out["refined_encoder_features_72"]
+
+        # 3. Second pass: Pixel Decoder + Semantic Head with gradients.
+        final_logits = self._decode_semantic_logits(
+            encoder_features_72=refined_encoder_features_72,
+            chunk_class_counts=chunk_class_counts,
+            backbone_fpn=backbone_fpn,
+        )
+
         result = {
             OUTPUT_KEYS.final_logits: final_logits.contiguous(),
         }
+
+        if self.training:
+            result[OUTPUT_KEYS.original_logits] = original_logits
+            result[OUTPUT_KEYS.refiner_aux_logits_36] = (
+                refiner_out["refiner_aux_logits_36"]
+            )
 
         if return_debug:
             result.update({

@@ -249,10 +249,6 @@ def build_log_getters(cfg) -> List[object]:
         if refiner is None:
             return {}
 
-        fpn_params = [
-            getattr(refiner, "feature_fpn_res_scale", None),
-        ]
-
         internal_names = (
             "class_feature_scale",
             "class_score_scale",
@@ -270,7 +266,6 @@ def build_log_getters(cfg) -> List[object]:
         ]
 
         out = {}
-        out.update(summarize_residual_scales("fpn", fpn_params))
         out.update(
             summarize_residual_scales(
                 "refiner_internal",

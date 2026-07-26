@@ -240,15 +240,8 @@ class Trainer:
                 return_debug=False,
             )
 
-            final_outputs = self.model.adapter(
-                raw_outputs=final_raw_outputs,
-                batch=batch,
-                expected_num_classes=None,
-                output_mode="final",
-            )
-
             loss_dict = self.criterion(
-                final_outputs,
+                final_raw_outputs,
                 {"label_map": label_map},
                 reduction="mean",
             )
