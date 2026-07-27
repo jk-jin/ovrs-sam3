@@ -8,7 +8,10 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 from .score_embeddings import ClipScoreEmbedding
-from .encoder_refiner_attention import EncoderRefinerLayer
+from .encoder_refiner_attention import (
+    EncoderRefinerLayer,
+    make_residual_scale,
+)
 from .refined_mask_decoder import RefinerMaskDecoder
 
 
@@ -16,12 +19,15 @@ class ClassConditionedEncoderRefiner(nn.Module):
     """Encoder feature refiner operating at 36×36.
 
     Takes the full 6-layer SAM3 encoder output after prompt cross-attention
-    as input. The score stream is initialised solely from RemoteCLIP score
-    embeddings. High-resolution mask decoding is delegated to
-    decode_mask_chunk(), which must be called separately for each class chunk.
+    as input. Before the Refiner attention layers, image-level SAM3 FPN72 is
+    downsampled to 36×36 and fused with the class-conditioned encoder features
+    via a learnable residual injection. The score stream is initialised solely
+    from RemoteCLIP score embeddings. High-resolution mask decoding is delegated
+    to decode_mask_chunk(), which must be called separately for each class chunk.
 
     Forward inputs:
         encoder_features_72:  [B, C, 256, 72, 72]  (full encoder + cross-attention)
+        sam_fpn_72:           [B, 256, 72, 72]      (SAM3 backbone image-level FPN72)
         clip_image_feat_map:  [B, D_clip, 36, 36]
         sam_text_mean:        [B, C, 256]
         class_names:          list of C class names
@@ -77,6 +83,19 @@ class ClassConditionedEncoderRefiner(nn.Module):
             text_prompt_use_checkpoint=bool(text_prompt_use_checkpoint),
         )
 
+        self.fpn_injection_proj_36 = nn.Conv2d(
+            self.hidden_dim * 2,
+            self.hidden_dim,
+            kernel_size=1,
+            bias=True,
+        )
+        nn.init.xavier_uniform_(self.fpn_injection_proj_36.weight)
+        nn.init.zeros_(self.fpn_injection_proj_36.bias)
+
+        self.fpn_injection_scale = make_residual_scale(
+            float(residual_scale_init)
+        )
+
         self.layers = nn.ModuleList([
             EncoderRefinerLayer(
                 hidden_dim=self.hidden_dim,
@@ -93,6 +112,95 @@ class ClassConditionedEncoderRefiner(nn.Module):
         self.mask_decoder = RefinerMaskDecoder(
             hidden_dim=self.hidden_dim,
             use_checkpoint=self.use_checkpoint,
+        )
+
+    def _inject_sam_fpn_36(
+        self,
+        base_feature_36: torch.Tensor,
+        sam_fpn_72: torch.Tensor,
+    ) -> torch.Tensor:
+        if base_feature_36.ndim != 5:
+            raise ValueError(
+                "base_feature_36 must be [B, C, D, 36, 36], "
+                f"got {tuple(base_feature_36.shape)}."
+            )
+        if sam_fpn_72.ndim != 4:
+            raise ValueError(
+                "sam_fpn_72 must be [B, D, 72, 72], "
+                f"got {tuple(sam_fpn_72.shape)}."
+            )
+
+        batch_size, num_classes, hidden_dim, height, width = (
+            base_feature_36.shape
+        )
+
+        expected_base_shape = (
+            batch_size,
+            num_classes,
+            self.hidden_dim,
+            36,
+            36,
+        )
+        if tuple(base_feature_36.shape) != expected_base_shape:
+            raise ValueError(
+                "base_feature_36 shape mismatch: expected "
+                f"{expected_base_shape}, got "
+                f"{tuple(base_feature_36.shape)}."
+            )
+
+        expected_fpn_shape = (
+            batch_size,
+            self.hidden_dim,
+            72,
+            72,
+        )
+        if tuple(sam_fpn_72.shape) != expected_fpn_shape:
+            raise ValueError(
+                "sam_fpn_72 shape mismatch: expected "
+                f"{expected_fpn_shape}, got "
+                f"{tuple(sam_fpn_72.shape)}."
+            )
+
+        sam_fpn_72 = sam_fpn_72.to(
+            device=base_feature_36.device,
+            dtype=base_feature_36.dtype,
+        )
+        sam_fpn_36 = F.interpolate(
+            sam_fpn_72,
+            size=(height, width),
+            mode="bilinear",
+            align_corners=False,
+        )
+        sam_fpn_36 = sam_fpn_36[:, None].expand(
+            batch_size,
+            num_classes,
+            hidden_dim,
+            height,
+            width,
+        )
+
+        fusion_input = torch.cat(
+            [base_feature_36, sam_fpn_36],
+            dim=2,
+        )
+        fpn_update_36 = self.fpn_injection_proj_36(
+            fusion_input.reshape(
+                batch_size * num_classes,
+                hidden_dim * 2,
+                height,
+                width,
+            )
+        ).reshape(
+            batch_size,
+            num_classes,
+            hidden_dim,
+            height,
+            width,
+        )
+
+        return (
+            base_feature_36
+            + self.fpn_injection_scale * fpn_update_36
         )
 
     def decode_mask_chunk(
@@ -120,6 +228,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
     def forward(
         self,
         encoder_features_72: torch.Tensor,
+        sam_fpn_72: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
         sam_text_mean: torch.Tensor,
         class_names: List[str],
@@ -129,6 +238,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
         Args:
             encoder_features_72:  [B, C, 256, 72, 72]
                 Full 6-layer encoder output after prompt cross-attention.
+            sam_fpn_72:           [B, 256, 72, 72]
+                SAM3 backbone image-level FPN72 (no class dimension).
             clip_image_feat_map:  [B, D_clip, 36, 36]
             sam_text_mean:        [B, C, 256]
             class_names:          list of C class names
@@ -144,13 +255,37 @@ class ClassConditionedEncoderRefiner(nn.Module):
         cross-class attention works correctly. High-resolution mask
         decoding is done later per class chunk via decode_mask_chunk().
         """
+        if encoder_features_72.ndim != 5:
+            raise ValueError(
+                f"encoder_features_72 must be [B, C, D, 72, 72], "
+                f"got {tuple(encoder_features_72.shape)}."
+            )
+
         batch_size, num_classes, hidden_dim, H, W = encoder_features_72.shape
+
+        if hidden_dim != self.hidden_dim:
+            raise ValueError(
+                f"encoder_features_72 hidden_dim mismatch: "
+                f"expected {self.hidden_dim}, got {hidden_dim}."
+            )
 
         if (H, W) != (72, 72):
             raise ValueError(
                 f"ClassConditionedEncoderRefiner expects 72×72 encoder features, "
                 f"got {(H, W)}."
             )
+
+        if tuple(sam_fpn_72.shape) != (
+            batch_size,
+            self.hidden_dim,
+            72,
+            72,
+        ):
+            raise ValueError(
+                f"sam_fpn_72 must be [{batch_size}, {self.hidden_dim}, 72, 72], "
+                f"got {tuple(sam_fpn_72.shape)}."
+            )
+
         if tuple(clip_image_feat_map.shape[-2:]) != (36, 36):
             raise ValueError(
                 f"clip_image_feat_map must be 36×36, "
@@ -172,7 +307,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
             remoteclip_feat_map=clip_image_feat_map,
         )
 
-        # 2. Downsample encoder features from 72×72 to 36×36 as the feature stream.
+        # 2. Downsample encoder features from 72×72 to 36×36.
         base_feature_36 = F.interpolate(
             encoder_features_72.reshape(
                 batch_size * num_classes,
@@ -191,12 +326,24 @@ class ClassConditionedEncoderRefiner(nn.Module):
             36,
         )
 
-        feature_36 = base_feature_36
+        # 3. Inject SAM3 FPN72 into the feature stream before Refiner attention.
+        if self.use_checkpoint and self.training:
+            feature_36 = checkpoint(
+                self._inject_sam_fpn_36,
+                base_feature_36,
+                sam_fpn_72,
+                use_reentrant=False,
+            )
+        else:
+            feature_36 = self._inject_sam_fpn_36(
+                base_feature_36=base_feature_36,
+                sam_fpn_72=sam_fpn_72,
+            )
 
-        # 3. Score stream is initialised solely from RemoteCLIP.
+        # 4. Score stream is initialised solely from RemoteCLIP.
         score_embed_36 = clip_score_embed_36
 
-        # 4. Run refiner layers.
+        # 5. Run refiner layers.
         for layer in self.layers:
             if self.use_checkpoint and self.training:
                 feature_36, score_embed_36 = checkpoint(

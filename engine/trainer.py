@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import signal
 import time
 from collections import deque
 from dataclasses import fields, is_dataclass
@@ -94,25 +93,8 @@ class Trainer:
 
         self._train_iterator = None
         self.is_resumed = False
-        self._stop_requested = False
         self._pending_rng_state = None
         self._pending_val_from_resume = False
-
-        self._setup_signal_handlers()
-
-    # ------------------------------------------------------------------
-    # Signal handlers
-    # ------------------------------------------------------------------
-
-    def _setup_signal_handlers(self) -> None:
-        def _handler(signum, frame):
-            self._stop_requested = True
-
-        try:
-            signal.signal(signal.SIGINT, _handler)
-            signal.signal(signal.SIGTERM, _handler)
-        except ValueError:
-            pass
 
     # ------------------------------------------------------------------
     # State dict (for checkpoint runtime_state)
@@ -652,19 +634,18 @@ class Trainer:
 
         try:
             self._run_training_loop(train_stats_window, end)
-        except BaseException as exc:
-            if not isinstance(exc, KeyboardInterrupt) or not self._stop_requested:
-                self._save_checkpoint(
-                    self._average_stats(train_stats_window),
-                    checkpoint_reason="exception",
-                )
+        except KeyboardInterrupt as exc:
             self.hook_manager.call("on_exception", self, exc)
             raise
-
-        if self._stop_requested:
-            return
-
-        self._finish_training(train_stats_window)
+        except BaseException as exc:
+            self._save_checkpoint(
+                self._average_stats(train_stats_window),
+                checkpoint_reason="exception",
+            )
+            self.hook_manager.call("on_exception", self, exc)
+            raise
+        else:
+            self._finish_training(train_stats_window)
 
     def _run_training_loop(
         self,
@@ -692,18 +673,6 @@ class Trainer:
                     print(f"Finalized pending validation checkpoint at iter={self.global_iter}")
 
         while self.global_iter < self.cfg.max_iters:
-            if self._stop_requested:
-                print(
-                    f"\nStop requested at iter={self.global_iter}. "
-                    "Saving checkpoint before exit..."
-                )
-                self._save_checkpoint(
-                    self._average_stats(train_stats_window),
-                    checkpoint_reason="interrupt",
-                )
-                self.hook_manager.call("on_exception", self, KeyboardInterrupt())
-                return
-
             data_time = time.perf_counter() - end
 
             if self.device.type == "cuda":

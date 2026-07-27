@@ -37,8 +37,17 @@ RemoteCLIP 局部相似度图
   → clip_score_embed_36 [B, C, 256, 36, 36]
   → 直接作为初始 score_embed_36
 
-72×72 encoder feature 双线性下采样
-  → base_feature_36 → 初始 feature_36
+72×72 cross-attended encoder feature
+  → 双线性下采样
+  → base_feature_36 [B, C, 256, 36, 36]
+
+SAM3 FPN72 [B, 256, 72, 72]
+  → 双线性下采样到 36×36
+  → 扩展类别维
+  → 与 base_feature_36 通道拼接
+  → 1×1 Conv 得到 FPN 更新量
+  → fpn_injection_scale 残差注入
+  → 初始 feature_36 [B, C, 256, 36, 36]
 
 feature_36 + score_embed_36
   → Refiner layer 1..4（全类别同时运行）
@@ -84,6 +93,9 @@ refiner_feature_36_chunk
 | ----------------------------- | ---------------------------------- | ------------------------------ |
 | `backbone_fpn`                | `[B, 256, 288/144/72, 288/144/72]` | SAM3 多尺度图像特征                   |
 | `cross_attended_encoder_features_72` | `[B, C, 256, 72, 72]`       | 完整 6 层 encoder 与 prompt cross-attention 后的类条件特征 |
+| `sam_fpn_72`                   | `[B, 256, 72, 72]`                 | SAM3 backbone 的图像级 FPN72，不带类别维度 |
+| `sam_fpn_36`                   | `[B, 256, 36, 36]`                 | 双线性下采样后的 FPN，随后扩展类别维 |
+| `fpn_update_36`                | `[B, C, 256, 36, 36]`              | encoder36 与 FPN36 拼接并经 1×1 Conv 得到的更新量 |
 | `sam_text_mean`               | `[B, C, 256]`                      | SAM 文本 token 的 masked mean     |
 | `remoteclip_feat_map`         | `[B, 768, 36, 36]`                 | RemoteCLIP dense image feature |
 | `template_clip_text`          | `[C, 32, 768]`                     | 每类 32 个模板的文本特征                 |
@@ -184,13 +196,19 @@ RemoteCLIP 使用 ViT-L/14。原始图像单独缩放到 504×504，并使用 CL
 
 Refiner 在 36×36 上同时维护图像 feature 流和 score embedding 流。默认使用 4 层、8 个 attention heads、12×12 窗口和 6 像素 shift。
 
-### 5.1 Score stream 初始化
+### 5.1 FPN 残差注入与 score stream 初始化
 
-Cross-attended full-encoder feature（72×72）双线性下采样到 36×36，直接作为初始 feature stream：
+Cross-attended full-encoder feature（72×72）双线性下采样到 36×36，得到 `base_feature_36`。
+
+SAM3 backbone 的图像级 `sam_fpn_72 [B, 256, 72, 72]` 双线性下采样到 36×36，通过 `expand` 扩展类别维为 `[B, C, 256, 36, 36]`。
+
+两者在第 3 维（通道维）拼接为 `[B, C, 512, 36, 36]`，经一个 `Conv2d(512→256, k=1)`（Xavier 初始化，bias=0）得到 FPN 更新量 `fpn_update_36`，并通过独立可学习标量 `fpn_injection_scale` 做残差注入：
 
 ```python
-feature_36 = base_feature_36
+feature_36 = base_feature_36 + fpn_injection_scale * fpn_update_36
 ```
+
+注入只发生一次，位于所有 Refiner Attention 之前。卷积后没有 norm 和 activation，允许更新量可正可负。FPN 只注入 feature stream，不进入 score stream。
 
 Score stream 只由 RemoteCLIP 初始化：
 
@@ -198,7 +216,7 @@ Score stream 只由 RemoteCLIP 初始化：
 score_embed_36 = clip_score_embed_36
 ```
 
-没有任何额外投影、归一化、残差或 mask prompt 注入。
+`fpn_injection_scale` 初值来自现有 `residual_scale_init`（默认 0.1），由 `make_residual_scale()` 创建并自动关闭 weight decay。
 
 ### 5.2 单层 refiner
 
@@ -246,16 +264,15 @@ refiner_feature_36 [N, 256, 36, 36]
 
 ### 5.4 残差系数日志
 
-训练日志、JSONL 和 W&B 记录 Refiner 内部的残差系数：
+训练日志、JSONL 和 W&B 记录 Refiner 相关的残差系数：
 
 | 类别 | 前缀 | 参数 |
 | --- | --- | --- |
 | Refiner 内部 | `residual/refiner_internal/` | 每层 8 个 LayerScale |
+| FPN 输入注入 | `residual/fpn_injection/` | 单个 `fpn_injection_scale` |
 
 每类记录 `count`、`mean`、`abs_mean`、`min`、`max` 和
-`negative_ratio`。`residual/refiner_internal/count` 为 32（4 层 × 8 个标量）。
-
-不再记录 `residual/fpn/*`。
+`negative_ratio`。`residual/refiner_internal/count` 为 32（4 层 × 8 个标量），`residual/fpn_injection/count` 为 1。
 
 ## 6. 冻结 SAM3 分割头
 
@@ -289,7 +306,7 @@ OpenCLIP 常把 Q/K/V 存在同一个融合参数中。项目对该参数注册�
 * encoder refiner 使用 1.0 倍学习率；
 * RemoteCLIP text/image 使用 0.01 倍学习率，即 `1e-6`；
 * normalization 参数不使用 weight decay；
-* 所有残差系数（Refiner 内部 32 个 LayerScale）使用 `_ovrs_disable_weight_decay` 标记，weight decay 强制为 0；
+* 所有残差系数（Refiner 内部 32 个 LayerScale + FPN 注入 1 个 `fpn_injection_scale`，共 33 个可学习标量）使用 `_ovrs_disable_weight_decay` 标记，weight decay 强制为 0；全部由同一个 `residual_scale_init` 配置初始化；
 * 梯度裁剪上限为 0.1；
 * warmup 保持前 1000 步，线性从 0.1 倍到全额学习率，后续余弦衰减。
 
@@ -347,7 +364,7 @@ TTA 当前只支持 `scale=1.0` 和空间翻转。多个视图必须先反变换
 * model、optimizer、AMP scaler 和 scheduler；
 * Python、NumPy、Torch CPU 与各 CUDA device 的 RNG 状态；
 * 可恢复随机 batch sampler 的排列、增强种子、游标和 generator 状态；
-* hook 状态，包括 W&B run identity；
+* hook 状态，包括 W&B run identity 和 `last_history_step`；
 * checkpoint manager 的 best score；
 * train/validation 统计及 validation 状态。
 
@@ -357,7 +374,7 @@ NumPy RNG 数组以 Tensor 保存，因此统一加载入口可以安全使用 `
 
 恢复顺序为：严格加载模型与训练状态、恢复 sampler/hook、构建 DataLoader iterator、初始化或恢复 W&B、准备缓存，最后恢复 RNG。若 checkpoint 标记验证尚未完成，恢复后先重放该次验证，再继续训练。
 
-W&B run ID、project、entity 和 run name 来自 checkpoint hook 状态，不依赖 `work_dir/wandb_run.json`。正常恢复使用同一个 run；全新训练生成新 run。JSONL 在恢复时追加，在全新训练时重建。
+W&B run ID、project、entity、run name 和 `last_history_step` 来自 checkpoint hook 状态，不依赖 `work_dir/wandb_run.json`。恢复时先查询远端 `lastHistoryStep`：远端尾部超过 checkpoint 时使用 `resume_from` 截断旧历史并继续同一个 run；远端未超过 checkpoint 时使用 `resume="must"` 正常接续。`last_history_step` 是 W&B 内部 `_step` 序号，不等于 `trainer/global_iter`。所有 `run.log()` 使用显式严格递增的 `_step`，summary 在 rewind 后由 W&B 重新计算。JSONL 在恢复时追加，在全新训练时重建。
 
 两种加载模式必须区分：
 
@@ -376,6 +393,22 @@ python tools/train.py configs/test/loveda.py \
   --eval-only \
   --load-model-from /path/to/checkpoint.pth
 ```
+
+Ctrl+C 使用 Python 默认 `KeyboardInterrupt`。训练和验证均立即退出，不保存新的 checkpoint。已有周期 checkpoint 保留不变。非人工异常仍可保存 exception checkpoint。
+
+W&B rewind 示例：
+
+```text
+远端 run：trainer/global_iter 已到 9900
+恢复 checkpoint：global_iter=8000
+checkpoint 内 last_history_step=K
+远端 lastHistoryStep > K
+→ resume_from="<run_id>?_step=K"
+→ 删除 K 之后的旧历史
+→ 从 checkpoint 状态重新训练并上传
+```
+
+其中 `K` 是 checkpoint 保存时最后一条 W&B history 的内部序号，不是训练步数 8000。
 
 旧格式或缺少完整运行状态的权重不能用于 `--resume-from`，但可以通过 `--load-model-from` 只加载模型参数。
 
@@ -429,7 +462,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 6. 验证不得重新开启 RemoteCLIP 图像分支的 autograd。
 7. 原始 Pixel Decoder 和 semantic head 完全冻结，前向始终在 `torch.no_grad()` 中。
 8. Refiner 必须先在全部类别上执行，再按 chunk 解码。Refiner 不能放进 chunk 循环。
-9. 新 mask decoder 不能直接读取原始 FPN；多尺度特征必须由冻结 Pixel Decoder 生成。
+9. `RefinerMaskDecoder` 不能直接读取原始 `backbone_fpn`；多尺度特征必须由冻结 Pixel Decoder 生成。原始 FPN 的直接注入只发生在 Refiner Attention 前的 feature stream 中。
 10. 原始多尺度特征不跨 chunk 累积。
 11. 三个融合阶段使用独立参数。
 12. teacher 和 student 都为 288×288，不做尺度变换。
@@ -441,6 +474,9 @@ python tools/train.py configs/train/isaid_loveda_full.py
 18. 完整恢复必须严格校验 checkpoint schema；模型权重迁移必须走独立入口。
 19. 完整 6 层 encoder → 一次 prompt cross-attention → Refiner（全类别）→ 逐 chunk 调用冻结 Pixel Decoder → 逐 chunk 调用可训练 RefinerMaskDecoder → 拼接。
 20. 新 mask decoder 属于 `core.encoder_refiner` 并使用基础学习率 `1e-4`。
+21. 原始 SAM3 FPN 只在 Refiner Attention 前直接注入一次，使用 `base + scale * update` 残差形式。
+22. FPN 只进入 feature stream，不进入 score stream。
+23. FPN 注入必须在全类别 Refiner 中执行，不能移入高分辨率 chunk 循环。
 
 当前限制：
 
@@ -452,14 +488,18 @@ python tools/train.py configs/train/isaid_loveda_full.py
 
 ## 12. Checkpoint 非兼容变更
 
+Checkpoint schema 版本为 4。新增 `runtime_state.hooks.WandbHook.last_history_step` 持久化字段。旧 version 3 checkpoint 不支持完整恢复。
+
 本次模型参数结构发生了非兼容变化：
 
 * 删除 `mask_prompt_encoder.*`、`mask_score_fusion_36.*`、`score_aux_mask_head.*`、`encoder_feature_fusion_72.*`、`final_score_norm.*`。
-* 新增 `mask_decoder.fusion_72.*`、`mask_decoder.fusion_144.*`、`mask_decoder.fusion_288.*`、`mask_decoder.mask_head.*`。
+* 新增 `mask_decoder.fusion_72.*`、`mask_decoder.fusion_144.*`、`mask_decoder.fusion_288.*`、`mask_decoder.mask_head.*`、`fpn_injection_proj_36.*`、`fpn_injection_scale`。
 
 旧 checkpoint 不能通过 `--resume-from` 严格恢复。如使用 `--load-model-from` 迁移旧模型参数：
 
 * 允许报告预期的 missing/unexpected keys；
 * 新 mask head 保留从 SAM3 semantic head 复制的初始化；
 * 新融合卷积使用自身 Kaiming 初始化；
+* 新 FPN 注入投影卷积使用 Xavier 初始化，bias=0；
+* 新 `fpn_injection_scale` 使用当前 `residual_scale_init` 初始化；
 * 不创建兼容层或旧参数占位符。

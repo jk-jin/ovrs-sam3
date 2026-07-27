@@ -272,6 +272,12 @@ def build_log_getters(cfg) -> List[object]:
                 internal_params,
             )
         )
+        out.update(
+            summarize_residual_scales(
+                "fpn_injection",
+                [refiner.fpn_injection_scale],
+            )
+        )
         return out
 
     return [project_log_getter]
@@ -466,7 +472,14 @@ def main():
         trainer.hook_manager.call("before_run", trainer)
         try:
             trainer.val()
-        finally:
+        except BaseException as exc:
+            trainer.hook_manager.call(
+                "on_exception",
+                trainer,
+                exc,
+            )
+            raise
+        else:
             trainer.hook_manager.call("after_run", trainer)
 
         return

@@ -227,6 +227,7 @@ class WandbHook(Hook):
         self.run_id: Optional[str] = None
         self.run_name: Optional[str] = None
         self.entity: Optional[str] = None
+        self.last_history_step: int = -1
 
         self._wandb = None
         self._run = None
@@ -246,6 +247,7 @@ class WandbHook(Hook):
             "project": self.project,
             "entity": self.entity,
             "run_name": self.run_name,
+            "last_history_step": int(self.last_history_step),
         }
 
     def load_state_dict(self, state):
@@ -253,6 +255,64 @@ class WandbHook(Hook):
         self.run_name = state.get("run_name", None)
         self._resume_project = state.get("project", None)
         self._resume_entity = state.get("entity", None)
+
+        if "last_history_step" not in state:
+            raise ValueError(
+                "Checkpoint W&B state is missing "
+                "'last_history_step'. This checkpoint predates "
+                "precise W&B rewind support and cannot resume "
+                "the same run safely."
+            )
+
+        self.last_history_step = int(
+            state["last_history_step"]
+        )
+        if self.last_history_step < -1:
+            raise ValueError(
+                "W&B last_history_step must be >= -1, got "
+                f"{self.last_history_step}."
+            )
+
+    # ------------------------------------------------------------------
+    # Logging
+    # ------------------------------------------------------------------
+
+    def _log_payload(self, payload: Dict[str, Any]) -> None:
+        if self._run is None:
+            raise RuntimeError(
+                "W&B run is not initialized."
+            )
+
+        next_history_step = self.last_history_step + 1
+        self._run.log(
+            payload,
+            step=next_history_step,
+            commit=True,
+        )
+        self.last_history_step = next_history_step
+
+    # ------------------------------------------------------------------
+    # Remote history query
+    # ------------------------------------------------------------------
+
+    def _get_remote_last_history_step(
+        self,
+        wandb,
+        entity: str,
+    ) -> int:
+        if self.run_id is None:
+            raise ValueError(
+                "Cannot query W&B history without run_id."
+            )
+
+        api = wandb.Api()
+        remote_run = api.run(
+            f"{entity}/{self.project}/{self.run_id}"
+        )
+        remote_last = remote_run.lastHistoryStep
+        if remote_last is None:
+            return -1
+        return int(remote_last)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -273,35 +333,9 @@ class WandbHook(Hook):
         self._wandb = wandb
 
         is_resumed = bool(getattr(trainer, "is_resumed", False))
-
-        if is_resumed:
-            if self.run_id is not None:
-                resume_mode = "must"
-            else:
-                # Checkpoint was saved without W&B state; start a fresh run.
-                print(
-                    "WandbHook: resumed checkpoint has no W&B run_id — "
-                    "starting a new W&B run."
-                )
-                resume_mode = "never"
-                self.run_id = wandb.util.generate_id()
-        else:
-            resume_mode = "never"
-            self.run_id = wandb.util.generate_id()
-
-        if resume_mode == "must":
-            # Verify project/entity consistency against checkpoint.
-            if self._resume_project is not None and self._resume_project != self.project:
-                raise ValueError(
-                    f"W&B project mismatch: checkpoint saved under "
-                    f"{self._resume_project!r}, current config is {self.project!r}."
-                )
-            if self._resume_entity is not None and self.entity is not None:
-                if self._resume_entity != self.entity:
-                    raise ValueError(
-                        f"W&B entity mismatch: checkpoint saved under "
-                        f"{self._resume_entity!r}, current config is {self.entity!r}."
-                    )
+        has_wandb_run_id = (
+            is_resumed and self.run_id is not None
+        )
 
         config = {}
         raw_cfg = getattr(trainer, "raw_cfg_for_logging", None)
@@ -317,19 +351,97 @@ class WandbHook(Hook):
                 prefix=self.name_prefix,
             )
 
-        self._run = wandb.init(
-            id=self.run_id,
-            resume=resume_mode,
-            project=self.project,
-            entity=self.entity,
-            name=self.run_name,
-            group=self.group,
-            tags=self.tags,
-            mode=self.mode,
-            config=config,
-        )
+        resume_entity = self._resume_entity
 
-        # Sync from the actual run (in case W&B assigned different values).
+        init_kwargs: Dict[str, Any] = {
+            "project": self.project,
+            "entity": resume_entity,
+            "name": self.run_name,
+            "group": self.group,
+            "tags": self.tags,
+            "mode": self.mode,
+            "config": config,
+        }
+
+        # --- Case A: fresh training ---
+        if not has_wandb_run_id:
+            self.run_id = wandb.util.generate_id()
+            self.last_history_step = -1
+
+            init_kwargs.update({
+                "id": self.run_id,
+                "resume": "never",
+            })
+
+        # --- Case C: checkpoint has a W&B run ID ---
+        else:
+            if self._resume_project is not None and self._resume_project != self.project:
+                raise ValueError(
+                    f"W&B project mismatch: checkpoint saved under "
+                    f"{self._resume_project!r}, current config is {self.project!r}."
+                )
+            if resume_entity is None:
+                raise ValueError(
+                    "Checkpoint has a W&B entity but none was configured. "
+                    "Set entity in the W&B config."
+                )
+
+            remote_last = self._get_remote_last_history_step(
+                wandb=wandb,
+                entity=resume_entity,
+            )
+
+            if remote_last > self.last_history_step:
+                # Remote run has history past the checkpoint — rewind.
+                if self.last_history_step < 0:
+                    raise RuntimeError(
+                        "The checkpoint was saved before its first W&B "
+                        "history row, but the remote run already contains "
+                        "history. There is no valid rewind target."
+                    )
+
+                rewind_target = (
+                    f"{self.run_id}"
+                    f"?_step={self.last_history_step}"
+                )
+                init_kwargs["resume_from"] = rewind_target
+
+                print(
+                    "WandbHook: rewinding run "
+                    f"{self.run_id} from remote history step "
+                    f"{remote_last} to checkpoint history step "
+                    f"{self.last_history_step}."
+                )
+            else:
+                # Remote has not progressed past checkpoint — normal resume.
+                init_kwargs.update({
+                    "id": self.run_id,
+                    "resume": "must",
+                })
+
+        # --- Initialisation ---
+        try:
+            self._run = wandb.init(**init_kwargs)
+        except Exception as exc:
+            if "resume_from" in init_kwargs:
+                raise RuntimeError(
+                    "W&B run rewind failed. The project requires "
+                    "resume_from support to truncate history after "
+                    "the checkpoint. Do not fall back to resume='must', "
+                    "because that would keep stale future metrics."
+                ) from exc
+            raise
+
+        # Verify rewind kept the same run.
+        expected_run_id = init_kwargs.get("id", self.run_id)
+        if expected_run_id is not None and self._run.id != expected_run_id:
+            raise RuntimeError(
+                "W&B rewind returned a different run id: "
+                f"expected {expected_run_id!r}, "
+                f"got {self._run.id!r}."
+            )
+
+        # Sync from the actual run.
         self.run_id = self._run.id
         self.project = self._run.project or self.project
         self.entity = self._run.entity
@@ -404,7 +516,7 @@ class WandbHook(Hook):
             self._define_extra_metric(metric_name)
             payload[metric_name] = v
 
-        self._run.log(payload)
+        self._log_payload(payload)
 
     def after_val(self, trainer, global_iter: int, val_stats: Dict[str, float]):
         if not self.enabled or self._wandb is None or not val_stats:
@@ -417,13 +529,16 @@ class WandbHook(Hook):
             if _jsonable(v) is not None:
                 payload[f"val/{k}"] = v
 
-        self._run.log(payload)
+        self._log_payload(payload)
 
     def on_exception(self, trainer, exception):
         if self.enabled and self._run is not None:
-            self._run.finish(exit_code=1)
+            run = self._run
+            self._run = None
+            run.finish(exit_code=1)
 
     def after_run(self, trainer):
         if self.enabled and self._run is not None:
-            self._run.finish(exit_code=0)
+            run = self._run
             self._run = None
+            run.finish(exit_code=0)

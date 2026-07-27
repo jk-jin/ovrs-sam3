@@ -582,8 +582,16 @@ class Sam3Image(torch.nn.Module):
 
         # 1. Run Refiner at 36×36 on ALL classes simultaneously so that
         #    cross-class attention can see the full set of categories.
+        #    SAM3 FPN72 is injected into the feature stream before the
+        #    Refiner attention layers.
+        if len(backbone_fpn) == 0:
+            raise ValueError("backbone_fpn must contain SAM3 FPN features.")
+
+        sam_fpn_72 = backbone_fpn[-1]
+
         refiner_out = self.encoder_refiner(
             encoder_features_72=cross_attended_encoder_features_72,
+            sam_fpn_72=sam_fpn_72,
             clip_image_feat_map=clip_image_feat_map,
             sam_text_mean=sam_text_mean,
             class_names=class_names,

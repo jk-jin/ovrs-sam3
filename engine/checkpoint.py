@@ -12,7 +12,7 @@ from ..config_dataclasses import CheckpointManagerConfig
 from .optimizer_builder import enforce_optimizer_param_group_invariants
 
 
-_CHECKPOINT_VERSION = 3
+_CHECKPOINT_VERSION = 4
 
 
 # ---------------------------------------------------------------------------
@@ -277,8 +277,8 @@ class CheckpointManager:
         self._validate_version(ckpt, path)
 
         # --- Schema validation for resume ---
-        # A v3 checkpoint used for full resume must contain runtime_state
-        # (with rng) and checkpoint_manager.
+        # A checkpoint used for full resume must contain runtime_state
+        # (with rng), checkpoint_manager, and WandbHook.last_history_step.
         runtime_state = ckpt.get("runtime_state")
         if runtime_state is None:
             raise ValueError(
@@ -302,7 +302,7 @@ class CheckpointManager:
         if ckpt_mgr_state is None:
             raise ValueError(
                 f"Checkpoint {path} does not contain 'checkpoint_manager'. "
-                "This is required for v3 checkpoints."
+                "This is required for full resume."
             )
         self.load_state_dict(ckpt_mgr_state)
 
