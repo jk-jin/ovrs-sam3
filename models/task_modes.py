@@ -22,7 +22,6 @@ class ModelOutputKeys:
 
     # Encoder feature refiner outputs
     encoder_features: str = "encoder_features"
-    refined_encoder_features: str = "refined_encoder_features"
     refiner_features_36: str = "refiner_features_36"
     score_embed_36: str = "score_embed_36"
     clip_score_embed_36: str = "clip_score_embed_36"
@@ -31,9 +30,8 @@ class ModelOutputKeys:
     clip_score_embed: str = "clip_score_embed"
     clip_mid_features: str = "clip_mid_features"
 
-    # First-pass mask logits (detached) and per-layer aux logits
-    original_logits: str = "original_logits"
-    refiner_aux_logits_36: str = "refiner_aux_logits_36"
+    # Frozen SAM3 teacher logits for lightweight distillation (training only)
+    sam3_teacher_logits: str = "sam3_teacher_logits"
 
 
 OUTPUT_KEYS = ModelOutputKeys()

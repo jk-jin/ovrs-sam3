@@ -15,8 +15,7 @@ TensorDict = Dict[str, torch.Tensor]
 
 
 class SemanticCriterion(nn.Module):
-    """
-    Semantic segmentation criterion.
+    """Semantic segmentation criterion.
 
     Losses:
         1. mask BCE on final_logits
@@ -28,6 +27,11 @@ class SemanticCriterion(nn.Module):
         2. present-only Dice on final_logits
            - optional
            - controlled by final_dice_weight
+
+        3. SAM3 teacher mask distillation BCE
+           - frozen SAM3 semantic head logits as soft targets
+           - only for present image-class pairs on valid pixels
+           - controlled by sam3_mask_distill_weight
     """
 
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
@@ -53,63 +57,64 @@ class SemanticCriterion(nn.Module):
                 f"SemanticCriterion requires outputs[{OUTPUT_KEYS.final_logits!r}]."
             )
 
-        # Validate refiner_aux_distill_weight early.
-        aux_weight = float(self.cfg.refiner_aux_distill_weight)
-        if not math.isfinite(aux_weight) or aux_weight < 0.0:
-            raise ValueError(
-                "criterion_cfg.refiner_aux_distill_weight must be finite "
-                f"and >= 0, got {aux_weight!r}."
-            )
-
         return self._forward_final(outputs=outputs, targets=targets)
 
-    def _refiner_aux_distill_loss(
+    def _sam3_mask_distill_loss(
         self,
-        original_logits: torch.Tensor,
-        refiner_aux_logits_36: torch.Tensor,
+        final_logits: torch.Tensor,
+        sam3_teacher_logits: torch.Tensor,
+        valid_mask: torch.Tensor,
+        presence_target: torch.Tensor,
     ) -> torch.Tensor:
-        if original_logits.ndim != 4:
-            raise ValueError(
-                f"original_logits must be [B, C, H, W], got {tuple(original_logits.shape)}."
-            )
-        if refiner_aux_logits_36.ndim != 5:
-            raise ValueError(
-                f"refiner_aux_logits_36 must be [L, B, C, H, W], "
-                f"got {tuple(refiner_aux_logits_36.shape)}."
-            )
+        """Distillation BCE: frozen SAM3 teacher → trainable student mask.
 
-        num_layers = refiner_aux_logits_36.shape[0]
-        if num_layers <= 0:
-            raise ValueError("refiner_aux_logits_36 must have at least one layer.")
-
-        if tuple(original_logits.shape[:2]) != tuple(refiner_aux_logits_36.shape[1:3]):
+        Teacher logits are sigmoided to produce soft probability targets.
+        Student stays in raw logit space for BCEWithLogits.
+        Only present image-class pairs and valid pixels participate.
+        """
+        if final_logits.ndim != 4:
             raise ValueError(
-                "Batch/class mismatch between original_logits "
-                f"{tuple(original_logits.shape[:2])} and "
-                f"refiner_aux_logits_36 {tuple(refiner_aux_logits_36.shape[1:3])}."
+                f"final_logits must be [B, C, H, W], got {tuple(final_logits.shape)}."
+            )
+        if sam3_teacher_logits.ndim != 4:
+            raise ValueError(
+                f"sam3_teacher_logits must be [B, C, H, W], "
+                f"got {tuple(sam3_teacher_logits.shape)}."
             )
 
-        if tuple(refiner_aux_logits_36.shape[-2:]) != (36, 36):
+        if tuple(final_logits.shape) != tuple(sam3_teacher_logits.shape):
             raise ValueError(
-                f"refiner_aux_logits_36 spatial size must be 36×36, "
-                f"got {tuple(refiner_aux_logits_36.shape[-2:])}."
+                "Shape mismatch between final_logits "
+                f"{tuple(final_logits.shape)} and "
+                f"sam3_teacher_logits {tuple(sam3_teacher_logits.shape)}."
             )
 
-        teacher_prob_36 = F.interpolate(
-            original_logits.detach().sigmoid(),
-            size=(36, 36),
-            mode="area",
+        if tuple(final_logits.shape[-2:]) != (288, 288):
+            raise ValueError(
+                f"Both logits must be 288×288, "
+                f"got {tuple(final_logits.shape[-2:])}."
+            )
+
+        teacher_prob = sam3_teacher_logits.detach().sigmoid()
+
+        pixel_ce = F.binary_cross_entropy_with_logits(
+            final_logits,
+            teacher_prob,
+            reduction="none",
         )
 
-        teacher_prob_36 = teacher_prob_36.unsqueeze(0).expand_as(
-            refiner_aux_logits_36
-        )
+        present = presence_target > 0.5
+        if not present.any().item():
+            return final_logits.sum() * 0.0
 
-        return F.binary_cross_entropy_with_logits(
-            refiner_aux_logits_36,
-            teacher_prob_36,
-            reduction="mean",
+        pair_pixel_mask = (
+            present.to(device=pixel_ce.device, dtype=torch.bool)[:, :, None, None]
+            & valid_mask.to(device=pixel_ce.device, dtype=torch.bool)[:, None, :, :]
         )
+        pixel_weight = pair_pixel_mask.to(dtype=pixel_ce.dtype)
+
+        denom = pixel_weight.sum().clamp_min(float(self.cfg.eps))
+        return (pixel_ce * pixel_weight).sum() / denom
 
     def _forward_final(
         self,
@@ -153,7 +158,7 @@ class SemanticCriterion(nn.Module):
             return {
                 "loss_final_bce": zero,
                 "loss_final_dice": zero,
-                "loss_refiner_aux_distill_bce": zero,
+                "loss_sam3_mask_distill_bce": zero,
                 "total_loss": zero,
                 "num_valid": torch.tensor(
                     0,
@@ -184,50 +189,42 @@ class SemanticCriterion(nn.Module):
         else:
             loss_final_dice = zero
 
-        has_aux = (
-            OUTPUT_KEYS.original_logits in outputs
-            and OUTPUT_KEYS.refiner_aux_logits_36 in outputs
-        )
+        distill_weight = float(self.cfg.sam3_mask_distill_weight)
+        if not math.isfinite(distill_weight) or distill_weight < 0.0:
+            raise ValueError(
+                "criterion_cfg.sam3_mask_distill_weight must be finite and "
+                f"non-negative, got {self.cfg.sam3_mask_distill_weight!r}."
+            )
 
-        aux_weight = float(self.cfg.refiner_aux_distill_weight)
-
-        if aux_weight > 0.0:
-            if not has_aux:
-                missing = []
-                if OUTPUT_KEYS.original_logits not in outputs:
-                    missing.append(OUTPUT_KEYS.original_logits)
-                if OUTPUT_KEYS.refiner_aux_logits_36 not in outputs:
-                    missing.append(OUTPUT_KEYS.refiner_aux_logits_36)
+        if distill_weight > 0.0:
+            if OUTPUT_KEYS.sam3_teacher_logits not in outputs:
                 raise ValueError(
-                    "criterion_cfg.refiner_aux_distill_weight > 0 "
-                    f"({aux_weight}), but the following required keys "
-                    f"are missing from outputs: {missing}. "
-                    "Ensure the model forward returns raw outputs "
+                    "criterion_cfg.sam3_mask_distill_weight > 0 "
+                    f"({distill_weight}), but "
+                    f"{OUTPUT_KEYS.sam3_teacher_logits!r} is missing from "
+                    "outputs. Ensure the model returns teacher logits "
                     "in training mode."
                 )
 
-            loss_refiner_aux_distill_bce = self._refiner_aux_distill_loss(
-                original_logits=outputs[OUTPUT_KEYS.original_logits],
-                refiner_aux_logits_36=outputs[OUTPUT_KEYS.refiner_aux_logits_36],
-            )
-        elif has_aux:
-            loss_refiner_aux_distill_bce = self._refiner_aux_distill_loss(
-                original_logits=outputs[OUTPUT_KEYS.original_logits],
-                refiner_aux_logits_36=outputs[OUTPUT_KEYS.refiner_aux_logits_36],
+            loss_sam3_mask_distill_bce = self._sam3_mask_distill_loss(
+                final_logits=final_logits,
+                sam3_teacher_logits=outputs[OUTPUT_KEYS.sam3_teacher_logits],
+                valid_mask=valid_mask,
+                presence_target=presence_target,
             )
         else:
-            loss_refiner_aux_distill_bce = zero
+            loss_sam3_mask_distill_bce = zero
 
         total_loss = (
             float(self.cfg.final_bce_weight) * loss_final_bce
             + float(self.cfg.final_dice_weight) * loss_final_dice
-            + aux_weight * loss_refiner_aux_distill_bce
+            + distill_weight * loss_sam3_mask_distill_bce
         )
 
         return {
             "loss_final_bce": loss_final_bce,
             "loss_final_dice": loss_final_dice,
-            "loss_refiner_aux_distill_bce": loss_refiner_aux_distill_bce,
+            "loss_sam3_mask_distill_bce": loss_sam3_mask_distill_bce,
             "total_loss": total_loss,
             "num_valid": torch.tensor(
                 num_valid_pixels,
@@ -295,13 +292,6 @@ class SemanticCriterion(nn.Module):
         num_channels: int,
         dtype: torch.dtype,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Build binary mask targets.
-
-        Important:
-            ignore_index pixels are NOT removed from mask BCE.
-            They simply stay 0 for every class.
-        """
         B, H, W = label_map.shape
         valid_mask = label_map != int(self.cfg.ignore_index)
 
@@ -323,15 +313,6 @@ class SemanticCriterion(nn.Module):
         class_ids: Sequence[int],
         dtype: torch.dtype,
     ) -> torch.Tensor:
-        """
-        Build image-level class presence target.
-
-        presence_target[b, c] = 1
-            if class c appears in non-ignore region of image b.
-
-        presence_target[b, c] = 0
-            otherwise.
-        """
         B = int(label_map.shape[0])
         C = len(class_ids)
 
@@ -358,21 +339,6 @@ class SemanticCriterion(nn.Module):
         ignore_pixel_weight: float,
         eps: float,
     ) -> torch.Tensor:
-        """
-        BCE over all image-class pairs with pair-dependent pixel masking.
-
-        For present image-class pairs:
-            valid pixels use valid_pixel_weight.
-            ignore pixels use ignore_pixel_weight.
-
-        For absent image-class pairs:
-            valid pixels use valid_pixel_weight.
-            ignore pixels are ignored with weight 0.
-
-        Pair-level weights:
-            present image-class pairs: 1.0
-            absent image-class pairs:  absent_weight
-        """
         pixel_loss = F.binary_cross_entropy_with_logits(
             logits,
             target,
@@ -458,12 +424,6 @@ class SemanticCriterion(nn.Module):
         target: torch.Tensor,
         presence_target: torch.Tensor,
     ) -> torch.Tensor:
-        """
-        Dice loss for present image-class pairs only.
-
-        ignore_index pixels are not removed.
-        They remain target=0 and therefore penalize leakage.
-        """
         prob = logits.sigmoid()
 
         prob = prob.flatten(2)

@@ -99,7 +99,7 @@ class SAM3Segmentor(nn.Module):
         )
 
         # Training: return raw outputs directly so the criterion can access
-        # original_logits and refiner_aux_logits_36.
+        # final_logits and detached sam3_teacher_logits.
         if self.training:
             return final_raw_outputs
 

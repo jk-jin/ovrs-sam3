@@ -101,47 +101,68 @@ class SegmentationHead(nn.Module):
         self._device = None
         return super().to(*args, **kwargs)
 
+    def _prepare_pixel_decoder_input(
+        self,
+        backbone_feats: List[torch.Tensor],
+        image_ids,
+        encoder_hidden_states,
+    ) -> List[torch.Tensor]:
+        """Prepare per-query backbone visual feats for the pixel decoder.
+
+        Handles image_ids broadcasting (bs=1) or copying (bs>1), and replaces
+        the last FPN level with the class-conditional encoder feature.
+        """
+        feature_device = backbone_feats[0].device
+        model_device = self.device
+        image_ids_ = image_ids.to(feature_device)
+
+        if backbone_feats[0].shape[0] > 1:
+            backbone_visual_feats = []
+            for feat in backbone_feats:
+                backbone_visual_feats.append(feat[image_ids_, ...].to(model_device))
+        else:
+            backbone_visual_feats = [bb_feat.clone() for bb_feat in backbone_feats]
+
+        encoder_hidden_states_ = encoder_hidden_states.permute(1, 2, 0)
+        spatial_dim = math.prod(backbone_feats[-1].shape[-2:])
+        encoder_visual_embed = encoder_hidden_states_[..., :spatial_dim].reshape(
+            -1, *backbone_feats[-1].shape[1:]
+        )
+
+        backbone_visual_feats[-1] = encoder_visual_embed
+        return backbone_visual_feats
+
     def _embed_pixels(
         self,
         backbone_feats: List[torch.Tensor],
         image_ids,
         encoder_hidden_states,
     ) -> torch.Tensor:
-        feature_device = backbone_feats[0].device  # features could be on CPU
-        model_device = self.device
-        image_ids_ = image_ids.to(feature_device)
-        if self.use_encoder_inputs:
-            if backbone_feats[0].shape[0] > 1:
-                # For bs > 1, we construct the per query backbone features
-                backbone_visual_feats = []
-                for feat in backbone_feats:
-                    # Copy the img features per query (pixel decoder won't share img feats)
-                    backbone_visual_feats.append(feat[image_ids_, ...].to(model_device))
-            else:
-                # Bs=1, we rely on broadcasting for query-based processing
-                backbone_visual_feats = [bb_feat.clone() for bb_feat in backbone_feats]
-            # Extract visual embeddings
-            encoder_hidden_states = encoder_hidden_states.permute(1, 2, 0)
-            spatial_dim = math.prod(backbone_feats[-1].shape[-2:])
-            encoder_visual_embed = encoder_hidden_states[..., :spatial_dim].reshape(
-                -1, *backbone_feats[-1].shape[1:]
-            )
-
-            backbone_visual_feats[-1] = encoder_visual_embed
-            if self.act_ckpt:
-                pixel_embed = checkpoint.checkpoint(
-                    self.pixel_decoder, backbone_visual_feats, use_reentrant=False
-                )
-            else:
-                pixel_embed = self.pixel_decoder(backbone_visual_feats)
-        else:
-            backbone_feats = [x.to(model_device) for x in backbone_feats]
-            pixel_embed = self.pixel_decoder(backbone_feats)
+        if not self.use_encoder_inputs:
+            model_device = self.device
+            backbone_feats_dev = [x.to(model_device) for x in backbone_feats]
+            pixel_embed = self.pixel_decoder(backbone_feats_dev)
             if pixel_embed.shape[0] == 1:
-                # For batch_size=1 training, we can avoid the indexing to save memory
                 pixel_embed = pixel_embed.squeeze(0)
             else:
                 pixel_embed = pixel_embed[image_ids, ...]
+            return pixel_embed
+
+        assert encoder_hidden_states is not None
+
+        backbone_visual_feats = self._prepare_pixel_decoder_input(
+            backbone_feats=backbone_feats,
+            image_ids=image_ids,
+            encoder_hidden_states=encoder_hidden_states,
+        )
+
+        if self.act_ckpt:
+            pixel_embed = checkpoint.checkpoint(
+                self.pixel_decoder, backbone_visual_feats, use_reentrant=False
+            )
+        else:
+            pixel_embed = self.pixel_decoder(backbone_visual_feats)
+
         return pixel_embed
 
     def forward(
@@ -203,22 +224,67 @@ class PixelDecoder(nn.Module):
             torch._dynamo.config.optimize_ddp = False
 
     def forward(self, backbone_feats: List[torch.Tensor]):
-        # Assumes backbone features are already projected (C == hidden dim)
+        out = self.forward_multiscale(backbone_feats)
+        return out["feature_288"]
 
-        prev_fpn = backbone_feats[-1]
-        fpn_feats = backbone_feats[:-1]
-        for layer_idx, bb_feat in enumerate(fpn_feats[::-1]):
+    def forward_multiscale(
+        self,
+        backbone_feats: List[torch.Tensor],
+    ) -> Dict[str, torch.Tensor]:
+        """Return features at all three scales (72, 144, 288).
+
+        Uses the exact same computation as forward(). The last element of
+        backbone_feats is the class-conditional 72×72 feature; earlier
+        elements are the 288×288 and 144×144 FPN levels.
+        """
+        prev_fpn = backbone_feats[-1]  # 72×72
+        feature_72 = prev_fpn
+        fpn_feats = backbone_feats[:-1]  # [288, 144]
+
+        feature_144: torch.Tensor | None = None
+
+        for stage_idx, bb_feat in enumerate(fpn_feats[::-1]):
+            # fpn_feats[::-1] = [144, 288]
             curr_fpn = bb_feat
             prev_fpn = curr_fpn + F.interpolate(
                 prev_fpn, size=curr_fpn.shape[-2:], mode=self.interpolation_mode
             )
-            if self.shared_conv:
-                # only one conv layer
-                layer_idx = 0
-            prev_fpn = self.conv_layers[layer_idx](prev_fpn)
-            prev_fpn = F.relu(self.norms[layer_idx](prev_fpn))
 
-        return prev_fpn
+            conv_idx = 0 if self.shared_conv else stage_idx
+            prev_fpn = self.conv_layers[conv_idx](prev_fpn)
+            prev_fpn = F.relu(self.norms[conv_idx](prev_fpn))
+
+            if stage_idx == 0:
+                feature_144 = prev_fpn
+
+        feature_288 = prev_fpn
+
+        if feature_144 is None:
+            raise RuntimeError(
+                "PixelDecoder.forward_multiscale failed to produce feature_144."
+            )
+
+        if tuple(feature_72.shape[-2:]) != (72, 72):
+            raise RuntimeError(
+                f"feature_72 spatial size mismatch: "
+                f"expected 72×72, got {tuple(feature_72.shape[-2:])}."
+            )
+        if tuple(feature_144.shape[-2:]) != (144, 144):
+            raise RuntimeError(
+                f"feature_144 spatial size mismatch: "
+                f"expected 144×144, got {tuple(feature_144.shape[-2:])}."
+            )
+        if tuple(feature_288.shape[-2:]) != (288, 288):
+            raise RuntimeError(
+                f"feature_288 spatial size mismatch: "
+                f"expected 288×288, got {tuple(feature_288.shape[-2:])}."
+            )
+
+        return {
+            "feature_72": feature_72,
+            "feature_144": feature_144,
+            "feature_288": feature_288,
+        }
 
 
 class UniversalSegmentationHead(SegmentationHead):
@@ -288,6 +354,38 @@ class UniversalSegmentationHead(SegmentationHead):
             key_padding_mask=prompt_mask,
         )[0]
         return encoder_hidden_states + update
+
+    def forward_semantic_multiscale(
+        self,
+        backbone_feats: List[torch.Tensor],
+        image_ids: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
+        return_logits: bool,
+    ) -> Dict[str, torch.Tensor]:
+        """Return multi-scale features from the frozen Pixel Decoder.
+
+        Prepares per-query backbone visual feats via _prepare_pixel_decoder_input,
+        then calls pixel_decoder.forward_multiscale() to produce features at
+        72×72, 144×144 and 288×288. When return_logits=True, additionally runs
+        the frozen semantic_seg_head on feature_288.
+
+        This path does not use activation checkpointing because it is always
+        called under torch.no_grad() and needs no backward pass.
+        """
+        backbone_visual_feats = self._prepare_pixel_decoder_input(
+            backbone_feats=backbone_feats,
+            image_ids=image_ids,
+            encoder_hidden_states=encoder_hidden_states,
+        )
+
+        multiscale = self.pixel_decoder.forward_multiscale(backbone_visual_feats)
+
+        if return_logits:
+            multiscale["semantic_seg"] = self.semantic_seg_head(
+                multiscale["feature_288"]
+            )
+
+        return multiscale
 
     def forward(
         self,

@@ -297,7 +297,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         if cfg.encoder_hw != 72:
             raise ValueError(
-                "Current multi-scale refiner requires encoder_refiner_cfg.encoder_hw=72, "
+                "Current multi-scale mask decoder requires encoder_refiner_cfg.encoder_hw=72, "
                 f"got {cfg.encoder_hw}."
             )
 
@@ -311,6 +311,13 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             raise ValueError(
                 "Current design requires refiner_hw * 2 == encoder_hw (36→72 upsampling), "
                 f"got refiner_hw={cfg.refiner_hw}, encoder_hw={cfg.encoder_hw}."
+            )
+
+        if cfg.hidden_dim != 256:
+            raise ValueError(
+                "encoder_refiner_cfg.hidden_dim must be 256 because the frozen "
+                "Pixel Decoder multi-scale features and the copied semantic head "
+                f"are fixed at 256 channels, got {cfg.hidden_dim}."
             )
 
         if (
@@ -813,6 +820,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         if checkpoint_path is not None:
             cls._load_checkpoint(model, checkpoint_path)
+
+        model.initialize_refiner_mask_head_from_sam3()
 
         return model
 

@@ -140,6 +140,12 @@ class Sam3Image(torch.nn.Module):
         self.clear_text_cache()
         return super().to(*args, **kwargs)
 
+    @torch.no_grad()
+    def initialize_refiner_mask_head_from_sam3(self) -> None:
+        self.encoder_refiner.initialize_mask_head_from_semantic_head(
+            self.segmentation_head.semantic_seg_head
+        )
+
     @staticmethod
     def _normalize_text_cache_key(class_texts: List[str]) -> Tuple[str, ...]:
         return tuple(str(x) for x in class_texts)
@@ -560,64 +566,6 @@ class Sam3Image(torch.nn.Module):
             input_points_mask=torch.zeros((num_pairs, 0), dtype=torch.bool, device=device),
         )
 
-    def _decode_semantic_logits(
-        self,
-        encoder_features_72: torch.Tensor,
-        chunk_class_counts: List[int],
-        backbone_fpn: List[torch.Tensor],
-    ) -> torch.Tensor:
-        B, C, D, H, W = encoder_features_72.shape
-
-        logits_chunks: list[torch.Tensor] = []
-        chunk_start = 0
-
-        for num_chunk_classes in chunk_class_counts:
-            chunk = encoder_features_72[
-                :, chunk_start:chunk_start + num_chunk_classes
-            ]
-
-            hidden_states = self._feature_72_to_hidden_states(chunk)
-
-            image_ids = torch.arange(
-                B,
-                device=chunk.device,
-                dtype=torch.long,
-            ).repeat_interleave(num_chunk_classes)
-
-            seg_outputs = self.segmentation_head(
-                backbone_feats=backbone_fpn,
-                image_ids=image_ids,
-                encoder_hidden_states=hidden_states,
-            )
-
-            chunk_logits = seg_outputs["semantic_seg"]
-            if chunk_logits.dim() == 4 and chunk_logits.shape[0] == B * num_chunk_classes:
-                chunk_logits = chunk_logits.reshape(
-                    B, num_chunk_classes, *chunk_logits.shape[-2:]
-                )
-            elif chunk_logits.dim() == 4 and chunk_logits.shape[0] == B and chunk_logits.shape[1] == num_chunk_classes:
-                pass
-            elif chunk_logits.dim() == 4 and chunk_logits.shape[1] == 1:
-                chunk_logits = chunk_logits.squeeze(1)
-            else:
-                raise ValueError(
-                    f"Unexpected semantic_seg shape: {tuple(chunk_logits.shape)}, "
-                    f"expected [B*C_chunk, 1, H, W] or [B, C_chunk, H, W]."
-                )
-
-            logits_chunks.append(chunk_logits)
-            chunk_start += num_chunk_classes
-
-        final_logits = torch.cat(logits_chunks, dim=1)
-
-        if tuple(final_logits.shape[:2]) != (B, C):
-            raise ValueError(
-                f"final_logits batch/class mismatch: expected {(B, C)}, "
-                f"got {tuple(final_logits.shape[:2])}."
-            )
-
-        return final_logits.contiguous()
-
     def run_encoder_refiner(
         self,
         cross_attended_encoder_features_72: torch.Tensor,
@@ -632,50 +580,123 @@ class Sam3Image(torch.nn.Module):
     ) -> Dict[str, torch.Tensor]:
         B, C, D, H, W = cross_attended_encoder_features_72.shape
 
-        # 1. First pass: Pixel Decoder + Semantic Head in no_grad
-        #    to produce original logits for mask prompt encoding.
-        with torch.no_grad():
-            original_logits = self._decode_semantic_logits(
-                encoder_features_72=cross_attended_encoder_features_72,
-                chunk_class_counts=chunk_class_counts,
-                backbone_fpn=backbone_fpn,
-            )
-
-        original_logits = original_logits.detach().contiguous()
-
-        # 2. Run encoder refiner with mask prompt from original logits.
+        # 1. Run Refiner at 36×36 on ALL classes simultaneously so that
+        #    cross-class attention can see the full set of categories.
         refiner_out = self.encoder_refiner(
             encoder_features_72=cross_attended_encoder_features_72,
             clip_image_feat_map=clip_image_feat_map,
             sam_text_mean=sam_text_mean,
             class_names=class_names,
-            original_logits_288=original_logits,
         )
 
-        refined_encoder_features_72 = refiner_out["refined_encoder_features_72"]
+        refiner_features_36 = refiner_out["refiner_features_36"]
 
-        # 3. Second pass: Pixel Decoder + Semantic Head with gradients.
-        final_logits = self._decode_semantic_logits(
-            encoder_features_72=refined_encoder_features_72,
-            chunk_class_counts=chunk_class_counts,
-            backbone_fpn=backbone_fpn,
-        )
+        # 2. Per-chunk high-resolution decoding.
+        final_logits_chunks: list[torch.Tensor] = []
+        teacher_logits_chunks: list[torch.Tensor] = []
+        chunk_start = 0
+        total_class_count = 0
+
+        for num_chunk_classes in chunk_class_counts:
+            chunk_end = chunk_start + num_chunk_classes
+            total_class_count += num_chunk_classes
+
+            # Slice the per-class encoder and refiner features for this chunk.
+            original_feature_72_chunk = cross_attended_encoder_features_72[
+                :, chunk_start:chunk_end
+            ]
+            refiner_feature_36_chunk = refiner_features_36[
+                :, chunk_start:chunk_end
+            ]
+
+            # Convert to hidden states for the pixel decoder.
+            hidden_states = self._feature_72_to_hidden_states(
+                original_feature_72_chunk
+            )
+
+            image_ids = torch.arange(
+                B,
+                device=hidden_states.device,
+                dtype=torch.long,
+            ).repeat_interleave(num_chunk_classes)
+
+            # Frozen pixel decoder + optional teacher semantic head.
+            with torch.no_grad():
+                original_outputs = self.segmentation_head.forward_semantic_multiscale(
+                    backbone_feats=backbone_fpn,
+                    image_ids=image_ids,
+                    encoder_hidden_states=hidden_states,
+                    return_logits=self.training,
+                )
+
+            # Reshape refiner features to flat pair form.
+            refiner_feature_36_flat = refiner_feature_36_chunk.reshape(
+                B * num_chunk_classes, 256, 36, 36
+            )
+
+            # Trainable mask decoder with gradients.
+            final_logits_flat = self.encoder_refiner.decode_mask_chunk(
+                refiner_feature_36=refiner_feature_36_flat,
+                original_feature_72=original_outputs["feature_72"],
+                original_feature_144=original_outputs["feature_144"],
+                original_feature_288=original_outputs["feature_288"],
+            )
+
+            # [B*C_chunk, 1, 288, 288] → [B, C_chunk, 288, 288]
+            final_logits_chunk = final_logits_flat.reshape(
+                B, num_chunk_classes, 288, 288
+            )
+            final_logits_chunks.append(final_logits_chunk)
+
+            if self.training:
+                teacher_logits = original_outputs["semantic_seg"]
+                # [B*C_chunk, 1, 288, 288] → [B, C_chunk, 288, 288]
+                teacher_logits_chunk = teacher_logits.reshape(
+                    B, num_chunk_classes, 288, 288
+                )
+                teacher_logits_chunks.append(teacher_logits_chunk)
+
+            chunk_start = chunk_end
+
+        # Verify chunk coverage.
+        if total_class_count != C:
+            raise ValueError(
+                f"Chunk class count mismatch: sum={total_class_count}, "
+                f"expected C={C}."
+            )
+        if chunk_start != C:
+            raise ValueError(
+                f"Chunk index mismatch: final chunk_start={chunk_start}, "
+                f"expected C={C}."
+            )
+
+        final_logits = torch.cat(final_logits_chunks, dim=1)
+
+        if tuple(final_logits.shape[:2]) != (B, C):
+            raise ValueError(
+                f"final_logits batch/class mismatch: expected {(B, C)}, "
+                f"got {tuple(final_logits.shape[:2])}."
+            )
 
         result = {
             OUTPUT_KEYS.final_logits: final_logits.contiguous(),
         }
 
         if self.training:
-            result[OUTPUT_KEYS.original_logits] = original_logits
-            result[OUTPUT_KEYS.refiner_aux_logits_36] = (
-                refiner_out["refiner_aux_logits_36"]
+            sam3_teacher_logits = torch.cat(teacher_logits_chunks, dim=1)
+            if tuple(sam3_teacher_logits.shape[:2]) != (B, C):
+                raise ValueError(
+                    f"sam3_teacher_logits batch/class mismatch: "
+                    f"expected {(B, C)}, got {tuple(sam3_teacher_logits.shape[:2])}."
+                )
+            result[OUTPUT_KEYS.sam3_teacher_logits] = (
+                sam3_teacher_logits.detach().contiguous()
             )
 
         if return_debug:
             result.update({
                 OUTPUT_KEYS.encoder_features: cross_attended_encoder_features_72.detach().contiguous(),
-                OUTPUT_KEYS.refined_encoder_features: refined_encoder_features_72.detach().contiguous(),
-                OUTPUT_KEYS.refiner_features_36: refiner_out["refiner_features_36"].detach().contiguous(),
+                OUTPUT_KEYS.refiner_features_36: refiner_features_36.detach().contiguous(),
                 OUTPUT_KEYS.score_embed_36: refiner_out["score_embed_36"].detach().contiguous(),
                 OUTPUT_KEYS.clip_score_embed_36: refiner_out["clip_score_embed_36"].detach().contiguous(),
                 OUTPUT_KEYS.clip_score_maps: refiner_out["clip_score_maps_36"].detach().contiguous(),

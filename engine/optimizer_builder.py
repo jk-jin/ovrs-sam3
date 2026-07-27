@@ -66,16 +66,18 @@ class OptimizerBuilder:
                 group['lr'] = base_lr * bias_lr_mult
                 group['weight_decay'] = base_wd * bias_decay_mult
 
-            lowered = name.lower()
-            if any(token in lowered for token in ('norm', 'bn', 'ln', 'gn')):
-                group['weight_decay'] = base_wd * norm_decay_mult
-
+            # Apply custom_keys before norm override so that per-module
+            # decay_mult rules are then overridden by the norm exception.
             for key, rule in custom_keys.items():
                 if key in name:
                     if 'lr_mult' in rule:
                         group['lr'] = base_lr * float(rule['lr_mult'])
                     if 'decay_mult' in rule:
                         group['weight_decay'] = base_wd * float(rule['decay_mult'])
+
+            lowered = name.lower()
+            if any(token in lowered for token in ('norm', 'bn', 'ln', 'gn')):
+                group['weight_decay'] = base_wd * norm_decay_mult
 
             if getattr(param, "_ovrs_disable_weight_decay", False):
                 group["weight_decay"] = 0.0

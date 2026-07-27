@@ -108,7 +108,7 @@ class SemanticCriterionConfig:
 
     eps: float = 1e-6
 
-    refiner_aux_distill_weight: float = 0.05
+    sam3_mask_distill_weight: float = 0.05
 
 
 @dataclass
