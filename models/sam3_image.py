@@ -140,12 +140,6 @@ class Sam3Image(torch.nn.Module):
         self.clear_text_cache()
         return super().to(*args, **kwargs)
 
-    @torch.no_grad()
-    def initialize_refiner_mask_head_from_sam3(self) -> None:
-        self.encoder_refiner.initialize_mask_head_from_semantic_head(
-            self.segmentation_head.semantic_seg_head
-        )
-
     @staticmethod
     def _normalize_text_cache_key(class_texts: List[str]) -> Tuple[str, ...]:
         return tuple(str(x) for x in class_texts)
@@ -582,7 +576,7 @@ class Sam3Image(torch.nn.Module):
 
         # 1. Run Refiner at 36×36 on ALL classes simultaneously so that
         #    cross-class attention can see the full set of categories.
-        #    SAM3 FPN72 is injected into the feature stream before the
+        #    SAM3 FPN72 is injected into the score stream before the
         #    Refiner attention layers.
         if len(backbone_fpn) == 0:
             raise ValueError("backbone_fpn must contain SAM3 FPN features.")
@@ -653,12 +647,28 @@ class Sam3Image(torch.nn.Module):
                 align_corners=False,
             )
 
-            refiner_feature_72_chunk = refiner_feature_72_flat.reshape(
-                B, num_chunk_classes, D, 72, 72
+            # Flatten original encoder feature 72 for the same chunk.
+            original_feature_72_flat = original_feature_72_chunk.reshape(
+                B * num_chunk_classes, D, 72, 72
             )
 
-            refiner_hidden_states = self._feature_72_to_hidden_states(
-                refiner_feature_72_chunk
+            # Fuse refiner 72 with original encoder 72 before Pixel Decoder.
+            fused_pixel_decoder_input_72_flat = (
+                self.encoder_refiner.fuse_pixel_decoder_input_chunk(
+                    refiner_feature_72=refiner_feature_72_flat,
+                    original_feature_72=original_feature_72_flat,
+                )
+            )
+
+            # Convert fused 72 to hidden states for the refiner Pixel Decoder branch.
+            fused_pixel_decoder_input_72_chunk = (
+                fused_pixel_decoder_input_72_flat.reshape(
+                    B, num_chunk_classes, D, 72, 72
+                )
+            )
+
+            fused_hidden_states = self._feature_72_to_hidden_states(
+                fused_pixel_decoder_input_72_chunk
             )
 
             # Refiner branch through the same frozen Pixel Decoder (grad enabled).
@@ -666,17 +676,20 @@ class Sam3Image(torch.nn.Module):
                 self.segmentation_head.forward_semantic_pixel_decoder(
                     backbone_feats=backbone_fpn,
                     image_ids=image_ids,
-                    encoder_hidden_states=refiner_hidden_states,
+                    encoder_hidden_states=fused_hidden_states,
                     return_logits=False,
                 )
             )
 
             refined_pixel_feature_288 = refined_outputs["pixel_feature_288"]
 
-            # Final 288×288 fusion + mask head.
-            final_logits_flat = self.encoder_refiner.decode_mask_chunk(
+            # Final 288×288 fusion → frozen SAM3 semantic_seg_head → logits.
+            fused_feature_288 = self.encoder_refiner.decode_mask_chunk(
                 refined_feature_288=refined_pixel_feature_288,
                 original_feature_288=original_pixel_feature_288,
+            )
+            final_logits_flat = self.segmentation_head.semantic_seg_head(
+                fused_feature_288
             )
 
             # [B*C_chunk, 1, 288, 288] → [B, C_chunk, 288, 288]

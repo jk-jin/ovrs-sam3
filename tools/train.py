@@ -274,8 +274,8 @@ def build_log_getters(cfg) -> List[object]:
         )
         out.update(
             summarize_residual_scales(
-                "fpn_injection",
-                [refiner.fpn_injection_scale],
+                "fpn_score_injection",
+                [refiner.fpn_score_injection_scale],
             )
         )
         return out

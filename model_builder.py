@@ -315,8 +315,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         if cfg.hidden_dim != 256:
             raise ValueError(
-                "共享的冻结 SAM3 Pixel Decoder、最终融合头和复制的 mask head "
-                "均固定使用 256 通道，"
+                "SAM3 FPN、Pixel Decoder 输入融合、共享 Pixel Decoder、"
+                "最终融合头和 mask head 均固定使用 256 通道，"
                 f"got {cfg.hidden_dim}."
             )
 
@@ -820,8 +820,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         if checkpoint_path is not None:
             cls._load_checkpoint(model, checkpoint_path)
-
-        model.initialize_refiner_mask_head_from_sam3()
 
         return model
 
