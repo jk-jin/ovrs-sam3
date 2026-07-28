@@ -22,8 +22,12 @@ class ClassConditionedEncoderRefiner(nn.Module):
     as input. Before the Refiner attention layers, image-level SAM3 FPN72 is
     downsampled to 36×36 and fused with the class-conditioned encoder features
     via a learnable residual injection. The score stream is initialised solely
-    from RemoteCLIP score embeddings. High-resolution mask decoding is delegated
-    to decode_mask_chunk(), which must be called separately for each class chunk.
+    from RemoteCLIP score embeddings.
+
+    The Refiner outputs 36×36 features. The 36→72 bilinear interpolation and
+    the shared frozen SAM3 Pixel Decoder calls are orchestrated by Sam3Image
+    per class chunk. decode_mask_chunk() now only handles the final 288×288
+    feature fusion and mask prediction.
 
     Forward inputs:
         encoder_features_72:  [B, C, 256, 72, 72]  (full encoder + cross-attention)
@@ -205,15 +209,17 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
     def decode_mask_chunk(
         self,
-        refiner_feature_36: torch.Tensor,
-        original_feature_72: torch.Tensor,
-        original_feature_144: torch.Tensor,
+        refined_feature_288: torch.Tensor,
         original_feature_288: torch.Tensor,
     ) -> torch.Tensor:
+        """Fuse two 288×288 features and predict mask logits for one chunk.
+
+        The 36→72 bilinear interpolation and the shared frozen SAM3 Pixel
+        Decoder calls are handled externally by Sam3Image. This method only
+        performs the final 288×288 fusion and mask head prediction.
+        """
         return self.mask_decoder(
-            refiner_feature_36=refiner_feature_36,
-            original_feature_72=original_feature_72,
-            original_feature_144=original_feature_144,
+            refined_feature_288=refined_feature_288,
             original_feature_288=original_feature_288,
         )
 
@@ -252,8 +258,10 @@ class ClassConditionedEncoderRefiner(nn.Module):
             template_clip_text
 
         The Refiner operates on ALL classes simultaneously so that
-        cross-class attention works correctly. High-resolution mask
-        decoding is done later per class chunk via decode_mask_chunk().
+        cross-class attention works correctly. The 36→72 bilinear
+        interpolation and shared frozen SAM3 Pixel Decoder calls are
+        orchestrated by Sam3Image per class chunk. Final 288×288 fusion
+        and mask prediction are done via decode_mask_chunk().
         """
         if encoder_features_72.ndim != 5:
             raise ValueError(

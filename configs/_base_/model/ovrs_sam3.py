@@ -97,6 +97,6 @@ model = dict(
         bce_valid_pixel_weight=1.0,
         bce_ignore_pixel_weight=0.05,
         eps=1e-6,
-        sam3_mask_distill_weight=0.1,
+        sam3_mask_distill_weight=0.05,
     ),
 )

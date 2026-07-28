@@ -297,27 +297,27 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         if cfg.encoder_hw != 72:
             raise ValueError(
-                "Current multi-scale mask decoder requires encoder_refiner_cfg.encoder_hw=72, "
+                "当前共享 Pixel Decoder 路径要求 encoder feature 输入为 72×72，"
                 f"got {cfg.encoder_hw}."
             )
 
         if cfg.refiner_hw != 36:
             raise ValueError(
-                "Current refiner requires encoder_refiner_cfg.refiner_hw=36, "
+                "Refiner 36×36 特征需要先双线性插值到 Pixel Decoder 的 72×72 输入尺度，"
                 f"got {cfg.refiner_hw}."
             )
 
         if cfg.refiner_hw * 2 != cfg.encoder_hw:
             raise ValueError(
-                "Current design requires refiner_hw * 2 == encoder_hw (36→72 upsampling), "
+                "当前设计需要 refiner_hw * 2 == encoder_hw（36→72 双线性插值），"
                 f"got refiner_hw={cfg.refiner_hw}, encoder_hw={cfg.encoder_hw}."
             )
 
         if cfg.hidden_dim != 256:
             raise ValueError(
-                "encoder_refiner_cfg.hidden_dim must be 256 because the frozen "
-                "Pixel Decoder multi-scale features and the copied semantic head "
-                f"are fixed at 256 channels, got {cfg.hidden_dim}."
+                "共享的冻结 SAM3 Pixel Decoder、最终融合头和复制的 mask head "
+                "均固定使用 256 通道，"
+                f"got {cfg.hidden_dim}."
             )
 
         if (
