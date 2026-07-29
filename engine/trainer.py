@@ -233,7 +233,7 @@ class Trainer:
 
         return loss_dict, loss_dict["total_loss"]
 
-    def train_step(self, batch) -> tuple[Dict[str, float], bool]:
+    def train_step(self, batch) -> Dict[str, float]:
         if self.optimizer is None:
             raise RuntimeError("Optimizer is None, cannot run train_step().")
 
@@ -264,7 +264,7 @@ class Trainer:
             else:
                 stats[key] = float(value)
 
-        return stats, True
+        return stats
 
     # ------------------------------------------------------------------
     # Sampler commit
@@ -674,7 +674,7 @@ class Trainer:
 
             self.hook_manager.call("before_train_iter", self, next_iter, batch)
 
-            stats, did_step = self.train_step(batch)
+            stats = self.train_step(batch)
 
             self._commit_sampler_batch()
 

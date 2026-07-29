@@ -2,47 +2,64 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
+
+
+def _safe_group_norm(num_channels: int) -> nn.GroupNorm:
+    num_groups = min(8, int(num_channels))
+    if int(num_channels) % num_groups != 0:
+        num_groups = 1
+    return nn.GroupNorm(num_groups, int(num_channels))
 
 
 class PixelDecoderInputFusion72(nn.Module):
     """Fuse refiner 72 and original encoder 72 before the shared Pixel Decoder.
 
-    Input:
-        refiner_feature_72   [N, 256, 72, 72]
-        original_feature_72  [N, 256, 72, 72]
+    Stage A (local spatial fusion):
+        concat(refiner_72, original_72) [N, 512, 72, 72]
+          → 3×3 Conv(512→256, bias=False)
+          → GroupNorm → GELU
+          → 3×3 Conv(256→256, bias=False)
+          → GroupNorm → GELU
+          → local_fused_72 [N, 256, 72, 72]
 
-    Output:
-        [N, 256, 72, 72]
-
-    Uses 1×1 Conv + 3×3 Conv without norm or activation so that the
-    fused output preserves the value range of the original encoder
-    features for the downstream frozen Pixel Decoder.
+    Stage B (semantic anchor):
+        concat(local_fused_72, original_72) [N, 512, 72, 72]
+          → 1×1 Conv(512→256, bias=False)
+          → fused_pixel_decoder_input_72 [N, 256, 72, 72]
     """
 
     def __init__(self, hidden_dim: int = 256):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
 
-        self.conv_1x1 = nn.Conv2d(
+        self.local_fusion = nn.Sequential(
+            nn.Conv2d(
+                self.hidden_dim * 2,
+                self.hidden_dim,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            _safe_group_norm(self.hidden_dim),
+            nn.GELU(),
+            nn.Conv2d(
+                self.hidden_dim,
+                self.hidden_dim,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            _safe_group_norm(self.hidden_dim),
+            nn.GELU(),
+        )
+
+        self.final_fusion = nn.Conv2d(
             self.hidden_dim * 2,
             self.hidden_dim,
             kernel_size=1,
-            bias=True,
+            bias=False,
         )
-        self.conv_3x3 = nn.Conv2d(
-            self.hidden_dim,
-            self.hidden_dim,
-            kernel_size=3,
-            padding=1,
-            bias=True,
-        )
-
-        nn.init.xavier_uniform_(self.conv_1x1.weight)
-        nn.init.zeros_(self.conv_1x1.bias)
-        nn.init.xavier_uniform_(self.conv_3x3.weight)
-        nn.init.zeros_(self.conv_3x3.bias)
 
     def forward(
         self,
@@ -76,58 +93,67 @@ class PixelDecoderInputFusion72(nn.Module):
                 f"Spatial size must be 72×72, got {(H, W)}."
             )
 
-        fused = torch.cat(
+        local_input = torch.cat(
             [refiner_feature_72, original_feature_72],
             dim=1,
         )
-        fused = self.conv_1x1(fused)
-        fused = self.conv_3x3(fused)
-        return fused
+        local_fused_72 = self.local_fusion(local_input)
+
+        final_input = torch.cat(
+            [local_fused_72, original_feature_72],
+            dim=1,
+        )
+        return self.final_fusion(final_input)
 
 
 class FinalFeatureFusion288(nn.Module):
-    """Fuse two 288×288 features via concat + 1×1 Conv + 3×3 Conv + GroupNorm + ReLU.
+    """Fuse two 288×288 features via Stage A local fusion + Stage B semantic anchor.
 
-    Input:
-        refined_feature_288  [N, 256, 288, 288]
-        original_feature_288 [N, 256, 288, 288]
+    Stage A (local spatial fusion):
+        concat(refined_288, original_288) [N, 512, 288, 288]
+          → 3×3 Conv(512→256, bias=False)
+          → GroupNorm → GELU
+          → 3×3 Conv(256→256, bias=False)
+          → GroupNorm → GELU
+          → local_fused_288 [N, 256, 288, 288]
 
-    Output:
-        [N, 256, 288, 288]
+    Stage B (semantic anchor):
+        concat(local_fused_288, original_288) [N, 512, 288, 288]
+          → 1×1 Conv(512→256, bias=False)
+          → fused_feature_288 [N, 256, 288, 288]
     """
 
     def __init__(self, hidden_dim: int = 256):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
-        self.conv_1x1 = nn.Conv2d(
+
+        self.local_fusion = nn.Sequential(
+            nn.Conv2d(
+                self.hidden_dim * 2,
+                self.hidden_dim,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            _safe_group_norm(self.hidden_dim),
+            nn.GELU(),
+            nn.Conv2d(
+                self.hidden_dim,
+                self.hidden_dim,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            _safe_group_norm(self.hidden_dim),
+            nn.GELU(),
+        )
+
+        self.final_fusion = nn.Conv2d(
             self.hidden_dim * 2,
             self.hidden_dim,
             kernel_size=1,
-            bias=True,
+            bias=False,
         )
-        self.conv_3x3 = nn.Conv2d(
-            self.hidden_dim,
-            self.hidden_dim,
-            kernel_size=3,
-            padding=1,
-            bias=True,
-        )
-        self.norm = nn.GroupNorm(8, self.hidden_dim)
-
-        nn.init.kaiming_normal_(
-            self.conv_1x1.weight,
-            mode="fan_out",
-            nonlinearity="relu",
-        )
-        nn.init.zeros_(self.conv_1x1.bias)
-        nn.init.kaiming_normal_(
-            self.conv_3x3.weight,
-            mode="fan_out",
-            nonlinearity="relu",
-        )
-        nn.init.zeros_(self.conv_3x3.bias)
-        nn.init.ones_(self.norm.weight)
-        nn.init.zeros_(self.norm.bias)
 
     def forward(
         self,
@@ -161,19 +187,27 @@ class FinalFeatureFusion288(nn.Module):
                 f"Spatial size must be 288×288, got {(H, W)}."
             )
 
-        fused = torch.cat(
+        local_input = torch.cat(
             [refined_feature_288, original_feature_288],
             dim=1,
         )
-        fused = self.conv_1x1(fused)
-        fused = self.conv_3x3(fused)
-        fused = self.norm(fused)
-        fused = F.relu(fused, inplace=False)
-        return fused
+        local_fused_288 = self.local_fusion(local_input)
+
+        final_input = torch.cat(
+            [local_fused_288, original_feature_288],
+            dim=1,
+        )
+        return self.final_fusion(final_input)
 
 
 class RefinerMaskDecoder(nn.Module):
     """72×72 input fusion and 288×288 final feature fusion.
+
+    Both fusion modules use the same Stage A + Stage B structure with
+    independent parameters:
+
+    Stage A: 3×3 Conv → GN → GELU → 3×3 Conv → GN → GELU (local spatial)
+    Stage B: concat with original feature → 1×1 Conv (semantic anchor)
 
     Pixel Decoder input path:
         refiner_feature_72 + original_feature_72

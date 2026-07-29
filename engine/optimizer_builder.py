@@ -51,6 +51,17 @@ class OptimizerBuilder:
         bias_lr_mult = float(paramwise_cfg.get('bias_lr_mult', 1.0))
         bias_decay_mult = float(paramwise_cfg.get('bias_decay_mult', 1.0))
 
+        _NORM_TYPES = (
+            torch.nn.modules.batchnorm._BatchNorm,
+            torch.nn.LayerNorm,
+            torch.nn.GroupNorm,
+            torch.nn.InstanceNorm1d,
+            torch.nn.InstanceNorm2d,
+            torch.nn.InstanceNorm3d,
+        )
+
+        module_map = dict(model.named_modules())
+
         params = []
         for name, param in model.named_parameters():
             if not param.requires_grad:
@@ -75,8 +86,18 @@ class OptimizerBuilder:
                     if 'decay_mult' in rule:
                         group['weight_decay'] = base_wd * float(rule['decay_mult'])
 
+            # Detect normalization parameters by module type (primary)
+            # and by parameter name (fallback).
+            parent_name = name.rsplit('.', 1)[0] if '.' in name else ''
+            parent_module = module_map.get(parent_name, None)
+            is_norm_by_type = isinstance(parent_module, _NORM_TYPES)
+
             lowered = name.lower()
-            if any(token in lowered for token in ('norm', 'bn', 'ln', 'gn')):
+            is_norm_by_name = any(
+                token in lowered for token in ('norm', 'bn', 'ln', 'gn')
+            )
+
+            if is_norm_by_type or is_norm_by_name:
                 group['weight_decay'] = base_wd * norm_decay_mult
 
             if getattr(param, "_ovrs_disable_weight_decay", False):

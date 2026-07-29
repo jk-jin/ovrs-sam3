@@ -480,6 +480,7 @@ class ColorAugSSD:
 
     每种扰动以 0.5 概率独立启用。
     图像值域 [0, 1]，所有参数内部换算到此范围。
+    image 和 raw_image 共享同一次采样参数。
     """
 
     def __init__(
@@ -498,55 +499,60 @@ class ColorAugSSD:
         self.saturation_high = float(saturation_high)
         self.hue_delta = float(hue_delta)
 
-    def _apply(self, image: torch.Tensor) -> torch.Tensor:
-        contrast_first = random.random() < 0.5
-
-        # 亮度
-        if random.random() < 0.5:
-            delta = random.uniform(
+    def _sample_params(self) -> dict:
+        return {
+            "contrast_first": random.random() < 0.5,
+            "do_brightness": random.random() < 0.5,
+            "do_contrast": random.random() < 0.5,
+            "do_saturation": random.random() < 0.5,
+            "do_hue": random.random() < 0.5,
+            "brightness_delta": random.uniform(
                 -self.brightness_delta, self.brightness_delta
-            ) / 255.0
-            image = image + delta
+            ) / 255.0,
+            "contrast_alpha": random.uniform(self.contrast_low, self.contrast_high),
+            "saturation_factor": random.uniform(
+                self.saturation_low, self.saturation_high
+            ),
+            "hue_shift": random.randint(
+                -int(self.hue_delta), int(self.hue_delta)
+            ) / 180.0,
+        }
 
-        # 对比度
-        if contrast_first and random.random() < 0.5:
-            alpha = random.uniform(self.contrast_low, self.contrast_high)
-            image = image * alpha
+    def _apply(self, image: torch.Tensor, params: dict) -> torch.Tensor:
+        # 亮度
+        if params["do_brightness"]:
+            image = image + params["brightness_delta"]
 
-        if random.random() < 0.5:
-            # 饱和度 + 色相（在 HSV 空间）
+        # 对比度（在 HSV 之前）
+        if params["contrast_first"] and params["do_contrast"]:
+            image = image * params["contrast_alpha"]
+
+        if params["do_saturation"] or params["do_hue"]:
             image = image.clamp(0.0, 1.0)
             hsv = _rgb_to_hsv(image)
 
-            if random.random() < 0.5:
-                # 饱和度
-                sat_factor = random.uniform(self.saturation_low, self.saturation_high)
-                hsv[1] = (hsv[1] * sat_factor).clamp(0.0, 1.0)
+            if params["do_saturation"]:
+                hsv[1] = (hsv[1] * params["saturation_factor"]).clamp(0.0, 1.0)
 
-            if random.random() < 0.5:
-                # 色相（循环偏移）
-                hue_shift = random.uniform(-self.hue_delta, self.hue_delta) / 360.0
-                hsv[0] = (hsv[0] + hue_shift) % 1.0
+            if params["do_hue"]:
+                hsv[0] = (hsv[0] + params["hue_shift"]) % 1.0
 
             image = _hsv_to_rgb(hsv)
 
-        # 对比度在饱和度之后执行
-        if not contrast_first and random.random() < 0.5:
-            alpha = random.uniform(self.contrast_low, self.contrast_high)
-            image = image * alpha
+        # 对比度（在 HSV 之后）
+        if not params["contrast_first"] and params["do_contrast"]:
+            image = image * params["contrast_alpha"]
 
         return image.clamp(0.0, 1.0)
 
     def __call__(self, sample: Sample) -> Sample:
-        # 只采样一次随机参数，应用到 image 和 raw_image
-        rng_state = random.getstate()
+        params = self._sample_params()
         sample = dict(sample)
 
-        sample["image"] = self._apply(sample["image"])
+        sample["image"] = self._apply(sample["image"], params)
 
         if "raw_image" in sample and sample["raw_image"] is not None:
-            random.setstate(rng_state)
-            sample["raw_image"] = self._apply(sample["raw_image"])
+            sample["raw_image"] = self._apply(sample["raw_image"], params)
 
         return sample
 

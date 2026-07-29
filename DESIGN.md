@@ -66,14 +66,17 @@ original_pixel_feature_288
 refiner_feature_36_chunk
   → bilinear 插值到 72×72
   → refiner_feature_72 [B×C_chunk, 256, 72, 72]
-  → 与 original_encoder_feature_72 通道拼接
-  → 1×1 Conv + 3×3 Conv
+  → 与 original_encoder_feature_72 通过 PixelDecoderInputFusion72 融合
+      Stage A: concat → 3×3+GN+GELU+3×3+GN+GELU → local_fused_72
+      Stage B: concat(local_fused_72, original_72) → 1×1
   → fused_pixel_decoder_input_72 [B×C_chunk, 256, 72, 72]
   → 同一个冻结 SAM3 Pixel Decoder（梯度开启）
   → refined_pixel_feature_288 [B×C_chunk, 256, 288, 288]
 
 refined_pixel_feature_288 + original_pixel_feature_288
-  → 通道拼接 → 1×1 Conv + 3×3 Conv + GroupNorm + ReLU
+  → FinalFeatureFusion288
+      Stage A: concat → 3×3+GN+GELU+3×3+GN+GELU → local_fused_288
+      Stage B: concat(local_fused_288, original_288) → 1×1
   → fused_feature_288
   → 冻结 SAM3 semantic_seg_head
   → final_logits_chunk
@@ -243,35 +246,34 @@ score_embed_36 = clip_score_embed_36 + fpn_score_injection_scale * fpn_score_upd
 
 Refiner 在所有类别上统一执行后，36×36 特征经 bilinear 插值到 72×72。Refiner72 与同一 chunk 的原始 encoder72 通过 `PixelDecoderInputFusion72` 融合后，送入共享的冻结 SAM3 Pixel Decoder 上采样到 288×288。
 
-72 输入融合模块 `PixelDecoderInputFusion72` 位于 `models/refined_mask_decoder.py`，执行：
+72 和 288 两个融合模块使用完全相同的 Stage A + Stage B 结构，但参数相互独立。
+
+**Stage A（局部空间融合）**：
 
 ```text
-refiner_feature_72 [N, 256, 72, 72]
-  + original_feature_72 [N, 256, 72, 72]
-  → 通道拼接 → [N, 512, 72, 72]
-  → Conv2d(512→256, k=1)
-  → Conv2d(256→256, k=3, p=1)
-  → fused_pixel_decoder_input_72
+concat(refiner, original) [N, 512, H, W]
+  → 3×3 Conv(512→256, bias=False)
+  → GroupNorm → GELU
+  → 3×3 Conv(256→256, bias=False)
+  → GroupNorm → GELU
+  → local_fused [N, 256, H, W]
 ```
 
-融合模块不使用 norm 和 activation，无残差系数，不读取 FPN。只有融合结果进入 Refiner 分支 Pixel Decoder。训练时使用 non-reentrant activation checkpoint。属于 `core.encoder_refiner`。
-
-两条 Pixel Decoder 分支的输出在 288×288 尺度通过 `FinalFeatureFusion288` 融合。该模块执行：
+**Stage B（语义锚点）**：
 
 ```text
-refined_pixel_feature_288 [N, 256, 288, 288]
-  + original_pixel_feature_288 [N, 256, 288, 288]
-  → 通道拼接 → [N, 512, 288, 288]
-  → Conv2d(512→256, k=1)
-  → Conv2d(256→256, k=3, p=1)
-  → GroupNorm(8, 256)
-  → ReLU
-  → fused_feature_288 [N, 256, 288, 288]
+concat(local_fused, original) [N, 512, H, W]
+  → 1×1 Conv(512→256, bias=False)
+  → output [N, 256, H, W]
 ```
+
+原始特征在每个融合模块中使用两次（Stage A 输入和 Stage B 输入）。Stage B 的 1×1 卷积后无 norm、activation 或 residual。所有新层使用 PyTorch 默认初始化。
+
+两条 Pixel Decoder 分支的输出在 288×288 尺度通过 `FinalFeatureFusion288` 融合，结构同上（H=W=288）。
 
 最终掩码 logits 由冻结的 SAM3 `semantic_seg_head`（Conv2d 256→1, k=1）在外部对 `fused_feature_288` 产生。该卷积权重冻结，但调用时不在 `no_grad()` 中，梯度可穿过它回传至融合模块和 Refiner。
 
-`RefinerMaskDecoder` 只负责两张 288×288 特征的融合。不再执行任何插值、上采样或掩码预测。训练时只对 `final_fusion_288` 使用 non-reentrant activation checkpoint。
+`RefinerMaskDecoder` 同时负责 72 和 288 两处融合。两处都使用 non-reentrant activation checkpoint。
 
 ### 5.4 残差系数日志
 
@@ -291,10 +293,10 @@ Prompt cross-attention 在完整 6 层 encoder 之后、Refiner 之前执行一�
 
 Pixel Decoder 参数始终冻结（`requires_grad=False`）并保持 `eval()`。两条分支共享同一个 Pixel Decoder 实例：
 
-- **原始分支**：在 `torch.no_grad()` 中执行，`original_pixel_feature_288.requires_grad` 为 False，teacher logits 不保留计算图。
-- **Refiner 分支**：在梯度开启状态下执行。Pixel Decoder 参数虽冻结，但梯度可以穿过其插值、加法、卷积、GroupNorm 和 ReLU 回传至72融合模块和 `refiner_features_36`。semantic head 只在原始 teacher 分支中调用并始终位于 `no_grad` 中。
+- **原始分支**：在 `torch.no_grad()` 中执行，`original_pixel_feature_288.requires_grad` 为 False。冻结 semantic head 在此分支中产生 teacher logits（detach）。
+- **Refiner 分支**：在梯度开启状态下执行。Pixel Decoder 参数虽冻结，但梯度可以穿过其插值、加法、卷积、GroupNorm 和 ReLU 回传至72融合模块和 `refiner_features_36`。最终融合特征也调用同一个冻结 semantic head 产生 student logits，此调用不在 `no_grad()` 中，梯度可穿过冻结卷积回传至 288 融合、72 融合和 Refiner。
 
-原始 semantic head 始终冻结并只用于 teacher logits。
+原始 semantic head 始终冻结。其参数本身无梯度更新，但作为 student 调用时梯度可穿过其权重回传。
 
 语义主路径只消费冻结分割头的 `pixel_feature_288` 输出和 teacher logits。`pred_masks` 和 `presence_head` 等子模块定义保留但不调用。
 
@@ -307,7 +309,7 @@ Pixel Decoder 参数始终冻结（`requires_grad=False`）并保持 `eval()`。
 * backbone；
 * transformer encoder（完整 6 层，在 `no_grad()` 中执行）；
 * geometry encoder；
-* segmentation head（Pixel Decoder 参数冻结并保持 `eval()`。原始分支在 `no_grad()` 中执行，Refiner 分支在梯度开启状态下执行。semantic head 只在原始 teacher 分支中调用并位于 `no_grad()` 中）。
+* segmentation head（Pixel Decoder 参数冻结并保持 `eval()`。原始分支在 `no_grad()` 中执行，Refiner 分支在梯度开启状态下执行。semantic head 在原始分支中产生 detach 的 teacher logits，在 student 分支中产生可回传梯度的 student logits）。
 
 完整 SAM3 encoder 和前置 prompt cross-attention 不保留计算图，均在 `torch.no_grad()` 中执行。
 
@@ -328,7 +330,7 @@ OpenCLIP 常把 Q/K/V 存在同一个融合参数中。项目对该参数注册�
 
 ### 7.2 数据增强
 
-训练图像确定性短边缩放到 1008，再随机裁剪 1008×1008，`cat_max_ratio=1.0`（不限制单一类别占比）。SSD 风格颜色增强（亮度、对比度、饱和度、色相各以 0.5 概率独立启用），只使用 0.5 概率水平翻转。不使用随机尺度、垂直翻转和 90° 旋转。
+训练图像确定性短边缩放到 1008，再随机裁剪 1008×1008，`cat_max_ratio=1.0`（不限制单一类别占比）。SSD 风格颜色增强（亮度、对比度、饱和度、色相各以 0.5 概率独立启用，色相使用 `/180` 的 HSV 归一化单位），`image` 和 `raw_image` 共享同一次采样参数。只使用 0.5 概率水平翻转。不使用随机尺度、垂直翻转和 90° 旋转。
 
 验证和测试不应用颜色增强或随机裁剪。TTA 默认关闭。
 
@@ -490,21 +492,21 @@ python tools/train.py configs/train/isaid_loveda_full.py
 6. 验证不得重新开启 RemoteCLIP 图像分支的 autograd。
 7. Refiner 必须先在全部类别上执行，再按 chunk 做72融合和288解码。Refiner 不能放进 chunk 循环。
 8. Refiner 36 特征只做一次 bilinear 36→72 插值。
-9. Refiner72 必须先与相同 chunk 的原始 encoder72 融合（1×1+3×3 Conv，无 norm 和 activation，无残差系数）。只有融合结果进入 Refiner 分支 Pixel Decoder。
+9. Refiner72 必须先与相同 chunk 的原始 encoder72 通过 Stage A + Stage B 融合。Stage A 是两次 3×3 Conv + GN + GELU，Stage B 是再次拼接原始特征后使用 1×1 Conv（无 norm/activation）。只有融合结果进入 Refiner 分支 Pixel Decoder。
 10. base_feature_36 不接收直接 FPN 残差。FPN36 只注入 score stream。
 11. FPN score 注入必须位于所有 Refiner 层之前且只执行一次。使用 1×1+3×3 Conv，无 norm 和 activation。
 12. clip_score_embed_36 保持纯 RemoteCLIP 输出，用于 debug。
 13. 原始分支和 Refiner 分支必须共享同一个 Pixel Decoder 实例。不复制、不新建、不解冻 Pixel Decoder。
 14. 原始 Pixel Decoder 分支必须在 `no_grad()` 中。Refiner Pixel Decoder 分支必须保持输入梯度。
 15. Pixel Decoder 内部继续使用 `interpolation_mode="nearest"`。Pixel Decoder 上采样使用 FPN144 和 FPN288。不在 Pixel Decoder 入口再次叠加 FPN72。
-16. 最终只在 288×288 尺度拼接原始与 Refiner 特征。最终融合模块不执行插值。
+16. 最终只在 288×288 尺度通过 Stage A + Stage B 融合原始与 Refiner 特征。最终融合模块不执行插值。72 和 288 模块参数相互独立。
 17. teacher 只来自原始分支并且必须 detach。teacher 和 student 都为 288×288，不做尺度变换。
 18. 最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生，不创建独立的 mask head。
 19. Refiner 内部残差系数统一由 `residual_scale_init` 控制，默认值为 0.1；这些标量不使用 weight decay。
 20. TTA 必须先平均原始分数，再进行相对阈值过滤。
 21. `reduce_zero_label` 与 `background_cfg` 各自只执行其定义的一次标签空间变换。
 22. 完整恢复必须严格校验 checkpoint schema；模型权重迁移必须走独立入口。
-23. 完整 6 层 encoder → prompt cross-attention → Refiner（全类别）→ 36→72 bilinear → 72 融合 → 逐 chunk 共享 Pixel Decoder → 逐 chunk 288 融合 → 冻结 semantic_seg_head → 拼接。
+23. 完整 6 层 encoder → prompt cross-attention → Refiner（全类别）→ 36→72 bilinear → 72 Stage A+B 融合 → 逐 chunk 共享 Pixel Decoder → 逐 chunk 288 Stage A+B 融合 → 冻结 semantic_seg_head → 拼接。
 24. 最终融合模块属于 `core.encoder_refiner` 并使用基础学习率 `1e-4`。冻结 `semantic_seg_head` 属于 `segmentation_head`。
 25. FPN 注入必须在全类别 Refiner 中执行，不能移入高分辨率 chunk 循环。
 26. 72/288 高分辨率特征不跨 chunk 累积。
@@ -527,14 +529,18 @@ Checkpoint schema 版本为 4。新增 `runtime_state.hooks.WandbHook.last_histo
 * 新增 `fpn_score_fusion_36.*`、`fpn_score_injection_scale`（新 score-stream FPN 注入）。
 * 新增 `mask_decoder.pixel_decoder_input_fusion_72.*`（72 输入融合模块）。
 * 删除 `mask_decoder.mask_head.*`（最终掩码现由冻结 SAM3 `semantic_seg_head` 产生）。
-* `mask_decoder.final_fusion_288.*` 名称和形状保持不变。
+* `mask_decoder.final_fusion_288.*` 和 `mask_decoder.pixel_decoder_input_fusion_72.*` 内部结构已改为 Stage A + Stage B，包含：
+  - `local_fusion.0.weight`（3×3 Conv 512→256）
+  - `local_fusion.1.{weight,bias}`（GroupNorm）
+  - `local_fusion.3.weight`（3×3 Conv 256→256）
+  - `local_fusion.4.{weight,bias}`（GroupNorm）
+  - `final_fusion.weight`（1×1 Conv 512→256）
 * Pixel Decoder 权重结构不变，继续加载原始 SAM3 权重。
 
 旧 checkpoint 不能通过 `--resume-from` 严格恢复。如使用 `--load-model-from` 迁移旧模型参数：
 
 * 旧 `fpn_injection_proj_36.*` 和 `fpn_injection_scale` 应成为 unexpected keys。
-* 新 score 融合卷积、score 残差系数和 72 融合卷积应成为 missing keys，使用自身 Xavier 初始化。
-* 新残差系数使用当前 `residual_scale_init`。
-* final fusion 名称不变时继续加载已有参数。
 * 旧 `mask_head` 参数成为 unexpected keys。
+* 旧融合模块参数（`conv_1x1`、`conv_3x3`、`norm`）成为 unexpected keys。
+* 新 score 融合卷积、score 残差系数和新 Stage A+B 融合参数应成为 missing keys，使用 PyTorch 默认初始化。
 * 不创建兼容层或旧参数占位符。

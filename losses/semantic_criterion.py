@@ -133,19 +133,9 @@ class SemanticCriterion(nn.Module):
             target_hw=(H, W),
         )
 
-        class_ids = list(range(C))
-
         target, valid_mask = self._build_binary_targets(
             label_map=label_map,
-            class_ids=class_ids,
             num_channels=C,
-            dtype=final_logits.dtype,
-        )
-
-        presence_target = self._build_presence_target(
-            label_map=label_map,
-            valid_mask=valid_mask,
-            class_ids=class_ids,
             dtype=final_logits.dtype,
         )
 
@@ -158,8 +148,23 @@ class SemanticCriterion(nn.Module):
             reduction="mean",
         )
 
-        if float(self.cfg.final_dice_weight) > 0.0 and bool(
-            presence_target.bool().any().item()
+        dice_weight = float(self.cfg.final_dice_weight)
+        distill_weight = float(self.cfg.sam3_mask_distill_weight)
+        need_presence = dice_weight > 0.0 or distill_weight > 0.0
+
+        if need_presence:
+            presence_target = self._build_presence_target(
+                label_map=label_map,
+                valid_mask=valid_mask,
+                num_classes=C,
+                dtype=final_logits.dtype,
+            )
+        else:
+            presence_target = None
+
+        if dice_weight > 0.0 and (
+            presence_target is not None
+            and bool(presence_target.bool().any().item())
         ):
             loss_final_dice = self._dice_loss_present_mean_from_logits(
                 logits=final_logits,
@@ -169,7 +174,6 @@ class SemanticCriterion(nn.Module):
         else:
             loss_final_dice = zero
 
-        distill_weight = float(self.cfg.sam3_mask_distill_weight)
         if not math.isfinite(distill_weight) or distill_weight < 0.0:
             raise ValueError(
                 "criterion_cfg.sam3_mask_distill_weight must be finite and "
@@ -263,7 +267,6 @@ class SemanticCriterion(nn.Module):
     def _build_binary_targets(
         self,
         label_map: torch.Tensor,
-        class_ids: Sequence[int],
         num_channels: int,
         dtype: torch.dtype,
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -283,18 +286,15 @@ class SemanticCriterion(nn.Module):
             device=label_map.device,
         )
 
-        if valid_mask.any():
-            valid_labels = label_map[valid_mask]
-            if valid_labels.min().item() < 0 or valid_labels.max().item() >= num_channels:
-                raise ValueError(
-                    f"Valid labels out of range: min={valid_labels.min().item()}, "
-                    f"max={valid_labels.max().item()}, num_classes={num_channels}. "
-                    "All non-ignore labels must be in [0, num_classes)."
-                )
-            one_hot = F.one_hot(valid_labels, num_classes=int(num_channels)).to(dtype=dtype)
+        valid_labels = label_map[valid_mask]
+        if valid_labels.numel() > 0:
+            one_hot = F.one_hot(
+                valid_labels,
+                num_classes=int(num_channels),
+            ).to(dtype=dtype)
             target[valid_mask] = one_hot
 
-        target = target.permute(0, 3, 1, 2)  # [B, H, W, C] → [B, C, H, W]
+        target = target.permute(0, 3, 1, 2).contiguous()  # [B, H, W, C] → [B, C, H, W]
 
         return target, valid_mask
 
@@ -302,11 +302,11 @@ class SemanticCriterion(nn.Module):
     def _build_presence_target(
         label_map: torch.Tensor,
         valid_mask: torch.Tensor,
-        class_ids: Sequence[int],
+        num_classes: int,
         dtype: torch.dtype,
     ) -> torch.Tensor:
         B = int(label_map.shape[0])
-        C = len(class_ids)
+        C = int(num_classes)
 
         presence_target = torch.zeros(
             (B, C),
@@ -314,9 +314,9 @@ class SemanticCriterion(nn.Module):
             device=label_map.device,
         )
 
-        for channel_idx, class_id in enumerate(class_ids):
-            appears = ((label_map == int(class_id)) & valid_mask).flatten(1).any(dim=1)
-            presence_target[:, channel_idx] = appears.to(dtype=dtype)
+        for class_id in range(C):
+            appears = ((label_map == class_id) & valid_mask).flatten(1).any(dim=1)
+            presence_target[:, class_id] = appears.to(dtype=dtype)
 
         return presence_target
 
