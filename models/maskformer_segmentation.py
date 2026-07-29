@@ -223,7 +223,27 @@ class PixelDecoder(nn.Module):
             # Needed to make checkpointing happy. But we don't know if the module is checkpointed, so we disable it by default.
             torch._dynamo.config.optimize_ddp = False
 
-    def forward(self, backbone_feats: List[torch.Tensor]) -> torch.Tensor:
+    def forward_multiscale(
+        self,
+        backbone_feats: List[torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if len(backbone_feats) != 3:
+            raise ValueError(
+                "Semantic Pixel Decoder pyramid requires exactly three "
+                f"feature levels, got {len(backbone_feats)}."
+            )
+
+        # Verify expected spatial ordering: 288, 144, 72.
+        expected_sizes = [(288, 288), (144, 144), (72, 72)]
+        for i, (feat, expected) in enumerate(zip(backbone_feats, expected_sizes)):
+            if tuple(feat.shape[-2:]) != expected:
+                raise ValueError(
+                    f"backbone_feats[{i}] must be {expected}, "
+                    f"got {tuple(feat.shape[-2:])}."
+                )
+
+        multiscale_features = [backbone_feats[-1]]  # 72×72
+
         prev_fpn = backbone_feats[-1]
 
         for stage_idx, curr_fpn in enumerate(backbone_feats[:-1][::-1]):
@@ -239,7 +259,42 @@ class PixelDecoder(nn.Module):
                 self.norms[conv_idx](prev_fpn)
             )
 
-        return prev_fpn
+            multiscale_features.append(prev_fpn)
+
+        if len(multiscale_features) != 3:
+            raise RuntimeError(
+                f"forward_multiscale produced {len(multiscale_features)} "
+                "features, expected 3."
+            )
+
+        pixel_feature_72, pixel_feature_144, pixel_feature_288 = (
+            multiscale_features
+        )
+
+        if tuple(pixel_feature_72.shape[-2:]) != (72, 72):
+            raise RuntimeError(
+                f"pixel_feature_72 must be 72×72, "
+                f"got {tuple(pixel_feature_72.shape[-2:])}."
+            )
+        if tuple(pixel_feature_144.shape[-2:]) != (144, 144):
+            raise RuntimeError(
+                f"pixel_feature_144 must be 144×144, "
+                f"got {tuple(pixel_feature_144.shape[-2:])}."
+            )
+        if tuple(pixel_feature_288.shape[-2:]) != (288, 288):
+            raise RuntimeError(
+                f"pixel_feature_288 must be 288×288, "
+                f"got {tuple(pixel_feature_288.shape[-2:])}."
+            )
+
+        return (
+            pixel_feature_72,
+            pixel_feature_144,
+            pixel_feature_288,
+        )
+
+    def forward(self, backbone_feats: List[torch.Tensor]) -> torch.Tensor:
+        return self.forward_multiscale(backbone_feats)[-1]
 
 
 class UniversalSegmentationHead(SegmentationHead):
@@ -310,28 +365,35 @@ class UniversalSegmentationHead(SegmentationHead):
         )[0]
         return encoder_hidden_states + update
 
-    def forward_semantic_pixel_decoder(
+    def forward_semantic_pixel_pyramid(
         self,
         backbone_feats: List[torch.Tensor],
         image_ids: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
         return_logits: bool,
     ) -> Dict[str, torch.Tensor]:
-        """Run the frozen Pixel Decoder and optionally the semantic head.
+        """Run the frozen Pixel Decoder and return all three scales.
 
-        Returns a dict with "pixel_feature_288" and, when return_logits=True,
-        "semantic_seg". Gradient boundaries are controlled by the caller:
-        the original branch wraps this in torch.no_grad(); the Refiner branch
-        calls it with gradients enabled so that gradients flow through the
-        frozen Pixel Decoder back to the Refiner input.
+        Returns a dict with "pixel_feature_72", "pixel_feature_144",
+        "pixel_feature_288" and, when return_logits=True, "semantic_seg".
+        This is the only interface for the original frozen branch; callers
+        must wrap it in torch.no_grad().
         """
-        pixel_feature_288 = self._embed_pixels(
+        backbone_visual_feats = self._prepare_pixel_decoder_input(
             backbone_feats=backbone_feats,
             image_ids=image_ids,
             encoder_hidden_states=encoder_hidden_states,
         )
 
+        (
+            pixel_feature_72,
+            pixel_feature_144,
+            pixel_feature_288,
+        ) = self.pixel_decoder.forward_multiscale(backbone_visual_feats)
+
         outputs = {
+            "pixel_feature_72": pixel_feature_72,
+            "pixel_feature_144": pixel_feature_144,
             "pixel_feature_288": pixel_feature_288,
         }
 

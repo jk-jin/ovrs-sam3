@@ -560,30 +560,25 @@ class Sam3Image(torch.nn.Module):
             input_points_mask=torch.zeros((num_pairs, 0), dtype=torch.bool, device=device),
         )
 
-    def run_encoder_refiner(
+    # ------------------------------------------------------------------
+    # Low-resolution: all-class Refiner at 36×36
+    # ------------------------------------------------------------------
+
+    def _run_encoder_refiner_lowres(
         self,
         cross_attended_encoder_features_72: torch.Tensor,
-        chunk_class_counts: List[int],
         backbone_fpn: List[torch.Tensor],
         clip_image_feat_map: torch.Tensor,
         sam_text_mean: torch.Tensor,
         class_names: List[str],
-        clip_mid_features: List[torch.Tensor],
-        clip_mid_layer_indices: tuple[int, ...],
-        return_debug: bool = False,
     ) -> Dict[str, torch.Tensor]:
-        B, C, D, H, W = cross_attended_encoder_features_72.shape
-
-        # 1. Run Refiner at 36×36 on ALL classes simultaneously so that
-        #    cross-class attention can see the full set of categories.
-        #    SAM3 FPN72 is injected into the score stream before the
-        #    Refiner attention layers.
+        """Run Refiner at 36×36 on ALL classes simultaneously."""
         if len(backbone_fpn) == 0:
             raise ValueError("backbone_fpn must contain SAM3 FPN features.")
 
         sam_fpn_72 = backbone_fpn[-1]
 
-        refiner_out = self.encoder_refiner(
+        return self.encoder_refiner(
             encoder_features_72=cross_attended_encoder_features_72,
             sam_fpn_72=sam_fpn_72,
             clip_image_feat_map=clip_image_feat_map,
@@ -591,159 +586,261 @@ class Sam3Image(torch.nn.Module):
             class_names=class_names,
         )
 
+    def run_encoder_refiner_lowres_from_cache(
+        self,
+        encoder_refiner_cache: Dict[str, Any],
+        batch: BatchedDatapoint,
+        return_debug: bool = False,
+    ) -> Dict[str, torch.Tensor]:
+        """Run the all-class Encoder Refiner at 36×36 and return its output.
+
+        Does NOT perform any 72/144/288 decoding. Returns refiner features
+        and score embeddings for downstream per-chunk high-res decoding.
+        """
+        cross_attended_encoder_features_72 = encoder_refiner_cache[
+            "cross_attended_encoder_features_72"
+        ]
+        backbone_fpn = encoder_refiner_cache["backbone_fpn"]
+        clip_image_feat_map = encoder_refiner_cache["clip_image_feat_map"]
+        sam_text_mean = encoder_refiner_cache["sam_text_mean"]
+
+        cached_class_names = list(encoder_refiner_cache["class_names"])
+        batch_class_names = list(batch.find_text_batch)
+        if cached_class_names != batch_class_names:
+            raise ValueError(
+                "Cached class_names do not match batch.find_text_batch."
+            )
+
+        refiner_out = self._run_encoder_refiner_lowres(
+            cross_attended_encoder_features_72=cross_attended_encoder_features_72,
+            backbone_fpn=backbone_fpn,
+            clip_image_feat_map=clip_image_feat_map,
+            sam_text_mean=sam_text_mean,
+            class_names=batch_class_names,
+        )
+
+        result: Dict[str, torch.Tensor] = {
+            "refiner_features_36": refiner_out["refiner_features_36"],
+        }
+
+        if return_debug:
+            clip_mid_features = encoder_refiner_cache[
+                OUTPUT_KEYS.clip_mid_features
+            ]
+            result.update({
+                OUTPUT_KEYS.encoder_features: cross_attended_encoder_features_72.detach().contiguous(),
+                "score_embed_36": refiner_out["score_embed_36"].detach().contiguous(),
+                "clip_score_embed_36": refiner_out["clip_score_embed_36"].detach().contiguous(),
+                "clip_score_maps_36": refiner_out["clip_score_maps_36"].detach().contiguous(),
+                "template_clip_text": refiner_out["template_clip_text"].detach().contiguous(),
+                OUTPUT_KEYS.clip_mid_features: [
+                    feat.detach().contiguous() for feat in clip_mid_features
+                ],
+            })
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Per-chunk high-resolution pyramid decoding
+    # ------------------------------------------------------------------
+
+    def decode_encoder_refiner_chunk_from_cache(
+        self,
+        encoder_refiner_cache: Dict[str, Any],
+        refiner_feature_36_chunk: torch.Tensor,
+        class_start: int,
+        class_end: int,
+        return_teacher_logits: bool = False,
+    ) -> Dict[str, torch.Tensor]:
+        """Decode one class chunk through the frozen Pixel Decoder pyramid.
+
+        Steps:
+        1. Slice original encoder 72 from cache for this chunk.
+        2. Convert to Pixel Decoder hidden states.
+        3. Run frozen Pixel Decoder pyramid (no_grad) → O72, O144, O288.
+        4. Run RefinerPyramidDecoder: 36→72→144→288 with detail injection.
+        5. Fused 288 → frozen semantic_seg_head → logits.
+        6. Optionally return teacher logits (detached).
+        """
+        cross_attended_encoder_features_72 = encoder_refiner_cache[
+            "cross_attended_encoder_features_72"
+        ]
+        total_classes = cross_attended_encoder_features_72.shape[1]
+
+        if not 0 <= class_start < class_end <= total_classes:
+            raise ValueError(
+                f"Chunk indices out of range: class_start={class_start}, "
+                f"class_end={class_end}, total_classes={total_classes}."
+            )
+        backbone_fpn = encoder_refiner_cache["backbone_fpn"]
+
+        B = cross_attended_encoder_features_72.shape[0]
+        D = cross_attended_encoder_features_72.shape[2]
+        num_chunk_classes = class_end - class_start
+
+        expected_chunk_shape = (
+            B, num_chunk_classes, 256, 36, 36,
+        )
+        if tuple(refiner_feature_36_chunk.shape) != expected_chunk_shape:
+            raise ValueError(
+                f"refiner_feature_36_chunk shape mismatch: expected "
+                f"{expected_chunk_shape}, "
+                f"got {tuple(refiner_feature_36_chunk.shape)}."
+            )
+
+        # Slice original encoder 72 for this chunk.
+        original_feature_72_chunk = cross_attended_encoder_features_72[
+            :, class_start:class_end
+        ]
+
+        # Convert to hidden states for the Pixel Decoder.
+        original_hidden_states = self._feature_72_to_hidden_states(
+            original_feature_72_chunk
+        )
+
+        image_ids = torch.arange(
+            B,
+            device=original_hidden_states.device,
+            dtype=torch.long,
+        ).repeat_interleave(num_chunk_classes)
+
+        # Frozen Pixel Decoder pyramid (no_grad) — single call per chunk.
+        with torch.no_grad():
+            original_outputs = (
+                self.segmentation_head.forward_semantic_pixel_pyramid(
+                    backbone_feats=backbone_fpn,
+                    image_ids=image_ids,
+                    encoder_hidden_states=original_hidden_states,
+                    return_logits=return_teacher_logits,
+                )
+            )
+
+        original_feature_72_flat = original_outputs["pixel_feature_72"]
+        original_feature_144_flat = original_outputs["pixel_feature_144"]
+        original_feature_288_flat = original_outputs["pixel_feature_288"]
+
+        # Flatten refiner feature for this chunk.
+        refiner_feature_36_flat = refiner_feature_36_chunk.reshape(
+            B * num_chunk_classes, D, 36, 36
+        )
+
+        # Three-stage pyramid decoder: 36→72→144→288 + final fusion.
+        fused_feature_288_flat = (
+            self.encoder_refiner.decode_feature_pyramid_chunk(
+                refiner_feature_36=refiner_feature_36_flat,
+                original_feature_72=original_feature_72_flat,
+                original_feature_144=original_feature_144_flat,
+                original_feature_288=original_feature_288_flat,
+            )
+        )
+
+        # Frozen semantic_seg_head → logits.
+        final_logits_flat = self.segmentation_head.semantic_seg_head(
+            fused_feature_288_flat
+        )
+        # [B*C_chunk, 1, 288, 288] → [B, C_chunk, 288, 288]
+        final_logits_chunk = final_logits_flat.reshape(
+            B, num_chunk_classes, 288, 288
+        )
+
+        result: Dict[str, torch.Tensor] = {
+            OUTPUT_KEYS.final_logits: final_logits_chunk,
+        }
+
+        if return_teacher_logits:
+            teacher_logits = original_outputs["semantic_seg"]
+            # [B*C_chunk, 1, 288, 288] → [B, C_chunk, 288, 288]
+            teacher_logits_chunk = teacher_logits.reshape(
+                B, num_chunk_classes, 288, 288
+            )
+            result[OUTPUT_KEYS.sam3_teacher_logits] = (
+                teacher_logits_chunk.detach()
+            )
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Inference / validation: full forward (not chunked backward)
+    # ------------------------------------------------------------------
+
+    def run_encoder_refiner_from_cache(
+        self,
+        encoder_refiner_cache: Dict[str, Any],
+        batch: BatchedDatapoint,
+        return_debug: bool = False,
+    ) -> Dict[str, torch.Tensor]:
+        """Full inference forward pass.
+
+        For training this MUST NOT be called directly — use the Trainer's
+        streaming chunk path instead (run_encoder_refiner_lowres_from_cache +
+        decode_encoder_refiner_chunk_from_cache per chunk).
+        """
+        if self.training:
+            raise RuntimeError(
+                "run_encoder_refiner_from_cache() must not be called during "
+                "training. The Trainer must use the streaming chunk path: "
+                "run_encoder_refiner_lowres_from_cache() + per-chunk "
+                "decode_encoder_refiner_chunk_from_cache()."
+            )
+
+        if batch is None:
+            raise ValueError("batch must be provided.")
+
+        refiner_out = self.run_encoder_refiner_lowres_from_cache(
+            encoder_refiner_cache=encoder_refiner_cache,
+            batch=batch,
+            return_debug=return_debug,
+        )
+
         refiner_features_36 = refiner_out["refiner_features_36"]
+        B, C = refiner_features_36.shape[:2]
+        chunk_class_counts = encoder_refiner_cache["chunk_class_counts"]
 
-        # 2. Per-chunk high-resolution decoding.
-        final_logits_chunks: list[torch.Tensor] = []
-        teacher_logits_chunks: list[torch.Tensor] = []
+        final_logits = torch.empty(
+            B, C, 288, 288,
+            device=refiner_features_36.device,
+            dtype=refiner_features_36.dtype,
+        )
+
         chunk_start = 0
-        total_class_count = 0
-
         for num_chunk_classes in chunk_class_counts:
             chunk_end = chunk_start + num_chunk_classes
-            total_class_count += num_chunk_classes
 
-            # Slice the per-class encoder and refiner features for this chunk.
-            original_feature_72_chunk = cross_attended_encoder_features_72[
-                :, chunk_start:chunk_end
-            ]
             refiner_feature_36_chunk = refiner_features_36[
                 :, chunk_start:chunk_end
             ]
 
-            # Convert original feature to hidden states for the pixel decoder.
-            original_hidden_states = self._feature_72_to_hidden_states(
-                original_feature_72_chunk
+            chunk_outputs = self.decode_encoder_refiner_chunk_from_cache(
+                encoder_refiner_cache=encoder_refiner_cache,
+                refiner_feature_36_chunk=refiner_feature_36_chunk,
+                class_start=chunk_start,
+                class_end=chunk_end,
+                return_teacher_logits=False,
             )
 
-            image_ids = torch.arange(
-                B,
-                device=original_hidden_states.device,
-                dtype=torch.long,
-            ).repeat_interleave(num_chunk_classes)
-
-            # Frozen pixel decoder for the original branch → teacher.
-            with torch.no_grad():
-                original_outputs = (
-                    self.segmentation_head.forward_semantic_pixel_decoder(
-                        backbone_feats=backbone_fpn,
-                        image_ids=image_ids,
-                        encoder_hidden_states=original_hidden_states,
-                        return_logits=self.training,
-                    )
-                )
-
-            original_pixel_feature_288 = original_outputs["pixel_feature_288"]
-
-            # Refiner 36→72 bilinear interpolation.
-            refiner_feature_36_flat = refiner_feature_36_chunk.reshape(
-                B * num_chunk_classes, D, 36, 36
+            final_logits[:, chunk_start:chunk_end].copy_(
+                chunk_outputs[OUTPUT_KEYS.final_logits]
             )
-
-            refiner_feature_72_flat = F.interpolate(
-                refiner_feature_36_flat,
-                size=(72, 72),
-                mode="bilinear",
-                align_corners=False,
-            )
-
-            # Flatten original encoder feature 72 for the same chunk.
-            original_feature_72_flat = original_feature_72_chunk.reshape(
-                B * num_chunk_classes, D, 72, 72
-            )
-
-            # Fuse refiner 72 with original encoder 72 before Pixel Decoder.
-            fused_pixel_decoder_input_72_flat = (
-                self.encoder_refiner.fuse_pixel_decoder_input_chunk(
-                    refiner_feature_72=refiner_feature_72_flat,
-                    original_feature_72=original_feature_72_flat,
-                )
-            )
-
-            # Convert fused 72 to hidden states for the refiner Pixel Decoder branch.
-            fused_pixel_decoder_input_72_chunk = (
-                fused_pixel_decoder_input_72_flat.reshape(
-                    B, num_chunk_classes, D, 72, 72
-                )
-            )
-
-            fused_hidden_states = self._feature_72_to_hidden_states(
-                fused_pixel_decoder_input_72_chunk
-            )
-
-            # Refiner branch through the same frozen Pixel Decoder (grad enabled).
-            refined_outputs = (
-                self.segmentation_head.forward_semantic_pixel_decoder(
-                    backbone_feats=backbone_fpn,
-                    image_ids=image_ids,
-                    encoder_hidden_states=fused_hidden_states,
-                    return_logits=False,
-                )
-            )
-
-            refined_pixel_feature_288 = refined_outputs["pixel_feature_288"]
-
-            # Final 288×288 fusion → frozen SAM3 semantic_seg_head → logits.
-            fused_feature_288 = self.encoder_refiner.decode_mask_chunk(
-                refined_feature_288=refined_pixel_feature_288,
-                original_feature_288=original_pixel_feature_288,
-            )
-            final_logits_flat = self.segmentation_head.semantic_seg_head(
-                fused_feature_288
-            )
-
-            # [B*C_chunk, 1, 288, 288] → [B, C_chunk, 288, 288]
-            final_logits_chunk = final_logits_flat.reshape(
-                B, num_chunk_classes, 288, 288
-            )
-            final_logits_chunks.append(final_logits_chunk)
-
-            if self.training:
-                teacher_logits = original_outputs["semantic_seg"]
-                # [B*C_chunk, 1, 288, 288] → [B, C_chunk, 288, 288]
-                teacher_logits_chunk = teacher_logits.reshape(
-                    B, num_chunk_classes, 288, 288
-                )
-                teacher_logits_chunks.append(teacher_logits_chunk)
 
             chunk_start = chunk_end
 
-        # Verify chunk coverage.
-        if total_class_count != C:
-            raise ValueError(
-                f"Chunk class count mismatch: sum={total_class_count}, "
-                f"expected C={C}."
-            )
         if chunk_start != C:
             raise ValueError(
                 f"Chunk index mismatch: final chunk_start={chunk_start}, "
                 f"expected C={C}."
             )
 
-        final_logits = torch.cat(final_logits_chunks, dim=1)
-
-        if tuple(final_logits.shape[:2]) != (B, C):
-            raise ValueError(
-                f"final_logits batch/class mismatch: expected {(B, C)}, "
-                f"got {tuple(final_logits.shape[:2])}."
-            )
-
-        result = {
+        result: Dict[str, torch.Tensor] = {
             OUTPUT_KEYS.final_logits: final_logits.contiguous(),
         }
 
-        if self.training:
-            sam3_teacher_logits = torch.cat(teacher_logits_chunks, dim=1)
-            if tuple(sam3_teacher_logits.shape[:2]) != (B, C):
-                raise ValueError(
-                    f"sam3_teacher_logits batch/class mismatch: "
-                    f"expected {(B, C)}, got {tuple(sam3_teacher_logits.shape[:2])}."
-                )
-            result[OUTPUT_KEYS.sam3_teacher_logits] = (
-                sam3_teacher_logits.detach().contiguous()
-            )
-
         if return_debug:
+            cross_attended_encoder_features_72 = encoder_refiner_cache[
+                "cross_attended_encoder_features_72"
+            ]
+            clip_mid_features = encoder_refiner_cache[
+                OUTPUT_KEYS.clip_mid_features
+            ]
             result.update({
                 OUTPUT_KEYS.encoder_features: cross_attended_encoder_features_72.detach().contiguous(),
                 OUTPUT_KEYS.refiner_features_36: refiner_features_36.detach().contiguous(),
@@ -757,47 +854,6 @@ class Sam3Image(torch.nn.Module):
             })
 
         return result
-
-    def run_encoder_refiner_from_cache(
-        self,
-        encoder_refiner_cache: Dict[str, Any],
-        batch: BatchedDatapoint,
-        return_debug: bool = False,
-    ) -> Dict[str, torch.Tensor]:
-        if batch is None:
-            raise ValueError("batch must be provided.")
-
-        cross_attended_encoder_features_72 = encoder_refiner_cache[
-            "cross_attended_encoder_features_72"
-        ]
-        chunk_class_counts = encoder_refiner_cache["chunk_class_counts"]
-        backbone_fpn = encoder_refiner_cache["backbone_fpn"]
-        clip_image_feat_map = encoder_refiner_cache["clip_image_feat_map"]
-        sam_text_mean = encoder_refiner_cache["sam_text_mean"]
-        clip_mid_features = encoder_refiner_cache[OUTPUT_KEYS.clip_mid_features]
-        clip_mid_layer_indices = encoder_refiner_cache["clip_mid_layer_indices"]
-
-        class_names = list(batch.find_text_batch)
-        if len(class_names) == 0:
-            raise ValueError("batch.find_text_batch is empty.")
-
-        cached_class_names = list(encoder_refiner_cache["class_names"])
-        if cached_class_names != class_names:
-            raise ValueError(
-                "Cached class_names do not match batch.find_text_batch."
-            )
-
-        return self.run_encoder_refiner(
-            cross_attended_encoder_features_72=cross_attended_encoder_features_72,
-            chunk_class_counts=chunk_class_counts,
-            backbone_fpn=backbone_fpn,
-            clip_image_feat_map=clip_image_feat_map,
-            sam_text_mean=sam_text_mean,
-            class_names=class_names,
-            clip_mid_features=clip_mid_features,
-            clip_mid_layer_indices=clip_mid_layer_indices,
-            return_debug=return_debug,
-        )
 
     def _get_img_feats(self, backbone_out, img_ids):
         vis_feats = backbone_out["backbone_fpn"][-self.num_feature_levels:]
@@ -921,6 +977,14 @@ class Sam3Image(torch.nn.Module):
         }
 
     def forward(self, input: BatchedDatapoint) -> Dict[str, torch.Tensor]:
+        if self.training:
+            raise RuntimeError(
+                "Sam3Image.forward() must not be called during training. "
+                "The Trainer must use the streaming chunk path: "
+                "build_encoder_refiner_cache() + "
+                "run_encoder_refiner_lowres_from_cache() + per-chunk "
+                "decode_encoder_refiner_chunk_from_cache()."
+            )
         encoder_refiner_cache = self.build_encoder_refiner_cache(input)
         return self.run_encoder_refiner_from_cache(
             encoder_refiner_cache=encoder_refiner_cache,

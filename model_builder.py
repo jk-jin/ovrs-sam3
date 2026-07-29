@@ -297,13 +297,13 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         if cfg.encoder_hw != 72:
             raise ValueError(
-                "当前共享 Pixel Decoder 路径要求 encoder feature 输入为 72×72，"
+                "encoder_hw=72 表示原始 Pixel Decoder pyramid 的最低分辨率，"
                 f"got {cfg.encoder_hw}."
             )
 
         if cfg.refiner_hw != 36:
             raise ValueError(
-                "Refiner 36×36 特征需要先双线性插值到 Pixel Decoder 的 72×72 输入尺度，"
+                "refiner_hw=36 表示新 pyramid decoder 的起始尺度，"
                 f"got {cfg.refiner_hw}."
             )
 
@@ -315,8 +315,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         if cfg.hidden_dim != 256:
             raise ValueError(
-                "SAM3 FPN、Pixel Decoder 输入融合、共享 Pixel Decoder、"
-                "最终融合头和 mask head 均固定使用 256 通道，"
+                "Refiner、多尺度注入和冻结 SAM3 head 均固定使用 256 通道，"
                 f"got {cfg.hidden_dim}."
             )
 

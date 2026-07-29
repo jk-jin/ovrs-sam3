@@ -78,6 +78,34 @@ class SAM3Segmentor(nn.Module):
     ) -> Dict[str, Any]:
         return self.core.build_encoder_refiner_cache(batch)
 
+    def run_encoder_refiner_lowres_from_cache(
+        self,
+        encoder_refiner_cache: Dict[str, Any],
+        batch: BatchedDatapoint,
+        return_debug: bool = False,
+    ) -> Dict[str, torch.Tensor]:
+        return self.core.run_encoder_refiner_lowres_from_cache(
+            encoder_refiner_cache=encoder_refiner_cache,
+            batch=batch,
+            return_debug=return_debug,
+        )
+
+    def decode_encoder_refiner_chunk_from_cache(
+        self,
+        encoder_refiner_cache: Dict[str, Any],
+        refiner_feature_36_chunk: torch.Tensor,
+        class_start: int,
+        class_end: int,
+        return_teacher_logits: bool = False,
+    ) -> Dict[str, torch.Tensor]:
+        return self.core.decode_encoder_refiner_chunk_from_cache(
+            encoder_refiner_cache=encoder_refiner_cache,
+            refiner_feature_36_chunk=refiner_feature_36_chunk,
+            class_start=class_start,
+            class_end=class_end,
+            return_teacher_logits=return_teacher_logits,
+        )
+
     def run_encoder_refiner_from_cache(
         self,
         encoder_refiner_cache: Dict[str, Any],
@@ -91,17 +119,21 @@ class SAM3Segmentor(nn.Module):
         )
 
     def forward(self, batch: BatchedDatapoint) -> dict[str, torch.Tensor]:
+        if self.training:
+            raise RuntimeError(
+                "SAM3Segmentor.forward() must not be called during training. "
+                "The Trainer must use the streaming chunk path: "
+                "build_encoder_refiner_cache() + "
+                "run_encoder_refiner_lowres_from_cache() + per-chunk "
+                "decode_encoder_refiner_chunk_from_cache()."
+            )
+
         encoder_refiner_cache = self.build_encoder_refiner_cache(batch)
 
         final_raw_outputs = self.run_encoder_refiner_from_cache(
             encoder_refiner_cache=encoder_refiner_cache,
             batch=batch,
         )
-
-        # Training: return raw outputs directly so the criterion can access
-        # final_logits and detached sam3_teacher_logits.
-        if self.training:
-            return final_raw_outputs
 
         # Inference: go through adapter for sigmoid, relative threshold, argmax.
         return self.adapter(

@@ -12,7 +12,7 @@ from .encoder_refiner_attention import (
     EncoderRefinerLayer,
     make_residual_scale,
 )
-from .refined_mask_decoder import RefinerMaskDecoder
+from .refiner_pyramid_decoder import RefinerPyramidDecoder
 
 
 class ClassConditionedEncoderRefiner(nn.Module):
@@ -24,11 +24,10 @@ class ClassConditionedEncoderRefiner(nn.Module):
     into the score stream (RemoteCLIP score embedding) via a learnable
     residual injection before the Refiner attention layers.
 
-    The Refiner outputs 36×36 features. The 36→72 bilinear interpolation,
-    72×72 input fusion with original encoder features, and the shared frozen
-    SAM3 Pixel Decoder calls are orchestrated by Sam3Image per class chunk.
-    decode_mask_chunk() handles the final 288×288 feature fusion and mask
-    prediction.
+    The Refiner outputs 36×36 features. High-resolution decoding is handled
+    by RefinerPyramidDecoder: three-stage bilinear upsampling with
+    lightweight detail injection from frozen Pixel Decoder features
+    (72→144→288), followed by a gated final fusion at 288.
 
     Forward inputs:
         encoder_features_72:  [B, C, 256, 72, 72]  (full encoder + cross-attention)
@@ -124,8 +123,10 @@ class ClassConditionedEncoderRefiner(nn.Module):
             for _ in range(self.num_fusion_layers)
         ])
 
-        self.mask_decoder = RefinerMaskDecoder(
+        self.pyramid_decoder = RefinerPyramidDecoder(
             hidden_dim=self.hidden_dim,
+            detail_dim=64,
+            fusion_dim=96,
             use_checkpoint=self.use_checkpoint,
         )
 
@@ -228,32 +229,29 @@ class ClassConditionedEncoderRefiner(nn.Module):
             + self.fpn_score_injection_scale * fpn_score_update_36
         )
 
-    def decode_mask_chunk(
+    def decode_feature_pyramid_chunk(
         self,
-        refined_feature_288: torch.Tensor,
+        refiner_feature_36: torch.Tensor,
+        original_feature_72: torch.Tensor,
+        original_feature_144: torch.Tensor,
         original_feature_288: torch.Tensor,
     ) -> torch.Tensor:
-        """Fuse two 288×288 features and return the fused feature.
+        """Three-stage detail injection pyramid + final 288 gated fusion.
 
-        The 36→72 bilinear interpolation, 72×72 input fusion, and the shared
-        frozen SAM3 Pixel Decoder calls are handled externally by Sam3Image.
-        This method only performs the final 288×288 fusion. The final mask
-        logits are produced externally by the frozen SAM3 semantic_seg_head.
+        Args:
+            refiner_feature_36:   [B*C_chunk, 256, 36, 36]
+            original_feature_72:  [B*C_chunk, 256, 72, 72]
+            original_feature_144: [B*C_chunk, 256, 144, 144]
+            original_feature_288: [B*C_chunk, 256, 288, 288]
+
+        Returns:
+            fused_feature_288: [B*C_chunk, 256, 288, 288]
         """
-        return self.mask_decoder(
-            refined_feature_288=refined_feature_288,
-            original_feature_288=original_feature_288,
-        )
-
-    def fuse_pixel_decoder_input_chunk(
-        self,
-        refiner_feature_72: torch.Tensor,
-        original_feature_72: torch.Tensor,
-    ) -> torch.Tensor:
-        """Fuse refiner 72 and original encoder 72 before the Pixel Decoder."""
-        return self.mask_decoder.fuse_pixel_decoder_input_72(
-            refiner_feature_72=refiner_feature_72,
+        return self.pyramid_decoder(
+            refiner_feature_36=refiner_feature_36,
             original_feature_72=original_feature_72,
+            original_feature_144=original_feature_144,
+            original_feature_288=original_feature_288,
         )
 
     def forward(
@@ -283,11 +281,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
             template_clip_text
 
         The Refiner operates on ALL classes simultaneously so that
-        cross-class attention works correctly. The 36→72 bilinear
-        interpolation, 72×72 input fusion, and shared frozen SAM3 Pixel
-        Decoder calls are orchestrated by Sam3Image per class chunk.
-        Final 288×288 fusion and mask prediction are done via
-        decode_mask_chunk().
+        cross-class attention works correctly. High-resolution pyramid
+        decoding is handled per chunk via decode_feature_pyramid_chunk().
         """
         if encoder_features_72.ndim != 5:
             raise ValueError(

@@ -30,7 +30,8 @@ class ModelOutputKeys:
     clip_score_embed: str = "clip_score_embed"
     clip_mid_features: str = "clip_mid_features"
 
-    # Frozen SAM3 teacher logits for lightweight distillation (training only)
+    # Frozen SAM3 teacher logits — per-chunk temporary output during training,
+    # no longer a concatenated full-class output that must be saved.
     sam3_teacher_logits: str = "sam3_teacher_logits"
 
 

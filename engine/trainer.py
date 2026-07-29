@@ -199,39 +199,138 @@ class Trainer:
     # Training step
     # ------------------------------------------------------------------
 
-    def _compute_train_loss(self, batch) -> tuple[Dict[str, torch.Tensor], torch.Tensor]:
+    def _compute_train_loss_streaming(
+        self, batch
+    ) -> Dict[str, torch.Tensor]:
+        """Streaming per-chunk loss/backward with proxy leaf gradient isolation.
+
+        Low-resolution Refiner runs once on all classes. High-resolution
+        decoding, loss and backward run per chunk. A detached proxy leaf
+        accumulates gradients from all chunks; after all chunks, the
+        accumulated gradient is handed back to the real Refiner graph in
+        a single backward call.
+        """
         if not hasattr(self.model, "build_encoder_refiner_cache"):
             raise AttributeError(
                 "Model must provide build_encoder_refiner_cache(batch)."
             )
 
-        if not hasattr(self.model, "run_encoder_refiner_from_cache"):
-            raise AttributeError(
-                "Model must provide run_encoder_refiner_from_cache(encoder_refiner_cache, batch)."
-            )
-
         label_map = batch.find_targets[0].semantic_label_map
         use_amp = self.cfg.use_amp and self.device.type == "cuda"
 
+        # ---- Build cache and run low-res Refiner once ----
         with autocast(device_type=self.device.type, enabled=use_amp):
             encoder_refiner_cache = self.model.build_encoder_refiner_cache(batch)
 
-            final_raw_outputs = self.model.run_encoder_refiner_from_cache(
-                encoder_refiner_cache=encoder_refiner_cache,
-                batch=batch,
-                return_debug=False,
+            refiner_out = (
+                self.model.run_encoder_refiner_lowres_from_cache(
+                    encoder_refiner_cache,
+                    batch,
+                    return_debug=False,
+                )
             )
 
-            loss_dict = self.criterion(
-                final_raw_outputs,
-                {"label_map": label_map},
-                reduction="mean",
+        refiner_features_36 = refiner_out["refiner_features_36"]
+        del refiner_out
+
+        B, C_total = refiner_features_36.shape[:2]
+
+        # Detached proxy leaf — accumulates gradients from all chunks.
+        refiner_proxy = refiner_features_36.detach().requires_grad_(True)
+
+        # Build streaming loss context once.
+        with autocast(device_type=self.device.type, enabled=use_amp):
+            loss_context = self.criterion.prepare_streaming_context(
+                targets={"label_map": label_map},
+                num_classes=C_total,
+                target_hw=(288, 288),
             )
 
-        if "total_loss" not in loss_dict:
-            raise ValueError("Criterion must return 'total_loss'.")
+        need_teacher_logits = (
+            float(self.criterion.cfg.sam3_mask_distill_weight) > 0.0
+            and loss_context.distill_pixel_denom > 0
+        )
 
-        return loss_dict, loss_dict["total_loss"]
+        chunk_class_counts = encoder_refiner_cache["chunk_class_counts"]
+
+        # GPU-side accumulators (detached scalars, .item() deferred).
+        accum: Dict[str, torch.Tensor] = {}
+
+        chunk_start = 0
+        for num_chunk_classes in chunk_class_counts:
+            chunk_end = chunk_start + num_chunk_classes
+
+            refiner_proxy_chunk = refiner_proxy[
+                :, chunk_start:chunk_end
+            ]
+
+            with autocast(device_type=self.device.type, enabled=use_amp):
+                chunk_outputs = (
+                    self.model.decode_encoder_refiner_chunk_from_cache(
+                        encoder_refiner_cache=encoder_refiner_cache,
+                        refiner_feature_36_chunk=refiner_proxy_chunk,
+                        class_start=chunk_start,
+                        class_end=chunk_end,
+                        return_teacher_logits=need_teacher_logits,
+                    )
+                )
+
+                chunk_loss_dict = self.criterion.forward_chunk(
+                    outputs=chunk_outputs,
+                    context=loss_context,
+                    class_start=chunk_start,
+                    class_end=chunk_end,
+                )
+
+            chunk_total_loss = chunk_loss_dict["total_loss"]
+
+            # Backward outside autocast.
+            self.scaler.scale(chunk_total_loss).backward()
+
+            # Accumulate detached stats on GPU.
+            for key in (
+                "loss_positive_bce",
+                "loss_present_negative_bce",
+                "loss_absent_negative_bce",
+                "loss_final_balanced_bce",
+                "loss_final_dice",
+                "loss_sam3_mask_distill_bce",
+                "total_loss",
+            ):
+                val = chunk_loss_dict.get(key)
+                if val is not None and torch.is_tensor(val):
+                    detached = val.detach()
+                    if key not in accum:
+                        accum[key] = detached
+                    else:
+                        accum[key] = accum[key] + detached
+
+            # Release chunk intermediates.
+            del chunk_outputs, chunk_loss_dict, chunk_total_loss, refiner_proxy_chunk
+
+            chunk_start = chunk_end
+
+        if chunk_start != C_total:
+            raise ValueError(
+                f"Chunk index mismatch: final chunk_start={chunk_start}, "
+                f"expected C_total={C_total}."
+            )
+
+        # ---- Hand proxy gradient back to real Refiner graph ----
+        if refiner_proxy.grad is None:
+            raise RuntimeError(
+                "No gradient was accumulated on refiner_proxy. "
+                "Check that chunk losses have non-zero contribution."
+            )
+
+        scaled_refiner_grad = refiner_proxy.grad.detach()
+
+        torch.autograd.backward(
+            tensors=refiner_features_36,
+            grad_tensors=scaled_refiner_grad,
+        )
+
+        return accum
 
     def train_step(self, batch) -> Dict[str, float]:
         if self.optimizer is None:
@@ -240,9 +339,9 @@ class Trainer:
         batch = self._move_to_device(batch)
         self.optimizer.zero_grad(set_to_none=True)
 
-        loss_dict, total_loss = self._compute_train_loss(batch)
+        accum = self._compute_train_loss_streaming(batch)
 
-        self.scaler.scale(total_loss).backward()
+        # Optimizer step (once per batch).
         self.scaler.unscale_(self.optimizer)
 
         if self.cfg.grad_clip_norm is not None:
@@ -257,12 +356,10 @@ class Trainer:
         if self.lr_scheduler is not None:
             self.lr_scheduler.step()
 
+        # Convert GPU accumulators to float (single CPU sync).
         stats = {}
-        for key, value in loss_dict.items():
-            if torch.is_tensor(value):
-                stats[key] = float(value.detach().item())
-            else:
-                stats[key] = float(value)
+        for key, value in accum.items():
+            stats[key] = float(value.item())
 
         return stats
 

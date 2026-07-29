@@ -93,12 +93,12 @@ class EncoderRefinerConfig:
 class SemanticCriterionConfig:
     ignore_index: int = 255
 
-    final_bce_weight: float = 1.0
+    final_balanced_bce_weight: float = 1.0
     final_dice_weight: float = 0.0
 
     eps: float = 1e-6
 
-    sam3_mask_distill_weight: float = 0.0
+    sam3_mask_distill_weight: float = 0.05
 
 
 @dataclass
