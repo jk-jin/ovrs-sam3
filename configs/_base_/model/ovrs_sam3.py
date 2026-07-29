@@ -93,10 +93,7 @@ model = dict(
         ignore_index=255,
         final_bce_weight=1.0,
         final_dice_weight=0.0,
-        bce_absent_class_weight=0.05,
-        bce_valid_pixel_weight=1.0,
-        bce_ignore_pixel_weight=0.05,
         eps=1e-6,
-        sam3_mask_distill_weight=0.05,
+        sam3_mask_distill_weight=0.0,
     ),
 )

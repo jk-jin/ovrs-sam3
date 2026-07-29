@@ -18,20 +18,18 @@ class SemanticCriterion(nn.Module):
     """Semantic segmentation criterion.
 
     Losses:
-        1. mask BCE on final_logits
-           - present class pairs use valid and ignore pixels
-           - absent class pairs use valid pixels only
-           - absent class pairs are weighted by bce_absent_class_weight
-           - ignore pixels suppress leakage only for present classes
+        1. 全像素等权 BCE on final_logits
+           - 所有图像、所有类别、所有像素统一计算 BCE 均值
+           - 标签 255 的所有类别通道目标为 0，作为负样本参与监督
 
-        2. present-only Dice on final_logits
-           - optional
-           - controlled by final_dice_weight
+        2. 可选 Dice on final_logits
+           - 只对图像中存在的类别计算
+           - 默认 final_dice_weight=0.0
 
-        3. SAM3 teacher mask distillation BCE
-           - frozen SAM3 semantic head logits as soft targets
-           - only for present image-class pairs on valid pixels
-           - controlled by sam3_mask_distill_weight
+        3. 可选 SAM3 teacher mask distillation BCE
+           - 冻结 SAM3 semantic head logits 作为软目标
+           - 只监督存在类别和非 255 像素
+           - 默认 sam3_mask_distill_weight=0.0
     """
 
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
@@ -151,31 +149,13 @@ class SemanticCriterion(nn.Module):
             dtype=final_logits.dtype,
         )
 
-        num_valid_pixels = int(valid_mask.sum().item())
         zero = self._zero_loss(final_logits)
 
-        if num_valid_pixels <= 0:
-            return {
-                "loss_final_bce": zero,
-                "loss_final_dice": zero,
-                "loss_sam3_mask_distill_bce": zero,
-                "total_loss": zero,
-                "num_valid": torch.tensor(
-                    0,
-                    device=final_logits.device,
-                    dtype=torch.long,
-                ),
-            }
-
-        loss_final_bce = self._binary_cross_entropy_pair_weighted_all_pixels(
-            logits=final_logits,
-            target=target,
-            valid_mask=valid_mask,
-            presence_target=presence_target,
-            absent_weight=float(self.cfg.bce_absent_class_weight),
-            valid_pixel_weight=float(self.cfg.bce_valid_pixel_weight),
-            ignore_pixel_weight=float(self.cfg.bce_ignore_pixel_weight),
-            eps=float(self.cfg.eps),
+        # 主 BCE：所有图像、类别、像素等权计算
+        loss_final_bce = F.binary_cross_entropy_with_logits(
+            final_logits,
+            target,
+            reduction="mean",
         )
 
         if float(self.cfg.final_dice_weight) > 0.0 and bool(
@@ -226,11 +206,6 @@ class SemanticCriterion(nn.Module):
             "loss_final_dice": loss_final_dice,
             "loss_sam3_mask_distill_bce": loss_sam3_mask_distill_bce,
             "total_loss": total_loss,
-            "num_valid": torch.tensor(
-                num_valid_pixels,
-                device=final_logits.device,
-                dtype=torch.long,
-            ),
         }
 
     @staticmethod
@@ -292,17 +267,34 @@ class SemanticCriterion(nn.Module):
         num_channels: int,
         dtype: torch.dtype,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        B, H, W = label_map.shape
-        valid_mask = label_map != int(self.cfg.ignore_index)
+        """构建二值目标，行为与 RSKT-Seg 一致。
 
+        标签 0..C-1 → 对应类别通道为 1，其余通道为 0。
+        标签 255 → 所有类别通道均为 0，作为全类别负样本参与 BCE。
+        """
+        B, H, W = label_map.shape
+        ignore_index = int(self.cfg.ignore_index)
+        valid_mask = label_map != ignore_index
+
+        # 先构造 [B, H, W, C]，valid_mask 索引后再 permute 到 [B, C, H, W]
         target = torch.zeros(
-            (B, int(num_channels), H, W),
+            (B, H, W, int(num_channels)),
             dtype=dtype,
             device=label_map.device,
         )
 
-        for channel_idx, class_id in enumerate(class_ids):
-            target[:, channel_idx] = (label_map == int(class_id)).to(dtype=dtype)
+        if valid_mask.any():
+            valid_labels = label_map[valid_mask]
+            if valid_labels.min().item() < 0 or valid_labels.max().item() >= num_channels:
+                raise ValueError(
+                    f"Valid labels out of range: min={valid_labels.min().item()}, "
+                    f"max={valid_labels.max().item()}, num_classes={num_channels}. "
+                    "All non-ignore labels must be in [0, num_classes)."
+                )
+            one_hot = F.one_hot(valid_labels, num_classes=int(num_channels)).to(dtype=dtype)
+            target[valid_mask] = one_hot
+
+        target = target.permute(0, 3, 1, 2)  # [B, H, W, C] → [B, C, H, W]
 
         return target, valid_mask
 
@@ -327,96 +319,6 @@ class SemanticCriterion(nn.Module):
             presence_target[:, channel_idx] = appears.to(dtype=dtype)
 
         return presence_target
-
-    @staticmethod
-    def _binary_cross_entropy_pair_weighted_all_pixels(
-        logits: torch.Tensor,
-        target: torch.Tensor,
-        valid_mask: torch.Tensor,
-        presence_target: torch.Tensor,
-        absent_weight: float,
-        valid_pixel_weight: float,
-        ignore_pixel_weight: float,
-        eps: float,
-    ) -> torch.Tensor:
-        pixel_loss = F.binary_cross_entropy_with_logits(
-            logits,
-            target,
-            reduction="none",
-        )
-
-        valid_pixel_weight = max(float(valid_pixel_weight), 0.0)
-        ignore_pixel_weight = max(float(ignore_pixel_weight), 0.0)
-        absent_weight = max(float(absent_weight), 0.0)
-
-        if valid_mask.dim() != 3:
-            raise ValueError(
-                f"valid_mask must be [B, H, W], got {tuple(valid_mask.shape)}."
-            )
-
-        if tuple(valid_mask.shape) != tuple(logits.shape[0:1] + logits.shape[-2:]):
-            raise ValueError(
-                "valid_mask shape mismatch: "
-                f"expected {(logits.shape[0], logits.shape[-2], logits.shape[-1])}, "
-                f"got {tuple(valid_mask.shape)}."
-            )
-
-        if presence_target.dim() != 2:
-            raise ValueError(
-                f"presence_target must be [B, C], got {tuple(presence_target.shape)}."
-            )
-
-        if tuple(presence_target.shape) != tuple(logits.shape[:2]):
-            raise ValueError(
-                "presence_target shape mismatch: "
-                f"expected {(logits.shape[0], logits.shape[1])}, "
-                f"got {tuple(presence_target.shape)}."
-            )
-
-        present_pair = presence_target > 0.5          # [B, C]
-        valid = valid_mask[:, None]                   # [B, 1, H, W]
-
-        valid_weight_map = torch.full_like(pixel_loss, valid_pixel_weight)
-        ignore_weight_map = torch.full_like(pixel_loss, ignore_pixel_weight)
-        zero_weight_map = torch.zeros_like(pixel_loss)
-
-        # present pair: valid -> valid_pixel_weight, ignore -> ignore_pixel_weight
-        present_pixel_weight = torch.where(
-            valid,
-            valid_weight_map,
-            ignore_weight_map,
-        )
-
-        # absent pair: valid -> valid_pixel_weight, ignore -> 0
-        absent_pixel_weight = torch.where(
-            valid,
-            valid_weight_map,
-            zero_weight_map,
-        )
-
-        pixel_weight = torch.where(
-            present_pair[:, :, None, None],
-            present_pixel_weight,
-            absent_pixel_weight,
-        )
-
-        weighted_pixel_loss = pixel_loss * pixel_weight
-
-        pixel_weight_sum = pixel_weight.flatten(2).sum(dim=2).clamp_min(float(eps))
-        pair_loss = weighted_pixel_loss.flatten(2).sum(dim=2) / pixel_weight_sum
-
-        pair_weight = torch.where(
-            present_pair,
-            torch.ones_like(presence_target),
-            torch.full_like(presence_target, absent_weight),
-        )
-
-        weight_sum = pair_weight.sum()
-
-        if bool(weight_sum.detach().le(0).item()):
-            return logits.sum() * 0.0
-
-        return (pair_loss * pair_weight).sum() / weight_sum.clamp_min(float(eps))
 
     def _dice_loss_present_mean_from_logits(
         self,

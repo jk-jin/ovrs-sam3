@@ -158,9 +158,6 @@ def _compact_key_name(key: str) -> str:
     mapping = {
         "final_bce_weight": "bce",
         "final_dice_weight": "dice",
-        "bce_valid_pixel_weight": "valid",
-        "bce_ignore_pixel_weight": "ignore",
-        "bce_absent_class_weight": "abs",
         "score_embed_dim": "score_dim",
         "layer_scale_init": "lsi",
         "openclip_text_finetune": "text",

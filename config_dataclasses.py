@@ -96,19 +96,9 @@ class SemanticCriterionConfig:
     final_bce_weight: float = 1.0
     final_dice_weight: float = 0.0
 
-    # 0.0 = absent classes not supervised for mask BCE.
-    # Set to 0.01 / 0.05 for mild absent-class suppression.
-    bce_absent_class_weight: float = 0.0
-
-    # Pixel-level BCE weights.
-    # valid pixels: label_map != ignore_index
-    # ignore pixels: label_map == ignore_index
-    bce_valid_pixel_weight: float = 1.0
-    bce_ignore_pixel_weight: float = 1.0
-
     eps: float = 1e-6
 
-    sam3_mask_distill_weight: float = 0.05
+    sam3_mask_distill_weight: float = 0.0
 
 
 @dataclass

@@ -230,8 +230,6 @@ class Trainer:
 
         if "total_loss" not in loss_dict:
             raise ValueError("Criterion must return 'total_loss'.")
-        if "num_valid" not in loss_dict:
-            raise ValueError("Criterion must return 'num_valid'.")
 
         return loss_dict, loss_dict["total_loss"]
 
@@ -244,36 +242,29 @@ class Trainer:
 
         loss_dict, total_loss = self._compute_train_loss(batch)
 
-        num_valid = int(loss_dict["num_valid"].detach().item())
-        did_step = False
+        self.scaler.scale(total_loss).backward()
+        self.scaler.unscale_(self.optimizer)
 
-        if num_valid > 0:
-            self.scaler.scale(total_loss).backward()
-            self.scaler.unscale_(self.optimizer)
+        if self.cfg.grad_clip_norm is not None:
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(),
+                self.cfg.grad_clip_norm,
+            )
 
-            if self.cfg.grad_clip_norm is not None:
-                torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(),
-                    self.cfg.grad_clip_norm,
-                )
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
 
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            did_step = True
-
-            if self.lr_scheduler is not None:
-                self.lr_scheduler.step()
+        if self.lr_scheduler is not None:
+            self.lr_scheduler.step()
 
         stats = {}
         for key, value in loss_dict.items():
-            if key == "num_valid":
-                continue
             if torch.is_tensor(value):
                 stats[key] = float(value.detach().item())
             else:
                 stats[key] = float(value)
 
-        return stats, did_step
+        return stats, True
 
     # ------------------------------------------------------------------
     # Sampler commit
@@ -686,10 +677,6 @@ class Trainer:
             stats, did_step = self.train_step(batch)
 
             self._commit_sampler_batch()
-
-            if not did_step:
-                end = time.perf_counter()
-                continue
 
             train_stats_window.append(stats)
 

@@ -12,24 +12,21 @@ train_dataloader = dict(
             dict(type="ConvertImageDtype", dtype="float32", scale=True),
 
             dict(
-                type="RandomResizeByRatio",
-                base_scale=(1008, 1008),
-                ratio_range=(0.5, 2.0),
-                keep_ratio=True,
+                type="ResizeShortestEdge",
+                short_edge=1008,
             ),
 
             dict(
                 type="RandomCrop",
                 crop_size=(1008, 1008),
-                cat_max_ratio=0.75,
+                cat_max_ratio=1.0,
                 ignore_index=255,
                 pad_if_needed=True,
                 image_pad_value=0.0,
             ),
 
+            dict(type="ColorAugSSD"),
             dict(type="RandomHorizontalFlip", prob=0.5),
-            dict(type="RandomVerticalFlip", prob=0.5),
-            dict(type="RandomRotate90", prob=0.5),
 
             dict(
                 type="Normalize",

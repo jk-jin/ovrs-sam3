@@ -61,7 +61,7 @@ original_encoder_feature_72_chunk
 
 original_pixel_feature_288
   → 冻结的 SAM3 semantic_seg_head
-  → sam3_teacher_logits（训练时用于轻量辅助蒸馏）
+  → sam3_teacher_logits（供可选蒸馏使用，默认关闭）
 
 refiner_feature_36_chunk
   → bilinear 插值到 72×72
@@ -326,18 +326,29 @@ OpenCLIP 常把 Q/K/V 存在同一个融合参数中。项目对该参数注册�
 * 梯度裁剪上限为 0.1；
 * warmup 保持前 1000 步，线性从 0.1 倍到全额学习率，后续余弦衰减。
 
-### 7.2 损失
+### 7.2 数据增强
+
+训练图像确定性短边缩放到 1008，再随机裁剪 1008×1008，`cat_max_ratio=1.0`（不限制单一类别占比）。SSD 风格颜色增强（亮度、对比度、饱和度、色相各以 0.5 概率独立启用），只使用 0.5 概率水平翻转。不使用随机尺度、垂直翻转和 90° 旋转。
+
+验证和测试不应用颜色增强或随机裁剪。TTA 默认关闭。
+
+### 7.3 损失
 
 每个类别通道独立使用 binary mask 监督，不使用跨类别 softmax。
 
 **GT 主损失**（监督 `final_logits`）：
 
-* 存在于图像中的类别：有效像素参与 BCE，ignore 像素作为低权重负样本抑制泄漏。
-* 不存在于图像中的类别：只在有效像素上计算 BCE，并使用较小的 pair 权重。
-* Dice 只对存在类别计算；当前默认权重为 0。
-* 全部像素均为 ignore 时跳过 backward 和 optimizer step。
+* 有效标签（0..C-1）转换成 one-hot 二值目标，对应类别通道为 1，其余通道为 0。
+* 标签 255 的所有类别通道目标均为 0，作为全类别负样本参与 BCE。
+* 所有图像、所有类别、所有像素统一计算 BCE 均值（`reduction="mean"`）。
+* 不进行正负样本、类别存在性或像素区域加权。
+* 全 255 图像仍产生全负 BCE 并正常执行 backward 和 optimizer step。
 
-**SAM3 teacher 掩码蒸馏**（监督 `final_logits`，仅训练时）：
+**可选辅助损失**：
+
+Dice 损失（`final_dice_weight=0.0`）只对图像中存在的类别计算，默认关闭。
+
+SAM3 teacher 掩码蒸馏（`sam3_mask_distill_weight=0.0`）默认关闭。开启时行为如下：
 
 1. 冻结的 SAM3 semantic head 产生的 teacher logits 做 sigmoid，得到 soft probability 目标。
 2. student 使用 raw `final_logits`。
@@ -345,7 +356,6 @@ OpenCLIP 常把 Q/K/V 存在同一个融合参数中。项目对该参数注册�
 4. 只监督 GT 中存在的图像—类别对的有效像素。
 5. teacher 和 student 都在 288×288 分辨率，不做尺度变换。
 6. teacher 必须 detach。
-7. 蒸馏权重 `sam3_mask_distill_weight=0.05`。
 
 总损失：
 
@@ -354,6 +364,8 @@ total_loss = final_bce_weight * loss_final_bce
            + final_dice_weight * loss_final_dice
            + sam3_mask_distill_weight * loss_sam3_mask_distill_bce
 ```
+
+当前默认只有 BCE 项实际生效。
 
 ## 8. 推理与评测
 
@@ -459,7 +471,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 | `models/score_embeddings.py`          | 32 模板相似度图和多尺度 score encoder              |
 | `models/openclip_image_encoder.py`    | 36×36 dense RemoteCLIP 图像特征              |
 | `models/openclip_text_encoder.py`     | 模板文本编码、micro-batch 与梯度控制                 |
-| `losses/semantic_criterion.py`        | GT 主损失（present/absent 加权 BCE + Dice）和 SAM3 teacher 蒸馏 BCE |
+| `losses/semantic_criterion.py`        | 全像素等权 BCE，以及默认关闭的 Dice 和 SAM3 teacher 蒸馏 |
 | `engine/checkpoint.py`                | 安全、原子、严格的 checkpoint 保存与加载               |
 | `engine/runtime_state.py`             | RNG 捕获与恢复                                |
 | `data/resumable_sampler.py`           | 可精确恢复的数据顺序与增强种子                          |

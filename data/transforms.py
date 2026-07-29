@@ -261,25 +261,22 @@ class ResizeLongestSide:
         return Resize((out_h, out_w))(sample)
 
 
-class RandomResizeByRatio:
-    def __init__(
-        self,
-        base_scale: Tuple[int, int],
-        ratio_range: Tuple[float, float] = (0.5, 2.0),
-        keep_ratio: bool = True,
-    ):
-        self.base_scale = tuple(base_scale)
-        self.ratio_range = tuple(ratio_range)
-        self.keep_ratio = bool(keep_ratio)
+class ResizeShortestEdge:
+    """将图像短边确定性地缩放到指定长度，长边按相同比例缩放。"""
+
+    def __init__(self, short_edge: int):
+        self.short_edge = int(short_edge)
 
     def __call__(self, sample: Sample) -> Sample:
-        min_ratio, max_ratio = self.ratio_range
-        ratio = random.uniform(min_ratio, max_ratio)
+        image = sample["image"]
+        h, w = image.shape[-2:]
 
-        target_h = max(1, int(round(self.base_scale[0] * ratio)))
-        target_w = max(1, int(round(self.base_scale[1] * ratio)))
+        short_side = min(h, w)
+        scale = self.short_edge / max(short_side, 1)
+        out_h = max(1, int(round(h * scale)))
+        out_w = max(1, int(round(w * scale)))
 
-        return Resize((target_h, target_w), keep_ratio=self.keep_ratio)(sample)
+        return Resize((out_h, out_w))(sample)
 
 
 class RandomCrop:
@@ -387,52 +384,6 @@ class RandomCrop:
         return sample
 
 
-class RandomVerticalFlip:
-    def __init__(self, prob: float = 0.5):
-        self.prob = float(prob)
-
-    def __call__(self, sample: Sample) -> Sample:
-        if random.random() >= self.prob:
-            return sample
-
-        sample = dict(sample)
-        sample["image"] = torch.flip(sample["image"], dims=[-2])
-
-        if "raw_image" in sample and sample["raw_image"] is not None:
-            sample["raw_image"] = torch.flip(sample["raw_image"], dims=[-2])
-
-        sample = _apply_to_label_keys(
-            sample,
-            lambda m: torch.flip(m, dims=[-2]),
-        )
-
-        return sample
-
-
-class RandomRotate90:
-    def __init__(self, prob: float = 0.5):
-        self.prob = float(prob)
-
-    def __call__(self, sample: Sample) -> Sample:
-        if random.random() >= self.prob:
-            return sample
-
-        sample = dict(sample)
-        k = random.randint(1, 3)
-
-        sample["image"] = torch.rot90(sample["image"], k=k, dims=(-2, -1))
-
-        if "raw_image" in sample and sample["raw_image"] is not None:
-            sample["raw_image"] = torch.rot90(sample["raw_image"], k=k, dims=(-2, -1))
-
-        sample = _apply_to_label_keys(
-            sample,
-            lambda m: torch.rot90(m, k=k, dims=(-2, -1)).long(),
-        )
-
-        return sample
-
-
 class RandomResize:
     def __init__(self, scales: Sequence[Tuple[int, int]]):
         self.scales = list(scales)
@@ -460,6 +411,142 @@ class RandomHorizontalFlip:
             sample,
             lambda m: torch.flip(m, dims=[-1]),
         )
+
+        return sample
+
+
+def _rgb_to_hsv(image: torch.Tensor) -> torch.Tensor:
+    """RGB→HSV，image 为 [3, H, W]，值域 [0, 1]"""
+    r, g, b = image[0], image[1], image[2]
+    max_val, max_idx = torch.max(image, dim=0)
+    min_val, _ = torch.min(image, dim=0)
+    delta = max_val - min_val
+
+    h = torch.zeros_like(max_val)
+    s = torch.zeros_like(max_val)
+    v = max_val
+
+    denom = delta.clone().clamp_min(1e-8)
+
+    r_max = (max_idx == 0) & (delta > 0)
+    h[r_max] = ((g[r_max] - b[r_max]) / denom[r_max]) % 6
+
+    g_max = (max_idx == 1) & (delta > 0)
+    h[g_max] = (b[g_max] - r[g_max]) / denom[g_max] + 2
+
+    b_max = (max_idx == 2) & (delta > 0)
+    h[b_max] = (r[b_max] - g[b_max]) / denom[b_max] + 4
+
+    h = h / 6.0
+
+    mask = max_val > 0
+    s[mask] = delta[mask] / max_val[mask]
+
+    return torch.stack([h, s, v], dim=0)
+
+
+def _hsv_to_rgb(image: torch.Tensor) -> torch.Tensor:
+    """HSV→RGB，image 为 [3, H, W]，值域 [0, 1]"""
+    h, s, v = image[0], image[1], image[2]
+    h = h * 6.0
+    sector = h.long().clamp(0, 5)
+    f = h - sector.float()
+    p = v * (1.0 - s)
+    q = v * (1.0 - s * f)
+    t = v * (1.0 - s * (1.0 - f))
+
+    r = torch.zeros_like(h)
+    g = torch.zeros_like(h)
+    b = torch.zeros_like(h)
+
+    m0 = sector == 0
+    r[m0], g[m0], b[m0] = v[m0], t[m0], p[m0]
+    m1 = sector == 1
+    r[m1], g[m1], b[m1] = q[m1], v[m1], p[m1]
+    m2 = sector == 2
+    r[m2], g[m2], b[m2] = p[m2], v[m2], t[m2]
+    m3 = sector == 3
+    r[m3], g[m3], b[m3] = p[m3], q[m3], v[m3]
+    m4 = sector == 4
+    r[m4], g[m4], b[m4] = t[m4], p[m4], v[m4]
+    m5 = sector == 5
+    r[m5], g[m5], b[m5] = v[m5], p[m5], q[m5]
+
+    return torch.stack([r, g, b], dim=0)
+
+
+class ColorAugSSD:
+    """SSD 风格颜色增强，与 Detectron2 PointRend 保持一致。
+
+    每种扰动以 0.5 概率独立启用。
+    图像值域 [0, 1]，所有参数内部换算到此范围。
+    """
+
+    def __init__(
+        self,
+        brightness_delta: float = 32.0,
+        contrast_low: float = 0.5,
+        contrast_high: float = 1.5,
+        saturation_low: float = 0.5,
+        saturation_high: float = 1.5,
+        hue_delta: float = 18.0,
+    ):
+        self.brightness_delta = float(brightness_delta)
+        self.contrast_low = float(contrast_low)
+        self.contrast_high = float(contrast_high)
+        self.saturation_low = float(saturation_low)
+        self.saturation_high = float(saturation_high)
+        self.hue_delta = float(hue_delta)
+
+    def _apply(self, image: torch.Tensor) -> torch.Tensor:
+        contrast_first = random.random() < 0.5
+
+        # 亮度
+        if random.random() < 0.5:
+            delta = random.uniform(
+                -self.brightness_delta, self.brightness_delta
+            ) / 255.0
+            image = image + delta
+
+        # 对比度
+        if contrast_first and random.random() < 0.5:
+            alpha = random.uniform(self.contrast_low, self.contrast_high)
+            image = image * alpha
+
+        if random.random() < 0.5:
+            # 饱和度 + 色相（在 HSV 空间）
+            image = image.clamp(0.0, 1.0)
+            hsv = _rgb_to_hsv(image)
+
+            if random.random() < 0.5:
+                # 饱和度
+                sat_factor = random.uniform(self.saturation_low, self.saturation_high)
+                hsv[1] = (hsv[1] * sat_factor).clamp(0.0, 1.0)
+
+            if random.random() < 0.5:
+                # 色相（循环偏移）
+                hue_shift = random.uniform(-self.hue_delta, self.hue_delta) / 360.0
+                hsv[0] = (hsv[0] + hue_shift) % 1.0
+
+            image = _hsv_to_rgb(hsv)
+
+        # 对比度在饱和度之后执行
+        if not contrast_first and random.random() < 0.5:
+            alpha = random.uniform(self.contrast_low, self.contrast_high)
+            image = image * alpha
+
+        return image.clamp(0.0, 1.0)
+
+    def __call__(self, sample: Sample) -> Sample:
+        # 只采样一次随机参数，应用到 image 和 raw_image
+        rng_state = random.getstate()
+        sample = dict(sample)
+
+        sample["image"] = self._apply(sample["image"])
+
+        if "raw_image" in sample and sample["raw_image"] is not None:
+            random.setstate(rng_state)
+            sample["raw_image"] = self._apply(sample["raw_image"])
 
         return sample
 
