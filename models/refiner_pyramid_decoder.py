@@ -5,6 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
+from .encoder_refiner_attention import make_residual_scale
+
 
 def _safe_group_norm(num_channels: int) -> nn.GroupNorm:
     num_groups = min(8, int(num_channels))
@@ -13,189 +15,170 @@ def _safe_group_norm(num_channels: int) -> nn.GroupNorm:
     return nn.GroupNorm(num_groups, int(num_channels))
 
 
-class PixelDetailInjectionStage(nn.Module):
-    """Single-scale detail injection from frozen Pixel Decoder features.
+class SemanticDetailFusionStage(nn.Module):
+    """Single-scale dual-branch fusion: semantic (Refiner + Pixel Decoder)
+    and detail (Refiner + original SAM3 FPN).
 
-    The 256-channel upsampled refiner feature is the main path and passes
-    straight to the output. The frozen Pixel Decoder feature only injects
-    detail through a 64-channel compact branch using depthwise 3×3 conv,
-    avoiding expensive 3×3 convs on the full 256-channel path.
+    Both branches operate in 128-channel compact space with independent
+    grouped 3×3 conv blocks (groups=8). The semantic branch is the main
+    output; the detail branch injects via a learnable residual scale
+    initialised at 0.1.
     """
 
-    def __init__(self, hidden_dim: int = 256, detail_dim: int = 64):
+    def __init__(
+        self,
+        hidden_dim: int = 256,
+        branch_dim: int = 128,
+        spatial_groups: int = 8,
+        residual_scale_init: float = 0.1,
+    ):
         super().__init__()
-        self.hidden_dim = int(hidden_dim)
-        self.detail_dim = int(detail_dim)
+        if hidden_dim <= 0:
+            raise ValueError(f"hidden_dim must be > 0, got {hidden_dim}")
+        if branch_dim <= 0:
+            raise ValueError(f"branch_dim must be > 0, got {branch_dim}")
+        if spatial_groups <= 0:
+            raise ValueError(f"spatial_groups must be > 0, got {spatial_groups}")
+        if branch_dim % spatial_groups != 0:
+            raise ValueError(
+                f"branch_dim ({branch_dim}) must be divisible by "
+                f"spatial_groups ({spatial_groups})"
+            )
 
+        self.hidden_dim = int(hidden_dim)
+        self.branch_dim = int(branch_dim)
+        self.spatial_groups = int(spatial_groups)
+
+        # Three independent 256→128 projections (no activation).
         self.refiner_proj = nn.Sequential(
-            nn.Conv2d(self.hidden_dim, self.detail_dim, kernel_size=1, bias=False),
-            _safe_group_norm(self.detail_dim),
-            nn.GELU(),
+            nn.Conv2d(self.hidden_dim, self.branch_dim, kernel_size=1, bias=False),
+            _safe_group_norm(self.branch_dim),
         )
 
         self.pixel_proj = nn.Sequential(
-            nn.Conv2d(self.hidden_dim, self.detail_dim, kernel_size=1, bias=False),
-            _safe_group_norm(self.detail_dim),
-            nn.GELU(),
+            nn.Conv2d(self.hidden_dim, self.branch_dim, kernel_size=1, bias=False),
+            _safe_group_norm(self.branch_dim),
         )
 
-        self.detail_block = nn.Sequential(
+        self.fpn_proj = nn.Sequential(
+            nn.Conv2d(self.hidden_dim, self.branch_dim, kernel_size=1, bias=False),
+            _safe_group_norm(self.branch_dim),
+        )
+
+        self.semantic_block = self._make_branch_block()
+        self.detail_block = self._make_branch_block()
+
+        self.semantic_out_proj = nn.Conv2d(
+            self.branch_dim, self.hidden_dim, kernel_size=1, bias=False,
+        )
+        self.detail_out_proj = nn.Conv2d(
+            self.branch_dim, self.hidden_dim, kernel_size=1, bias=False,
+        )
+
+        self.detail_scale = make_residual_scale(float(residual_scale_init))
+
+    def _make_branch_block(self) -> nn.Sequential:
+        return nn.Sequential(
             nn.Conv2d(
-                self.detail_dim,
-                self.detail_dim,
+                self.branch_dim,
+                self.branch_dim,
                 kernel_size=3,
                 padding=1,
-                groups=self.detail_dim,
+                groups=self.spatial_groups,
                 bias=False,
             ),
-            _safe_group_norm(self.detail_dim),
+            _safe_group_norm(self.branch_dim),
             nn.GELU(),
             nn.Conv2d(
-                self.detail_dim,
-                self.detail_dim,
+                self.branch_dim,
+                self.branch_dim,
                 kernel_size=1,
                 bias=False,
             ),
-            _safe_group_norm(self.detail_dim),
-            nn.GELU(),
-        )
-
-        self.detail_out = nn.Conv2d(
-            self.detail_dim,
-            self.hidden_dim,
-            kernel_size=1,
-            bias=False,
+            _safe_group_norm(self.branch_dim),
         )
 
     def forward(
         self,
         refiner_feature: torch.Tensor,
         original_pixel_feature: torch.Tensor,
+        sam_fpn: torch.Tensor,
     ) -> torch.Tensor:
+        """Forward one dual-branch fusion stage.
+
+        Args:
+            refiner_feature:        [N, 256, H_prev, W_prev]
+            original_pixel_feature: [N, 256, H, W]
+            sam_fpn:                [B, 256, H, W]  (image-level, no class dim)
+
+        Returns:
+            output: [N, 256, H, W]
+        """
+        N, _, H_prev, W_prev = refiner_feature.shape
+        target_hw = original_pixel_feature.shape[-2:]
+
+        # 1. Bilinear upsample refiner to current resolution.
         upsampled_refiner = F.interpolate(
             refiner_feature,
-            size=original_pixel_feature.shape[-2:],
+            size=target_hw,
             mode="bilinear",
             align_corners=False,
-        )
+        )  # [N, 256, H, W]
 
-        refiner_compact = self.refiner_proj(upsampled_refiner)
-        pixel_compact = self.pixel_proj(original_pixel_feature)
+        # 2. Project all three inputs to 128 channels.
+        refiner_compact = self.refiner_proj(upsampled_refiner)   # [N, 128, H, W]
+        pixel_compact = self.pixel_proj(original_pixel_feature)  # [N, 128, H, W]
+        fpn_compact = self.fpn_proj(sam_fpn)                     # [B, 128, H, W]
 
-        detail_input = refiner_compact + pixel_compact
-        detail_compact = detail_input + self.detail_block(detail_input)
-        detail_update = self.detail_out(detail_compact)
+        # 3. Recover batch/image layout for broadcast-based fusion.
+        B = sam_fpn.shape[0]
+        if N % B != 0:
+            raise ValueError(
+                f"refiner N={N} must be divisible by batch B={B}. "
+                f"refiner: {tuple(refiner_feature.shape)}, "
+                f"sam_fpn: {tuple(sam_fpn.shape)}"
+            )
+        C_chunk = N // B
+        _, branch_dim, H, W = refiner_compact.shape
 
-        return upsampled_refiner + detail_update
+        refiner_compact_5d = refiner_compact.reshape(B, C_chunk, branch_dim, H, W)
+        pixel_compact_5d = pixel_compact.reshape(B, C_chunk, branch_dim, H, W)
+        # fpn_compact stays [B, branch_dim, H, W] and broadcasts over classes.
 
+        # 4. Build semantic and detail inputs via broadcasting.
+        semantic_input = (refiner_compact_5d + pixel_compact_5d).reshape(N, branch_dim, H, W)
+        detail_input = (refiner_compact_5d + fpn_compact[:, None]).reshape(N, branch_dim, H, W)
 
-class FinalPixelFeatureFusion288(nn.Module):
-    """Gated fusion of refined and original 288×288 features.
+        # 5. Branch blocks with internal residual.
+        semantic_feature = semantic_input + self.semantic_block(semantic_input)
+        detail_feature = detail_input + self.detail_block(detail_input)
 
-    Learns a per-pixel gate to blend the two features, plus a delta head
-    for explicit correction. The gate bias is zero-initialised so the
-    initial blend is ~0.5. ``delta_head`` is NOT zero-initialised so it
-    can actively correct the SAM3 feature from the start.
-    """
+        # 6. Project back to 256 and fuse.
+        semantic_out = self.semantic_out_proj(semantic_feature)
+        detail_out = self.detail_out_proj(detail_feature)
 
-    def __init__(self, hidden_dim: int = 256, fusion_dim: int = 96):
-        super().__init__()
-        self.hidden_dim = int(hidden_dim)
-        self.fusion_dim = int(fusion_dim)
-
-        self.refined_proj = nn.Sequential(
-            nn.Conv2d(self.hidden_dim, self.fusion_dim, kernel_size=1, bias=False),
-            _safe_group_norm(self.fusion_dim),
-            nn.GELU(),
-        )
-
-        self.original_proj = nn.Sequential(
-            nn.Conv2d(self.hidden_dim, self.fusion_dim, kernel_size=1, bias=False),
-            _safe_group_norm(self.fusion_dim),
-            nn.GELU(),
-        )
-
-        self.fusion_block = nn.Sequential(
-            nn.Conv2d(
-                self.fusion_dim * 2,
-                self.fusion_dim * 2,
-                kernel_size=3,
-                padding=1,
-                groups=self.fusion_dim * 2,
-                bias=False,
-            ),
-            _safe_group_norm(self.fusion_dim * 2),
-            nn.GELU(),
-            nn.Conv2d(
-                self.fusion_dim * 2,
-                self.fusion_dim,
-                kernel_size=1,
-                bias=False,
-            ),
-            _safe_group_norm(self.fusion_dim),
-            nn.GELU(),
-        )
-
-        self.gate_head = nn.Conv2d(
-            self.fusion_dim,
-            1,
-            kernel_size=1,
-            bias=True,
-        )
-
-        self.delta_head = nn.Conv2d(
-            self.fusion_dim,
-            self.hidden_dim,
-            kernel_size=1,
-            bias=False,
-        )
-
-        self._init_gate_bias()
-
-    def _init_gate_bias(self) -> None:
-        nn.init.zeros_(self.gate_head.bias)
-
-    def forward(
-        self,
-        refined_feature_288: torch.Tensor,
-        original_feature_288: torch.Tensor,
-    ) -> torch.Tensor:
-        refined_compact = self.refined_proj(refined_feature_288)
-        original_compact = self.original_proj(original_feature_288)
-
-        fusion_input = torch.cat(
-            [refined_compact, original_compact],
-            dim=1,
-        )
-
-        fusion_update = self.fusion_block(fusion_input)
-
-        fusion_compact = (
-            refined_compact
-            + original_compact
-            + fusion_update
-        )
-
-        gate = torch.sigmoid(self.gate_head(fusion_compact))
-
-        base_feature = (
-            gate * refined_feature_288
-            + (1.0 - gate) * original_feature_288
-        )
-
-        delta = self.delta_head(fusion_compact)
-
-        return base_feature + delta
+        return semantic_out + self.detail_scale * detail_out
 
 
 class RefinerPyramidDecoder(nn.Module):
-    """Three-stage lightweight detail injection pyramid + final 288 fusion.
+    """Three-stage semantic–detail dual-branch upsampling pyramid.
+
+    Each stage fuses:
+      - upsampled Refiner feature (semantic main path + detail reference)
+      - frozen Pixel Decoder feature (semantic branch)
+      - original SAM3 backbone FPN (detail branch)
+
+    Both branches operate in 128-channel compact space with independent
+    grouped 3×3 conv blocks (groups=8). The semantic branch is the main
+    output; the detail branch injects via a learnable residual scale.
 
     Stages:
-        stage_72:  36→72  + detail from original_pixel_feature_72
-        stage_144: 72→144 + detail from original_pixel_feature_144
-        stage_288: 144→288 + detail from original_pixel_feature_288
-        final_fusion_288: gated base + delta correction at 288
+        stage_72:  36→72   (refiner_36 + O72 + FPN72)
+        stage_144: 72→144  (refined_72 + O144 + FPN144)
+        stage_288: 144→288 (refined_144 + O288 + FPN288)
+
+    stage_288 output goes directly into the frozen SAM3 semantic_seg_head.
+    There is no final fusion.
 
     The entire pyramid is wrapped in a single non-reentrant checkpoint
     during training when ``use_checkpoint=True``.
@@ -204,90 +187,92 @@ class RefinerPyramidDecoder(nn.Module):
     def __init__(
         self,
         hidden_dim: int = 256,
-        detail_dim: int = 64,
-        fusion_dim: int = 96,
+        branch_dim: int = 128,
+        spatial_groups: int = 8,
+        residual_scale_init: float = 0.1,
         use_checkpoint: bool = True,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
         self.use_checkpoint = bool(use_checkpoint)
 
-        self.stage_72 = PixelDetailInjectionStage(
+        stage_kwargs = dict(
             hidden_dim=self.hidden_dim,
-            detail_dim=int(detail_dim),
+            branch_dim=int(branch_dim),
+            spatial_groups=int(spatial_groups),
+            residual_scale_init=float(residual_scale_init),
         )
-        self.stage_144 = PixelDetailInjectionStage(
-            hidden_dim=self.hidden_dim,
-            detail_dim=int(detail_dim),
-        )
-        self.stage_288 = PixelDetailInjectionStage(
-            hidden_dim=self.hidden_dim,
-            detail_dim=int(detail_dim),
-        )
-        self.final_fusion_288 = FinalPixelFeatureFusion288(
-            hidden_dim=self.hidden_dim,
-            fusion_dim=int(fusion_dim),
-        )
+
+        self.stage_72 = SemanticDetailFusionStage(**stage_kwargs)
+        self.stage_144 = SemanticDetailFusionStage(**stage_kwargs)
+        self.stage_288 = SemanticDetailFusionStage(**stage_kwargs)
 
     def _forward_impl(
         self,
         refiner_feature_36: torch.Tensor,
-        original_feature_72: torch.Tensor,
-        original_feature_144: torch.Tensor,
-        original_feature_288: torch.Tensor,
+        original_pixel_feature_72: torch.Tensor,
+        original_pixel_feature_144: torch.Tensor,
+        original_pixel_feature_288: torch.Tensor,
+        sam_fpn_72: torch.Tensor,
+        sam_fpn_144: torch.Tensor,
+        sam_fpn_288: torch.Tensor,
     ) -> torch.Tensor:
         refined_72 = self.stage_72(
             refiner_feature_36,
-            original_feature_72,
+            original_pixel_feature_72,
+            sam_fpn_72,
         )
 
         refined_144 = self.stage_144(
             refined_72,
-            original_feature_144,
+            original_pixel_feature_144,
+            sam_fpn_144,
         )
 
         refined_288 = self.stage_288(
             refined_144,
-            original_feature_288,
+            original_pixel_feature_288,
+            sam_fpn_288,
         )
 
-        return self.final_fusion_288(
-            refined_288,
-            original_feature_288,
-        )
+        return refined_288
 
     def _validate_inputs(
         self,
         refiner_feature_36: torch.Tensor,
-        original_feature_72: torch.Tensor,
-        original_feature_144: torch.Tensor,
-        original_feature_288: torch.Tensor,
+        original_pixel_feature_72: torch.Tensor,
+        original_pixel_feature_144: torch.Tensor,
+        original_pixel_feature_288: torch.Tensor,
+        sam_fpn_72: torch.Tensor,
+        sam_fpn_144: torch.Tensor,
+        sam_fpn_288: torch.Tensor,
     ) -> None:
         """Check shapes before entering checkpoint so errors are clear."""
-        expected = [
+        # Class-conditioned tensors: [N, 256, H, W].
+        cond_expected = [
             (refiner_feature_36, 36, "refiner_feature_36"),
-            (original_feature_72, 72, "original_feature_72"),
-            (original_feature_144, 144, "original_feature_144"),
-            (original_feature_288, 288, "original_feature_288"),
+            (original_pixel_feature_72, 72, "original_pixel_feature_72"),
+            (original_pixel_feature_144, 144, "original_pixel_feature_144"),
+            (original_pixel_feature_288, 288, "original_pixel_feature_288"),
         ]
 
         N_ref = None
         device_ref = None
 
-        for tensor, hw, name in expected:
+        for tensor, hw, name in cond_expected:
             if tensor.ndim != 4:
                 raise ValueError(
                     f"{name} must be [N, 256, {hw}, {hw}], "
                     f"got {tuple(tensor.shape)}."
                 )
-            N, C, H, W = tensor.shape
+            N, C, H, W_val = tensor.shape
             if C != self.hidden_dim:
                 raise ValueError(
                     f"{name} channel must be {self.hidden_dim}, got {C}."
                 )
-            if (H, W) != (hw, hw):
+            if (H, W_val) != (hw, hw):
                 raise ValueError(
-                    f"{name} spatial size must be {hw}×{hw}, got {(H, W)}."
+                    f"{name} spatial size must be {hw}×{hw}, got {(H, W_val)}."
                 )
             if N_ref is None:
                 N_ref = N
@@ -295,7 +280,7 @@ class RefinerPyramidDecoder(nn.Module):
             else:
                 if N != N_ref:
                     raise ValueError(
-                        f"All pyramid inputs must share N, but "
+                        f"All pyramid class-conditioned inputs must share N, but "
                         f"{name} has N={N} (expected {N_ref})."
                     )
                 if tensor.device != device_ref:
@@ -305,32 +290,95 @@ class RefinerPyramidDecoder(nn.Module):
                         f"(expected {device_ref})."
                     )
 
+        # Image-level FPN tensors: [B, 256, H, W].
+        fpn_expected = [
+            (sam_fpn_72, 72, "sam_fpn_72"),
+            (sam_fpn_144, 144, "sam_fpn_144"),
+            (sam_fpn_288, 288, "sam_fpn_288"),
+        ]
+
+        B_ref = None
+
+        for tensor, hw, name in fpn_expected:
+            if tensor.ndim != 4:
+                raise ValueError(
+                    f"{name} must be [B, 256, {hw}, {hw}], "
+                    f"got {tuple(tensor.shape)}."
+                )
+            B, C, H, W_val = tensor.shape
+            if C != self.hidden_dim:
+                raise ValueError(
+                    f"{name} channel must be {self.hidden_dim}, got {C}."
+                )
+            if (H, W_val) != (hw, hw):
+                raise ValueError(
+                    f"{name} spatial size must be {hw}×{hw}, got {(H, W_val)}."
+                )
+            if B_ref is None:
+                B_ref = B
+            else:
+                if B != B_ref:
+                    raise ValueError(
+                        f"All FPN inputs must share B, but "
+                        f"{name} has B={B} (expected {B_ref})."
+                    )
+                if tensor.device != device_ref:
+                    raise ValueError(
+                        f"All pyramid inputs must be on the same device, "
+                        f"but {name} is on {tensor.device} "
+                        f"(expected {device_ref})."
+                    )
+
+        if N_ref is None or B_ref is None:
+            raise ValueError("No inputs provided for validation.")
+        if B_ref <= 0:
+            raise ValueError(f"Batch size B must be > 0, got {B_ref}.")
+        if N_ref <= 0:
+            raise ValueError(f"Class-conditioned N must be > 0, got {N_ref}.")
+        if N_ref % B_ref != 0:
+            raise ValueError(
+                f"N ({N_ref}) must be divisible by B ({B_ref}). "
+                f"Got N={N_ref}, B={B_ref}."
+            )
+
     def forward(
         self,
         refiner_feature_36: torch.Tensor,
-        original_feature_72: torch.Tensor,
-        original_feature_144: torch.Tensor,
-        original_feature_288: torch.Tensor,
+        original_pixel_feature_72: torch.Tensor,
+        original_pixel_feature_144: torch.Tensor,
+        original_pixel_feature_288: torch.Tensor,
+        sam_fpn_72: torch.Tensor,
+        sam_fpn_144: torch.Tensor,
+        sam_fpn_288: torch.Tensor,
     ) -> torch.Tensor:
         self._validate_inputs(
             refiner_feature_36=refiner_feature_36,
-            original_feature_72=original_feature_72,
-            original_feature_144=original_feature_144,
-            original_feature_288=original_feature_288,
+            original_pixel_feature_72=original_pixel_feature_72,
+            original_pixel_feature_144=original_pixel_feature_144,
+            original_pixel_feature_288=original_pixel_feature_288,
+            sam_fpn_72=sam_fpn_72,
+            sam_fpn_144=sam_fpn_144,
+            sam_fpn_288=sam_fpn_288,
         )
 
         if self.use_checkpoint and self.training:
             return checkpoint(
                 self._forward_impl,
                 refiner_feature_36,
-                original_feature_72,
-                original_feature_144,
-                original_feature_288,
+                original_pixel_feature_72,
+                original_pixel_feature_144,
+                original_pixel_feature_288,
+                sam_fpn_72,
+                sam_fpn_144,
+                sam_fpn_288,
                 use_reentrant=False,
             )
         return self._forward_impl(
             refiner_feature_36=refiner_feature_36,
-            original_feature_72=original_feature_72,
-            original_feature_144=original_feature_144,
-            original_feature_288=original_feature_288,
+            original_pixel_feature_72=original_pixel_feature_72,
+            original_pixel_feature_144=original_pixel_feature_144,
+            original_pixel_feature_288=original_pixel_feature_288,
+            sam_fpn_72=sam_fpn_72,
+            sam_fpn_144=sam_fpn_144,
+            sam_fpn_288=sam_fpn_288,
         )

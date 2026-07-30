@@ -25,9 +25,11 @@ class ClassConditionedEncoderRefiner(nn.Module):
     residual injection before the Refiner attention layers.
 
     The Refiner outputs 36×36 features. High-resolution decoding is handled
-    by RefinerPyramidDecoder: three-stage bilinear upsampling with
-    lightweight detail injection from frozen Pixel Decoder features
-    (72→144→288), followed by a gated final fusion at 288.
+    by RefinerPyramidDecoder: three-stage semantic–detail dual-branch
+    fusion (72→144→288), where the semantic branch fuses upsampled Refiner
+    with frozen Pixel Decoder features and the detail branch fuses Refiner
+    with original SAM3 backbone FPN. stage_288 output goes directly into
+    the frozen semantic_seg_head.
 
     Forward inputs:
         encoder_features_72:  [B, C, 256, 72, 72]  (full encoder + cross-attention)
@@ -125,8 +127,9 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
         self.pyramid_decoder = RefinerPyramidDecoder(
             hidden_dim=self.hidden_dim,
-            detail_dim=64,
-            fusion_dim=96,
+            branch_dim=128,
+            spatial_groups=8,
+            residual_scale_init=float(residual_scale_init),
             use_checkpoint=self.use_checkpoint,
         )
 
@@ -232,26 +235,35 @@ class ClassConditionedEncoderRefiner(nn.Module):
     def decode_feature_pyramid_chunk(
         self,
         refiner_feature_36: torch.Tensor,
-        original_feature_72: torch.Tensor,
-        original_feature_144: torch.Tensor,
-        original_feature_288: torch.Tensor,
+        original_pixel_feature_72: torch.Tensor,
+        original_pixel_feature_144: torch.Tensor,
+        original_pixel_feature_288: torch.Tensor,
+        sam_fpn_72: torch.Tensor,
+        sam_fpn_144: torch.Tensor,
+        sam_fpn_288: torch.Tensor,
     ) -> torch.Tensor:
-        """Three-stage detail injection pyramid + final 288 gated fusion.
+        """Three-stage semantic–detail dual-branch upsampling.
 
         Args:
-            refiner_feature_36:   [B*C_chunk, 256, 36, 36]
-            original_feature_72:  [B*C_chunk, 256, 72, 72]
-            original_feature_144: [B*C_chunk, 256, 144, 144]
-            original_feature_288: [B*C_chunk, 256, 288, 288]
+            refiner_feature_36:          [B×C_chunk, 256, 36, 36]
+            original_pixel_feature_72:   [B×C_chunk, 256, 72, 72]
+            original_pixel_feature_144:  [B×C_chunk, 256, 144, 144]
+            original_pixel_feature_288:  [B×C_chunk, 256, 288, 288]
+            sam_fpn_72:                  [B, 256, 72, 72]
+            sam_fpn_144:                 [B, 256, 144, 144]
+            sam_fpn_288:                 [B, 256, 288, 288]
 
         Returns:
-            fused_feature_288: [B*C_chunk, 256, 288, 288]
+            final_feature_288: [B×C_chunk, 256, 288, 288]
         """
         return self.pyramid_decoder(
             refiner_feature_36=refiner_feature_36,
-            original_feature_72=original_feature_72,
-            original_feature_144=original_feature_144,
-            original_feature_288=original_feature_288,
+            original_pixel_feature_72=original_pixel_feature_72,
+            original_pixel_feature_144=original_pixel_feature_144,
+            original_pixel_feature_288=original_pixel_feature_288,
+            sam_fpn_72=sam_fpn_72,
+            sam_fpn_144=sam_fpn_144,
+            sam_fpn_288=sam_fpn_288,
         )
 
     def forward(

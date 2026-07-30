@@ -6,7 +6,7 @@ model = dict(
     device="cuda",
     eval_mode=False,
     compile=False,
-    prompt_chunk_size=8,
+    prompt_chunk_size=4,
 
     openclip_cfg=dict(
         enabled=True,

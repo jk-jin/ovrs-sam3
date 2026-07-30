@@ -658,8 +658,9 @@ class Sam3Image(torch.nn.Module):
         1. Slice original encoder 72 from cache for this chunk.
         2. Convert to Pixel Decoder hidden states.
         3. Run frozen Pixel Decoder pyramid (no_grad) → O72, O144, O288.
-        4. Run RefinerPyramidDecoder: 36→72→144→288 with detail injection.
-        5. Fused 288 → frozen semantic_seg_head → logits.
+        4. Run RefinerPyramidDecoder: three-scale semantic–detail dual-branch
+           fusion (36→72→144→288) with FPN broadcasting at 128 channels.
+        5. stage_288 output → frozen semantic_seg_head → logits.
         6. Optionally return teacher logits (detached).
         """
         cross_attended_encoder_features_72 = encoder_refiner_cache[
@@ -673,6 +674,11 @@ class Sam3Image(torch.nn.Module):
                 f"class_end={class_end}, total_classes={total_classes}."
             )
         backbone_fpn = encoder_refiner_cache["backbone_fpn"]
+
+        # Original SAM3 backbone FPN at three scales (image-level, no class dim).
+        sam_fpn_288 = backbone_fpn[0]  # [B, 256, 288, 288]
+        sam_fpn_144 = backbone_fpn[1]  # [B, 256, 144, 144]
+        sam_fpn_72 = backbone_fpn[2]   # [B, 256, 72, 72]
 
         B = cross_attended_encoder_features_72.shape[0]
         D = cross_attended_encoder_features_72.shape[2]
@@ -715,28 +721,31 @@ class Sam3Image(torch.nn.Module):
                 )
             )
 
-        original_feature_72_flat = original_outputs["pixel_feature_72"]
-        original_feature_144_flat = original_outputs["pixel_feature_144"]
-        original_feature_288_flat = original_outputs["pixel_feature_288"]
+        original_pixel_feature_72_flat = original_outputs["pixel_feature_72"]
+        original_pixel_feature_144_flat = original_outputs["pixel_feature_144"]
+        original_pixel_feature_288_flat = original_outputs["pixel_feature_288"]
 
         # Flatten refiner feature for this chunk.
         refiner_feature_36_flat = refiner_feature_36_chunk.reshape(
             B * num_chunk_classes, D, 36, 36
         )
 
-        # Three-stage pyramid decoder: 36→72→144→288 + final fusion.
-        fused_feature_288_flat = (
+        # Three-stage semantic–detail dual-branch fusion: 36→72→144→288.
+        final_feature_288_flat = (
             self.encoder_refiner.decode_feature_pyramid_chunk(
                 refiner_feature_36=refiner_feature_36_flat,
-                original_feature_72=original_feature_72_flat,
-                original_feature_144=original_feature_144_flat,
-                original_feature_288=original_feature_288_flat,
+                original_pixel_feature_72=original_pixel_feature_72_flat,
+                original_pixel_feature_144=original_pixel_feature_144_flat,
+                original_pixel_feature_288=original_pixel_feature_288_flat,
+                sam_fpn_72=sam_fpn_72,
+                sam_fpn_144=sam_fpn_144,
+                sam_fpn_288=sam_fpn_288,
             )
         )
 
         # Frozen semantic_seg_head → logits.
         final_logits_flat = self.segmentation_head.semantic_seg_head(
-            fused_feature_288_flat
+            final_feature_288_flat
         )
         # [B*C_chunk, 1, 288, 288] → [B, C_chunk, 288, 288]
         final_logits_chunk = final_logits_flat.reshape(

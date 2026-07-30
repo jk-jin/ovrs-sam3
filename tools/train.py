@@ -278,6 +278,16 @@ def build_log_getters(cfg) -> List[object]:
                 [refiner.fpn_score_injection_scale],
             )
         )
+        out.update(
+            summarize_residual_scales(
+                "pyramid_detail_injection",
+                [
+                    refiner.pyramid_decoder.stage_72.detail_scale,
+                    refiner.pyramid_decoder.stage_144.detail_scale,
+                    refiner.pyramid_decoder.stage_288.detail_scale,
+                ],
+            )
+        )
         return out
 
     return [project_log_getter]
