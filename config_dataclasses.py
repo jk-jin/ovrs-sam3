@@ -99,6 +99,8 @@ class SemanticCriterionConfig:
     eps: float = 1e-6
 
     sam3_mask_distill_weight: float = 0.05
+    sam3_mask_distill_decay_start_iter: int = 4000
+    sam3_mask_distill_decay_end_iter: int = 10000
 
 
 @dataclass

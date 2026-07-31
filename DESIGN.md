@@ -62,8 +62,8 @@ original_encoder_feature_72_chunk
   → original_pixel_feature_288 [B×C_chunk, 256, 288, 288]
 
 original_pixel_feature_288
-  → 冻结的 SAM3 semantic_seg_head
-  → sam3_teacher_logits（供蒸馏使用，默认开启 weight=0.05）
+  → 冻结的 SAM3 semantic_seg_head（仅当前有效蒸馏权重 > 0 时执行）
+  → sam3_teacher_logits（1～10000 步余弦衰减，10000 步起跳过）
 
 refiner_feature_36_chunk
   → stage_72: Refiner + O72 语义支路，Refiner + FPN72 细节支路
@@ -146,7 +146,9 @@ SAM3 图像 backbone 在训练中冻结并运行于 `eval()`。图像特征使�
 
 Pixel Decoder 内部继续使用 `interpolation_mode="nearest"`（SAM3 原始设置）。每次 chunk 只调用一次 Pixel Decoder，且必须在 `torch.no_grad()` 中。Pixel Decoder 参数冻结且保持 `eval()`。
 
-原始 semantic head 始终冻结并通过 O288 产生 teacher logits。
+O72/O144/O288 始终用于 Refiner Pyramid Decoder。原始 semantic head
+始终冻结，但仅在前 10000 步按需运行以产生 teacher logits（取决于当前
+有效蒸馏权重是否大于零）；第 10000 步及以后跳过 teacher head 调用。
 
 ## 4. RemoteCLIP 分支
 
@@ -348,36 +350,37 @@ OpenCLIP 常把 Q/K/V 存在同一个融合参数中。项目对该参数注册�
 
 每个类别通道独立使用 binary mask 监督，不使用跨类别 softmax。
 
-**主损失：正负平衡 BCE**（监督 `final_logits`）：
+**主损失：朴素 BCE**（监督 `final_logits`）：
 
-正像素和负像素在每个图像—类别对内分别求均值，不对全像素混合求平均。
-
-对存在类别：
-1. 只在 target=1 的像素中计算 `positive_pair_bce`；
-2. 只在 target=0 的像素中计算 `present_negative_pair_bce`。
-
-对不存在类别：
-3. 全部像素 target=0，计算 `absent_negative_pair_bce`。
-
-再对图像—类别对求均值。不由像素数量或类别面积决定权重。
+所有有效像素（label ≠ 255）等权参与全局均值。不做正负像素分离、不按类别是否出现分组加权。每个 `[B, C, H, W]` 位置只要 label ≠ 255 就对损失有相同贡献。
 
 ```python
-positive_bce = mean(positive_pair_bce)          # 存在类别正像素
-present_negative_bce = mean(present_negative_pair_bce)  # 存在类别负像素
-absent_negative_bce = mean(absent_pair_bce)     # 不存在类别负像素
-
-loss_final_balanced_bce = (
-    0.5 * positive_bce
-    + 0.25 * present_negative_bce
-    + 0.25 * absent_negative_bce
-)
+# 全局分母 = Σ valid_pixels × C
+bce_per_pixel = BCEWithLogits(final_logits, target)
+loss_final_bce = (bce_per_pixel * valid_mask).sum() / total_valid_pixels
 ```
 
-标签 255 对所有类别都是负样本。空组使用确定性规则（如全 255 图像只使用 absent-negative）。
+标签 255 被排除（不参与 BCE），对所有类别统一处理。
 
 **Dice 损失**（`final_dice_weight=0.0`）：只对图像中存在的类别计算，默认关闭。开启时按全局 `N_present` 做逐 chunk 贡献归一化。
 
-**SAM3 teacher 掩码蒸馏**（`sam3_mask_distill_weight=0.05`）：默认开启。行为如下：
+**SAM3 teacher 掩码蒸馏**（初始权重 `sam3_mask_distill_weight=0.05`）：
+
+蒸馏权重按训练绝对步数独立余弦衰减，不与学习率调度器绑定：
+
+- 1～4000 步：保持 `0.05`；
+- 4000～10000 步：余弦衰减至 `0`；
+- 第 10000 步及以后：严格为 `0`。
+
+衰减公式：
+
+```
+w(t) = w_0/2 × (1 + cos(π × (t - t_s) / (t_e - t_s)))
+```
+
+其中 `w_0=0.05`、`t_s=4000`、`t_e=10000`、`t` 为当前训练步骤（从 1 开始计数）。
+
+蒸馏监督范围保持不变：
 
 1. 冻结的 SAM3 semantic head 产生的 teacher logits 做 sigmoid，得到 soft probability 目标。
 2. student 使用 raw `final_logits`。
@@ -391,11 +394,13 @@ loss_final_balanced_bce = (
 
 ```python
 total_loss = (
-    1.0 * loss_final_balanced_bce
+    1.0 * loss_final_bce
     + 0.0 * loss_final_dice
-    + 0.05 * loss_sam3_mask_distill_bce
+    + distill_weight(global_iter) * loss_sam3_mask_distill_bce
 )
 ```
+
+`loss_sam3_mask_distill_bce` 为未经权重的原始蒸馏 BCE；`loss_sam3_mask_distill_weighted` 为真正加入总损失的加权贡献。第 10000 步以后两者均为零。
 
 **训练显存设计**：
 
@@ -480,6 +485,17 @@ checkpoint 内 last_history_step=K
 其中 `K` 是 checkpoint 保存时最后一条 W&B history 的内部序号，不是训练步数 8000。
 
 旧格式或缺少完整运行状态的权重不能用于 `--resume-from`，但可以通过 `--load-model-from` 只加载模型参数。
+
+训练日志中记录以下蒸馏相关项：
+
+| 键 | 含义 |
+| --- | --- |
+| `loss_final_bce` | 朴素 BCE，所有有效像素等权全局均值（跨 chunk 累加后求均值） |
+| `loss_sam3_mask_distill_bce` | 未经权重的原始蒸馏 BCE（跨 chunk 累加后求均值） |
+| `loss_sam3_mask_distill_weighted` | 真正加入总损失的加权蒸馏贡献（跨 chunk 累加后求均值） |
+| `extra/loss/sam3_mask_distill_effective_weight` | 当前训练步骤对应的有效蒸馏权重（log getter 产出，不经滑动平均） |
+
+第 10000 步以后前三项均应为零。有效权重不按 chunk 累加，所有 chunk 共享同一值。
 
 ## 10. 配置与主要文件
 

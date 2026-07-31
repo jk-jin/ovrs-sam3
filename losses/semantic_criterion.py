@@ -26,32 +26,25 @@ class SemanticStreamingContext:
 
     label_map: torch.Tensor
     valid_mask: torch.Tensor
-    presence_target: torch.Tensor          # [B, C] bool
-    present_negative_target: torch.Tensor  # [B, C] bool
+    presence_target: torch.Tensor          # [B, C] bool — kept for Dice / distillation
     num_classes: int
-    num_present_pairs: int
-    num_present_negative_pairs: int
-    num_absent_pairs: int
-    distill_pixel_denom: int
-    positive_weight: float
-    present_negative_weight: float
-    absent_negative_weight: float
+    num_present_pairs: int                 # kept for Dice
+    distill_pixel_denom: int               # kept for distillation
+    total_valid_pixels: int                # Σ valid pixels × C, denominator for plain BCE
+    sam3_mask_distill_weight: float
 
 
 class SemanticCriterion(nn.Module):
     """Semantic segmentation criterion with streaming per-chunk support.
 
     Losses:
-        1. Positive-negative balanced BCE on final_logits
-           - Positive pixels and negative pixels are averaged separately
-             within each image-class pair, then averaged across pairs.
-           - 0.5 * positive_bce + 0.25 * present_negative_bce
-             + 0.25 * absent_negative_bce
-           - Label 255 is negative for all classes in main BCE.
+        1. Plain BCE on final_logits — every valid pixel (label ≠ 255)
+           contributes equally regardless of class presence or pixel sign.
+           Global mean over all B × C × H × W valid pixel positions.
 
         2. Optional Dice on final_logits (default weight 0.0)
 
-        3. SAM3 teacher mask distillation BCE (default weight 0.05)
+        3. SAM3 teacher mask distillation BCE (cosine-decayed weight)
            - Frozen SAM3 semantic head logits as soft targets
            - Only present pairs and non-255 pixels
     """
@@ -59,6 +52,78 @@ class SemanticCriterion(nn.Module):
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
         super().__init__()
         self.cfg = cfg or SemanticCriterionConfig()
+
+        # Validate distillation schedule config.
+        initial_weight = float(self.cfg.sam3_mask_distill_weight)
+        decay_start_iter = int(
+            self.cfg.sam3_mask_distill_decay_start_iter
+        )
+        decay_end_iter = int(
+            self.cfg.sam3_mask_distill_decay_end_iter
+        )
+
+        if initial_weight < 0.0:
+            raise ValueError(
+                "sam3_mask_distill_weight must be >= 0, "
+                f"got {initial_weight}."
+            )
+        if decay_start_iter < 0:
+            raise ValueError(
+                "sam3_mask_distill_decay_start_iter must be >= 0, "
+                f"got {decay_start_iter}."
+            )
+        if decay_end_iter <= decay_start_iter:
+            raise ValueError(
+                "sam3_mask_distill_decay_end_iter "
+                f"({decay_end_iter}) must be > "
+                "sam3_mask_distill_decay_start_iter "
+                f"({decay_start_iter})."
+            )
+
+    def get_sam3_mask_distill_weight(
+        self,
+        global_iter: int,
+    ) -> float:
+        """Compute effective distillation weight for the given training step.
+
+        Uses cosine decay from decay_start_iter to decay_end_iter.
+        Returns exact 0.0 when global_iter >= decay_end_iter.
+        """
+        global_iter = int(global_iter)
+
+        if global_iter < 0:
+            raise ValueError(
+                f"global_iter must be >= 0, got {global_iter}."
+            )
+
+        initial_weight = float(
+            self.cfg.sam3_mask_distill_weight
+        )
+        decay_start_iter = int(
+            self.cfg.sam3_mask_distill_decay_start_iter
+        )
+        decay_end_iter = int(
+            self.cfg.sam3_mask_distill_decay_end_iter
+        )
+
+        if initial_weight == 0.0:
+            return 0.0
+
+        if global_iter <= decay_start_iter:
+            return initial_weight
+
+        if global_iter >= decay_end_iter:
+            return 0.0
+
+        progress = (
+            global_iter - decay_start_iter
+        ) / (
+            decay_end_iter - decay_start_iter
+        )
+
+        return 0.5 * initial_weight * (
+            1.0 + math.cos(math.pi * progress)
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -70,6 +135,7 @@ class SemanticCriterion(nn.Module):
         targets: TensorDict,
         chunk_class_ids: Optional[Sequence[int]] = None,
         reduction: str = "mean",
+        global_iter: int = 0,
     ) -> TensorDict:
         """Full-batch forward (inference / eval / legacy)."""
         del chunk_class_ids
@@ -93,6 +159,7 @@ class SemanticCriterion(nn.Module):
             targets=targets,
             num_classes=C,
             target_hw=final_logits.shape[-2:],
+            global_iter=global_iter,
         )
 
         # Build full target for Dice.
@@ -117,6 +184,7 @@ class SemanticCriterion(nn.Module):
         targets: TensorDict,
         num_classes: int,
         target_hw: tuple[int, int] = (288, 288),
+        global_iter: int = 0,
     ) -> SemanticStreamingContext:
         """Build global statistics for streaming per-chunk loss.
 
@@ -141,32 +209,19 @@ class SemanticCriterion(nn.Module):
                     f"got min={valid_labels.min().item()}, max={valid_labels.max().item()}."
                 )
 
-        # Compute presence and positive pixel counts per class in one pass.
-        num_pixels = int(label_map.shape[-2] * label_map.shape[-1])
-        positive_pixel_counts = torch.zeros(
-            (B, C), dtype=torch.long, device=label_map.device
-        )
+        # Global BCE denominator: every valid pixel × every class.
+        total_valid_pixels = int(valid_mask.sum().item()) * C
+
+        # Presence: which image-class pairs actually appear (for Dice / distillation).
         presence_target = torch.zeros(
             (B, C), dtype=torch.bool, device=label_map.device
         )
-
         for class_id in range(C):
-            class_pixel_count = (
-                label_map == class_id
-            ).flatten(1).sum(dim=1)
-            positive_pixel_counts[:, class_id] = class_pixel_count
-            presence_target[:, class_id] = class_pixel_count > 0
-
-        # Present-negative: present AND has at least one pixel that is NOT
-        # this class (255 counts as negative here, matching main BCE behaviour).
-        present_negative_target = (
-            presence_target
-            & (positive_pixel_counts < num_pixels)
-        )
+            presence_target[:, class_id] = (
+                (label_map == class_id).flatten(1).sum(dim=1) > 0
+            )
 
         num_present_pairs = int(presence_target.sum().item())
-        num_present_negative_pairs = int(present_negative_target.sum().item())
-        num_absent_pairs = int((~presence_target).sum().item())
 
         # Distillation denominator: Σ presence[b,c] × valid_pixel_count[b].
         valid_pixel_count = valid_mask.flatten(1).sum(dim=1)  # [B]
@@ -177,38 +232,19 @@ class SemanticCriterion(nn.Module):
             ).sum().item()
         )
 
-        # Determine weights based on which groups are non-empty.
-        has_present = num_present_pairs > 0
-        has_present_neg = num_present_negative_pairs > 0
-        has_absent = num_absent_pairs > 0
-
-        if has_present and has_present_neg and has_absent:
-            pos_w, pn_w, an_w = 0.5, 0.25, 0.25
-        elif has_present and has_present_neg and not has_absent:
-            pos_w, pn_w, an_w = 0.5, 0.5, 0.0
-        elif has_present and not has_present_neg and has_absent:
-            pos_w, pn_w, an_w = 0.5, 0.0, 0.5
-        elif not has_present and has_absent:
-            pos_w, pn_w, an_w = 0.0, 0.0, 1.0
-        elif has_present and not has_present_neg and not has_absent:
-            pos_w, pn_w, an_w = 1.0, 0.0, 0.0
-        else:
-            # All 255 — treat as absent.
-            pos_w, pn_w, an_w = 0.0, 0.0, 1.0
+        distill_weight = self.get_sam3_mask_distill_weight(
+            global_iter
+        )
 
         return SemanticStreamingContext(
             label_map=label_map,
             valid_mask=valid_mask,
             presence_target=presence_target,
-            present_negative_target=present_negative_target,
             num_classes=C,
             num_present_pairs=num_present_pairs,
-            num_present_negative_pairs=num_present_negative_pairs,
-            num_absent_pairs=num_absent_pairs,
             distill_pixel_denom=distill_pixel_denom,
-            positive_weight=pos_w,
-            present_negative_weight=pn_w,
-            absent_negative_weight=an_w,
+            total_valid_pixels=total_valid_pixels,
+            sam3_mask_distill_weight=distill_weight,
         )
 
     def forward_chunk(
@@ -259,76 +295,32 @@ class SemanticCriterion(nn.Module):
 
         zero = self._zero_loss(final_logits_chunk)
 
-        # ---- Balanced BCE (per image-class pair, pos/neg separated) ----
+        # ---- Plain BCE (every valid pixel equal, global mean) ----
         bce_per_pixel = F.binary_cross_entropy_with_logits(
             final_logits_chunk,
             target_chunk,
             reduction="none",
         )  # [B, C_chunk, H, W]
 
-        # Count positive and negative pixels per pair.
-        positive_pixel_count = target_bool.flatten(2).sum(dim=2)  # [B, C_chunk]
-        negative_pixel_count = (~target_bool).flatten(2).sum(dim=2)
+        valid_float = valid_mask.to(
+            device=device, dtype=bce_per_pixel.dtype
+        )[:, None, :, :]  # [B, 1, H, W]
 
-        # Positive-pixel BCE per pair.
-        positive_pair_bce = (
-            bce_per_pixel * target_chunk
-        ).flatten(2).sum(dim=2)
-        positive_pair_bce = positive_pair_bce / positive_pixel_count.to(
-            dtype=bce_per_pixel.dtype
-        ).clamp_min(1.0)
+        plain_bce_contribution = (
+            bce_per_pixel * valid_float
+        ).sum() / max(context.total_valid_pixels, 1)
 
-        # Negative-pixel BCE per pair.
-        negative_target = (~target_bool).to(dtype=bce_per_pixel.dtype)
-        negative_pair_bce = (
-            bce_per_pixel * negative_target
-        ).flatten(2).sum(dim=2)
-        negative_pair_bce = negative_pair_bce / negative_pixel_count.to(
-            dtype=bce_per_pixel.dtype
-        ).clamp_min(1.0)
-
-        # Slice masks from context.
+        # ---- Dice (optional) ----
         present_mask = context.presence_target[
             :, class_start:class_end
         ].to(device=device)
 
-        present_negative_mask = context.present_negative_target[
-            :, class_start:class_end
-        ].to(device=device)
-
-        absent_mask = ~present_mask
-
-        # Positive contribution: only present pairs, using positive-pixel BCE.
-        positive_contribution = (
-            positive_pair_bce * present_mask.to(dtype=positive_pair_bce.dtype)
-        ).sum() / max(context.num_present_pairs, 1)
-
-        # Present-negative contribution: present pairs that have negative
-        # pixels, using negative-pixel BCE.
-        present_negative_contribution = (
-            negative_pair_bce
-            * present_negative_mask.to(dtype=negative_pair_bce.dtype)
-        ).sum() / max(context.num_present_negative_pairs, 1)
-
-        # Absent contribution: absent pairs, using negative-pixel BCE.
-        absent_negative_contribution = (
-            negative_pair_bce * absent_mask.to(dtype=negative_pair_bce.dtype)
-        ).sum() / max(context.num_absent_pairs, 1)
-
-        balanced_bce_contribution = (
-            context.positive_weight * positive_contribution
-            + context.present_negative_weight * present_negative_contribution
-            + context.absent_negative_weight * absent_negative_contribution
-        )
-
-        # ---- Dice (optional) ----
         dice_weight = float(self.cfg.final_dice_weight)
         if dice_weight > 0.0 and context.num_present_pairs > 0:
             if target_full is not None:
                 target_chunk_full = target_full[:, class_start:class_end]
             else:
                 target_chunk_full = target_chunk
-            # presence_target from context is bool; convert for Dice.
             chunk_presence_float = present_mask.to(dtype=torch.float32)
             dice_contribution = self._dice_contribution_chunk(
                 logits=final_logits_chunk,
@@ -340,7 +332,7 @@ class SemanticCriterion(nn.Module):
             dice_contribution = zero
 
         # ---- SAM3 teacher distillation ----
-        distill_weight = float(self.cfg.sam3_mask_distill_weight)
+        distill_weight = float(context.sam3_mask_distill_weight)
         if distill_weight > 0.0 and context.distill_pixel_denom > 0:
             if OUTPUT_KEYS.sam3_teacher_logits not in outputs:
                 raise ValueError(
@@ -358,20 +350,22 @@ class SemanticCriterion(nn.Module):
         else:
             distill_contribution = zero
 
+        weighted_distill_contribution = (
+            distill_weight * distill_contribution
+        )
+
         # ---- Total ----
         chunk_total = (
-            float(self.cfg.final_balanced_bce_weight) * balanced_bce_contribution
+            float(self.cfg.final_balanced_bce_weight) * plain_bce_contribution
             + dice_weight * dice_contribution
-            + distill_weight * distill_contribution
+            + weighted_distill_contribution
         )
 
         return {
-            "loss_positive_bce": positive_contribution,
-            "loss_present_negative_bce": present_negative_contribution,
-            "loss_absent_negative_bce": absent_negative_contribution,
-            "loss_final_balanced_bce": balanced_bce_contribution,
+            "loss_final_bce": plain_bce_contribution,
             "loss_final_dice": dice_contribution,
             "loss_sam3_mask_distill_bce": distill_contribution,
+            "loss_sam3_mask_distill_weighted": weighted_distill_contribution,
             "total_loss": chunk_total,
         }
 

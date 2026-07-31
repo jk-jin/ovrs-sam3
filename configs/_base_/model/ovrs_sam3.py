@@ -95,5 +95,7 @@ model = dict(
         final_dice_weight=0.0,
         eps=1e-6,
         sam3_mask_distill_weight=0.05,
+        sam3_mask_distill_decay_start_iter=15000,
+        sam3_mask_distill_decay_end_iter=20000,
     ),
 )

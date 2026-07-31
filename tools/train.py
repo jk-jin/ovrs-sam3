@@ -290,7 +290,22 @@ def build_log_getters(cfg) -> List[object]:
         )
         return out
 
-    return [project_log_getter]
+    def distill_schedule_log_getter(trainer):
+        weight = (
+            trainer.criterion
+            .get_sam3_mask_distill_weight(
+                trainer.global_iter
+            )
+        )
+        return {
+            "loss/sam3_mask_distill_effective_weight":
+                float(weight),
+        }
+
+    return [
+        project_log_getter,
+        distill_schedule_log_getter,
+    ]
 
 
 def _unwrap_state_dict(obj: Any) -> Dict[str, torch.Tensor]:
