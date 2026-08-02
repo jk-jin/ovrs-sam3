@@ -62,8 +62,8 @@ original_encoder_feature_72_chunk
   → original_pixel_feature_288 [B×C_chunk, 256, 288, 288]
 
 original_pixel_feature_288
-  → 冻结的 SAM3 semantic_seg_head（仅当前有效蒸馏权重 > 0 时执行）
-  → sam3_teacher_logits（1～10000 步余弦衰减，10000 步起跳过）
+  → 冻结的 SAM3 semantic_seg_head（仅当固定蒸馏权重 > 0 时执行）
+  → sam3_teacher_logits
 
 refiner_feature_36_chunk
   → stage_72: Refiner + O72 语义支路，Refiner + FPN72 细节支路
@@ -147,8 +147,8 @@ SAM3 图像 backbone 在训练中冻结并运行于 `eval()`。图像特征使�
 Pixel Decoder 内部继续使用 `interpolation_mode="nearest"`（SAM3 原始设置）。每次 chunk 只调用一次 Pixel Decoder，且必须在 `torch.no_grad()` 中。Pixel Decoder 参数冻结且保持 `eval()`。
 
 O72/O144/O288 始终用于 Refiner Pyramid Decoder。原始 semantic head
-始终冻结，但仅在前 10000 步按需运行以产生 teacher logits（取决于当前
-有效蒸馏权重是否大于零）；第 10000 步及以后跳过 teacher head 调用。
+始终冻结，但仅当固定蒸馏权重大于零且存在可蒸馏类别时按需运行以产生
+teacher logits。
 
 ## 4. RemoteCLIP 分支
 
@@ -248,13 +248,16 @@ stage_288 输出直接进入冻结 `semantic_seg_head`，不再有最终融合�
 
 **SemanticDetailFusionStage（每个尺度）**：
 
-三路独立的 256→128 投影（`1×1 Conv + GroupNorm`，无激活）：
+四路独立的 256→128 投影（`1×1 Conv + GroupNorm`，无激活）：
 
 ```text
-refiner_proj:  upsampled_refiner [N, 256, H, W] → [N, 128, H, W]
-pixel_proj:    original_pixel     [N, 256, H, W] → [N, 128, H, W]
-fpn_proj:      sam_fpn            [B, 256, H, W] → [B, 128, H, W]
+semantic_refiner_proj:  upsampled_refiner [N, 256, H, W] → [N, 128, H, W]
+detail_refiner_proj:    upsampled_refiner [N, 256, H, W] → [N, 128, H, W]
+pixel_proj:             original_pixel     [N, 256, H, W] → [N, 128, H, W]
+fpn_proj:               sam_fpn            [B, 256, H, W] → [B, 128, H, W]
 ```
+
+语义和细节分支各自使用独立的 Refiner 投影（`semantic_refiner_proj` 和 `detail_refiner_proj`），参数不共享。
 
 FPN 先按图像投影到 128 通道，再通过广播与 Refiner 逐类别相加。不使用 `repeat` 或 `repeat_interleave` 复制 256 通道 FPN。
 
@@ -266,21 +269,18 @@ block: 3×3 grouped conv (128→128, groups=8) → GN(8,128) → GELU
 output = input + block(input)   # block 内部残差
 ```
 
-语义支路融合 Refiner 与 Pixel Decoder；细节支路融合 Refiner 与原始 FPN。
+语义支路融合独立 Refiner 语义投影与 Pixel Decoder；细节支路融合独立 Refiner 细节投影与原始 FPN。
 
 两条支路分别使用独立的 128→256 `1×1 Conv`（无 norm、无激活）恢复到 256 通道。
 
-每个 stage 具有独立的可学习标量 `detail_scale`，初值由 `residual_scale_init`（默认 0.1）控制：
+两路直接相加，再经过一个 256→256 的 `1×1 Conv`（`fusion_out_proj`）输出：
 
 ```python
-output = semantic_out + detail_scale * detail_out
+fused_out = semantic_out + detail_out
+output = fusion_out_proj(fused_out)
 ```
 
-- `semantic_out` 是主路径（Refiner + Pixel Decoder）；
-- `detail_out` 是细节修正量（Refiner + FPN）；
-- `detail_scale` 允许为负值，由 `make_residual_scale()` 创建并自动关闭 weight decay。
-
-256 通道输出后无 GroupNorm、GELU、ReLU 或原始特征残差。无 final fusion 模块。
+每个 stage 不再包含可学习的末尾融合系数。256 通道输出后无 GroupNorm、GELU、ReLU 或原始特征残差。无 final fusion 模块。
 
 整个 pyramid decoder 使用一次 non-reentrant checkpoint（`self.training and self.use_checkpoint` 时开启），不嵌套给每个 stage。
 
@@ -292,10 +292,9 @@ output = semantic_out + detail_scale * detail_out
 | --- | --- | ---: |
 | Refiner 内部 | `residual/refiner_internal/` | 32 |
 | FPN score 注入 | `residual/fpn_score_injection/` | 1 |
-| Pyramid detail injection | `residual/pyramid_detail_injection/` | 3 |
 
 每类记录 `count`、`mean`、`abs_mean`、`min`、`max` 和
-`negative_ratio`。`residual/refiner_internal/count` 为 32（4 层 × 8 个标量），`residual/fpn_score_injection/count` 为 1，`residual/pyramid_detail_injection/count` 为 3。
+`negative_ratio`。`residual/refiner_internal/count` 为 32（4 层 × 8 个标量），`residual/fpn_score_injection/count` 为 1。
 
 ## 6. 冻结 SAM3 分割头与梯度边界
 
@@ -336,7 +335,7 @@ OpenCLIP 常把 Q/K/V 存在同一个融合参数中。项目对该参数注册�
 * encoder refiner 使用 1.0 倍学习率；
 * RemoteCLIP text/image 使用 0.01 倍学习率，即 `1e-6`；
 * normalization 参数不使用 weight decay；
-* 所有残差系数（Refiner 内部 32 个 LayerScale + FPN score 注入 1 个 + Pyramid detail injection 3 个，共 36 个可学习标量）使用 `_ovrs_disable_weight_decay` 标记，weight decay 强制为 0；全部由同一个 `residual_scale_init` 配置初始化；
+* 所有残差系数（Refiner 内部 32 个 LayerScale + FPN score 注入 1 个，共 33 个可学习标量）使用 `_ovrs_disable_weight_decay` 标记，weight decay 强制为 0；全部由同一个 `residual_scale_init` 配置初始化；
 * 梯度裁剪上限为 0.1；
 * warmup 保持前 1000 步，线性从 0.1 倍到全额学习率，后续余弦衰减。
 
@@ -364,21 +363,9 @@ loss_final_bce = (bce_per_pixel * valid_mask).sum() / total_valid_pixels
 
 **Dice 损失**（`final_dice_weight=0.0`）：只对图像中存在的类别计算，默认关闭。开启时按全局 `N_present` 做逐 chunk 贡献归一化。
 
-**SAM3 teacher 掩码蒸馏**（初始权重 `sam3_mask_distill_weight=0.05`）：
+**SAM3 teacher 掩码蒸馏**（固定权重 `sam3_mask_distill_weight=0.05`）：
 
-蒸馏权重按训练绝对步数独立余弦衰减，不与学习率调度器绑定：
-
-- 1～4000 步：保持 `0.05`；
-- 4000～10000 步：余弦衰减至 `0`；
-- 第 10000 步及以后：严格为 `0`。
-
-衰减公式：
-
-```
-w(t) = w_0/2 × (1 + cos(π × (t - t_s) / (t_e - t_s)))
-```
-
-其中 `w_0=0.05`、`t_s=4000`、`t_e=10000`、`t` 为当前训练步骤（从 1 开始计数）。
+蒸馏权重在整个训练过程中保持不变。只要当前 batch 存在可蒸馏类别，就计算 teacher logits。
 
 蒸馏监督范围保持不变：
 
@@ -396,11 +383,11 @@ w(t) = w_0/2 × (1 + cos(π × (t - t_s) / (t_e - t_s)))
 total_loss = (
     1.0 * loss_final_bce
     + 0.0 * loss_final_dice
-    + distill_weight(global_iter) * loss_sam3_mask_distill_bce
+    + 0.05 * loss_sam3_mask_distill_bce
 )
 ```
 
-`loss_sam3_mask_distill_bce` 为未经权重的原始蒸馏 BCE；`loss_sam3_mask_distill_weighted` 为真正加入总损失的加权贡献。第 10000 步以后两者均为零。
+`loss_sam3_mask_distill_bce` 为未经权重的原始蒸馏 BCE；`loss_sam3_mask_distill_weighted` 为真正加入总损失的加权贡献。`0.05` 是整个训练期间固定不变的蒸馏权重。
 
 **训练显存设计**：
 
@@ -493,9 +480,6 @@ checkpoint 内 last_history_step=K
 | `loss_final_bce` | 朴素 BCE，所有有效像素等权全局均值（跨 chunk 累加后求均值） |
 | `loss_sam3_mask_distill_bce` | 未经权重的原始蒸馏 BCE（跨 chunk 累加后求均值） |
 | `loss_sam3_mask_distill_weighted` | 真正加入总损失的加权蒸馏贡献（跨 chunk 累加后求均值） |
-| `extra/loss/sam3_mask_distill_effective_weight` | 当前训练步骤对应的有效蒸馏权重（log getter 产出，不经滑动平均） |
-
-第 10000 步以后前三项均应为零。有效权重不按 chunk 累加，所有 chunk 共享同一值。
 
 ## 10. 配置与主要文件
 
@@ -595,3 +579,15 @@ Checkpoint schema 版本为 4。新增 `runtime_state.hooks.WandbHook.last_histo
 * 不创建旧参数映射或兼容层。
 * `_CHECKPOINT_VERSION` 继续保持 4，因为 checkpoint 容器格式没有改变。
 * 原始 SAM3 Pixel Decoder 和 semantic head 参数名称、形状保持不变。
+
+后续一次重构中：
+
+* 删除 `pyramid_decoder.stage_*.refiner_proj.*`（共享 Refiner 投影）。
+* 删除 `pyramid_decoder.stage_*.detail_scale`（可学习残差系数）。
+* 新增 `pyramid_decoder.stage_*.semantic_refiner_proj.*`（独立语义 Refiner 投影）。
+* 新增 `pyramid_decoder.stage_*.detail_refiner_proj.*`（独立细节 Refiner 投影）。
+* 新增 `pyramid_decoder.stage_*.fusion_out_proj.*`（256→256 最终融合 1×1 Conv）。
+* 不复制旧 `refiner_proj` 到两个新投影。
+* 蒸馏损失不再使用余弦衰减，权重在训练全程保持固定。
+* 配置字段 `sam3_mask_distill_decay_start_iter` 和 `sam3_mask_distill_decay_end_iter` 已删除。
+* `_CHECKPOINT_VERSION` 继续保持 4。

@@ -28,8 +28,9 @@ class ClassConditionedEncoderRefiner(nn.Module):
     by RefinerPyramidDecoder: three-stage semantic–detail dual-branch
     fusion (72→144→288), where the semantic branch fuses upsampled Refiner
     with frozen Pixel Decoder features and the detail branch fuses Refiner
-    with original SAM3 backbone FPN. stage_288 output goes directly into
-    the frozen semantic_seg_head.
+    with original SAM3 backbone FPN. Both branches use independent Refiner
+    projections. stage_288 output goes directly into the frozen
+    semantic_seg_head.
 
     Forward inputs:
         encoder_features_72:  [B, C, 256, 72, 72]  (full encoder + cross-attention)
@@ -129,7 +130,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
             hidden_dim=self.hidden_dim,
             branch_dim=128,
             spatial_groups=8,
-            residual_scale_init=float(residual_scale_init),
             use_checkpoint=self.use_checkpoint,
         )
 
@@ -242,7 +242,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
         sam_fpn_144: torch.Tensor,
         sam_fpn_288: torch.Tensor,
     ) -> torch.Tensor:
-        """Three-stage semantic–detail dual-branch upsampling.
+        """Three-stage semantic–detail dual-branch upsampling with
+        independent Refiner projections per branch.
 
         Args:
             refiner_feature_36:          [B×C_chunk, 256, 36, 36]

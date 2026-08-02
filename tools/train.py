@@ -218,7 +218,7 @@ def print_config_as_json(cfg) -> None:
     print(json.dumps(_to_builtin(cfg), indent=2, ensure_ascii=False))
 
 
-def build_log_getters(cfg) -> List[object]:
+def build_log_getters() -> List[object]:
     def summarize_residual_scales(prefix, params):
         params = [
             param.detach().reshape(-1).float()
@@ -278,34 +278,9 @@ def build_log_getters(cfg) -> List[object]:
                 [refiner.fpn_score_injection_scale],
             )
         )
-        out.update(
-            summarize_residual_scales(
-                "pyramid_detail_injection",
-                [
-                    refiner.pyramid_decoder.stage_72.detail_scale,
-                    refiner.pyramid_decoder.stage_144.detail_scale,
-                    refiner.pyramid_decoder.stage_288.detail_scale,
-                ],
-            )
-        )
         return out
 
-    def distill_schedule_log_getter(trainer):
-        weight = (
-            trainer.criterion
-            .get_sam3_mask_distill_weight(
-                trainer.global_iter
-            )
-        )
-        return {
-            "loss/sam3_mask_distill_effective_weight":
-                float(weight),
-        }
-
-    return [
-        project_log_getter,
-        distill_schedule_log_getter,
-    ]
+    return [project_log_getter]
 
 
 def _unwrap_state_dict(obj: Any) -> Dict[str, torch.Tensor]:
@@ -532,7 +507,7 @@ def main():
         raw_cfg_for_logging=_to_builtin(cfg),
     )
 
-    for getter in build_log_getters(cfg):
+    for getter in build_log_getters():
         trainer.register_log_getter(getter)
 
     if args.resume_from:

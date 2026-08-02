@@ -85,7 +85,7 @@ model = dict(
     ),
 
     adapter_cfg=dict(
-        class_relative_prob_thd=0.2,
+        class_relative_prob_thd=0.5,
         class_relative_eps=1e-6,
     ),
 
@@ -94,8 +94,6 @@ model = dict(
         final_balanced_bce_weight=1.0,
         final_dice_weight=0.0,
         eps=1e-6,
-        sam3_mask_distill_weight=0.05,
-        sam3_mask_distill_decay_start_iter=15000,
-        sam3_mask_distill_decay_end_iter=20000,
+        sam3_mask_distill_weight=0.1,
     ),
 )

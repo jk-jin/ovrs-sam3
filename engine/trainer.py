@@ -202,7 +202,6 @@ class Trainer:
     def _compute_train_loss_streaming(
         self,
         batch,
-        train_iter: int,
     ) -> Dict[str, torch.Tensor]:
         """Streaming per-chunk loss/backward with proxy leaf gradient isolation.
 
@@ -246,7 +245,6 @@ class Trainer:
                 targets={"label_map": label_map},
                 num_classes=C_total,
                 target_hw=(288, 288),
-                global_iter=train_iter,
             )
 
         effective_distill_weight = float(
@@ -340,7 +338,6 @@ class Trainer:
     def train_step(
         self,
         batch,
-        train_iter: int,
     ) -> Dict[str, float]:
         if self.optimizer is None:
             raise RuntimeError("Optimizer is None, cannot run train_step().")
@@ -348,10 +345,7 @@ class Trainer:
         batch = self._move_to_device(batch)
         self.optimizer.zero_grad(set_to_none=True)
 
-        accum = self._compute_train_loss_streaming(
-            batch,
-            train_iter=train_iter,
-        )
+        accum = self._compute_train_loss_streaming(batch)
 
         # Optimizer step (once per batch).
         self.scaler.unscale_(self.optimizer)
@@ -783,10 +777,7 @@ class Trainer:
 
             self.hook_manager.call("before_train_iter", self, next_iter, batch)
 
-            stats = self.train_step(
-                batch,
-                train_iter=next_iter,
-            )
+            stats = self.train_step(batch)
 
             self._commit_sampler_batch()
 

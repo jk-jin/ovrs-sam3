@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import Dict, Optional, Sequence
 
@@ -44,7 +43,7 @@ class SemanticCriterion(nn.Module):
 
         2. Optional Dice on final_logits (default weight 0.0)
 
-        3. SAM3 teacher mask distillation BCE (cosine-decayed weight)
+        3. SAM3 teacher mask distillation BCE (fixed weight)
            - Frozen SAM3 semantic head logits as soft targets
            - Only present pairs and non-255 pixels
     """
@@ -53,77 +52,12 @@ class SemanticCriterion(nn.Module):
         super().__init__()
         self.cfg = cfg or SemanticCriterionConfig()
 
-        # Validate distillation schedule config.
-        initial_weight = float(self.cfg.sam3_mask_distill_weight)
-        decay_start_iter = int(
-            self.cfg.sam3_mask_distill_decay_start_iter
-        )
-        decay_end_iter = int(
-            self.cfg.sam3_mask_distill_decay_end_iter
-        )
-
-        if initial_weight < 0.0:
+        distill_weight = float(self.cfg.sam3_mask_distill_weight)
+        if distill_weight < 0.0:
             raise ValueError(
                 "sam3_mask_distill_weight must be >= 0, "
-                f"got {initial_weight}."
+                f"got {distill_weight}."
             )
-        if decay_start_iter < 0:
-            raise ValueError(
-                "sam3_mask_distill_decay_start_iter must be >= 0, "
-                f"got {decay_start_iter}."
-            )
-        if decay_end_iter <= decay_start_iter:
-            raise ValueError(
-                "sam3_mask_distill_decay_end_iter "
-                f"({decay_end_iter}) must be > "
-                "sam3_mask_distill_decay_start_iter "
-                f"({decay_start_iter})."
-            )
-
-    def get_sam3_mask_distill_weight(
-        self,
-        global_iter: int,
-    ) -> float:
-        """Compute effective distillation weight for the given training step.
-
-        Uses cosine decay from decay_start_iter to decay_end_iter.
-        Returns exact 0.0 when global_iter >= decay_end_iter.
-        """
-        global_iter = int(global_iter)
-
-        if global_iter < 0:
-            raise ValueError(
-                f"global_iter must be >= 0, got {global_iter}."
-            )
-
-        initial_weight = float(
-            self.cfg.sam3_mask_distill_weight
-        )
-        decay_start_iter = int(
-            self.cfg.sam3_mask_distill_decay_start_iter
-        )
-        decay_end_iter = int(
-            self.cfg.sam3_mask_distill_decay_end_iter
-        )
-
-        if initial_weight == 0.0:
-            return 0.0
-
-        if global_iter <= decay_start_iter:
-            return initial_weight
-
-        if global_iter >= decay_end_iter:
-            return 0.0
-
-        progress = (
-            global_iter - decay_start_iter
-        ) / (
-            decay_end_iter - decay_start_iter
-        )
-
-        return 0.5 * initial_weight * (
-            1.0 + math.cos(math.pi * progress)
-        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -135,7 +69,6 @@ class SemanticCriterion(nn.Module):
         targets: TensorDict,
         chunk_class_ids: Optional[Sequence[int]] = None,
         reduction: str = "mean",
-        global_iter: int = 0,
     ) -> TensorDict:
         """Full-batch forward (inference / eval / legacy)."""
         del chunk_class_ids
@@ -159,7 +92,6 @@ class SemanticCriterion(nn.Module):
             targets=targets,
             num_classes=C,
             target_hw=final_logits.shape[-2:],
-            global_iter=global_iter,
         )
 
         # Build full target for Dice.
@@ -184,7 +116,6 @@ class SemanticCriterion(nn.Module):
         targets: TensorDict,
         num_classes: int,
         target_hw: tuple[int, int] = (288, 288),
-        global_iter: int = 0,
     ) -> SemanticStreamingContext:
         """Build global statistics for streaming per-chunk loss.
 
@@ -232,8 +163,8 @@ class SemanticCriterion(nn.Module):
             ).sum().item()
         )
 
-        distill_weight = self.get_sam3_mask_distill_weight(
-            global_iter
+        distill_weight = float(
+            self.cfg.sam3_mask_distill_weight
         )
 
         return SemanticStreamingContext(

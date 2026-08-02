@@ -5,9 +5,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
-from .encoder_refiner_attention import make_residual_scale
-
-
 def _safe_group_norm(num_channels: int) -> nn.GroupNorm:
     num_groups = min(8, int(num_channels))
     if int(num_channels) % num_groups != 0:
@@ -20,9 +17,10 @@ class SemanticDetailFusionStage(nn.Module):
     and detail (Refiner + original SAM3 FPN).
 
     Both branches operate in 128-channel compact space with independent
-    grouped 3×3 conv blocks (groups=8). The semantic branch is the main
-    output; the detail branch injects via a learnable residual scale
-    initialised at 0.1.
+    grouped 3×3 conv blocks (groups=8). Each branch uses its own dedicated
+    Refiner projection. After projecting back to 256 channels, the two
+    branches are summed with equal weight and passed through a final
+    1×1 Conv.
     """
 
     def __init__(
@@ -30,7 +28,6 @@ class SemanticDetailFusionStage(nn.Module):
         hidden_dim: int = 256,
         branch_dim: int = 128,
         spatial_groups: int = 8,
-        residual_scale_init: float = 0.1,
     ):
         super().__init__()
         if hidden_dim <= 0:
@@ -49,8 +46,13 @@ class SemanticDetailFusionStage(nn.Module):
         self.branch_dim = int(branch_dim)
         self.spatial_groups = int(spatial_groups)
 
-        # Three independent 256→128 projections (no activation).
-        self.refiner_proj = nn.Sequential(
+        # Four independent 256→128 projections (no activation).
+        self.semantic_refiner_proj = nn.Sequential(
+            nn.Conv2d(self.hidden_dim, self.branch_dim, kernel_size=1, bias=False),
+            _safe_group_norm(self.branch_dim),
+        )
+
+        self.detail_refiner_proj = nn.Sequential(
             nn.Conv2d(self.hidden_dim, self.branch_dim, kernel_size=1, bias=False),
             _safe_group_norm(self.branch_dim),
         )
@@ -75,7 +77,9 @@ class SemanticDetailFusionStage(nn.Module):
             self.branch_dim, self.hidden_dim, kernel_size=1, bias=False,
         )
 
-        self.detail_scale = make_residual_scale(float(residual_scale_init))
+        self.fusion_out_proj = nn.Conv2d(
+            self.hidden_dim, self.hidden_dim, kernel_size=1, bias=False,
+        )
 
     def _make_branch_block(self) -> nn.Sequential:
         return nn.Sequential(
@@ -125,8 +129,13 @@ class SemanticDetailFusionStage(nn.Module):
             align_corners=False,
         )  # [N, 256, H, W]
 
-        # 2. Project all three inputs to 128 channels.
-        refiner_compact = self.refiner_proj(upsampled_refiner)   # [N, 128, H, W]
+        # 2. Project all inputs to 128 channels with dedicated projections.
+        semantic_refiner_compact = self.semantic_refiner_proj(
+            upsampled_refiner
+        )  # [N, 128, H, W]
+        detail_refiner_compact = self.detail_refiner_proj(
+            upsampled_refiner
+        )  # [N, 128, H, W]
         pixel_compact = self.pixel_proj(original_pixel_feature)  # [N, 128, H, W]
         fpn_compact = self.fpn_proj(sam_fpn)                     # [B, 128, H, W]
 
@@ -139,25 +148,36 @@ class SemanticDetailFusionStage(nn.Module):
                 f"sam_fpn: {tuple(sam_fpn.shape)}"
             )
         C_chunk = N // B
-        _, branch_dim, H, W = refiner_compact.shape
+        _, branch_dim, H, W = semantic_refiner_compact.shape
 
-        refiner_compact_5d = refiner_compact.reshape(B, C_chunk, branch_dim, H, W)
+        semantic_refiner_compact_5d = semantic_refiner_compact.reshape(
+            B, C_chunk, branch_dim, H, W
+        )
+        detail_refiner_compact_5d = detail_refiner_compact.reshape(
+            B, C_chunk, branch_dim, H, W
+        )
         pixel_compact_5d = pixel_compact.reshape(B, C_chunk, branch_dim, H, W)
         # fpn_compact stays [B, branch_dim, H, W] and broadcasts over classes.
 
         # 4. Build semantic and detail inputs via broadcasting.
-        semantic_input = (refiner_compact_5d + pixel_compact_5d).reshape(N, branch_dim, H, W)
-        detail_input = (refiner_compact_5d + fpn_compact[:, None]).reshape(N, branch_dim, H, W)
+        semantic_input = (
+            semantic_refiner_compact_5d + pixel_compact_5d
+        ).reshape(N, branch_dim, H, W)
+
+        detail_input = (
+            detail_refiner_compact_5d + fpn_compact[:, None]
+        ).reshape(N, branch_dim, H, W)
 
         # 5. Branch blocks with internal residual.
         semantic_feature = semantic_input + self.semantic_block(semantic_input)
         detail_feature = detail_input + self.detail_block(detail_input)
 
-        # 6. Project back to 256 and fuse.
+        # 6. Project back to 256, sum with equal weight, final projection.
         semantic_out = self.semantic_out_proj(semantic_feature)
         detail_out = self.detail_out_proj(detail_feature)
 
-        return semantic_out + self.detail_scale * detail_out
+        fused_out = semantic_out + detail_out
+        return self.fusion_out_proj(fused_out)
 
 
 class RefinerPyramidDecoder(nn.Module):
@@ -169,8 +189,9 @@ class RefinerPyramidDecoder(nn.Module):
       - original SAM3 backbone FPN (detail branch)
 
     Both branches operate in 128-channel compact space with independent
-    grouped 3×3 conv blocks (groups=8). The semantic branch is the main
-    output; the detail branch injects via a learnable residual scale.
+    grouped 3×3 conv blocks (groups=8). Each branch uses its own dedicated
+    Refiner projection. The two branches are summed with equal weight and
+    passed through a final 1×1 Conv. No learnable residual scale.
 
     Stages:
         stage_72:  36→72   (refiner_36 + O72 + FPN72)
@@ -189,7 +210,6 @@ class RefinerPyramidDecoder(nn.Module):
         hidden_dim: int = 256,
         branch_dim: int = 128,
         spatial_groups: int = 8,
-        residual_scale_init: float = 0.1,
         use_checkpoint: bool = True,
     ):
         super().__init__()
@@ -200,7 +220,6 @@ class RefinerPyramidDecoder(nn.Module):
             hidden_dim=self.hidden_dim,
             branch_dim=int(branch_dim),
             spatial_groups=int(spatial_groups),
-            residual_scale_init=float(residual_scale_init),
         )
 
         self.stage_72 = SemanticDetailFusionStage(**stage_kwargs)
