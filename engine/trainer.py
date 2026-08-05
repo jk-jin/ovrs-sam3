@@ -236,6 +236,36 @@ class Trainer:
 
         B, C_total = refiner_features_36.shape[:2]
 
+        metadata = batch.find_metadatas[0]
+
+        num_prompt_channels = int(metadata.num_prompts)
+        num_label_classes = int(metadata.num_classes)
+
+        if C_total != num_prompt_channels:
+            raise ValueError(
+                "Refiner prompt channel count does not match metadata: "
+                f"refiner={C_total}, "
+                f"metadata.num_prompts={num_prompt_channels}."
+            )
+
+        prompt_to_class_id = torch.as_tensor(
+            metadata.prompt_to_class_id,
+            dtype=torch.long,
+            device=refiner_features_36.device,
+        )
+
+        if prompt_to_class_id.ndim != 1:
+            raise ValueError(
+                "metadata.prompt_to_class_id must be 1D."
+            )
+
+        if int(prompt_to_class_id.numel()) != C_total:
+            raise ValueError(
+                "metadata.prompt_to_class_id length must equal the "
+                f"Refiner prompt count. Got "
+                f"{prompt_to_class_id.numel()} and {C_total}."
+            )
+
         # Detached proxy leaf — accumulates gradients from all chunks.
         refiner_proxy = refiner_features_36.detach().requires_grad_(True)
 
@@ -243,7 +273,9 @@ class Trainer:
         with autocast(device_type=self.device.type, enabled=use_amp):
             loss_context = self.criterion.prepare_streaming_context(
                 targets={"label_map": label_map},
-                num_classes=C_total,
+                num_prompt_channels=C_total,
+                prompt_to_class_id=prompt_to_class_id,
+                num_label_classes=num_label_classes,
                 target_hw=(288, 288),
             )
 
@@ -425,26 +457,29 @@ class Trainer:
         self._log_getters.append(fn)
 
     @staticmethod
-    def _extract_class_names_from_dataloader(dataloader) -> Optional[list[str]]:
+    def _extract_prompt_names_from_dataloader(
+        dataloader,
+    ) -> Optional[list[str]]:
         if dataloader is None:
             return None
 
         dataset = getattr(dataloader, "dataset", None)
+
         while dataset is not None and hasattr(dataset, "dataset"):
             dataset = dataset.dataset
 
         if dataset is None:
             return None
 
-        classes = getattr(dataset, "classes", None)
-        if classes is None:
+        prompt_names = getattr(dataset, "prompt_names", None)
+        if prompt_names is None:
             return None
 
-        classes = [str(x) for x in classes]
-        if len(classes) == 0:
+        prompt_names = [str(x) for x in prompt_names]
+        if len(prompt_names) == 0:
             return None
 
-        return classes
+        return prompt_names
 
     def _prepare_text_cache_for_dataloader(
         self,
@@ -457,12 +492,14 @@ class Trainer:
         if not hasattr(self.model, "prepare_text_cache"):
             return
 
-        class_names = self._extract_class_names_from_dataloader(dataloader)
-        if class_names is None:
+        prompt_names = self._extract_prompt_names_from_dataloader(
+            dataloader
+        )
+        if prompt_names is None:
             return
 
         self.model.prepare_text_cache(
-            class_names=class_names,
+            class_names=prompt_names,
             device=self.device,
             force=force,
         )

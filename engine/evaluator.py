@@ -423,6 +423,12 @@ def inference_with_tta(
     num_views = 0
     last_outputs = None
 
+    derived_class_space_keys = {
+        OUTPUT_KEYS.final_logits,
+        OUTPUT_KEYS.raw_final_score_map,
+        OUTPUT_KEYS.final_score_map,
+    }
+
     for scale in scales:
         if scale <= 0:
             raise ValueError(f"Invalid TTA scale: {scale}")
@@ -453,8 +459,8 @@ def inference_with_tta(
                     continue
 
                 # 逐类别相对过滤是非线性操作，各视图的过滤结果不能平均；
-                # 只平均原始分数，合并后统一过滤一次。
-                if key == OUTPUT_KEYS.final_score_map:
+                # 只平均原始提示分数，合并后统一过滤一次。
+                if key in derived_class_space_keys:
                     continue
 
                 if value.dim() == 4:
@@ -481,21 +487,50 @@ def inference_with_tta(
     for key, value in sum_2d.items():
         merged_outputs[key] = value / float(num_views)
 
-    if OUTPUT_KEYS.raw_final_score_map not in merged_outputs:
+    if OUTPUT_KEYS.raw_prompt_score_map not in merged_outputs:
         raise ValueError(
-            f"TTA merged outputs must contain '{OUTPUT_KEYS.raw_final_score_map}'."
+            "TTA merged outputs must contain "
+            f"{OUTPUT_KEYS.raw_prompt_score_map!r}."
         )
 
     segmentor = getattr(model, "module", model)
     adapter = getattr(segmentor, "adapter", None)
-    if adapter is None or not hasattr(adapter, "build_infer_score_outputs"):
+
+    if adapter is None or not hasattr(
+        adapter,
+        "build_infer_score_outputs",
+    ):
         raise ValueError(
-            "TTA requires model.adapter with build_infer_score_outputs()."
+            "TTA requires model.adapter with "
+            "build_infer_score_outputs()."
         )
+
+    if len(batch.find_metadatas) != 1:
+        raise ValueError(
+            "TTA semantic inference requires exactly one "
+            "metadata entry."
+        )
+
+    metadata = batch.find_metadatas[0]
 
     merged_outputs.update(
         adapter.build_infer_score_outputs(
-            merged_outputs[OUTPUT_KEYS.raw_final_score_map]
+            raw_prompt_score_map=merged_outputs[
+                OUTPUT_KEYS.raw_prompt_score_map
+            ],
+            metadata=metadata,
+        )
+    )
+
+    raw_final_score_map = merged_outputs[
+        OUTPUT_KEYS.raw_final_score_map
+    ]
+
+    logit_eps = 1e-6
+    merged_outputs[OUTPUT_KEYS.final_logits] = torch.logit(
+        raw_final_score_map.clamp(
+            min=logit_eps,
+            max=1.0 - logit_eps,
         )
     )
 

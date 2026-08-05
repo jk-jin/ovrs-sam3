@@ -139,6 +139,5 @@ class SAM3Segmentor(nn.Module):
         return self.adapter(
             raw_outputs=final_raw_outputs,
             batch=batch,
-            expected_num_classes=None,
             output_mode="infer",
         )

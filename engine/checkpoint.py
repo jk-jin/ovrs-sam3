@@ -278,7 +278,8 @@ class CheckpointManager:
 
         # --- Schema validation for resume ---
         # A checkpoint used for full resume must contain runtime_state
-        # (with rng), checkpoint_manager, and WandbHook.last_history_step.
+        # with RNG/data state and checkpoint_manager state.
+        # Experiment tracking state is intentionally not resumable.
         runtime_state = ckpt.get("runtime_state")
         if runtime_state is None:
             raise ValueError(

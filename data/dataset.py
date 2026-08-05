@@ -10,6 +10,7 @@ from PIL import Image
 from torch.utils.data import Dataset
 
 from . import transforms as T
+from .class_prompts import expand_class_prompts
 
 
 def _load_image(path: Path) -> Image.Image:
@@ -105,6 +106,10 @@ class OVSemanticSegDataset(Dataset):
             )
         else:
             self.classes = list(self.eval_classes)
+
+        self.prompt_names, self.prompt_to_class_id = (
+            expand_class_prompts(self.classes)
+        )
 
         if self.background_enabled and self.background_exclude_from_forward:
             if len(self.classes) != len(self.eval_classes) - 1:

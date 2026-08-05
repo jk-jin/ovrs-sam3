@@ -47,9 +47,18 @@ class BatchedInferenceMetadata:
     original_size: MyTensor
     original_size__type = torch.long
 
+    # Original forward class space after optional background exclusion.
     num_classes: int
     class_names: List[str]
 
+    # Expanded text-prompt space used by SAM3 / RemoteCLIP / Refiner.
+    num_prompts: int
+    prompt_names: List[str]
+
+    prompt_to_class_id: MyTensor
+    prompt_to_class_id__type = torch.long
+
+    # Dataset evaluation class space.
     eval_num_classes: int
     eval_class_names: List[str]
 

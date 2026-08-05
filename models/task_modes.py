@@ -15,10 +15,15 @@ VALID_TASK_MODES = {
 @dataclass(frozen=True)
 class ModelOutputKeys:
     # Final outputs
+    # Original-class inference outputs.
     final_logits: str = "final_logits"
     raw_final_score_map: str = "raw_final_score_map"
     final_score_map: str = "final_score_map"
     final_pred: str = "final_pred"
+
+    # Expanded prompt-space outputs used for alias-aware inference and TTA.
+    prompt_logits: str = "prompt_logits"
+    raw_prompt_score_map: str = "raw_prompt_score_map"
 
     # Encoder feature refiner outputs
     encoder_features: str = "encoder_features"

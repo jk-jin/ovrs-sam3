@@ -12,6 +12,7 @@ from ..models.data_misc import (
     BatchedInferenceMetadata,
     FindStage,
 )
+from .class_prompts import expand_class_prompts
 
 Sample = MutableMapping[str, Any]
 
@@ -150,6 +151,28 @@ class OVSemanticCollator:
         if shared_background_cfg is None:
             shared_background_cfg = {}
 
+        prompt_names, prompt_to_class_id = expand_class_prompts(
+            shared_class_texts
+        )
+
+        if len(prompt_names) != len(prompt_to_class_id):
+            raise RuntimeError(
+                "prompt_names and prompt_to_class_id must have the same length."
+            )
+
+        num_forward_classes = len(shared_class_texts)
+        num_prompts = len(prompt_names)
+
+        mapped_class_ids = set(prompt_to_class_id)
+        expected_class_ids = set(range(num_forward_classes))
+
+        if mapped_class_ids != expected_class_ids:
+            raise RuntimeError(
+                "Every original forward class must own at least one prompt. "
+                f"Got mapped ids={sorted(mapped_class_ids)}, "
+                f"expected={sorted(expected_class_ids)}."
+            )
+
         find_stage = FindStage(
             img_ids=None,
             text_ids=None,
@@ -166,17 +189,39 @@ class OVSemanticCollator:
         )
 
         metadata = BatchedInferenceMetadata(
-            original_image_id=torch.tensor(image_id_list, dtype=torch.long),
-            original_size=torch.stack(original_size_list, dim=0),
-            num_classes=len(shared_class_texts),
-            class_names=shared_class_texts,
+            original_image_id=torch.tensor(
+                image_id_list,
+                dtype=torch.long,
+            ),
+            original_size=torch.stack(
+                original_size_list,
+                dim=0,
+            ),
+            num_classes=num_forward_classes,
+            class_names=list(shared_class_texts),
+            num_prompts=num_prompts,
+            prompt_names=list(prompt_names),
+            prompt_to_class_id=torch.tensor(
+                prompt_to_class_id,
+                dtype=torch.long,
+            ),
             eval_num_classes=len(shared_eval_class_texts),
-            eval_class_names=shared_eval_class_texts,
-            background_enabled=bool(shared_background_cfg.get("enabled", False)),
-            background_class_id=int(shared_background_cfg.get("class_id", 0)),
-            background_class_name=shared_background_cfg.get("class_name", None),
+            eval_class_names=list(shared_eval_class_texts),
+            background_enabled=bool(
+                shared_background_cfg.get("enabled", False)
+            ),
+            background_class_id=int(
+                shared_background_cfg.get("class_id", 0)
+            ),
+            background_class_name=shared_background_cfg.get(
+                "class_name",
+                None,
+            ),
             background_exclude_from_forward=bool(
-                shared_background_cfg.get("exclude_from_forward", False)
+                shared_background_cfg.get(
+                    "exclude_from_forward",
+                    False,
+                )
             ),
         )
 
@@ -185,7 +230,7 @@ class OVSemanticCollator:
 
         return BatchedDatapoint(
             img_batch=img_batch,
-            find_text_batch=shared_class_texts,
+            find_text_batch=prompt_names,
             find_inputs=[find_stage],
             find_targets=[find_target],
             find_metadatas=[metadata],

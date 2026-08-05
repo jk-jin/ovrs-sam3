@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Sequence
+from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
@@ -16,20 +16,34 @@ TensorDict = Dict[str, torch.Tensor]
 
 @dataclass
 class SemanticStreamingContext:
-    """Pre-computed global statistics for streaming per-chunk loss.
-
-    All denominators are global (full batch, all classes) so that summing
-    per-chunk contributions yields the exact same result as a single
-    all-class forward.
-    """
+    """Global statistics shared by all prompt chunks."""
 
     label_map: torch.Tensor
+
+    # label != ignore_index
     valid_mask: torch.Tensor
-    presence_target: torch.Tensor          # [B, C] bool — kept for Dice / distillation
-    num_classes: int
-    num_present_pairs: int                 # kept for Dice
-    distill_pixel_denom: int               # kept for distillation
-    total_valid_pixels: int                # Σ valid pixels × C, denominator for plain BCE
+
+    # label == ignore_index
+    ignore_mask: torch.Tensor
+
+    # [P], each prompt channel maps to one original forward class id.
+    prompt_to_class_id: torch.Tensor
+
+    # [B, P], prompt-level presence inherited from original classes.
+    presence_target: torch.Tensor
+
+    num_prompt_channels: int
+    num_label_classes: int
+
+    # Number of present image-prompt pairs.
+    num_present_pairs: int
+
+    # Number of ignored pixels belonging to present image-prompt pairs.
+    distill_pixel_denom: int
+
+    # Number of valid pixels multiplied by P.
+    total_valid_pixels: int
+
     sam3_mask_distill_weight: float
 
 
@@ -39,13 +53,13 @@ class SemanticCriterion(nn.Module):
     Losses:
         1. Plain BCE on final_logits — every valid pixel (label ≠ 255)
            contributes equally regardless of class presence or pixel sign.
-           Global mean over all B × C × H × W valid pixel positions.
+           Global mean over all B × P × H × W valid pixel positions.
 
         2. Optional Dice on final_logits (default weight 0.0)
 
         3. SAM3 teacher mask distillation BCE (fixed weight)
            - Frozen SAM3 semantic head logits as soft targets
-           - Only present pairs and non-255 pixels
+           - Only present image-prompt pairs and label==255 pixels
     """
 
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
@@ -67,115 +81,202 @@ class SemanticCriterion(nn.Module):
         self,
         outputs: TensorDict,
         targets: TensorDict,
-        chunk_class_ids: Optional[Sequence[int]] = None,
+        prompt_to_class_id: torch.Tensor,
+        num_label_classes: int,
         reduction: str = "mean",
     ) -> TensorDict:
-        """Full-batch forward (inference / eval / legacy)."""
-        del chunk_class_ids
-
+        """Full prompt-space loss forward."""
         if reduction != "mean":
             raise ValueError(
-                f"SemanticCriterion only supports reduction='mean', got {reduction!r}."
+                "SemanticCriterion only supports reduction='mean', "
+                f"got {reduction!r}."
             )
 
         if OUTPUT_KEYS.final_logits not in outputs:
             raise ValueError(
-                f"SemanticCriterion requires outputs[{OUTPUT_KEYS.final_logits!r}]."
+                "SemanticCriterion requires "
+                f"outputs[{OUTPUT_KEYS.final_logits!r}]."
             )
 
         final_logits = self._extract_4d_tensor(
-            outputs, OUTPUT_KEYS.final_logits, "[B, C, H, W]"
+            outputs,
+            OUTPUT_KEYS.final_logits,
+            "[B, P, H, W]",
         )
-        B, C = final_logits.shape[:2]
+
+        num_prompt_channels = int(final_logits.shape[1])
 
         context = self.prepare_streaming_context(
             targets=targets,
-            num_classes=C,
+            num_prompt_channels=num_prompt_channels,
+            prompt_to_class_id=prompt_to_class_id,
+            num_label_classes=int(num_label_classes),
             target_hw=final_logits.shape[-2:],
         )
 
-        # Build full target for Dice.
         target_full, _ = self._build_binary_targets(
             label_map=context.label_map,
-            num_channels=C,
+            prompt_to_class_id=context.prompt_to_class_id,
             dtype=final_logits.dtype,
         )
 
-        loss_dict = self.forward_chunk(
+        return self.forward_chunk(
             outputs=outputs,
             context=context,
             class_start=0,
-            class_end=C,
+            class_end=num_prompt_channels,
             target_full=target_full,
         )
-
-        return loss_dict
 
     def prepare_streaming_context(
         self,
         targets: TensorDict,
-        num_classes: int,
+        num_prompt_channels: int,
+        prompt_to_class_id: torch.Tensor,
+        num_label_classes: int,
         target_hw: tuple[int, int] = (288, 288),
     ) -> SemanticStreamingContext:
-        """Build global statistics for streaming per-chunk loss.
-
-        Called once per batch before the chunk loop.
-        """
+        """Build full-batch statistics before the prompt chunk loop."""
         label_map = self._extract_label_map(targets)
         label_map = self._resize_label_map_to_hw(
             label_map=label_map,
             target_hw=target_hw,
         )
 
-        B = int(label_map.shape[0])
-        C = int(num_classes)
+        batch_size = int(label_map.shape[0])
+        num_prompt_channels = int(num_prompt_channels)
+        num_label_classes = int(num_label_classes)
 
-        # Validate non-255 labels are in [0, C-1].
-        valid_mask = label_map != int(self.cfg.ignore_index)
-        valid_labels = label_map[valid_mask]
-        if valid_labels.numel() > 0:
-            if valid_labels.min() < 0 or valid_labels.max() >= C:
-                raise ValueError(
-                    f"Labels must be in [0, {C - 1}] or {self.cfg.ignore_index}, "
-                    f"got min={valid_labels.min().item()}, max={valid_labels.max().item()}."
-                )
-
-        # Global BCE denominator: every valid pixel × every class.
-        total_valid_pixels = int(valid_mask.sum().item()) * C
-
-        # Presence: which image-class pairs actually appear (for Dice / distillation).
-        presence_target = torch.zeros(
-            (B, C), dtype=torch.bool, device=label_map.device
-        )
-        for class_id in range(C):
-            presence_target[:, class_id] = (
-                (label_map == class_id).flatten(1).sum(dim=1) > 0
+        if num_prompt_channels <= 0:
+            raise ValueError(
+                "num_prompt_channels must be positive."
             )
 
-        num_present_pairs = int(presence_target.sum().item())
+        if num_label_classes <= 0:
+            raise ValueError(
+                "num_label_classes must be positive."
+            )
 
-        # Distillation denominator: Σ presence[b,c] × valid_pixel_count[b].
-        valid_pixel_count = valid_mask.flatten(1).sum(dim=1)  # [B]
-        distill_pixel_denom = int(
-            (
-                presence_target.to(torch.long)
-                * valid_pixel_count[:, None]
-            ).sum().item()
+        prompt_to_class_id = torch.as_tensor(
+            prompt_to_class_id,
+            dtype=torch.long,
+            device=label_map.device,
         )
 
-        distill_weight = float(
-            self.cfg.sam3_mask_distill_weight
+        if prompt_to_class_id.ndim != 1:
+            raise ValueError(
+                "prompt_to_class_id must be a 1D tensor, "
+                f"got shape={tuple(prompt_to_class_id.shape)}."
+            )
+
+        if int(prompt_to_class_id.numel()) != num_prompt_channels:
+            raise ValueError(
+                "prompt_to_class_id length must equal the number of "
+                f"prompt channels. Got {prompt_to_class_id.numel()} "
+                f"and {num_prompt_channels}."
+            )
+
+        if prompt_to_class_id.numel() > 0:
+            min_class_id = int(prompt_to_class_id.min().item())
+            max_class_id = int(prompt_to_class_id.max().item())
+
+            if min_class_id < 0 or max_class_id >= num_label_classes:
+                raise ValueError(
+                    "prompt_to_class_id values must be in "
+                    f"[0, {num_label_classes - 1}], got "
+                    f"min={min_class_id}, max={max_class_id}."
+                )
+
+        prompt_counts = torch.bincount(
+            prompt_to_class_id,
+            minlength=num_label_classes,
+        )
+
+        if bool((prompt_counts == 0).any().item()):
+            missing = torch.nonzero(
+                prompt_counts == 0,
+                as_tuple=False,
+            ).flatten().tolist()
+
+            raise ValueError(
+                "Every original forward class must own at least one "
+                f"prompt. Missing class ids: {missing}."
+            )
+
+        ignore_index = int(self.cfg.ignore_index)
+        valid_mask = label_map != ignore_index
+        ignore_mask = label_map == ignore_index
+
+        valid_labels = label_map[valid_mask]
+        if valid_labels.numel() > 0:
+            min_label = int(valid_labels.min().item())
+            max_label = int(valid_labels.max().item())
+
+            if min_label < 0 or max_label >= num_label_classes:
+                raise ValueError(
+                    "Labels must be in "
+                    f"[0, {num_label_classes - 1}] or "
+                    f"{ignore_index}, got min={min_label}, "
+                    f"max={max_label}."
+                )
+
+        total_valid_pixels = (
+            int(valid_mask.sum().item())
+            * num_prompt_channels
+        )
+
+        original_presence = torch.zeros(
+            (batch_size, num_label_classes),
+            dtype=torch.bool,
+            device=label_map.device,
+        )
+
+        for class_id in range(num_label_classes):
+            original_presence[:, class_id] = (
+                (label_map == class_id)
+                .flatten(1)
+                .any(dim=1)
+            )
+
+        presence_target = original_presence.index_select(
+            dim=1,
+            index=prompt_to_class_id,
+        )
+
+        num_present_pairs = int(
+            presence_target.sum().item()
+        )
+
+        ignored_pixel_count = (
+            ignore_mask
+            .flatten(1)
+            .sum(dim=1)
+            .to(dtype=torch.long)
+        )
+
+        distill_pixel_denom = int(
+            (
+                presence_target.to(dtype=torch.long)
+                * ignored_pixel_count[:, None]
+            )
+            .sum()
+            .item()
         )
 
         return SemanticStreamingContext(
             label_map=label_map,
             valid_mask=valid_mask,
+            ignore_mask=ignore_mask,
+            prompt_to_class_id=prompt_to_class_id,
             presence_target=presence_target,
-            num_classes=C,
+            num_prompt_channels=num_prompt_channels,
+            num_label_classes=num_label_classes,
             num_present_pairs=num_present_pairs,
             distill_pixel_denom=distill_pixel_denom,
             total_valid_pixels=total_valid_pixels,
-            sam3_mask_distill_weight=distill_weight,
+            sam3_mask_distill_weight=float(
+                self.cfg.sam3_mask_distill_weight
+            ),
         )
 
     def forward_chunk(
@@ -200,27 +301,47 @@ class SemanticCriterion(nn.Module):
             )
 
         B, C_chunk = final_logits_chunk.shape[:2]
-        C = context.num_classes
-        class_ids = list(range(class_start, class_end))
+        num_prompt_channels = context.num_prompt_channels
 
-        if len(class_ids) != C_chunk:
+        if not (
+            0
+            <= int(class_start)
+            < int(class_end)
+            <= num_prompt_channels
+        ):
             raise ValueError(
-                f"Chunk class count mismatch: class_start={class_start}, "
-                f"class_end={class_end}, but logits have {C_chunk} channels."
+                "Prompt chunk indices are out of range: "
+                f"class_start={class_start}, "
+                f"class_end={class_end}, "
+                f"num_prompt_channels={num_prompt_channels}."
+            )
+
+        prompt_class_ids = context.prompt_to_class_id[
+            class_start:class_end
+        ]
+
+        if int(prompt_class_ids.numel()) != C_chunk:
+            raise ValueError(
+                "Prompt chunk count mismatch: "
+                f"class_start={class_start}, "
+                f"class_end={class_end}, "
+                f"logit_channels={C_chunk}."
             )
 
         label_map = context.label_map
         valid_mask = context.valid_mask
         device = final_logits_chunk.device
         dtype = final_logits_chunk.dtype
-        class_ids_t = torch.tensor(
-            class_ids, device=device, dtype=torch.long
+
+        prompt_class_ids = prompt_class_ids.to(
+            device=device,
+            dtype=torch.long,
         )
 
         # Build boolean and float chunk targets.
         target_bool = (
             label_map[:, None].to(device=device)
-            == class_ids_t[None, :, None, None]
+            == prompt_class_ids[None, :, None, None]
         )  # [B, C_chunk, H, W]
         target_chunk = target_bool.to(dtype=dtype)
 
@@ -273,8 +394,10 @@ class SemanticCriterion(nn.Module):
             chunk_presence_float = present_mask.to(dtype=torch.float32)
             distill_contribution = self._distill_contribution_chunk(
                 final_logits=final_logits_chunk,
-                teacher_logits=outputs[OUTPUT_KEYS.sam3_teacher_logits],
-                valid_mask=valid_mask,
+                teacher_logits=outputs[
+                    OUTPUT_KEYS.sam3_teacher_logits
+                ],
+                ignore_mask=context.ignore_mask,
                 presence_target_chunk=chunk_presence_float,
                 global_denom=context.distill_pixel_denom,
             )
@@ -308,11 +431,11 @@ class SemanticCriterion(nn.Module):
         self,
         final_logits: torch.Tensor,
         teacher_logits: torch.Tensor,
-        valid_mask: torch.Tensor,
+        ignore_mask: torch.Tensor,
         presence_target_chunk: torch.Tensor,
         global_denom: int,
     ) -> torch.Tensor:
-        """Distillation contribution for one chunk using global denominator."""
+        """Distill only present prompts on label==ignore_index pixels."""
         teacher_prob = teacher_logits.detach().sigmoid()
 
         pixel_ce = F.binary_cross_entropy_with_logits(
@@ -322,17 +445,28 @@ class SemanticCriterion(nn.Module):
         )
 
         present = presence_target_chunk > 0.5
-        if not present.any().item():
+
+        if not bool(present.any().item()):
             return final_logits.sum() * 0.0
 
         pair_pixel_mask = (
-            present.to(device=pixel_ce.device, dtype=torch.bool)[:, :, None, None]
-            & valid_mask.to(device=pixel_ce.device, dtype=torch.bool)[:, None, :, :]
+            present.to(
+                device=pixel_ce.device,
+                dtype=torch.bool,
+            )[:, :, None, None]
+            & ignore_mask.to(
+                device=pixel_ce.device,
+                dtype=torch.bool,
+            )[:, None, :, :]
         )
-        pixel_weight = pair_pixel_mask.to(dtype=pixel_ce.dtype)
 
-        denom = max(global_denom, 1)
-        return (pixel_ce * pixel_weight).sum() / denom
+        pixel_weight = pair_pixel_mask.to(
+            dtype=pixel_ce.dtype
+        )
+
+        return (
+            pixel_ce * pixel_weight
+        ).sum() / max(int(global_denom), 1)
 
     # ------------------------------------------------------------------
     # Dice (per-chunk, global denominator)
@@ -428,29 +562,33 @@ class SemanticCriterion(nn.Module):
     def _build_binary_targets(
         self,
         label_map: torch.Tensor,
-        num_channels: int,
+        prompt_to_class_id: torch.Tensor,
         dtype: torch.dtype,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        B, H, W = label_map.shape
         ignore_index = int(self.cfg.ignore_index)
         valid_mask = label_map != ignore_index
 
-        target = torch.zeros(
-            (B, H, W, int(num_channels)),
-            dtype=dtype,
+        prompt_to_class_id = torch.as_tensor(
+            prompt_to_class_id,
+            dtype=torch.long,
             device=label_map.device,
         )
 
-        valid_labels = label_map[valid_mask]
-        if valid_labels.numel() > 0:
-            one_hot = F.one_hot(
-                valid_labels,
-                num_classes=int(num_channels),
-            ).to(dtype=dtype)
-            target[valid_mask] = one_hot
+        if prompt_to_class_id.ndim != 1:
+            raise ValueError(
+                "prompt_to_class_id must be 1D."
+            )
 
-        target = target.permute(0, 3, 1, 2).contiguous()
-        return target, valid_mask
+        target = (
+            label_map[:, None]
+            == prompt_to_class_id[None, :, None, None]
+        ).to(dtype=dtype)
+
+        target = target * valid_mask[:, None].to(
+            dtype=dtype
+        )
+
+        return target.contiguous(), valid_mask
 
 
 class HybridCriterion(nn.Module):
