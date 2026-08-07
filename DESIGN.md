@@ -376,10 +376,18 @@ loss_final_bce = (bce_per_pixel * valid_mask).sum() / total_valid_pixels
 1. 冻结的 SAM3 semantic head 产生的 teacher logits 做 sigmoid，得到 soft probability 目标。
 2. student 使用 raw `final_logits`。
 3. 用 `binary_cross_entropy_with_logits` 逐像素计算蒸馏损失。
-4. 只监督 GT 中存在的图像—提示对、且标签为 255（ignore）的像素。非 255 区域不参与蒸馏。不存在类别的提示不参与蒸馏。
-5. teacher 和 student 都在 288×288 分辨率，不做尺度变换。
-6. teacher 必须 detach。
-7. 蒸馏分母是存在的提示与对应 255 像素数的全局总和，不按 chunk 单独求均值。
+4. 只对 GT 中存在的图像—提示对计算。
+5. 所有 `label != 255` 的有效像素参与蒸馏。
+6. 对每个存在原始类别，额外包含 GT 外侧指定宽度的边界环。
+7. 外侧边界环只保留 `label == 255` 的位置。
+8. 外环宽度由 `sam3_mask_distill_boundary_width` 控制，默认 2。
+9. 宽度 0 表示不增加外环，仅蒸馏全部有效像素。
+10. 远离物体的 255 区域不参与蒸馏。
+11. 不存在类别不参与蒸馏。
+12. teacher 和 student 都在 288×288 分辨率，不做尺度变换。
+13. teacher 必须 detach。
+14. 分母是全部存在提示对应的有效像素与类别外环像素总数（全局分母，不按 chunk 单独计算）。
+15. 多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
 
 总损失：
 
@@ -529,7 +537,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 12. FPN score 注入必须位于所有 Refiner 层之前且只执行一次。
 13. clip_score_embed_36 保持纯 RemoteCLIP 输出，用于 debug。
 14. teacher 只来自原始 O288 并且必须 detach。teacher 和 student 都为 288×288。
-15. 蒸馏只监督存在类别对应的 255 像素。非 255 区域不参与蒸馏。不存在类别不参与蒸馏。分母是存在提示对应的 255 像素总数。
+15. 蒸馏只监督存在类别。每个存在提示均监督全部 GT 有效像素，并额外监督其原始类别 GT 外侧 `sam3_mask_distill_boundary_width` 像素范围内且标签为 255 的边界环。远处 255 区域不参与蒸馏。多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
 16. 最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
 17. Refiner 内部残差系数统一由 `residual_scale_init` 控制，默认值为 0.1；这些标量不使用 weight decay。
 18. TTA 必须先平均提示空间分数（`raw_prompt_score_map`），再合并提示到原始类别，最后进行相对阈值过滤。

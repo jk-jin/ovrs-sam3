@@ -95,5 +95,6 @@ model = dict(
         final_dice_weight=0.0,
         eps=1e-6,
         sam3_mask_distill_weight=0.1,
+        sam3_mask_distill_boundary_width=5,
     ),
 )

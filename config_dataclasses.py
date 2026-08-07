@@ -99,6 +99,7 @@ class SemanticCriterionConfig:
     eps: float = 1e-6
 
     sam3_mask_distill_weight: float = 0.05
+    sam3_mask_distill_boundary_width: int = 2
 
 
 @dataclass
