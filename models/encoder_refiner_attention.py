@@ -60,10 +60,11 @@ class ClassScoreAttention(nn.Module):
     """
     Inter-class attention at each spatial position with dual value updates.
 
-    feature, score_embed and sam_text_mean are pre-normalized by the outer layer.
+    feature and score_embed are pre-normalized by the outer layer.
+    fused_text is fused and normalized once by the outer Refiner.
     q, k and both value paths are produced from the normalized inputs.
 
-    q/k = concat(feature, sam_text_mean, score_embed)  → 768 dims
+    q/k = concat(feature, fused_text, score_embed)  → 768 dims
     v_feature = feature
     v_score   = score_embed
 
@@ -105,13 +106,13 @@ class ClassScoreAttention(nn.Module):
         self,
         feature: torch.Tensor,
         score_embed: torch.Tensor,
-        sam_text_mean: torch.Tensor,
+        fused_text: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             feature:       [B, C, D, H, W]  pre-normalized
             score_embed:   [B, C, D_score, H, W]  pre-normalized
-            sam_text_mean: [B, C, D]  pre-normalized
+            fused_text:    [B, C, D]  pre-normalized
 
         Returns:
             feature_update: [B, C, D, H, W]
@@ -125,10 +126,10 @@ class ClassScoreAttention(nn.Module):
                 f"score_embed must be [{B}, {C}, {D_score}, {H}, {W}], "
                 f"got {tuple(score_embed.shape)}"
             )
-        if tuple(sam_text_mean.shape) != (B, C, D):
+        if tuple(fused_text.shape) != (B, C, D):
             raise ValueError(
-                f"sam_text_mean must be [{B}, {C}, {D}], "
-                f"got {tuple(sam_text_mean.shape)}"
+                f"fused_text must be [{B}, {C}, {D}], "
+                f"got {tuple(fused_text.shape)}"
             )
 
         N = H * W
@@ -140,9 +141,9 @@ class ClassScoreAttention(nn.Module):
         # score_embed: [B, C, D_score, H, W] → [B*N, C, D_score]
         s_flat = score_embed.permute(0, 3, 4, 1, 2).reshape(B * N, C, D_score)
 
-        # Broadcast sam_text_mean to each spatial position.
+        # Broadcast fused_text to each spatial position.
         text_broadcast = (
-            sam_text_mean.to(device=f_flat.device, dtype=f_flat.dtype)[:, None]
+            fused_text.to(device=f_flat.device, dtype=f_flat.dtype)[:, None]
             .expand(B, N, C, D)
             .reshape(B * N, C, D)
         )
@@ -522,7 +523,6 @@ class EncoderRefinerLayer(nn.Module):
         # Pre-norm for class attention.
         self.class_norm_feature = nn.LayerNorm(hidden_dim)
         self.class_norm_score = nn.LayerNorm(score_embed_dim)
-        self.class_norm_text = nn.LayerNorm(hidden_dim)
 
         # Pre-norm for regular window attention.
         self.regular_norm_feature = nn.LayerNorm(hidden_dim)
@@ -576,13 +576,13 @@ class EncoderRefinerLayer(nn.Module):
         self,
         feature_36: torch.Tensor,
         score_embed_36: torch.Tensor,
-        sam_text_mean: torch.Tensor,
+        fused_text: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             feature_36:      [B, C, 256, 36, 36]
             score_embed_36:  [B, C, 256, 36, 36]
-            sam_text_mean:   [B, C, 256]
+            fused_text:      [B, C, 256] shared, pre-normalized text guidance
 
         Returns:
             feature_36:      [B, C, 256, 36, 36]
@@ -597,12 +597,11 @@ class EncoderRefinerLayer(nn.Module):
             score_embed_36,
             self.class_norm_score,
         )
-        class_text = self.class_norm_text(sam_text_mean)
 
         feature_update, score_update = self.class_attn(
             feature=class_feature,
             score_embed=class_score,
-            sam_text_mean=class_text,
+            fused_text=fused_text,
         )
 
         feature_36 = feature_36 + feature_update

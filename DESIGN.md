@@ -218,13 +218,19 @@ SAM3 FPN 只在后续 RefinerPyramidDecoder 的 72/144/288 三个
 
 每层采用 pre-norm，并依次执行：
 
-1. **ClassScoreAttention**：在每个空间位置跨类别做注意力。Q/K 由图像 feature、SAM 文本均值和 score embedding 拼接后投影；feature 与 score 使用独立 value/output 分支。
+1. **ClassScoreAttention**：在每个空间位置跨类别做注意力。Q/K 由图像 feature、共享融合文本和 score embedding 拼接后投影；feature 与 score 使用独立 value/output 分支。
 2. **Regular WindowScoreAttention**：每个类别内部执行非移位窗口注意力。
 3. **Shifted WindowScoreAttention**：使用 shift mask 和相对位置偏置连接相邻窗口。
 4. **Feature FFN**：逐 token 更新图像流。
 5. **Score FFN**：逐 token 更新分数流。
 
 每个注意力和 FFN 子层均采用 pre-norm，并在末端线性投影后直接执行残差相加。Refiner 内部不设置固定或可学习残差系数。类间注意力和窗口注意力的更新尺度由各自的 feature/score output projection 学习，两路 FFN 的更新尺度由各自第二个线性投影层学习。
+
+**共享文本融合**：在 Refiner 层循环之前，复用 `template_clip_text`，对每个类别的 64 个模板整句向量求算术平均。整句向量来自 RemoteCLIP 的 EOT 池化及原始文本投影，不对 CLIP 单词 token 求均值，也不跨类别平均。这里使用返回的原始模板向量；score embedding 内部用于相似度计算的 L2 归一化流程保持独立。
+
+将该均值按图像 batch 广播，与 SAM3 的有效文本 token 均值沿通道拼接，再经过共享 `text_fusion` 线性层和共享 `text_fusion_norm` LayerNorm。线性层输入维度为 `hidden_dim + clip_dim`，输出维度为 `hidden_dim`；默认是 1024→256。归一化后的 `fused_text` 为 `[B, C, 256]`，其中 B 为图像数、C 为提示类别数；所有 Refiner 层复用同一张量，并在各自类间注意力中广播到空间位置。移除每层独立的 `class_norm_text`，不在层内再次变换或更新文本，因此 Q/K 拼接输入仍为 768 通道。
+
+共享融合在每次前向中计算一次，训练时保留梯度；全部层的梯度共同回传至融合层和可训练 RemoteCLIP 文本参数。模板编码不重复执行，可训练文本不跨 optimizer step 缓存，推理使用相同融合路径。
 
 全部 Refiner 层结束后，对最终 feature stream 执行一次逐空间位置、沿通道维度的 LayerNorm，再将归一化后的 refiner_features_36 送入 RefinerPyramidDecoder。最终 score stream 不执行额外输出 LayerNorm。
 
@@ -615,3 +621,10 @@ Checkpoint schema 版本为 4。实验追踪状态不再保存在 checkpoint 中
 * 非严格加载旧 checkpoint 时，新的 feature_output_norm 使用默认初始化：weight 为 1、bias 为 0。
 * 新实验必须使用新的 work directory。
 * `_CHECKPOINT_VERSION` 保持为 4，因为 checkpoint 容器格式没有变化。
+
+本次共享文本融合变更：
+
+* 新增 `core.encoder_refiner.text_fusion.*` 和 `core.encoder_refiner.text_fusion_norm.*`。
+* 删除 `core.encoder_refiner.layers.*.class_norm_text.*`，文本归一化改为层循环前共享执行。
+* 不增加旧参数兼容层或映射。旧训练 checkpoint 无法严格恢复此结构；可通过 `--load-model-from` 迁移未变化参数，新实验使用新的 work directory。
+* checkpoint 容器格式不变，`_CHECKPOINT_VERSION` 保持为 4。
