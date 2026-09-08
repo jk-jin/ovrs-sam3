@@ -18,8 +18,9 @@ class SemanticDetailFusionStage(nn.Module):
 
     Both branches operate in 128-channel compact space with independent
     standard 3×3 conv blocks. Each branch uses its own dedicated Refiner
-    projection. After projecting back to 256 channels, the two branches
-    are summed with equal weight and passed through a final 1×1 Conv.
+    projection, without a branch-input residual. Their outputs are
+    concatenated with independently normalized 256-channel Pixel Decoder
+    features, then fused by 1×1 → 3×3 → 1×1 convolutions.
     """
 
     def __init__(
@@ -60,15 +61,29 @@ class SemanticDetailFusionStage(nn.Module):
         self.semantic_block = self._make_branch_block()
         self.detail_block = self._make_branch_block()
 
-        self.semantic_out_proj = nn.Conv2d(
-            self.branch_dim, self.hidden_dim, kernel_size=1, bias=False,
-        )
-        self.detail_out_proj = nn.Conv2d(
-            self.branch_dim, self.hidden_dim, kernel_size=1, bias=False,
-        )
-
-        self.fusion_out_proj = nn.Conv2d(
-            self.hidden_dim, self.hidden_dim, kernel_size=1, bias=False,
+        # Reuse full-channel Pixel features, independently of pixel_proj.
+        self.pixel_fusion_norm = _safe_group_norm(self.hidden_dim)
+        self.fusion_block = nn.Sequential(
+            nn.Conv2d(
+                2 * self.branch_dim + self.hidden_dim,
+                self.branch_dim,
+                kernel_size=1,
+                bias=False,
+            ),
+            _safe_group_norm(self.branch_dim),
+            nn.GELU(),
+            nn.Conv2d(
+                self.branch_dim,
+                self.branch_dim,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            _safe_group_norm(self.branch_dim),
+            nn.GELU(),
+            nn.Conv2d(
+                self.branch_dim, self.hidden_dim, kernel_size=1, bias=False,
+            ),
         )
 
     def _make_branch_block(self) -> nn.Sequential:
@@ -157,16 +172,16 @@ class SemanticDetailFusionStage(nn.Module):
             detail_refiner_compact_5d + fpn_compact[:, None]
         ).reshape(N, branch_dim, H, W)
 
-        # 5. Branch blocks with internal residual.
-        semantic_feature = semantic_input + self.semantic_block(semantic_input)
-        detail_feature = detail_input + self.detail_block(detail_input)
+        # 5. Use branch block outputs directly, without input residuals.
+        semantic_feature = self.semantic_block(semantic_input)
+        detail_feature = self.detail_block(detail_input)
 
-        # 6. Project back to 256, sum with equal weight, final projection.
-        semantic_out = self.semantic_out_proj(semantic_feature)
-        detail_out = self.detail_out_proj(detail_feature)
-
-        fused_out = semantic_out + detail_out
-        return self.fusion_out_proj(fused_out)
+        # 6. Jointly fuse both branches and the original full-channel Pixel.
+        pixel_feature = self.pixel_fusion_norm(original_pixel_feature)
+        fusion_input = torch.cat(
+            (semantic_feature, detail_feature, pixel_feature), dim=1,
+        )  # [N, 512, H, W] with default dimensions.
+        return self.fusion_block(fusion_input)
 
 
 class RefinerPyramidDecoder(nn.Module):
@@ -174,13 +189,16 @@ class RefinerPyramidDecoder(nn.Module):
 
     Each stage fuses:
       - upsampled Refiner feature (semantic main path + detail reference)
-      - frozen Pixel Decoder feature (semantic branch)
+      - frozen Pixel Decoder feature (semantic branch and stage output fusion)
       - original SAM3 backbone FPN (detail branch)
 
     Both branches operate in 128-channel compact space with independent
     standard 3×3 conv blocks. Each branch uses its own dedicated Refiner
-    projection. The two branches are summed with equal weight and passed
-    through a final 1×1 Conv. No learnable residual scale.
+    projection, without branch-input residuals. The two 128-channel block
+    outputs and normalized 256-channel Pixel features are concatenated,
+    then fused by 512→128 (1×1), 128→128 (3×3), and 128→256 (1×1)
+    convolutions. The first two convolutions use GroupNorm and GELU;
+    the output convolution has no normalization, activation, or residual.
 
     Stages:
         stage_72:  36→72   (refiner_36 + O72 + FPN72)
@@ -188,7 +206,7 @@ class RefinerPyramidDecoder(nn.Module):
         stage_288: 144→288 (refined_144 + O288 + FPN288)
 
     stage_288 output goes directly into the frozen SAM3 semantic_seg_head.
-    There is no final fusion.
+    There is no additional fusion after stage_288.
 
     The entire pyramid is wrapped in a single non-reentrant checkpoint
     during training when ``use_checkpoint=True``.

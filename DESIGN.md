@@ -1,6 +1,6 @@
 # OVRS-SAM3 设计说明
 
-适用分支：`master`
+适用分支：`tmp/pyramid-pixel-concat-20260908`（基于 `master` 的 `c167ae8`）
 项目仓库：`jk-jin/ovrs-sam3`
 当前任务：开放词汇遥感语义分割
 
@@ -62,9 +62,9 @@ original_pixel_feature_288
   → sam3_teacher_logits
 
 refiner_feature_36_chunk
-  → stage_72: Refiner + O72 语义支路，Refiner + FPN72 细节支路
-  → stage_144: Refiner + O144 语义支路，Refiner + FPN144 细节支路
-  → stage_288: Refiner + O288 语义支路，Refiner + FPN288 细节支路
+  → stage_72: 语义/细节两路无残差 block 输出，与原始 O72 拼接卷积融合
+  → stage_144: 语义/细节两路无残差 block 输出，与原始 O144 拼接卷积融合
+  → stage_288: 语义/细节两路无残差 block 输出，与原始 O288 拼接卷积融合
   → stage_288 输出直接进入冻结 SAM3 semantic_seg_head
   → final_logits_chunk
 
@@ -265,21 +265,35 @@ FPN 先按图像投影到 128 通道，再通过广播与 Refiner 逐类别相�
 ```text
 block: 普通 3×3 Conv (128→128) → GN(8,128) → GELU
      → 1×1 Conv (128→128) → GN(8,128)
-output = input + block(input)   # block 内部残差
+output = block(input)   # 直接使用 block 输出，不与分支输入做残差相加
 ```
 
 语义支路融合独立 Refiner 语义投影与 Pixel Decoder；细节支路融合独立 Refiner 细节投影与原始 FPN。
 
-两条支路分别使用独立的 128→256 `1×1 Conv`（无 norm、无激活）恢复到 256 通道。
-
-两路直接相加，再经过一个 256→256 的 `1×1 Conv`（`fusion_out_proj`）输出：
+每个尺度重新使用同一次 Pixel Decoder 调用得到的原始 256 通道特征，经过独立的
+`pixel_fusion_norm`（`GroupNorm(8, 256)`），不复用语义支路入口的 `pixel_compact`。
+两路 block 输出已经各自经过末端 GroupNorm，直接与这份 Pixel 特征按通道拼接：
 
 ```python
-fused_out = semantic_out + detail_out
-output = fusion_out_proj(fused_out)
+pixel_feature = pixel_fusion_norm(original_pixel_feature)
+fusion_input = torch.cat((semantic_feature, detail_feature, pixel_feature), dim=1)
+output = fusion_block(fusion_input)
 ```
 
-每个 stage 不再包含可学习的末尾融合系数。256 通道输出后无 GroupNorm、GELU、ReLU 或原始特征残差。无 final fusion 模块。
+拼接张量为 `[N, 512, H, W]`，其中 `N` 是当前块的图像—提示对数量，`H/W` 是当前尺度的高/宽。
+新的 `fusion_block` 为：
+
+```text
+1×1 Conv (512→128) → GroupNorm(8,128) → GELU
+3×3 普通 Conv (128→128, padding=1) → GroupNorm(8,128) → GELU
+1×1 Conv (128→256)
+```
+
+箭头两侧的数值表示输入和输出通道数；所有新增卷积使用 `bias=False`，普通 3×3 卷积不分组。
+三个 stage 各自持有独立的归一化和融合参数，空间尺寸保持不变。
+删除旧 `semantic_out_proj`、`detail_out_proj`、`fusion_out_proj`，不增加门控或残差系数。
+256 通道输出后无 GroupNorm、GELU、ReLU 或原始特征残差。stage_288 后无额外 final fusion 模块。
+原有分支入口相加、双线性上采样、冻结 Pixel Decoder/semantic head 和逐 chunk 解码流程保持不变。
 
 整个 pyramid decoder 使用一次 non-reentrant checkpoint（`self.training and self.use_checkpoint` 时开启），不嵌套给每个 stage。
 
@@ -534,7 +548,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 27. backbone_fpn 顺序固定为 `[288, 144, 72]`，即 `backbone_fpn[0]` 为 288、`[1]` 为 144、`[2]` 为 72。
 28. 原始 FPN 在 256 通道时不按类别复制；FPN 先按图像投影到 128 通道，再按类别广播。
 29. FPN 投影模块可训练，每个 chunk 重新计算，不跨 chunk 缓存计算图。
-30. 三个 stage 固定 `branch_dim=128`，3×3 卷积使用普通卷积（无分组）。
+30. 三个 stage 固定 `branch_dim=128`，3×3 卷积使用普通卷积（无分组）。两路 block 不与输入做残差；block 输出与独立归一化的原始 256 通道 Pixel 特征拼接，再经 1×1→3×3→1×1 卷积输出 256 通道。
 31. stage_288 直接返回，无最终融合模块。
 32. 最终 logits 由冻结 `semantic_seg_head` 生成。
 
@@ -547,6 +561,17 @@ python tools/train.py configs/train/isaid_loveda_full.py
 * 当前默认训练集为 iSAID，验证集为 LoveDA。
 
 ## 12. Checkpoint 非兼容变更
+
+### 当前 Pyramid 三路融合实验
+
+* 基于 `master` 提交 `c167ae8`，删除三个 stage 的语义/细节 block 输入残差。
+* 删除 `pyramid_decoder.stage_*.semantic_out_proj.*`、`detail_out_proj.*`、`fusion_out_proj.*`。
+* 新增每个 stage 的 `pixel_fusion_norm.*` 和 `fusion_block.*`，不增加旧权重映射或兼容层。
+* 旧模型不能通过 `--resume-from` 严格恢复到这个结构；结构对照实验应使用新的 work directory 重新训练。
+* 若使用现有 `--load-model-from` 迁移未变化模块，新增融合层仍为随机初始化，不能视为等价续训。
+* checkpoint 容器格式与 schema 版本保持不变；本次不修改损失、训练配置或冻结策略。
+
+以下为此前的结构变更记录：
 
 Checkpoint schema 版本为 4。实验追踪状态不再保存在 checkpoint 中；`WandbHook` 不再产生持久化状态。
 
