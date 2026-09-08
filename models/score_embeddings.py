@@ -18,6 +18,57 @@ def _safe_group_norm(num_channels: int) -> nn.GroupNorm:
     return nn.GroupNorm(num_groups, num_channels)
 
 
+class _ScoreConditionBranch(nn.Module):
+    """Fuse scores with a pre-normalized CLIP condition using one spatial conv."""
+
+    def __init__(self, clip_dim: int, embed_dim: int):
+        super().__init__()
+        # 64-channel template score maps → 256-channel intermediate feature 1.
+        self.score_stem = nn.Sequential(
+            nn.Conv2d(
+                _NUM_PROMPT_TEMPLATES,
+                embed_dim,
+                kernel_size=1,
+                bias=False,
+            ),
+            _safe_group_norm(embed_dim),
+            nn.GELU(),
+        )
+
+        # Normalized score feature + normalized image or text condition.
+        self.condition_fusion = nn.Sequential(
+            nn.Conv2d(
+                embed_dim + clip_dim,
+                embed_dim,
+                kernel_size=1,
+                bias=False,
+            ),
+            _safe_group_norm(embed_dim),
+            nn.GELU(),
+        )
+
+        # Normalized intermediate feature 1 + normalized intermediate feature 2.
+        self.spatial_fusion = nn.Sequential(
+            nn.Conv2d(
+                embed_dim * 2,
+                embed_dim,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+            ),
+            _safe_group_norm(embed_dim),
+            nn.GELU(),
+        )
+
+    def forward(self, scores: torch.Tensor, condition: torch.Tensor) -> torch.Tensor:
+        score_feature = F.normalize(
+            self.score_stem(scores), dim=1, eps=_L2_NORM_EPS,
+        )
+        fused = self.condition_fusion(torch.cat([score_feature, condition], dim=1))
+        fused = F.normalize(fused, dim=1, eps=_L2_NORM_EPS)
+        return self.spatial_fusion(torch.cat([score_feature, fused], dim=1))
+
+
 class ClipScoreEmbedding(nn.Module):
     """Build a 36×36 score embedding from RemoteCLIP text scores and features.
 
@@ -27,11 +78,11 @@ class ClipScoreEmbedding(nn.Module):
 
     Process:
         1. Compute 64 normalized template score maps.
-        2. Project score maps from 64 to 256 channels.
-        3. L2-normalize score features and dense CLIP features separately.
-        4. Concatenate and fuse them with a 1×1 convolution.
-        5. L2-normalize both 256-channel fusion paths separately.
-        6. Concatenate and apply two ordinary 3×3 convolutions.
+        2. Independently fuse scores with dense image features and with the
+           mean pooled template text, broadcast over the batch and 36×36 grid.
+        3. Each branch has its own score stem, condition fusion, and a single
+           3×3 spatial convolution, with channel L2 normalization before fusion.
+        4. Concatenate both branch outputs and apply a bare 1×1 convolution.
 
     Outputs:
         clip_score_embed_36: [B, C, 256, 36, 36]
@@ -81,50 +132,14 @@ class ClipScoreEmbedding(nn.Module):
                 f"got {self.score_embed_dim}."
             )
 
-        # 64-channel template score maps → 256-channel intermediate feature 1.
-        self.score_stem = nn.Sequential(
-            nn.Conv2d(
-                self.num_prompt_templates,
-                self.score_embed_dim,
-                kernel_size=1,
-                bias=False,
-            ),
-            _safe_group_norm(self.score_embed_dim),
-            nn.GELU(),
+        self.image_branch = _ScoreConditionBranch(
+            self.clip_output_dim, self.score_embed_dim,
         )
-
-        # Normalized intermediate feature 1 + normalized dense CLIP feature.
-        self.score_clip_fusion = nn.Sequential(
-            nn.Conv2d(
-                self.score_embed_dim + self.clip_output_dim,
-                self.score_embed_dim,
-                kernel_size=1,
-                bias=False,
-            ),
-            _safe_group_norm(self.score_embed_dim),
-            nn.GELU(),
+        self.text_branch = _ScoreConditionBranch(
+            self.clip_output_dim, self.score_embed_dim,
         )
-
-        # Normalized intermediate feature 1 + normalized intermediate feature 2.
-        self.spatial_fusion = nn.Sequential(
-            nn.Conv2d(
-                self.score_embed_dim * 2,
-                self.score_embed_dim,
-                kernel_size=3,
-                padding=1,
-                bias=False,
-            ),
-            _safe_group_norm(self.score_embed_dim),
-            nn.GELU(),
-            nn.Conv2d(
-                self.score_embed_dim,
-                self.score_embed_dim,
-                kernel_size=3,
-                padding=1,
-                bias=False,
-            ),
-            _safe_group_norm(self.score_embed_dim),
-            nn.GELU(),
+        self.output_fusion = nn.Conv2d(
+            self.score_embed_dim * 2, self.score_embed_dim, kernel_size=1,
         )
 
         self._text_feature_cache: dict[tuple, torch.Tensor] = {}
@@ -242,8 +257,6 @@ class ClipScoreEmbedding(nn.Module):
         )
 
         # Normalize every spatial CLIP vector along D_clip.
-        # This normalized feature is used both for similarity calculation
-        # and for the direct dense CLIP fusion branch.
         image_norm = F.normalize(
             remoteclip_feat_map,
             p=2,
@@ -267,56 +280,29 @@ class ClipScoreEmbedding(nn.Module):
             width,
         )
 
-        # 64 template channels → 256-channel intermediate feature 1.
-        score_mid_1 = self.score_stem(score_flat)
-
-        # Perform per-pixel channel-wise L2 normalization before fusion.
-        score_mid_1_norm = F.normalize(
-            score_mid_1,
-            p=2,
-            dim=1,
-            eps=_L2_NORM_EPS,
-        )
-
-        # Broadcast the normalized image-level CLIP feature over classes.
-        clip_feature_flat = (
+        # The class dimension is shared with score_flat's [batch, class] order.
+        # Normalize image/text conditions before broadcasting to avoid repeats.
+        image_condition = (
             image_norm[:, None]
-            .expand(
-                batch_size,
-                num_classes,
-                self.clip_output_dim,
-                height,
-                width,
-            )
-            .reshape(
-                batch_size * num_classes,
-                self.clip_output_dim,
-                height,
-                width,
-            )
-            .contiguous()
+            .expand(batch_size, num_classes, self.clip_output_dim, height, width)
+            .reshape(batch_size * num_classes, self.clip_output_dim, height, width)
         )
 
-        score_clip_input = torch.cat(
-            [score_mid_1_norm, clip_feature_flat],
-            dim=1,
+        # Average raw pooled sentence embeddings across templates only.
+        # Normalize before broadcasting, and preserve the text encoder graph.
+        text_mean = F.normalize(
+            template_clip_text.mean(dim=1), dim=-1, eps=_L2_NORM_EPS,
         )
-        score_mid_2 = self.score_clip_fusion(score_clip_input)
-
-        # Normalize both 256-channel paths before the second concatenation.
-        score_mid_2_norm = F.normalize(
-            score_mid_2,
-            p=2,
-            dim=1,
-            eps=_L2_NORM_EPS,
+        text_condition = (
+            text_mean[None, :, :, None, None]
+            .expand(batch_size, num_classes, self.clip_output_dim, height, width)
+            .reshape(batch_size * num_classes, self.clip_output_dim, height, width)
         )
 
-        spatial_fusion_input = torch.cat(
-            [score_mid_1_norm, score_mid_2_norm],
-            dim=1,
-        )
-        clip_score_flat = self.spatial_fusion(
-            spatial_fusion_input
+        image_features = self.image_branch(score_flat, image_condition)
+        text_features = self.text_branch(score_flat, text_condition)
+        clip_score_flat = self.output_fusion(
+            torch.cat([image_features, text_features], dim=1)
         )
 
         clip_score_embed_36 = clip_score_flat.reshape(

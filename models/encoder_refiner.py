@@ -23,9 +23,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
     without any FPN injection. The score stream comes directly from
     ClipScoreEmbedding (score_embeddings.py) without any SAM3 FPN fusion.
 
-    SAM3 token means and mean RemoteCLIP template embeddings are concatenated,
-    linearly projected, and normalized once as shared text guidance for all
-    Refiner layers.
+    Each layer uses the SAM3 token mean as its direct text guidance.
+    CLIP text conditions the score stream inside ClipScoreEmbedding.
 
     The Refiner outputs 36×36 features. High-resolution decoding is handled
     by RefinerPyramidDecoder: three-stage semantic–detail dual-branch
@@ -95,11 +94,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
             text_prompt_batch_size=int(text_prompt_batch_size),
             text_prompt_use_checkpoint=bool(text_prompt_use_checkpoint),
         )
-
-        # Fuse both text sources once; every layer receives the same normalized
-        # class guidance. CLIP features use their projected output dimension.
-        self.text_fusion = nn.Linear(self.hidden_dim + int(clip_dim), self.hidden_dim)
-        self.text_fusion_norm = nn.LayerNorm(self.hidden_dim)
 
         self.layers = nn.ModuleList([
             EncoderRefinerLayer(
@@ -253,17 +247,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
             remoteclip_feat_map=clip_image_feat_map,
         )
 
-        # Average pooled sentence embeddings over templates, not word tokens.
-        # Keep the graph so all layers train the fusion and CLIP text branch.
-        clip_text_mean = template_clip_text.mean(dim=1)
-        clip_text_mean = clip_text_mean.unsqueeze(0).expand(batch_size, -1, -1)
-        sam_text_mean = sam_text_mean.to(
-            device=clip_text_mean.device, dtype=clip_text_mean.dtype,
-        )
-        fused_text = self.text_fusion_norm(
-            self.text_fusion(torch.cat([sam_text_mean, clip_text_mean], dim=-1))
-        )
-
         base_feature_36 = F.interpolate(
             encoder_features_72.reshape(
                 batch_size * num_classes,
@@ -294,14 +277,14 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     layer,
                     feature_36,
                     score_embed_36,
-                    fused_text,
+                    sam_text_mean,
                     use_reentrant=False,
                 )
             else:
                 feature_36, score_embed_36 = layer(
                     feature_36=feature_36,
                     score_embed_36=score_embed_36,
-                    fused_text=fused_text,
+                    sam_text_mean=sam_text_mean,
                 )
 
         # Normalize the accumulated feature stream once after all Refiner layers.

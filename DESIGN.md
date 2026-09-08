@@ -33,9 +33,10 @@ OVRS-SAM3 接收一批遥感图像和当前数据集的类别名称，输出每�
   → 72×72 cross-attended encoder feature
 
 RemoteCLIP 局部相似度图
-  → 64 通道模板分数图经 1×1 Conv 投影
-  → 与 CLIP dense feature map 分别 L2 归一化后融合
-  → 两次拼接前均做逐像素通道 L2 归一化
+  → 图像分支：分数图 + CLIP dense feature map
+  → 文本分支：分数图 + CLIP 模板整句向量均值（广播至 36×36）
+  → 两路参数独立，各自两次归一化拼接、一次 3×3 空间卷积
+  → 两路输出拼接后通过 512→256 的 1×1 Conv
   → clip_score_embed_36 [B, C, 256, 36, 36]
 
 72×72 cross-attended encoder feature
@@ -183,20 +184,21 @@ RemoteCLIP 使用 ViT-L/14。原始图像单独缩放到 504×504，并使用 CL
 L2 归一化，逐像素计算余弦相似度并乘固定系数 20，得到
 [B, C, 64, 36, 36] 模板分数图。
 
-模板分数图展平 batch 与类别维后，经过 64→256 的 1×1 Conv、
-GroupNorm 和 GELU，得到中间特征 1。
+模板分数图展平 batch 与类别维后，同时输入图像分支和文本分支。两条分支结构相同、参数独立，包括各自独立的分数图投影。它们共享原始分数图和同一次模板文本编码结果。
 
-中间特征 1 与 RemoteCLIP dense feature map 在每个空间位置分别沿
-通道维执行 L2 归一化。归一化后的 256 通道中间特征与归一化后的
-768 通道 CLIP 特征拼接，经 1024→256 的 1×1 Conv、GroupNorm 和
-GELU 得到中间特征 2。
+| 步骤 | 每条分支的处理 |
+| --- | --- |
+| 分数图投影 | 64→256 的 1×1 Conv、GroupNorm、GELU，得到分数中间特征 |
+| 第一次拼接 | 分数中间特征与本分支 CLIP 条件分别沿通道 L2 归一化后拼接，默认 256+768 通道 |
+| 条件融合 | 1024→256 的 1×1 Conv、GroupNorm、GELU |
+| 第二次拼接 | 最初的分数中间特征与条件融合结果分别沿通道 L2 归一化，再拼为 512 通道 |
+| 空间增强 | 仅一次普通 3×3 Conv（512→256，stride=1，padding=1），接 GroupNorm、GELU |
 
-中间特征 1 与中间特征 2 再次分别执行逐像素通道 L2 归一化，
-拼接为 512 通道。随后依次经过普通 3×3 Conv 512→256 和普通
-3×3 Conv 256→256；每层卷积后均使用 GroupNorm 和 GELU。
+图像分支使用 dense RemoteCLIP 图像特征，按类别广播。文本分支使用每个类别 64 个模板的原始整句投影向量均值，均值沿通道做 L2 归一化后，按 batch 和空间位置广播至 36×36。整句向量来自 EOT 池化及原始文本投影，不对单词 token 或类别维求平均。图像和文本条件均在广播之前归一化。
 
-最终输出 [B, C, 256, 36, 36] 的 clip_score_embed_36。该特征不再
-接收 SAM3 FPN 注入，直接作为 Refiner 的初始 score stream。
+两路各输出 256 通道，直接拼接为 512 通道，再通过一次普通 1×1 Conv（512→256，带 bias）生成最终 score embedding。最后一次拼接前不新增 L2 归一化，最终卷积后不增加归一化或激活。
+
+最终输出 `[B, C, 256, 36, 36]` 的 `clip_score_embed_36`，B 表示图像数，C 表示提示类别数。该特征不接收 SAM3 FPN 注入，直接作为 Refiner 初始 score stream。训练时两路均保留梯度，可训练 RemoteCLIP 文本不跨 optimizer step 缓存。
 
 ## 5. Class-conditioned encoder refiner
 
@@ -218,7 +220,7 @@ SAM3 FPN 只在后续 RefinerPyramidDecoder 的 72/144/288 三个
 
 每层采用 pre-norm，并依次执行：
 
-1. **ClassScoreAttention**：在每个空间位置跨类别做注意力。Q/K 由图像 feature、共享融合文本和 score embedding 拼接后投影；feature 与 score 使用独立 value/output 分支。
+1. **ClassScoreAttention**：在每个空间位置跨类别做注意力。Q/K 由图像 feature、SAM3 文本均值和 score embedding 拼接后投影；feature 与 score 使用独立 value/output 分支。
 2. **Regular WindowScoreAttention**：每个类别内部执行非移位窗口注意力。
 3. **Shifted WindowScoreAttention**：使用 shift mask 和相对位置偏置连接相邻窗口。
 4. **Feature FFN**：逐 token 更新图像流。
@@ -226,11 +228,7 @@ SAM3 FPN 只在后续 RefinerPyramidDecoder 的 72/144/288 三个
 
 每个注意力和 FFN 子层均采用 pre-norm，并在末端线性投影后直接执行残差相加。Refiner 内部不设置固定或可学习残差系数。类间注意力和窗口注意力的更新尺度由各自的 feature/score output projection 学习，两路 FFN 的更新尺度由各自第二个线性投影层学习。
 
-**共享文本融合**：在 Refiner 层循环之前，复用 `template_clip_text`，对每个类别的 64 个模板整句向量求算术平均。整句向量来自 RemoteCLIP 的 EOT 池化及原始文本投影，不对 CLIP 单词 token 求均值，也不跨类别平均。这里使用返回的原始模板向量；score embedding 内部用于相似度计算的 L2 归一化流程保持独立。
-
-将该均值按图像 batch 广播，与 SAM3 的有效文本 token 均值沿通道拼接，再经过共享 `text_fusion` 线性层和共享 `text_fusion_norm` LayerNorm。线性层输入维度为 `hidden_dim + clip_dim`，输出维度为 `hidden_dim`；默认是 1024→256。归一化后的 `fused_text` 为 `[B, C, 256]`，其中 B 为图像数、C 为提示类别数；所有 Refiner 层复用同一张量，并在各自类间注意力中广播到空间位置。移除每层独立的 `class_norm_text`，不在层内再次变换或更新文本，因此 Q/K 拼接输入仍为 768 通道。
-
-共享融合在每次前向中计算一次，训练时保留梯度；全部层的梯度共同回传至融合层和可训练 RemoteCLIP 文本参数。模板编码不重复执行，可训练文本不跨 optimizer step 缓存，推理使用相同融合路径。
+**文本输入**：每层直接接收 SAM3 有效文本 token 的均值，并通过该层独立的 `class_norm_text` LayerNorm 后参与类间注意力拼接。删除 Refiner 外层的 `text_fusion` 和 `text_fusion_norm`；不直接拼接 CLIP 文本。CLIP 文本在 score embedding 的文本分支中参与融合。类间注意力 Q/K 的拼接输入仍为 768 通道。
 
 全部 Refiner 层结束后，对最终 feature stream 执行一次逐空间位置、沿通道维度的 LayerNorm，再将归一化后的 refiner_features_36 送入 RefinerPyramidDecoder。最终 score stream 不执行额外输出 LayerNorm。
 
@@ -515,9 +513,9 @@ python tools/train.py configs/train/isaid_loveda_full.py
 2. SAM3 encoder、refiner 和 RemoteCLIP grid 分别固定为 72×72、36×36 和 36×36。
 3. SAM3 hidden dimension 固定为 256。
 4. 模板数固定为 64，RemoteCLIP 图文投影维度一致。
-5. clip_score_embed_36 完全由 RemoteCLIP 模板分数图和 dense RemoteCLIP feature map 生成。
-6. 模板分数中间特征与 dense CLIP 特征在拼接前必须分别沿通道维执行逐像素 L2 归一化。
-7. 两路 256 通道中间特征在第二次拼接前也必须分别执行逐像素 L2 归一化。
+5. clip_score_embed_36 由 RemoteCLIP 模板分数图、dense 图像特征和每类模板整句向量均值经独立图像/文本双分支生成。
+6. 每条分支的分数中间特征与对应 CLIP 图像/文本条件在拼接前必须分别沿通道维执行 L2 归一化。
+7. 每条分支的两份 256 通道中间特征在第二次拼接前分别执行逐像素 L2 归一化；每条分支仅使用一次普通 3×3 空间卷积。最终两路输出直接拼接并通过裸 1×1 卷积融合。
 8. 进入 Refiner Attention 前不得注入 SAM3 FPN。
 9. SAM3 FPN 只允许在 RefinerPyramidDecoder 的 72/144/288 高分辨率细节支路中使用。
 10. 可训练 RemoteCLIP 文本特征不能跨 optimizer step 缓存。
@@ -622,9 +620,11 @@ Checkpoint schema 版本为 4。实验追踪状态不再保存在 checkpoint 中
 * 新实验必须使用新的 work directory。
 * `_CHECKPOINT_VERSION` 保持为 4，因为 checkpoint 容器格式没有变化。
 
-本次共享文本融合变更：
+本次双路 score embedding 变更（取代上一版共享文本融合）：
 
-* 新增 `core.encoder_refiner.text_fusion.*` 和 `core.encoder_refiner.text_fusion_norm.*`。
-* 删除 `core.encoder_refiner.layers.*.class_norm_text.*`，文本归一化改为层循环前共享执行。
+* 删除 `core.encoder_refiner.text_fusion.*` 和 `core.encoder_refiner.text_fusion_norm.*`。
+* 恢复 `core.encoder_refiner.layers.*.class_norm_text.*`，每层直接归一化 SAM3 文本均值。
+* 删除 `clip_score_embed` 下旧的 `score_stem.*`、`score_clip_fusion.*` 和 `spatial_fusion.*`。
+* 新增 `clip_score_embed.image_branch.*`、`clip_score_embed.text_branch.*` 和 `clip_score_embed.output_fusion.*`；两路均只有一次 3×3 空间卷积。
 * 不增加旧参数兼容层或映射。旧训练 checkpoint 无法严格恢复此结构；可通过 `--load-model-from` 迁移未变化参数，新实验使用新的 work directory。
 * checkpoint 容器格式不变，`_CHECKPOINT_VERSION` 保持为 4。
