@@ -223,78 +223,37 @@ class PixelDecoder(nn.Module):
             # Needed to make checkpointing happy. But we don't know if the module is checkpointed, so we disable it by default.
             torch._dynamo.config.optimize_ddp = False
 
-    def forward_multiscale(
-        self,
-        backbone_feats: List[torch.Tensor],
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, backbone_feats: List[torch.Tensor]) -> torch.Tensor:
+        """Run the original SAM3 decoder and return its final 288x288 feature."""
         if len(backbone_feats) != 3:
-            raise ValueError(
-                "Semantic Pixel Decoder pyramid requires exactly three "
-                f"feature levels, got {len(backbone_feats)}."
-            )
+            raise ValueError("Pixel Decoder expects [FPN288, FPN144, feature72].")
 
-        # Verify expected spatial ordering: 288, 144, 72.
-        expected_sizes = [(288, 288), (144, 144), (72, 72)]
-        for i, (feat, expected) in enumerate(zip(backbone_feats, expected_sizes)):
-            if tuple(feat.shape[-2:]) != expected:
+        expected_sizes = ((288, 288), (144, 144), (72, 72))
+        for index, (feat, expected_hw) in enumerate(
+            zip(backbone_feats, expected_sizes)
+        ):
+            if (
+                feat.ndim != 4
+                or feat.shape[1] != self.hidden_dim
+                or tuple(feat.shape[-2:]) != expected_hw
+            ):
                 raise ValueError(
-                    f"backbone_feats[{i}] must be {expected}, "
-                    f"got {tuple(feat.shape[-2:])}."
+                    f"backbone_feats[{index}] must have {self.hidden_dim} "
+                    f"channels and spatial size {expected_hw}, "
+                    f"got {tuple(feat.shape)}."
                 )
 
-        multiscale_features = [backbone_feats[-1]]  # 72×72
-
         prev_fpn = backbone_feats[-1]
-
         for stage_idx, curr_fpn in enumerate(backbone_feats[:-1][::-1]):
             prev_fpn = curr_fpn + F.interpolate(
                 prev_fpn,
                 size=curr_fpn.shape[-2:],
                 mode=self.interpolation_mode,
             )
-
             conv_idx = 0 if self.shared_conv else stage_idx
             prev_fpn = self.conv_layers[conv_idx](prev_fpn)
-            prev_fpn = F.relu(
-                self.norms[conv_idx](prev_fpn)
-            )
-
-            multiscale_features.append(prev_fpn)
-
-        if len(multiscale_features) != 3:
-            raise RuntimeError(
-                f"forward_multiscale produced {len(multiscale_features)} "
-                "features, expected 3."
-            )
-
-        pixel_feature_72, pixel_feature_144, pixel_feature_288 = (
-            multiscale_features
-        )
-
-        if tuple(pixel_feature_72.shape[-2:]) != (72, 72):
-            raise RuntimeError(
-                f"pixel_feature_72 must be 72×72, "
-                f"got {tuple(pixel_feature_72.shape[-2:])}."
-            )
-        if tuple(pixel_feature_144.shape[-2:]) != (144, 144):
-            raise RuntimeError(
-                f"pixel_feature_144 must be 144×144, "
-                f"got {tuple(pixel_feature_144.shape[-2:])}."
-            )
-        if tuple(pixel_feature_288.shape[-2:]) != (288, 288):
-            raise RuntimeError(
-                f"pixel_feature_288 must be 288×288, "
-                f"got {tuple(pixel_feature_288.shape[-2:])}."
-            )
-
-        return (
-            pixel_feature_72,
-            pixel_feature_144,
-            pixel_feature_288,
-        )
-
-    def forward(self, backbone_feats: List[torch.Tensor]) -> torch.Tensor:
-        return self.forward_multiscale(backbone_feats)[-1]
+            prev_fpn = F.relu(self.norms[conv_idx](prev_fpn))
+        return prev_fpn
 
 
 class UniversalSegmentationHead(SegmentationHead):
@@ -364,45 +323,6 @@ class UniversalSegmentationHead(SegmentationHead):
             key_padding_mask=prompt_mask,
         )[0]
         return encoder_hidden_states + update
-
-    def forward_semantic_pixel_pyramid(
-        self,
-        backbone_feats: List[torch.Tensor],
-        image_ids: torch.Tensor,
-        encoder_hidden_states: torch.Tensor,
-        return_logits: bool,
-    ) -> Dict[str, torch.Tensor]:
-        """Run the frozen Pixel Decoder and return all three scales.
-
-        Returns a dict with "pixel_feature_72", "pixel_feature_144",
-        "pixel_feature_288" and, when return_logits=True, "semantic_seg".
-        This is the only interface for the original frozen branch; callers
-        must wrap it in torch.no_grad().
-        """
-        backbone_visual_feats = self._prepare_pixel_decoder_input(
-            backbone_feats=backbone_feats,
-            image_ids=image_ids,
-            encoder_hidden_states=encoder_hidden_states,
-        )
-
-        (
-            pixel_feature_72,
-            pixel_feature_144,
-            pixel_feature_288,
-        ) = self.pixel_decoder.forward_multiscale(backbone_visual_feats)
-
-        outputs = {
-            "pixel_feature_72": pixel_feature_72,
-            "pixel_feature_144": pixel_feature_144,
-            "pixel_feature_288": pixel_feature_288,
-        }
-
-        if return_logits:
-            outputs["semantic_seg"] = self.semantic_seg_head(
-                pixel_feature_288
-            )
-
-        return outputs
 
     def forward(
         self,

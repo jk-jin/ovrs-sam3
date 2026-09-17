@@ -12,7 +12,7 @@ OVRS-SAM3 接收一批遥感图像和当前数据集的类别名称，输出每�
 
 * SAM3 提供稳定的多尺度图像特征、文本提示编码、类条件 transformer encoder 和分割解码器。
 * RemoteCLIP 提供面向遥感场景的局部图文对齐。
-* Encoder refiner 在低分辨率融合两者，通过三阶段语义—细节双路融合上采样生成掩码。
+* Encoder refiner 在低分辨率融合两者，再通过 72×72 双路残差融合与冻结的原始 SAM3 Pixel Decoder 生成掩码。
 
 当前只实现 semantic 模式，不支持实例分割、hybrid 模式或非空几何提示训练。
 
@@ -51,22 +51,18 @@ feature_36 + score_embed_36
 
 随后按 prompt_chunk_size 逐提示块执行：
 
-original_encoder_feature_72_chunk
-  → 冻结的 SAM3 Pixel Decoder（torch.no_grad() 中，forward_multiscale）
-  → original_pixel_feature_72 [B×C_chunk, 256, 72, 72]
-  → original_pixel_feature_144 [B×C_chunk, 256, 144, 144]
-  → original_pixel_feature_288 [B×C_chunk, 256, 288, 288]
+refiner_feature_36_chunk + cross_attended_encoder_features_72_chunk + sam_fpn_72
+  → 双路残差融合（语义支路与细节支路各带内部残差）
+  → fused_feature_72 [B×P_chunk, 256, 72, 72]
 
-original_pixel_feature_288
-  → 冻结的 SAM3 semantic_seg_head（仅当固定蒸馏权重 > 0 时执行）
-  → sam3_teacher_logits
-
-refiner_feature_36_chunk
-  → stage_72: Refiner + O72 语义支路，Refiner + FPN72 细节支路
-  → stage_144: Refiner + O144 语义支路，Refiner + FPN144 细节支路
-  → stage_288: Refiner + O288 语义支路，Refiner + FPN288 细节支路
-  → stage_288 输出直接进入冻结 SAM3 semantic_seg_head
+fused_feature_72
+  → 冻结的 SAM3 Pixel Decoder（student，梯度开启）
+  → 冻结的 SAM3 semantic_seg_head（梯度可穿过）
   → final_logits_chunk
+
+cross_attended_encoder_features_72_chunk
+  → 冻结的 SAM3 Pixel Decoder + semantic_seg_head（no_grad；仅当固定蒸馏权重 > 0 时执行）
+  → sam3_teacher_logits [B, P_chunk, 288, 288]（detached）
 
 每个 chunk 立即计算 loss 和 backward，不再拼接全类别 logits。
 ```
@@ -100,10 +96,7 @@ refiner_feature_36_chunk
 | `clip_score_embed_36`         | `[B, P, 256, 36, 36]`              | 纯 RemoteCLIP score embedding，直接作为 Refiner 初始 score stream |
 | `score_embed_36`              | `[B, P, 256, 36, 36]`              | 经 Refiner 更新后的 score stream |
 | `refiner_features_36`         | `[B, P, 256, 36, 36]`              | Refiner 的图像特征流                 |
-| `original_pixel_feature_72`   | `[B×P_chunk, 256, 72, 72]`         | 冻结 Pixel Decoder 最低分辨率输出 |
-| `original_pixel_feature_144`  | `[B×P_chunk, 256, 144, 144]`       | 冻结 Pixel Decoder 中间分辨率输出 |
-| `original_pixel_feature_288`  | `[B×P_chunk, 256, 288, 288]`       | 冻结 Pixel Decoder 最高分辨率输出（同时用于 stage_288 语义支路和 detached teacher） |
-| `final_pixel_feature_288`     | `[B×P_chunk, 256, 288, 288]`       | RefinerPyramidDecoder stage_288 直接输出，随后进入 frozen semantic_seg_head |
+| `fused_feature_72`            | `[B×P_chunk, 256, 72, 72]`         | 双路融合输出，作为冻结 Pixel Decoder 的最低分辨率输入 |
 | `final_logits`                | `[B, P_chunk, 288, 288]`（逐 chunk） | 可训练路径输出的最终语义分割 logits |
 | `sam3_teacher_logits`         | `[B, P_chunk, 288, 288]`（逐 chunk） | 冻结 SAM3 semantic head 输出的 detached teacher logits |
 
@@ -131,22 +124,18 @@ SAM3 图像 backbone 在训练中冻结并运行于 `eval()`。图像特征使�
 
 ### 3.3 共享冻结 Pixel Decoder
 
-冻结的 Pixel Decoder 通过 `forward_multiscale()` 返回 72、144、288 三个尺度的特征。三个特征全部冻结、无梯度。
+冻结的 Pixel Decoder 接收 72×72 输入，输出唯一一个 288×288 特征。参数冻结、保持 `eval()`，但梯度必须能够穿过它的权重回传到融合模块和 Refiner。
 
 ```text
-类条件 72×72 特征（替换 FPN 最后一层）
-  → pixel_feature_72
-  → 上采样到 144×144 + FPN144 → 3×3 Conv + GroupNorm + ReLU
-  → pixel_feature_144
-  → 上采样到 288×288 + FPN288 → 3×3 Conv + GroupNorm + ReLU
-  → pixel_feature_288
+72×72 输入特征（替换 FPN 最后一层）
+  → 与 FPN144 融合 → 3×3 Conv + GroupNorm + ReLU
+  → 与 FPN288 融合 → 3×3 Conv + GroupNorm + ReLU
+  → 288×288 输出
 ```
 
-Pixel Decoder 内部继续使用 `interpolation_mode="nearest"`（SAM3 原始设置）。每次 chunk 只调用一次 Pixel Decoder，且必须在 `torch.no_grad()` 中。Pixel Decoder 参数冻结且保持 `eval()`。
+Pixel Decoder 内部继续使用 `interpolation_mode="nearest"`（SAM3 原始设置）。FPN 顺序固定为 `[288, 144, 72]`：72 级被调用方传入的特征替换，144/288 级来自原始 backbone FPN。`num_upsampling_stages` 仍保留 SAM3 原始的 3 次注册，但当前三尺度输入只执行两次上采样，这是为了按原键名加载 SAM3 预训练权重。
 
-O72/O144/O288 始终用于 Refiner Pyramid Decoder。原始 semantic head
-始终冻结，但仅当固定蒸馏权重大于零且存在可蒸馏类别时按需运行以产生
-teacher logits。
+原始 semantic head 始终冻结，但仅当固定蒸馏权重大于零且存在可蒸馏类别时按需运行以产生 teacher logits。
 
 ## 4. RemoteCLIP 分支
 
@@ -211,8 +200,8 @@ score_embeddings.py 生成的 clip_score_embed_36 直接作为 score
 stream。进入所有 Refiner Attention 层之前不再融合任何 SAM3 FPN
 特征，也不再设置额外残差系数。
 
-SAM3 FPN 只在后续 RefinerPyramidDecoder 的 72/144/288 三个
-高分辨率细节支路中使用。
+SAM3 FPN 只在后续 72×72 融合模块的细节支路中使用；FPN144 与 FPN288
+由冻结 Pixel Decoder 内部消费。
 
 ### 5.2 单层 refiner
 
@@ -226,7 +215,7 @@ SAM3 FPN 只在后续 RefinerPyramidDecoder 的 72/144/288 三个
 
 每个注意力和 FFN 子层均采用 pre-norm，并在末端线性投影后直接执行残差相加。Refiner 内部不设置固定或可学习残差系数。类间注意力和窗口注意力的更新尺度由各自的 feature/score output projection 学习，两路 FFN 的更新尺度由各自第二个线性投影层学习。
 
-全部 Refiner 层结束后，对最终 feature stream 执行一次逐空间位置、沿通道维度的 LayerNorm，再将归一化后的 refiner_features_36 送入 RefinerPyramidDecoder。最终 score stream 不执行额外输出 LayerNorm。
+全部 Refiner 层结束后，对最终 feature stream 执行一次逐空间位置、沿通道维度的 LayerNorm，再将归一化后的 refiner_features_36 送入逐 chunk 融合模块。最终 score stream 不执行额外输出 LayerNorm。
 
 子层执行顺序为：
 
@@ -234,69 +223,69 @@ SAM3 FPN 只在后续 RefinerPyramidDecoder 的 72/144/288 三个
 pre-norm → attention/FFN → output projection → dropout → direct residual
 ```
 
-### 5.3 多尺度金字塔解码器
+### 5.3 72×72 双路融合模块
 
-Refiner 在所有类别上统一执行后，最终 36×36 feature stream 先经过一次通道 LayerNorm，再进入 `RefinerPyramidDecoder`，
-三个尺度分别实例化独立的 `SemanticDetailFusionStage`（stage_72 / stage_144 / stage_288）。
-stage_288 输出直接进入冻结 `semantic_seg_head`，不再有最终融合模块。
+Refiner 在所有类别上统一执行后，最终 36×36 feature stream 先经过一次通道 LayerNorm，再按提示块进入 `DecoderInputFusion72`（`models/decoder_input_fusion.py`）。该模块固定在 72×72 上工作，输出就是冻结 Pixel Decoder 的完整解码输入，不再有第二个高分辨率融合模块。
 
 **输入**：
 
-- 类条件张量（`[N, 256, H, W]`，`N = B×C_chunk`）：refiner_feature_36, original_pixel_feature_72/144/288
-- 图像级 FPN（`[B, 256, H, W]`）：sam_fpn_72, sam_fpn_144, sam_fpn_288
+- 类条件张量（`[N, 256, H, W]`，`N = B×P_chunk`）：refiner_feature_36（双线性上采样到 72×72）、cross-attended encoder 72×72 特征
+- 图像级 FPN（`[B, 256, 72, 72]`）：sam_fpn_72
 
-**SemanticDetailFusionStage（每个尺度）**：
-
-四路独立的 256→128 投影（`1×1 Conv + GroupNorm`，无激活）：
+**四路独立的 256→128 投影**（`1×1 Conv + GroupNorm`，无激活）：
 
 ```text
-semantic_refiner_proj:  upsampled_refiner [N, 256, H, W] → [N, 128, H, W]
-detail_refiner_proj:    upsampled_refiner [N, 256, H, W] → [N, 128, H, W]
-pixel_proj:             original_pixel     [N, 256, H, W] → [N, 128, H, W]
-fpn_proj:               sam_fpn            [B, 256, H, W] → [B, 128, H, W]
+semantic_refiner_proj:  refiner_72   [N, 256, 72, 72] → [N, 128, 72, 72]
+detail_refiner_proj:    refiner_72   [N, 256, 72, 72] → [N, 128, 72, 72]
+encoder_proj:           encoder_72   [N, 256, 72, 72] → [N, 128, 72, 72]
+fpn_proj:               sam_fpn_72   [B, 256, 72, 72] → [B, 128, 72, 72]
 ```
 
-语义和细节分支各自使用独立的 Refiner 投影（`semantic_refiner_proj` 和 `detail_refiner_proj`），参数不共享。
-
-FPN 先按图像投影到 128 通道，再通过广播与 Refiner 逐类别相加。不使用 `repeat` 或 `repeat_interleave` 复制 256 通道 FPN。
+语义支路与细节支路各自使用独立的 Refiner 投影，参数不共享。FPN 在图像级先投影到 128 通道，再通过广播与逐提示特征相加；不复制 256 通道 FPN。
 
 两条独立支路（不能共享参数），结构相同：
 
 ```text
 block: 普通 3×3 Conv (128→128) → GN(8,128) → GELU
      → 1×1 Conv (128→128) → GN(8,128)
-output = input + block(input)   # block 内部残差
+output = input + block(input)   # 支路内部残差
 ```
 
-语义支路融合独立 Refiner 语义投影与 Pixel Decoder；细节支路融合独立 Refiner 细节投影与原始 FPN。
+语义支路融合独立 Refiner 语义投影与原始 encoder 72 特征；细节支路融合独立 Refiner 细节投影与原始 FPN72。
 
-两条支路分别使用独立的 128→256 `1×1 Conv`（无 norm、无激活）恢复到 256 通道。
-
-两路直接相加，再经过一个 256→256 的 `1×1 Conv`（`fusion_out_proj`）输出：
+两条支路分别使用独立的 128→256 `1×1 Conv`（无 norm、无激活）恢复到 256 通道。两路直接相加，再经过一个 256→256 的 `1×1 Conv`（`fusion_out_proj`）输出：
 
 ```python
 fused_out = semantic_out + detail_out
 output = fusion_out_proj(fused_out)
 ```
 
-每个 stage 不再包含可学习的末尾融合系数。256 通道输出后无 GroupNorm、GELU、ReLU 或原始特征残差。无 final fusion 模块。
+256 通道输出后无 GroupNorm、GELU、ReLU，也不添加融合模块外部的 encoder72 残差或 pixel288 残差。该输出不是原始 SAM3 的恒等映射，因此不做末层零初始化，也不加载旧 stage72 参数。
 
-整个 pyramid decoder 使用一次 non-reentrant checkpoint（`self.training and self.use_checkpoint` 时开启），不嵌套给每个 stage。
+融合模块使用一次 non-reentrant checkpoint（`self.training and self.use_checkpoint` 时开启），与冻结 Pixel Decoder 自身的 checkpoint 是前后两个独立区域，不做嵌套。
 
 ## 6. 冻结 SAM3 分割头与梯度边界
 
-Prompt cross-attention 在完整 6 层 encoder 之后、Refiner 之前执行一次（通过 `apply_prompt_cross_attention()`），位于 `torch.no_grad()` 中。
+Prompt cross-attention 在完整 6 层 encoder 之后、Refiner 之前执行一次（通过 `apply_prompt_cross_attention()`），位于 `torch.no_grad()` 中。`cross_attended_encoder_features_72` 就是这一层的输出：后续不再重复执行 prompt cross-attention，也不改取 backbone FPN72。
 
-Pixel Decoder 参数始终冻结（`requires_grad=False`）并保持 `eval()`。每个 class chunk 只执行一次冻结 Pixel Decoder，该调用位于 `torch.no_grad()` 中，一次返回 O72、O144、O288。
+Pixel Decoder 与 semantic head 参数始终冻结（`requires_grad=False`）并保持 `eval()`。学生的调用不进入 `no_grad()`，梯度穿过这两者的权重回传到融合模块与 Refiner；这只是保留对输入的梯度，不表示解冻分割头。
 
-Refiner 特征不再经过 Pixel Decoder。`RefinerPyramidDecoder` 使用 O72/O144/O288 为语义支路提供 Pixel Decoder 特征，并使用原始 backbone FPN 为细节支路提供高频细节。
+同一个 `UniversalSegmentationHead.forward()` 被调用两次，两次输入不同：
 
-- **原始 O288**：在 `no_grad()` 中经过冻结 semantic head，产生 detached teacher。
-- **stage_288 输出**：在梯度开启状态下经过同一个冻结 semantic head，产生 student。semantic head 参数无梯度更新，但 student 梯度可以穿过冻结卷积回传至 pyramid decoder 和 Refiner。
+- **教师**：原始 `cross_attended_encoder_features_72` 切片，位于 `torch.no_grad()` 中，产生 detached teacher logits。
+- **学生**：`DecoderInputFusion72` 融合后的 72×72 特征，在调用方的梯度与 autocast 上下文中执行，产生可回传梯度的 student logits。
 
-原始 semantic head 始终冻结。其参数本身无梯度更新，但作为 student 调用时梯度可穿过其权重回传。
+学生与教师共享同一份冻结权重，但执行两次独立解码，不复用学生中间特征作为教师结果。不存在第二套 Pixel Decoder 权重，分割头也不会再次挂到 `encoder_refiner` 下。
 
-轻量上采样器消费 O72、O144、O288 和原始 FPN；teacher 只消费 O288；student semantic head 消费 stage_288 输出。
+每个 chunk 的逻辑解码次数：
+
+| 情况 | 每 chunk 的 Pixel Decoder 次数 |
+| --- | --- |
+| 蒸馏开启 | 教师 1 次 + 学生 1 次 |
+| 蒸馏关闭 | 仅学生 1 次 |
+| 推理/验证 | 仅学生 1 次 |
+
+此处不计 activation checkpoint 在反向传播期间的必要重计算。
 
 ## 7. 训练设计
 
@@ -307,11 +296,11 @@ Refiner 特征不再经过 Pixel Decoder。`RefinerPyramidDecoder` 使用 O72/O1
 * backbone；
 * transformer encoder（完整 6 层，在 `no_grad()` 中执行）；
 * geometry encoder；
-* segmentation head（Pixel Decoder 参数冻结并保持 `eval()`。原始分支在 `no_grad()` 中执行，Refiner 分支在梯度开启状态下执行。semantic head 在原始分支中产生 detach 的 teacher logits，在 student 分支中产生可回传梯度的 student logits）。
+* segmentation head（Pixel Decoder 与 semantic head 参数冻结并保持 `eval()`。教师分支在 `no_grad()` 中执行，学生分支在梯度开启状态下执行，梯度可穿过冻结权重回传。semantic head 在教师分支中产生 detach 的 teacher logits，在学生分支中产生可回传梯度的 student logits）。
 
 完整 SAM3 encoder 和前置 prompt cross-attention 不保留计算图，均在 `torch.no_grad()` 中执行。
 
-`core.encoder_refiner` 完整训练。其内部的 Refiner 层、`RefinerPyramidDecoder`（stage_72/144/288）同属一个参数组，由现有 `trainable_modules=["core.encoder_refiner"]` 自动覆盖，使用基础学习率 `1e-4`。最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
+`core.encoder_refiner` 完整训练。其内部的 Refiner 层与 `DecoderInputFusion72` 同属一个参数组（新模块参数路径为 `core.encoder_refiner.decoder_input_fusion.*`），由现有 `trainable_modules=["core.encoder_refiner"]` 自动覆盖，使用基础学习率 `1e-4`。最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
 
 RemoteCLIP 图像和文本分支默认使用 `attention` 微调模式，仅训练注意力 Q/V 与位置嵌入，同时保持 `eval()` 以关闭 dropout 和 patch dropout。
 
@@ -485,11 +474,11 @@ python tools/train.py configs/train/isaid_loveda_full.py
 
 | 文件                                    | 职责                                       |
 | ------------------------------------- | ---------------------------------------- |
-| `models/sam3_image.py`                | 类别 chunk、缓存、SAM3 encoder、低分辨率 refiner、逐 chunk 高分辨率解码 |
-| `models/encoder_refiner.py`           | 全类别 Refiner、最终 feature LayerNorm 与多尺度金字塔解码接口 |
-| `models/refiner_pyramid_decoder.py`   | 三阶段语义—细节双路融合上采样，stage_288 直接输出最终高分辨率特征 |
+| `models/sam3_image.py`                | 类别 chunk、缓存、SAM3 encoder、低分辨率 refiner、逐 chunk 融合与冻结解码 |
+| `models/encoder_refiner.py`           | 全类别 Refiner、最终 feature LayerNorm 与逐 chunk 融合接口 |
+| `models/decoder_input_fusion.py`      | 固定 72×72 的双路残差融合，输出冻结 Pixel Decoder 的解码输入 |
 | `models/encoder_refiner_attention.py` | 跨类别/窗口注意力、双流 FFN、pre-norm 与直接残差更新            |
-| `models/maskformer_segmentation.py`   | prompt attention、Pixel Decoder 多尺度输出和原始 semantic head |
+| `models/maskformer_segmentation.py`   | prompt attention、原始 SAM3 Pixel Decoder 与 semantic head |
 | `models/score_embeddings.py`          | 64 模板相似度图、归一化 CLIP 融合和空间卷积增强 |
 | `models/openclip_image_encoder.py`    | 36×36 dense RemoteCLIP 图像特征              |
 | `models/openclip_text_encoder.py`     | 模板文本编码、micro-batch 与梯度控制                 |
@@ -513,30 +502,29 @@ python tools/train.py configs/train/isaid_loveda_full.py
 6. 模板分数中间特征与 dense CLIP 特征在拼接前必须分别沿通道维执行逐像素 L2 归一化。
 7. 两路 256 通道中间特征在第二次拼接前也必须分别执行逐像素 L2 归一化。
 8. 进入 Refiner Attention 前不得注入 SAM3 FPN。
-9. SAM3 FPN 只允许在 RefinerPyramidDecoder 的 72/144/288 高分辨率细节支路中使用。
+9. SAM3 FPN72 只允许在 72×72 融合模块的细节支路中使用；FPN144 与 FPN288 只允许在冻结 Pixel Decoder 内部使用。
 10. 可训练 RemoteCLIP 文本特征不能跨 optimizer step 缓存。
 11. 验证不得重新开启 RemoteCLIP 图像分支的 autograd。
 12. Refiner 必须先在全部类别上执行，再按 chunk 做高分辨率解码。Refiner 不能放进 chunk 循环。
-13. Pixel Decoder 每 chunk 只调用一次且必须在 `torch.no_grad()` 中。
-14. 三个 Pixel Decoder 尺度（72/144/288）全部来自同一次 `forward_multiscale` 调用。
-15. O288 同时用于 stage_288 语义支路和 detached teacher。
-16. clip_score_embed_36 保持纯 RemoteCLIP 输出，用于 debug。
-17. teacher 只来自原始 O288 并且必须 detach。teacher 和 student 都为 288×288。
-18. 蒸馏只监督存在类别。每个存在提示均监督全部 GT 有效像素，并额外监督其原始类别 GT 外侧 `sam3_mask_distill_boundary_width` 像素范围内且标签为 255 的边界环。远处 255 区域不参与蒸馏。多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
-19. 最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
-20. Refiner 的类间注意力、常规窗口注意力、移位窗口注意力和双流 FFN 均采用 pre-norm，并在末端线性投影后直接执行残差相加，不允许重新引入固定或可学习残差系数。全部 Refiner 层结束后，必须对最终 feature_36 执行一次通道 LayerNorm；最终 score_embed_36 不执行额外输出 LayerNorm。
-21. TTA 必须先平均提示空间分数（`raw_prompt_score_map`），再合并提示到原始类别，最后进行相对阈值过滤。
-22. `reduce_zero_label` 与 `background_cfg` 各自只执行其定义的一次标签空间变换。
-23. 完整恢复必须严格校验 checkpoint schema；模型权重迁移必须走独立入口。
-24. 训练不使用完整 `[B,C,288,288]` 计算图。逐 chunk backward 通过 proxy leaf 隔离。
-25. optimizer.zero_grad / scaler.step / scaler.update / scheduler.step 每 batch 只执行一次。
-26. 不使用 `retain_graph=True`。
-27. backbone_fpn 顺序固定为 `[288, 144, 72]`，即 `backbone_fpn[0]` 为 288、`[1]` 为 144、`[2]` 为 72。
-28. 原始 FPN 在 256 通道时不按类别复制；FPN 先按图像投影到 128 通道，再按类别广播。
-29. FPN 投影模块可训练，每个 chunk 重新计算，不跨 chunk 缓存计算图。
-30. 三个 stage 固定 `branch_dim=128`，3×3 卷积使用普通卷积（无分组）。
-31. stage_288 直接返回，无最终融合模块。
-32. 最终 logits 由冻结 `semantic_seg_head` 生成。
+13. Pixel Decoder 在蒸馏开启时每 chunk 调用两次（教师 1 次 + 学生 1 次），关闭时只调用学生 1 次；只有教师调用位于 `torch.no_grad()` 中。
+14. 学生 Pixel Decoder 的唯一 72×72 输入来自 `DecoderInputFusion72`；教师输入是未经融合修改的原始 `cross_attended_encoder_features_72`。两者共享同一份冻结权重，不复用中间特征。
+15. clip_score_embed_36 保持纯 RemoteCLIP 输出，用于 debug。
+16. teacher 只来自未经融合修改的原始 `cross_attended_encoder_features_72`，并且必须 detach。teacher 和 student 都为 288×288。
+17. 蒸馏只监督存在类别。每个存在提示均监督全部 GT 有效像素，并额外监督其原始类别 GT 外侧 `sam3_mask_distill_boundary_width` 像素范围内且标签为 255 的边界环。远处 255 区域不参与蒸馏。多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
+18. 最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
+19. Refiner 的类间注意力、常规窗口注意力、移位窗口注意力和双流 FFN 均采用 pre-norm，并在末端线性投影后直接执行残差相加，不允许重新引入固定或可学习残差系数。全部 Refiner 层结束后，必须对最终 feature_36 执行一次通道 LayerNorm；最终 score_embed_36 不执行额外输出 LayerNorm。
+20. TTA 必须先平均提示空间分数（`raw_prompt_score_map`），再合并提示到原始类别，最后进行相对阈值过滤。
+21. `reduce_zero_label` 与 `background_cfg` 各自只执行其定义的一次标签空间变换。
+22. 完整恢复必须严格校验 checkpoint schema；模型权重迁移必须走独立入口。
+23. 训练不使用完整 `[B,C,288,288]` 计算图。逐 chunk backward 通过 proxy leaf 隔离。
+24. optimizer.zero_grad / scaler.step / scaler.update / scheduler.step 每 batch 只执行一次。
+25. 不使用 `retain_graph=True`。
+26. backbone_fpn 顺序固定为 `[288, 144, 72]`，即 `backbone_fpn[0]` 为 288、`[1]` 为 144、`[2]` 为 72。
+27. 原始 FPN 在 256 通道时不按类别复制；FPN 先按图像投影到 128 通道，再按类别广播。
+28. FPN 投影模块可训练，每个 chunk 重新计算，不跨 chunk 缓存计算图。
+29. 融合模块宽度固定为 128，3×3 卷积使用普通卷积（无分组）；两条支路各自保留内部残差。
+30. 融合输出直接作为学生 Pixel Decoder 的输入，模块外部不添加 encoder72 残差或 pixel288 残差。
+31. 最终 logits 由冻结 `semantic_seg_head` 生成。
 
 当前限制：
 
@@ -550,7 +538,9 @@ python tools/train.py configs/train/isaid_loveda_full.py
 
 Checkpoint schema 版本为 4。实验追踪状态不再保存在 checkpoint 中；`WandbHook` 不再产生持久化状态。
 
-本次模型参数结构发生了非兼容变化：
+以下条目均为历史重构记录，其中提到的类、参数路径和配置字段在当前代码中已经不存在，仅用于解释旧 checkpoint 为何不能严格恢复。
+
+早期重构（Pyramid Decoder 128 通道双支路）：
 
 * 删除 `pyramid_decoder.final_fusion_288.*`（`FinalPixelFeatureFusion288`）。
 * 删除旧 `pyramid_decoder.stage_*.detail_dim=64` 单细节支路。
@@ -564,7 +554,7 @@ Checkpoint schema 版本为 4。实验追踪状态不再保存在 checkpoint 中
 * `_CHECKPOINT_VERSION` 继续保持 4，因为 checkpoint 容器格式没有改变。
 * 原始 SAM3 Pixel Decoder 和 semantic head 参数名称、形状保持不变。
 
-后续一次重构中：
+后续一次重构（Pyramid Decoder 独立 Refiner 投影）：
 
 * 删除 `pyramid_decoder.stage_*.refiner_proj.*`（共享 Refiner 投影）。
 * 删除 `pyramid_decoder.stage_*.detail_scale`（可学习残差系数）。
@@ -592,7 +582,7 @@ Checkpoint schema 版本为 4。实验追踪状态不再保存在 checkpoint 中
 * 不创建旧参数映射或兼容层。
 * `_CHECKPOINT_VERSION` 继续保持 4，因为 checkpoint 容器格式没有改变。
 
-本次 Refiner 残差与输出归一化重构：
+Refiner 残差与输出归一化重构：
 
 * 删除 `core.encoder_refiner.layers.*.class_feature_scale`。
 * 删除 `core.encoder_refiner.layers.*.class_score_scale`。
@@ -613,5 +603,20 @@ Checkpoint schema 版本为 4。实验追踪状态不再保存在 checkpoint 中
 * 旧 checkpoint 不能通过 `--resume-from` 严格恢复。
 * 可以通过 `--load-model-from` 非严格加载未变化参数，但旧输出投影是在 LayerScale 存在时训练的，不保证删除系数后具有等价数值行为。
 * 非严格加载旧 checkpoint 时，新的 feature_output_norm 使用默认初始化：weight 为 1、bias 为 0。
+* 新实验必须使用新的 work directory。
+* `_CHECKPOINT_VERSION` 保持为 4，因为 checkpoint 容器格式没有变化。
+
+本次 Pyramid Decoder 移除重构：
+
+* 删除整个 `models/refiner_pyramid_decoder.py`，包括 `RefinerPyramidDecoder` 和 `SemanticDetailFusionStage`。
+* 删除 `core.encoder_refiner.pyramid_decoder.*`（stage_72 / stage_144 / stage_288 的三尺度融合参数）。
+* 删除 `PixelDecoder.forward_multiscale()` 和 `UniversalSegmentationHead.forward_semantic_pixel_pyramid()`。
+* 新增 `models/decoder_input_fusion.py` 的 `DecoderInputFusion72`，参数路径为 `core.encoder_refiner.decoder_input_fusion.*`。
+* 新模块由 `trainable_modules=["core.encoder_refiner"]` 与现有参数组自动覆盖，不新增学习率组，也不新增 `decoder_input_fusion_cfg` 配置项。
+* 融合模块使用 PyTorch 默认初始化，不加载旧 stage72 权重，不做末层零初始化。
+* 学生与教师都通过原始 `UniversalSegmentationHead.forward()` 进入冻结解码链路，原始 SAM3 参数名称、形状与构造数量保持不变。
+* 新旧可训练参数结构不兼容，旧 checkpoint 不能通过 `--resume-from` 严格恢复。
+* 可以通过 `--load-model-from` 非严格加载未变化参数；新融合模块保持默认初始化。
+* 不迁移旧 optimizer 状态，不创建旧参数映射、占位属性或兼容分支。
 * 新实验必须使用新的 work directory。
 * `_CHECKPOINT_VERSION` 保持为 4，因为 checkpoint 容器格式没有变化。

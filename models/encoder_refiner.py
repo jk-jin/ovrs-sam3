@@ -12,7 +12,7 @@ from .encoder_refiner_attention import (
     EncoderRefinerLayer,
     apply_layer_norm_bcdhw,
 )
-from .refiner_pyramid_decoder import RefinerPyramidDecoder
+from .decoder_input_fusion import DecoderInputFusion72
 
 
 class ClassConditionedEncoderRefiner(nn.Module):
@@ -23,18 +23,13 @@ class ClassConditionedEncoderRefiner(nn.Module):
     without any FPN injection. The score stream comes directly from
     ClipScoreEmbedding (score_embeddings.py) without any SAM3 FPN fusion.
 
-    The Refiner outputs 36×36 features. High-resolution decoding is handled
-    by RefinerPyramidDecoder: three-stage semantic–detail dual-branch
-    fusion (72→144→288), where the semantic branch fuses upsampled Refiner
-    with frozen Pixel Decoder features and the detail branch fuses Refiner
-    with original SAM3 backbone FPN. Both branches use independent Refiner
-    projections. stage_288 output goes directly into the frozen
-    semantic_seg_head.
+    The Refiner outputs 36×36 features. The 72×72 dual-branch fusion runs
+    per prompt chunk in decoder_input_fusion, and high-resolution decoding
+    (72→144→288) is executed by the frozen original SAM3 Pixel Decoder.
 
     After all Refiner layers, the accumulated 36×36 feature stream is
     normalized once with a channel-wise LayerNorm before being returned
-    and passed to RefinerPyramidDecoder. The final score stream is not
-    post-normalized.
+    and fused per chunk. The final score stream is not post-normalized.
 
     Forward inputs:
         encoder_features_72:  [B, C, 256, 72, 72]  (full encoder + cross-attention)
@@ -105,49 +100,31 @@ class ClassConditionedEncoderRefiner(nn.Module):
         ])
 
         # Final normalization for the accumulated feature residual stream.
-        # This is applied once after all Refiner layers and before the
-        # 36×36 feature enters the Pyramid Decoder.
+        # This is applied once after all Refiner layers; the 36×36 feature is
+        # then fused per prompt chunk at 72×72.
         self.feature_output_norm = nn.LayerNorm(self.hidden_dim)
 
-        self.pyramid_decoder = RefinerPyramidDecoder(
-            hidden_dim=self.hidden_dim,
-            branch_dim=128,
-            use_checkpoint=self.use_checkpoint,
-        )
+        self.decoder_input_fusion = DecoderInputFusion72()
 
-    def decode_feature_pyramid_chunk(
+    def fuse_decoder_input_chunk(
         self,
         refiner_feature_36: torch.Tensor,
-        original_pixel_feature_72: torch.Tensor,
-        original_pixel_feature_144: torch.Tensor,
-        original_pixel_feature_288: torch.Tensor,
+        encoder_feature_72: torch.Tensor,
         sam_fpn_72: torch.Tensor,
-        sam_fpn_144: torch.Tensor,
-        sam_fpn_288: torch.Tensor,
     ) -> torch.Tensor:
-        """Three-stage semantic–detail dual-branch upsampling with
-        independent Refiner projections per branch.
-
-        Args:
-            refiner_feature_36:          [B×C_chunk, 256, 36, 36]
-            original_pixel_feature_72:   [B×C_chunk, 256, 72, 72]
-            original_pixel_feature_144:  [B×C_chunk, 256, 144, 144]
-            original_pixel_feature_288:  [B×C_chunk, 256, 288, 288]
-            sam_fpn_72:                  [B, 256, 72, 72]
-            sam_fpn_144:                 [B, 256, 144, 144]
-            sam_fpn_288:                 [B, 256, 288, 288]
-
-        Returns:
-            final_feature_288: [B×C_chunk, 256, 288, 288]
-        """
-        return self.pyramid_decoder(
+        """Build a differentiable 72x72 Pixel Decoder input for one chunk."""
+        if self.use_checkpoint and self.training and torch.is_grad_enabled():
+            return checkpoint(
+                self.decoder_input_fusion,
+                refiner_feature_36,
+                encoder_feature_72,
+                sam_fpn_72,
+                use_reentrant=False,
+            )
+        return self.decoder_input_fusion(
             refiner_feature_36=refiner_feature_36,
-            original_pixel_feature_72=original_pixel_feature_72,
-            original_pixel_feature_144=original_pixel_feature_144,
-            original_pixel_feature_288=original_pixel_feature_288,
+            encoder_feature_72=encoder_feature_72,
             sam_fpn_72=sam_fpn_72,
-            sam_fpn_144=sam_fpn_144,
-            sam_fpn_288=sam_fpn_288,
         )
 
     def forward(
