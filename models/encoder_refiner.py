@@ -12,7 +12,7 @@ from .encoder_refiner_attention import (
     EncoderRefinerLayer,
     apply_layer_norm_bcdhw,
 )
-from .refiner_pyramid_decoder import RefinerPyramidDecoder
+from .decoder_input_fusion import DecoderInputFusion
 
 
 class ClassConditionedEncoderRefiner(nn.Module):
@@ -23,18 +23,11 @@ class ClassConditionedEncoderRefiner(nn.Module):
     without any FPN injection. The score stream comes directly from
     ClipScoreEmbedding (score_embeddings.py) without any SAM3 FPN fusion.
 
-    The Refiner outputs 36×36 features. High-resolution decoding is handled
-    by RefinerPyramidDecoder: three-stage semantic–detail dual-branch
-    fusion (72→144→288), where the semantic branch fuses upsampled Refiner
-    with frozen Pixel Decoder features and the detail branch fuses Refiner
-    with original SAM3 backbone FPN. Both branches use independent Refiner
-    projections. stage_288 output goes directly into the frozen
-    semantic_seg_head.
-
-    After all Refiner layers, the accumulated 36×36 feature stream is
-    normalized once with a channel-wise LayerNorm before being returned
-    and passed to RefinerPyramidDecoder. The final score stream is not
-    post-normalized.
+    After all layers, feature36 receives one channel-wise LayerNorm.
+    DecoderInputFusion mixes its 72×72 interpolation with the original
+    cross-attended encoder72 and image-level FPN72. The fused encoder72
+    then enters the frozen SAM3 Pixel Decoder and semantic head with
+    input gradients enabled. The final score stream is not post-normalized.
 
     Forward inputs:
         encoder_features_72:  [B, C, 256, 72, 72]  (full encoder + cross-attention)
@@ -57,8 +50,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         clip_dim: int = 768,
         score_embed_dim: int = 256,
         num_heads: int = 8,
-        window_size: int = 12,
-        shift_size: int = 6,
+        local_attn_steps: int = 4,
         fusion_layers: int = 4,
         dropout: float = 0.1,
         prompt_templates: list[str] | None = None,
@@ -97,8 +89,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 hidden_dim=self.hidden_dim,
                 score_embed_dim=self.score_embed_dim,
                 num_heads=int(num_heads),
-                window_size=int(window_size),
-                shift_size=int(shift_size),
+                local_attn_steps=int(local_attn_steps),
                 dropout=float(dropout),
             )
             for _ in range(self.num_fusion_layers)
@@ -106,48 +97,24 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
         # Final normalization for the accumulated feature residual stream.
         # This is applied once after all Refiner layers and before the
-        # 36×36 feature enters the Pyramid Decoder.
+        # 36×36 feature enters the single-scale input fusion.
         self.feature_output_norm = nn.LayerNorm(self.hidden_dim)
 
-        self.pyramid_decoder = RefinerPyramidDecoder(
+        self.decoder_input_fusion = DecoderInputFusion(
             hidden_dim=self.hidden_dim,
             branch_dim=128,
             use_checkpoint=self.use_checkpoint,
         )
 
-    def decode_feature_pyramid_chunk(
+    def fuse_decoder_input_chunk(
         self,
         refiner_feature_36: torch.Tensor,
-        original_pixel_feature_72: torch.Tensor,
-        original_pixel_feature_144: torch.Tensor,
-        original_pixel_feature_288: torch.Tensor,
+        original_encoder_feature_72: torch.Tensor,
         sam_fpn_72: torch.Tensor,
-        sam_fpn_144: torch.Tensor,
-        sam_fpn_288: torch.Tensor,
     ) -> torch.Tensor:
-        """Three-stage semantic–detail dual-branch upsampling with
-        independent Refiner projections per branch.
-
-        Args:
-            refiner_feature_36:          [B×C_chunk, 256, 36, 36]
-            original_pixel_feature_72:   [B×C_chunk, 256, 72, 72]
-            original_pixel_feature_144:  [B×C_chunk, 256, 144, 144]
-            original_pixel_feature_288:  [B×C_chunk, 256, 288, 288]
-            sam_fpn_72:                  [B, 256, 72, 72]
-            sam_fpn_144:                 [B, 256, 144, 144]
-            sam_fpn_288:                 [B, 256, 288, 288]
-
-        Returns:
-            final_feature_288: [B×C_chunk, 256, 288, 288]
-        """
-        return self.pyramid_decoder(
-            refiner_feature_36=refiner_feature_36,
-            original_pixel_feature_72=original_pixel_feature_72,
-            original_pixel_feature_144=original_pixel_feature_144,
-            original_pixel_feature_288=original_pixel_feature_288,
-            sam_fpn_72=sam_fpn_72,
-            sam_fpn_144=sam_fpn_144,
-            sam_fpn_288=sam_fpn_288,
+        """Return [B×C_chunk, 256, 72, 72] for the frozen Pixel Decoder."""
+        return self.decoder_input_fusion(
+            refiner_feature_36, original_encoder_feature_72, sam_fpn_72,
         )
 
     def forward(
@@ -297,3 +264,4 @@ class ClassConditionedEncoderRefiner(nn.Module):
             "clip_score_maps_36": clip_score_maps_36,
             "template_clip_text": template_clip_text,
         }
+

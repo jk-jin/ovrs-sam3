@@ -113,8 +113,7 @@ model = dict(
         refiner_hw=36,
         encoder_hw=72,
 
-        window_size=12,
-        shift_size=6,
+        local_attn_steps=4,
 
         use_checkpoint=True,
     ),
@@ -143,3 +142,4 @@ model = dict(
         sam3_mask_distill_boundary_width=3,
     ),
 )
+

@@ -43,8 +43,7 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_dropout: float = 0.1,
         encoder_refiner_hidden_dim: int = 256,
         encoder_refiner_score_embed_dim: int = 256,
-        encoder_refiner_window_size: int = 12,
-        encoder_refiner_shift_size: int = 6,
+        encoder_refiner_local_attn_steps: int = 4,
         encoder_refiner_use_checkpoint: bool = True,
         task_mode: str = TASK_MODE_SEMANTIC,
         **kwargs,
@@ -109,8 +108,7 @@ class Sam3Image(torch.nn.Module):
             clip_dim=self.clip_align_dim,
             score_embed_dim=int(encoder_refiner_score_embed_dim),
             num_heads=int(encoder_refiner_num_heads),
-            window_size=int(encoder_refiner_window_size),
-            shift_size=int(encoder_refiner_shift_size),
+            local_attn_steps=int(encoder_refiner_local_attn_steps),
             fusion_layers=int(encoder_refiner_fusion_layers),
             dropout=float(encoder_refiner_dropout),
             prompt_templates=list(openclip_prompt_templates or []),
@@ -630,7 +628,7 @@ class Sam3Image(torch.nn.Module):
         return result
 
     # ------------------------------------------------------------------
-    # Per-chunk high-resolution pyramid decoding
+    # Per-chunk single-scale fusion and original SAM3 decoding
     # ------------------------------------------------------------------
 
     def decode_encoder_refiner_chunk_from_cache(
@@ -641,120 +639,54 @@ class Sam3Image(torch.nn.Module):
         class_end: int,
         return_teacher_logits: bool = False,
     ) -> Dict[str, torch.Tensor]:
-        """Decode one class chunk through the frozen Pixel Decoder pyramid.
+        """Fuse at 72, then decode student/optional teacher with shared frozen heads.
 
-        Steps:
-        1. Slice original encoder 72 from cache for this chunk.
-        2. Convert to Pixel Decoder hidden states.
-        3. Run frozen Pixel Decoder pyramid (no_grad) → O72, O144, O288.
-        4. Run RefinerPyramidDecoder: three-scale semantic–detail dual-branch
-           fusion (36→72→144→288) with FPN broadcasting at 128 channels.
-        5. stage_288 output → frozen semantic_seg_head → logits.
-        6. Optionally return teacher logits (detached).
+        Only the teacher runs in no_grad. The student must retain input
+        gradients through the frozen Pixel Decoder and semantic head.
         """
-        cross_attended_encoder_features_72 = encoder_refiner_cache[
-            "cross_attended_encoder_features_72"
-        ]
-        total_classes = cross_attended_encoder_features_72.shape[1]
-
+        encoder_features = encoder_refiner_cache["cross_attended_encoder_features_72"]
+        total_classes = encoder_features.shape[1]
         if not 0 <= class_start < class_end <= total_classes:
             raise ValueError(
                 f"Chunk indices out of range: class_start={class_start}, "
                 f"class_end={class_end}, total_classes={total_classes}."
             )
         backbone_fpn = encoder_refiner_cache["backbone_fpn"]
+        batch_size = encoder_features.shape[0]
+        chunk_classes = class_end - class_start
+        expected = (batch_size, chunk_classes, 256, 36, 36)
+        if tuple(refiner_feature_36_chunk.shape) != expected:
+            raise ValueError(f"refiner chunk must be {expected}, got {tuple(refiner_feature_36_chunk.shape)}")
 
-        # Original SAM3 backbone FPN at three scales (image-level, no class dim).
-        sam_fpn_288 = backbone_fpn[0]  # [B, 256, 288, 288]
-        sam_fpn_144 = backbone_fpn[1]  # [B, 256, 144, 144]
-        sam_fpn_72 = backbone_fpn[2]   # [B, 256, 72, 72]
-
-        B = cross_attended_encoder_features_72.shape[0]
-        D = cross_attended_encoder_features_72.shape[2]
-        num_chunk_classes = class_end - class_start
-
-        expected_chunk_shape = (
-            B, num_chunk_classes, 256, 36, 36,
-        )
-        if tuple(refiner_feature_36_chunk.shape) != expected_chunk_shape:
-            raise ValueError(
-                f"refiner_feature_36_chunk shape mismatch: expected "
-                f"{expected_chunk_shape}, "
-                f"got {tuple(refiner_feature_36_chunk.shape)}."
-            )
-
-        # Slice original encoder 72 for this chunk.
-        original_feature_72_chunk = cross_attended_encoder_features_72[
-            :, class_start:class_end
-        ]
-
-        # Convert to hidden states for the Pixel Decoder.
-        original_hidden_states = self._feature_72_to_hidden_states(
-            original_feature_72_chunk
-        )
-
-        image_ids = torch.arange(
-            B,
-            device=original_hidden_states.device,
-            dtype=torch.long,
-        ).repeat_interleave(num_chunk_classes)
-
-        # Frozen Pixel Decoder pyramid (no_grad) — single call per chunk.
-        with torch.no_grad():
-            original_outputs = (
-                self.segmentation_head.forward_semantic_pixel_pyramid(
+        original_feature = encoder_features[:, class_start:class_end]
+        image_ids = torch.arange(batch_size, device=original_feature.device).repeat_interleave(chunk_classes)
+        result: Dict[str, torch.Tensor] = {}
+        if return_teacher_logits:
+            with torch.no_grad():
+                teacher = self.segmentation_head(
                     backbone_feats=backbone_fpn,
                     image_ids=image_ids,
-                    encoder_hidden_states=original_hidden_states,
-                    return_logits=return_teacher_logits,
-                )
-            )
+                    encoder_hidden_states=self._feature_72_to_hidden_states(original_feature),
+                )["semantic_seg"]
+                result[OUTPUT_KEYS.sam3_teacher_logits] = teacher.reshape(
+                    batch_size, chunk_classes, 288, 288,
+                ).detach()
 
-        original_pixel_feature_72_flat = original_outputs["pixel_feature_72"]
-        original_pixel_feature_144_flat = original_outputs["pixel_feature_144"]
-        original_pixel_feature_288_flat = original_outputs["pixel_feature_288"]
-
-        # Flatten refiner feature for this chunk.
-        refiner_feature_36_flat = refiner_feature_36_chunk.reshape(
-            B * num_chunk_classes, D, 36, 36
+        pair_count = batch_size * chunk_classes
+        fused_feature = self.encoder_refiner.fuse_decoder_input_chunk(
+            refiner_feature_36=refiner_feature_36_chunk.reshape(pair_count, 256, 36, 36),
+            original_encoder_feature_72=original_feature.reshape(pair_count, 256, 72, 72),
+            sam_fpn_72=backbone_fpn[2],
         )
-
-        # Three-stage semantic–detail dual-branch fusion: 36→72→144→288.
-        final_feature_288_flat = (
-            self.encoder_refiner.decode_feature_pyramid_chunk(
-                refiner_feature_36=refiner_feature_36_flat,
-                original_pixel_feature_72=original_pixel_feature_72_flat,
-                original_pixel_feature_144=original_pixel_feature_144_flat,
-                original_pixel_feature_288=original_pixel_feature_288_flat,
-                sam_fpn_72=sam_fpn_72,
-                sam_fpn_144=sam_fpn_144,
-                sam_fpn_288=sam_fpn_288,
-            )
-        )
-
-        # Frozen semantic_seg_head → logits.
-        final_logits_flat = self.segmentation_head.semantic_seg_head(
-            final_feature_288_flat
-        )
-        # [B*C_chunk, 1, 288, 288] → [B, C_chunk, 288, 288]
-        final_logits_chunk = final_logits_flat.reshape(
-            B, num_chunk_classes, 288, 288
-        )
-
-        result: Dict[str, torch.Tensor] = {
-            OUTPUT_KEYS.final_logits: final_logits_chunk,
-        }
-
-        if return_teacher_logits:
-            teacher_logits = original_outputs["semantic_seg"]
-            # [B*C_chunk, 1, 288, 288] → [B, C_chunk, 288, 288]
-            teacher_logits_chunk = teacher_logits.reshape(
-                B, num_chunk_classes, 288, 288
-            )
-            result[OUTPUT_KEYS.sam3_teacher_logits] = (
-                teacher_logits_chunk.detach()
-            )
-
+        # The caller controls autograd; never place this student in no_grad.
+        student = self.segmentation_head(
+            backbone_feats=backbone_fpn,
+            image_ids=image_ids,
+            encoder_hidden_states=self._feature_72_to_hidden_states(
+                fused_feature.reshape(batch_size, chunk_classes, 256, 72, 72),
+            ),
+        )["semantic_seg"]
+        result[OUTPUT_KEYS.final_logits] = student.reshape(batch_size, chunk_classes, 288, 288)
         return result
 
     # ------------------------------------------------------------------
@@ -988,3 +920,4 @@ class Sam3Image(torch.nn.Module):
             encoder_refiner_cache=encoder_refiner_cache,
             batch=input,
         )
+

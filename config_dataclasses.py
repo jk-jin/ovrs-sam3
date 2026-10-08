@@ -128,8 +128,7 @@ class EncoderRefinerConfig:
     refiner_hw: int = 36
     encoder_hw: int = 72
 
-    window_size: int = 12
-    shift_size: int = 6
+    local_attn_steps: int = 4
 
     use_checkpoint: bool = True
 

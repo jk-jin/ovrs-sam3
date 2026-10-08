@@ -285,24 +285,20 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 f"encoder_refiner_cfg.num_heads must be positive, got {cfg.num_heads}."
             )
 
-        if cfg.window_size <= 0:
-            raise ValueError(
-                "encoder_refiner_cfg.window_size must be positive."
-            )
-        if not 0 <= cfg.shift_size < cfg.window_size:
-            raise ValueError(
-                "encoder_refiner_cfg.shift_size must satisfy 0 <= shift_size < window_size."
-            )
+        if cfg.local_attn_steps <= 0:
+            raise ValueError("encoder_refiner_cfg.local_attn_steps must be positive.")
+        if cfg.hidden_dim % cfg.num_heads:
+            raise ValueError("encoder_refiner_cfg.hidden_dim must be divisible by num_heads.")
 
         if cfg.encoder_hw != 72:
             raise ValueError(
-                "encoder_hw=72 表示原始 Pixel Decoder pyramid 的最低分辨率，"
+                "encoder_hw=72 表示原始 Pixel Decoder 的输入尺度，"
                 f"got {cfg.encoder_hw}."
             )
 
         if cfg.refiner_hw != 36:
             raise ValueError(
-                "refiner_hw=36 表示新 pyramid decoder 的起始尺度，"
+                "refiner_hw=36 表示 Refiner 的注意力尺度，"
                 f"got {cfg.refiner_hw}."
             )
 
@@ -314,7 +310,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         if cfg.hidden_dim != 256:
             raise ValueError(
-                "Refiner、多尺度注入和冻结 SAM3 head 均固定使用 256 通道，"
+                "Refiner、单尺度融合和冻结 SAM3 head 均固定使用 256 通道，"
                 f"got {cfg.hidden_dim}."
             )
 
@@ -793,8 +789,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             encoder_refiner_dropout=float(refiner_cfg.dropout),
             encoder_refiner_hidden_dim=int(refiner_cfg.hidden_dim),
             encoder_refiner_score_embed_dim=int(refiner_cfg.score_embed_dim),
-            encoder_refiner_window_size=int(refiner_cfg.window_size),
-            encoder_refiner_shift_size=int(refiner_cfg.shift_size),
+            encoder_refiner_local_attn_steps=int(refiner_cfg.local_attn_steps),
             encoder_refiner_use_checkpoint=bool(refiner_cfg.use_checkpoint),
             task_mode=TASK_MODE_SEMANTIC,
         )
