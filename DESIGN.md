@@ -1,6 +1,6 @@
 # OVRS-SAM3 设计说明
 
-适用分支：`master`
+适用分支：`tmp/refiner-alternating-single-value-20261011`（基于 `master`）
 项目仓库：`jk-jin/ovrs-sam3`
 当前任务：开放词汇遥感语义分割
 
@@ -23,7 +23,6 @@ OVRS-SAM3 接收一批遥感图像和当前数据集的类别名称，输出每�
   ├─ SAM3 图像 backbone → 288/144/72 多尺度 FPN
   ├─ SAM3 文本编码器与 transformer encoder layer 1..6
   │    → 每个图像-类别对的完整 6 层 encoder feature
-  │    → SAM 文本 token 的 masked mean
   └─ RemoteCLIP
        ├─ 504×504 图像 → 36×36 dense image feature
        └─ 每类 64 个文本模板 → template text feature
@@ -46,7 +45,7 @@ RemoteCLIP 局部相似度图
 clip_score_embed_36 直接作为初始 score_embed_36，不接收 SAM3 FPN 注入
 
 feature_36 + score_embed_36
-  → Refiner layer 1..4（全提示同时运行）
+  → Refiner layer 1..4（A→B→A→B，全提示同时运行）
   → refiner_features_36 [B, P, 256, 36, 36]
 
 随后按 prompt_chunk_size 逐提示块执行：
@@ -96,7 +95,6 @@ fused_feature_72
 | `sam_fpn_288`                  | `[B, 256, 288, 288]`               | SAM3 backbone 图像级 FPN288，只在原始 Pixel Decoder 内使用 |
 | `sam_fpn_144`                  | `[B, 256, 144, 144]`               | SAM3 backbone 图像级 FPN144，只在原始 Pixel Decoder 内使用 |
 | `sam_fpn_72`                   | `[B, 256, 72, 72]`                 | SAM3 backbone 图像级 FPN72，用于单尺度融合的细节支路 |
-| `sam_text_mean`               | `[B, P, 256]`                      | SAM 文本 token 的 masked mean     |
 | `remoteclip_feat_map`         | `[B, 768, 36, 36]`                 | RemoteCLIP dense image feature |
 | `template_clip_text`          | `[P, 64, 768]`                     | 每提示 64 个模板的文本特征                |
 | `clip_score_maps_36`          | `[B, P, 64, 36, 36]`               | 局部图文相似度图                       |
@@ -125,7 +123,7 @@ SAM3 图像 backbone 在训练中冻结并运行于 `eval()`。图像特征使�
 
 每个图像与每个提示组成一个 prompt pair。冻结的 SAM3 文本编码器和 6 层 transformer encoder 为每个 pair 生成类条件图像特征。所有 6 层在 `torch.no_grad()` 中一次运行完毕。
 
-完整 encoder 输出后，执行一次 prompt cross-attention（同样在 `no_grad()` 中），得到 cross-attended full-encoder feature。SAM 文本向量通过有效 token 的 masked mean 得到，padding token 不参与平均。
+完整 encoder 输出后，执行一次 prompt cross-attention（同样在 `no_grad()` 中），得到 cross-attended full-encoder feature。Refiner 不再计算或接收 SAM 文本 token 均值；原始 SAM3 encoder 和前置 prompt cross-attention 仍正常使用完整文本提示。
 
 所有提示块按原始顺序重新拼接。
 
@@ -211,25 +209,56 @@ stream。进入所有 Refiner Attention 层之前不再融合任何 SAM3 FPN
 SAM3 FPN72 只在后续单尺度 DecoderInputFusion 的细节支路中使用；
 FPN144 和 FPN288 由原始 Pixel Decoder 内部消费。
 
-### 5.2 单层 refiner
+### 5.2 交替单 Value Refiner
 
-每层采用 pre-norm，并依次执行：
+四层按 A→B→A→B 执行。每层始终先更新 score stream，再更新 feature stream，
+最后执行 Feature FFN 和 Score FFN。各层独立实例化，参数不共享。
 
-1. **ClassScoreAttention**：在每个空间位置跨类别做注意力。Q/K 由图像 feature、SAM 文本均值和 score embedding 拼接后投影；feature 与 score 使用独立 value/output 分支。
-2. **Regular WindowScoreAttention**：每个类别内部执行非移位窗口注意力。
-3. **Shifted WindowScoreAttention**：使用 shift mask 和相对位置偏置连接相邻窗口。
-4. **Feature FFN**：逐 token 更新图像流。
-5. **Score FFN**：逐 token 更新分数流。
+所有注意力的 Q/K 均由逐像素通道 LayerNorm 后的 score embedding 和 feature
+按通道顺序 `[score_embed, feature]` 拼接后独立线性投影。两路均为 256 通道时，
+Q/K 输入是 512 通道；不再拼接 SAM 文本均值，也不再保留双 Value/双输出分支。
 
-每个注意力和 FFN 子层均采用 pre-norm，并在末端线性投影后直接执行残差相加。Refiner 内部不设置固定或可学习残差系数。类间注意力和窗口注意力的更新尺度由各自的 feature/score output projection 学习，两路 FFN 的更新尺度由各自第二个线性投影层学习。
+**A 层（第 1、3 层，`score_attention_type="intra"`）：**
 
-全部 Refiner 层结束后，对最终 feature stream 执行一次逐空间位置、沿通道维度的 LayerNorm，再将归一化后的 refiner_features_36 送入 DecoderInputFusion。最终 score stream 不执行额外输出 LayerNorm。
+1. Regular WindowScoreAttention：Value 仅来自 score embedding，输出直接残差到 score。
+2. Shifted WindowScoreAttention：使用上一步更新后的 score，重新 pre-norm 和生成 Q/K；Value 仍仅来自 score，继续残差更新 score。
+3. ClassScoreAttention：使用两次窗口更新后的 score 与本层尚未更新的 feature 生成 Q/K；Value 仅来自 feature，输出残差到 feature。
+4. Feature FFN：更新 feature。
+5. Score FFN：更新 score。
 
-子层执行顺序为：
+**B 层（第 2、4 层，`score_attention_type="inter"`）：**
 
-```text
-pre-norm → attention/FFN → output projection → dropout → direct residual
-```
+1. ClassScoreAttention：Value 仅来自 score embedding，输出直接残差到 score。
+2. Regular WindowScoreAttention：使用刚更新的 score 与 feature 生成 Q/K；Value 仅来自 feature，输出残差到 feature。
+3. Shifted WindowScoreAttention：使用上一步更新后的 feature 和同一份已更新 score，重新 pre-norm 和生成 Q/K；Value 仅来自 feature，继续残差更新 feature。
+4. Feature FFN：更新 feature。
+5. Score FFN：更新 score。
+
+| 层 | score 更新方式 | feature 更新方式 | 最后 |
+| --- | --- | --- | --- |
+| 1（A） | 普通窗口→移位窗口 | 类间注意力 | Feature FFN→Score FFN |
+| 2（B） | 类间注意力 | 普通窗口→移位窗口 | Feature FFN→Score FFN |
+| 3（A） | 普通窗口→移位窗口 | 类间注意力 | Feature FFN→Score FFN |
+| 4（B） | 类间注意力 | 普通窗口→移位窗口 | Feature FFN→Score FFN |
+
+类间注意力在每个空间位置跨全部展开提示计算；类内注意力在各提示内沿空间维计算，
+继续使用原来的 12×12 非移位窗口和 shift=6 的移位窗口、相对位置偏置、shift mask。
+本次不改变窗口划分或注意力 softmax 轴，不引入逐像素 3×3 注意力。
+
+每个子层均执行 `pre-norm → attention/FFN → output projection → dropout → direct residual`。
+Value 和 output projection 只保留目标流一条分支。另一条流仅提供 Q/K 指导，不直接残差
+更新，但不 detach，仍保留通过注意力权重的梯度。后续子层必须使用前序更新后的特征，
+重新计算归一化和注意力，不复用旧 Q/K 或注意力权重。
+
+两路 FFN 维持原有独立的逐 token `256→1024→256`、GELU 和 dropout。
+Refiner 内部不设置固定或可学习残差系数。
+
+全部 Refiner 层结束后，对最终 feature stream 执行一次逐空间位置、沿通道维度的
+LayerNorm，再将归一化后的 refiner_features_36 送入 DecoderInputFusion。
+最终 score stream 不执行额外输出 LayerNorm。
+
+`fusion_layers` 默认仍为 4；由层序号自动交替 A/B，不新增实验开关。
+non-reentrant checkpoint 只传入 feature 和 score 两条流。
 
 ### 5.3 单尺度 Decoder Input Fusion
 
@@ -488,7 +517,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 | `models/sam3_image.py`                | 类别 chunk、缓存、SAM3 encoder、低分辨率 refiner、逐 chunk 学生/教师解码 |
 | `models/encoder_refiner.py`           | 全类别 Refiner、最终 feature LayerNorm 与单尺度融合接口 |
 | `models/decoder_input_fusion.py`      | 单尺度语义—细节双路融合，输出替换 Pixel Decoder 最后一层 FPN 输入 |
-| `models/encoder_refiner_attention.py` | 跨类别/窗口注意力、双流 FFN、pre-norm 与直接残差更新            |
+| `models/encoder_refiner_attention.py` | 交替单 Value 跨类别/窗口注意力、双流 FFN、pre-norm 与直接残差更新            |
 | `models/maskformer_segmentation.py`   | prompt attention、Pixel Decoder 和原始 semantic head |
 | `models/score_embeddings.py`          | 64 模板相似度图、归一化 CLIP 融合和空间卷积增强 |
 | `models/openclip_image_encoder.py`    | 36×36 dense RemoteCLIP 图像特征              |
@@ -524,7 +553,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 17. teacher 只来自原始 encoder72 解码路径并且必须 detach。teacher 和 student 都为 288×288。
 18. 蒸馏只监督存在类别。每个存在提示均监督全部 GT 有效像素，并额外监督其原始类别 GT 外侧 `sam3_mask_distill_boundary_width` 像素范围内且标签为 255 的边界环。远处 255 区域不参与蒸馏。多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
 19. 最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
-20. Refiner 的类间注意力、常规窗口注意力、移位窗口注意力和双流 FFN 均采用 pre-norm，并在末端线性投影后直接执行残差相加，不允许重新引入固定或可学习残差系数。全部 Refiner 层结束后，必须对最终 feature_36 执行一次通道 LayerNorm；最终 score_embed_36 不执行额外输出 LayerNorm。
+20. Refiner 按 A→B→A→B 交替，每层先更新 score 再更新 feature，Q/K 仅拼接 score 和 feature。类间注意力、常规窗口注意力、移位窗口注意力均为单 Value，只残差更新指定的目标流；它们与双流 FFN 均采用 pre-norm，不允许重新引入固定或可学习残差系数。全部 Refiner 层结束后，必须对最终 feature_36 执行一次通道 LayerNorm；最终 score_embed_36 不执行额外输出 LayerNorm。
 21. TTA 必须先平均提示空间分数（`raw_prompt_score_map`），再合并提示到原始类别，最后进行相对阈值过滤。
 22. `reduce_zero_label` 与 `background_cfg` 各自只执行其定义的一次标签空间变换。
 23. 完整恢复必须严格校验 checkpoint schema；模型权重迁移必须走独立入口。
@@ -629,3 +658,24 @@ Checkpoint schema 版本为 4。实验追踪状态不再保存在 checkpoint 中
 * 新实验必须使用新的 work directory。
 * `_CHECKPOINT_VERSION` 保持为 4，因为 checkpoint 容器格式没有变化。
 * 本次参数结构变化意味着旧模型可以迁移部分参数，但不等于可以完整继续旧训练。
+
+
+本次交替单 Value Refiner 重构：
+
+* 四层由同构双流更新改为 A→B→A→B；各层参数独立。
+* 类间 Q/K 输入从 768 改为 512 通道；类内 Q/K 仍为 512 通道，拼接顺序统一为 score→feature。
+* 删除各注意力的 `v_feature_proj`、`v_score_proj`、`out_feature_proj`、`out_score_proj`。
+* 每个注意力仅新增单路 `v_proj` 和 `out_proj`，目标流由所在层的类型决定。
+* 删除 `class_norm_text`、SAM 文本均值计算与缓存以及 Refiner 参数传递链路。
+* 保留原始 SAM3 文本编码、encoder 与 prompt cross-attention。
+* 保留窗口相对位置偏置、shift mask、双流 FFN、pre-norm、直接残差及最终 feature LayerNorm。
+* Score embedding、DecoderInputFusion、原始 SAM3 分割流程、损失和逐 chunk 梯度回传设计不变。
+* 旧 checkpoint 不能通过 `--resume-from` 严格恢复；新实验使用新的 work directory。
+* 旧 checkpoint 也不能直接使用 `--load-model-from`：当前加载器即使 `strict=False`，仍会拒绝类间 Q/K 的同名 shape 不匹配。若另行准备仅包含名称和 shape 均匹配参数的权重文件，可以加载其中的未变化参数；本次不添加旧参数映射、自动过滤或兼容层。
+* 类内 Q/K 拼接顺序也发生变化，即使旧权重 shape 匹配，直接加载亦不保证数值等价；建议本次新实验从默认初始化开始。
+* `_CHECKPOINT_VERSION` 保持 4，因为 checkpoint 容器格式不变。
+
+CPU 回归验证入口：`python -m unittest discover -s tests -v`。
+覆盖单 Value 来源、类间聚合轴、窗口隔离与边缘 shift mask、两种层的更新顺序和残差目标、
+指导流梯度，以及实际 36×36/256 通道四层 Refiner 在 checkpoint 开关两种路径下的输出和梯度一致性。
+测试中的文本编码器使用确定性的轻量替身，不需要下载 SAM3 或 RemoteCLIP 权重。

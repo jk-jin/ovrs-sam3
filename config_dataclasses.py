@@ -118,7 +118,7 @@ class OpenCLIPConfig:
 class EncoderRefinerConfig:
     enabled: bool = True
 
-    fusion_layers: int = 4
+    fusion_layers: int = 4  # Alternate score-intra/feature-inter and score-inter/feature-intra.
     num_heads: int = 8
     dropout: float = 0.1
 

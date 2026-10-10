@@ -39,7 +39,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
     Forward inputs:
         encoder_features_72:  [B, C, 256, 72, 72]  (full encoder + cross-attention)
         clip_image_feat_map:  [B, D_clip, 36, 36]
-        sam_text_mean:        [B, C, 256]
         class_names:          list of C class names
 
     Forward outputs:
@@ -100,8 +99,9 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 window_size=int(window_size),
                 shift_size=int(shift_size),
                 dropout=float(dropout),
+                score_attention_type="intra" if layer_index % 2 == 0 else "inter",
             )
-            for _ in range(self.num_fusion_layers)
+            for layer_index in range(self.num_fusion_layers)
         ])
 
         # Final normalization for the accumulated feature residual stream.
@@ -136,7 +136,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
         self,
         encoder_features_72: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
-        sam_text_mean: torch.Tensor,
         class_names: List[str],
     ) -> dict[str, torch.Tensor]:
         """Run the full 36×36 Refiner on all classes simultaneously.
@@ -147,8 +146,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 prompt cross-attention.
             clip_image_feat_map:
                 [B, D_clip, 36, 36] dense RemoteCLIP feature map.
-            sam_text_mean:
-                [B, C, 256] mean SAM3 text features.
             class_names:
                 List containing C prompt names.
 
@@ -205,18 +202,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 f"got {tuple(clip_image_feat_map.shape[-2:])}."
             )
 
-        expected_text_shape = (
-            batch_size,
-            num_classes,
-            hidden_dim,
-        )
-        if tuple(sam_text_mean.shape) != expected_text_shape:
-            raise ValueError(
-                "sam_text_mean shape mismatch: expected "
-                f"{expected_text_shape}, "
-                f"got {tuple(sam_text_mean.shape)}."
-            )
-
         (
             clip_score_embed_36,
             clip_score_maps_36,
@@ -256,14 +241,12 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     layer,
                     feature_36,
                     score_embed_36,
-                    sam_text_mean,
                     use_reentrant=False,
                 )
             else:
                 feature_36, score_embed_36 = layer(
                     feature_36=feature_36,
                     score_embed_36=score_embed_36,
-                    sam_text_mean=sam_text_mean,
                 )
 
         # Normalize the accumulated feature stream once after all Refiner layers.
