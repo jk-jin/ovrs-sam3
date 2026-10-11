@@ -158,7 +158,11 @@ RemoteCLIP 使用 ViT-L/14。原始图像单独缩放到 504×504，并使用 CL
 5. 执行 MLP 残差；
 6. 经过 `ln_post` 和原始 visual projection。
 
-最终输出 `[B, 768, 36, 36]`。配置指定的中间层特征只作为 debug 数据保留，不进入当前主路径。
+最终输出 `[B, 768, 36, 36]`。配置 `image_intermediate_layers=[7, 15]` 使用零基索引，
+对应第 8、16 层；中间特征保留原生通道，ViT-L/14 为 1024，不能按最终投影的 768 通道处理。
+默认仅保留 detached debug 数据。启用 `score_intra_use_clip_mid` 时，中间特征参与 Q/K 指导，
+训练且 RemoteCLIP 图像分支允许微调时，在提取与缓存处保留计算图；debug 输出仍 detach。
+验证或冻结图像编码时不启用梯度。不额外运行 RemoteCLIP。
 
 ### 4.2 模板文本编码
 
@@ -206,7 +210,8 @@ score_embeddings.py 生成的 clip_score_embed_36 直接作为 score
 stream。进入所有 Refiner Attention 层之前不再融合任何 SAM3 FPN
 特征，也不再设置额外残差系数。
 
-SAM3 FPN72 只在后续单尺度 DecoderInputFusion 的细节支路中使用；
+SAM3 FPN72 用于后续单尺度 DecoderInputFusion 的细节支路；可选地将其下采样到 36×36，
+为更新 feature 的类内注意力提供 Q/K 指导，仍不注入初始 score embedding。
 FPN144 和 FPN288 由原始 Pixel Decoder 内部消费。
 
 ### 5.2 交替单 Value Refiner
@@ -215,8 +220,10 @@ FPN144 和 FPN288 由原始 Pixel Decoder 内部消费。
 最后执行 Feature FFN 和 Score FFN。各层独立实例化，参数不共享。
 
 所有注意力的 Q/K 均由逐像素通道 LayerNorm 后的 score embedding 和 feature
-按通道顺序 `[score_embed, feature]` 拼接后独立线性投影。两路均为 256 通道时，
-Q/K 输入是 512 通道；不再拼接 SAM 文本均值，也不再保留双 Value/双输出分支。
+按通道顺序 `[score_embed, feature]` 拼接后独立线性投影。对应增强开关开启时，
+额外拼接经过独立通道 LayerNorm 的 256 通道指导特征，顺序为 `[score_embed, feature, guidance]`。
+两路均为 256 通道时，关闭开关的 Q/K 输入为 512 通道，开启为 768 通道；
+Q/K 投影输出仍为 256 通道，Value 和输出投影始终只保留目标流一条分支。
 
 **A 层（第 1、3 层，`score_attention_type="intra"`）：**
 
@@ -267,6 +274,38 @@ model = dict(
 四组对照实验分别为 window/window、window/local_3x3、local_3x3/window、local_3x3/local_3x3
 （顺序均为 score/feature）。类型值写错时直接报错。
 
+**四种注意力的可选指导：**
+
+| 配置开关（默认均为 False） | 作用位置 | 额外 Q/K 指导 |
+| --- | --- | --- |
+| `score_intra_use_clip_mid` | A 层更新 score 的类内注意力 | CLIP 第 8、16 层原生特征沿通道拼接，经共享 1×1 Conv 到 256；按图像广播给全部提示 |
+| `score_inter_use_clip_text_mean` | B 层更新 score 的类间注意力 | 复用 `template_clip_text`，每类 64 个原始模板向量求算术均值，经共享 Linear 到 256；广播到 batch 和整个 36×36 网格 |
+| `feature_intra_use_sam_fpn` | B 层更新 feature 的类内注意力 | `backbone_fpn[2]` 从 72×72 双线性下采样到 36×36（align_corners=False）；保持 256 通道，无额外通道投影，广播到提示维 |
+| `feature_inter_use_sam_text_mean` | A 层更新 feature 的类间注意力 | 每个 SAM3 类别文本的 `language_features` 沿有效 token 求均值，排除 `language_mask=True` 的 padding；本身为 256 通道，无额外投影，广播到 batch 和空间 |
+
+四个开关严格接受 bool，相互独立，且与两个类内模式选择独立。
+窗口模式的两个子步骤或局部模式的四个子步骤均使用对应的同一份指导信息，
+但各子步骤的 guidance LayerNorm 和注意力 Q/K 投影独立。
+新增 CLIP 卷积和线性投影放在 Refiner 入口，每次前向各计算一次；投影后再广播，
+不按提示复制原生 CLIP 中间特征。全部模块使用常规初始化。
+CLIP 模板均值直接使用当前模板向量求平均，不额外重新编码、不改为 SAM 文本或 pooled token。
+SAM 文本均值复用冻结文本缓存，顺序与全提示列表一致，不混入几何 prompt。
+
+示例：
+
+```python
+model = dict(encoder_refiner_cfg=dict(
+    score_intra_use_clip_mid=True,
+    score_inter_use_clip_text_mean=True,
+    feature_intra_use_sam_fpn=True,
+    feature_inter_use_sam_text_mean=True,
+))
+```
+
+关闭的分支不创建额外投影或 guidance norm，也不读取或计算对应指导源；
+四项全关时沿用当前双流拼接结构、参数名称及数值行为。
+开启的分支若缺失所需输入则直接报错；CLIP 中间指导必须能够按索引找到 7 和 15。
+
 每个子层均执行 `pre-norm → attention/FFN → output projection → dropout → direct residual`。
 Value 和 output projection 只保留目标流一条分支。另一条流仅提供 Q/K 指导，不直接残差
 更新，但不 detach，仍保留通过注意力权重的梯度。后续子层必须使用前序更新后的特征，
@@ -281,7 +320,8 @@ LayerNorm，再将归一化后的 refiner_features_36 送入 DecoderInputFusion�
 
 `fusion_layers` 默认仍为 4；由层序号自动交替 A/B。局部模式的四次注意力属于一层内部，
 不会增加 Refiner 总层数。
-non-reentrant checkpoint 只传入 feature 和 score 两条流。
+non-reentrant checkpoint 显式传入 feature、score 和四种可选指导，关闭的指导为 None。
+RemoteCLIP 文本和开启的中间图像指导保持已有微调范围的梯度；SAM3 图像和文本来源继续冻结。
 
 ### 5.3 单尺度 Decoder Input Fusion
 
@@ -564,8 +604,8 @@ python tools/train.py configs/train/isaid_loveda_full.py
 5. clip_score_embed_36 完全由 RemoteCLIP 模板分数图和 dense RemoteCLIP feature map 生成。
 6. 模板分数中间特征与 dense CLIP 特征在拼接前必须分别沿通道维执行逐像素 L2 归一化。
 7. 两路 256 通道中间特征在第二次拼接前也必须分别执行逐像素 L2 归一化。
-8. 进入 Refiner Attention 前不得注入 SAM3 FPN。
-9. SAM3 FPN 在新可训练融合中只使用 72 尺度；FPN144 和 FPN288 只在原始 Pixel Decoder 内部使用。
+8. 初始 score embedding 不注入 SAM3 FPN；仅在 `feature_intra_use_sam_fpn` 开启时，将 FPN72 下采样到 36×36 用作更新 feature 的类内 Q/K 指导。
+9. SAM3 FPN72 可用于可选 Refiner Q/K 指导及 72 尺度融合；FPN144 和 FPN288 只在原始 Pixel Decoder 内部使用。
 10. 可训练 RemoteCLIP 文本特征不能跨 optimizer step 缓存。
 11. 验证不得重新开启 RemoteCLIP 图像分支的 autograd。
 12. Refiner 必须先在全部提示上执行，再按 chunk 做高分辨率解码。Refiner 不能放进 chunk 循环。
@@ -576,7 +616,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 17. teacher 只来自原始 encoder72 解码路径并且必须 detach。teacher 和 student 都为 288×288。
 18. 蒸馏只监督存在类别。每个存在提示均监督全部 GT 有效像素，并额外监督其原始类别 GT 外侧 `sam3_mask_distill_boundary_width` 像素范围内且标签为 255 的边界环。远处 255 区域不参与蒸馏。多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
 19. 最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
-20. Refiner 按 A→B→A→B 交替，每层先更新 score 再更新 feature，Q/K 仅拼接 score 和 feature。两种目标流的类内注意力独立选择普通/移位窗口或四次连续普通 3×3 局部注意力。所有注意力均为单 Value，只残差更新指定的目标流；它们与双流 FFN 均采用 pre-norm，不允许重新引入固定或可学习残差系数。全部 Refiner 层结束后，必须对最终 feature_36 执行一次通道 LayerNorm；最终 score_embed_36 不执行额外输出 LayerNorm。
+20. Refiner 按 A→B→A→B 交替，每层先更新 score 再更新 feature。Q/K 拼接 score 和 feature，并由四个独立开关决定是否拼接各自的 256 通道指导信息。两种目标流的类内注意力独立选择普通/移位窗口或四次连续普通 3×3 局部注意力。所有注意力均为单 Value，只残差更新指定的目标流；它们与双流 FFN 均采用 pre-norm，不允许重新引入固定或可学习残差系数。全部 Refiner 层结束后，必须对最终 feature_36 执行一次通道 LayerNorm；最终 score_embed_36 不执行额外输出 LayerNorm。
 21. TTA 必须先平均提示空间分数（`raw_prompt_score_map`），再合并提示到原始类别，最后进行相对阈值过滤。
 22. `reduce_zero_label` 与 `background_cfg` 各自只执行其定义的一次标签空间变换。
 23. 完整恢复必须严格校验 checkpoint schema；模型权重迁移必须走独立入口。
@@ -595,7 +635,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 * 只支持 semantic 模式；
 * 不支持非空几何 prompt；
 * 不支持动态 SAM3/refiner 空间尺寸或多尺度 TTA；
-* `clip_mid_features` 只用于 debug；
+* `clip_mid_features` 默认只用于 debug，开启对应指导开关后参与前向；
 * 当前默认训练集为 iSAID，验证集为 LoveDA。
 
 ## 12. Checkpoint 非兼容变更
@@ -711,3 +751,14 @@ CPU 回归验证入口：`python -m unittest discover -s tests -v`。
 * 选用 `local_3x3` 的层改为 `local_attn.0` 至 `local_attn.3` 及独立的 pre-norm 参数，
   不加载或映射窗口参数。切换注意力类型后应开启新实验，不能严格恢复另一种结构的训练 checkpoint。
 * 类间注意力、A/B 交替顺序、FFN、score embedding、融合、冻结分割流程与损失不变。
+
+本次可选 Q/K 指导增强：
+
+* 新增四个指导开关，默认全关；关闭时保留上一版的参数结构与行为。
+* 开启时只扩展对应注意力的 Q/K 输入为 768 通道，V、输出维度和残差更新对象不变。
+* 两个 CLIP 投影共享于各 Refiner 层，每个增强注意力子步骤拥有独立的 guidance LayerNorm。
+* 不对关闭分支创建参数占位或旧权重映射。改变开关会改变模型结构，必须开启新实验；
+  打开开关后，旧 512 通道 Q/K 权重不能直接严格恢复或同名加载至 768 通道。
+* `tests/test_refiner_guidance.py` 覆盖全部 16 种开关组合、两种层和两种类内模式的路由，
+  指导只作用于权重而不进入 Value、投影只执行一次、均值/索引/广播、SAM padding 排除、
+  CLIP 中间梯度在提取与缓存处的保留、debug detach、实际配置构建链路及启用增强时的 checkpoint 一致性。

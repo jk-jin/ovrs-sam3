@@ -45,6 +45,10 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_score_embed_dim: int = 256,
         encoder_refiner_score_intra_attn_type: str = "window",
         encoder_refiner_feature_intra_attn_type: str = "window",
+        encoder_refiner_score_intra_use_clip_mid: bool = False,
+        encoder_refiner_score_inter_use_clip_text_mean: bool = False,
+        encoder_refiner_feature_intra_use_sam_fpn: bool = False,
+        encoder_refiner_feature_inter_use_sam_text_mean: bool = False,
         encoder_refiner_window_size: int = 12,
         encoder_refiner_shift_size: int = 6,
         encoder_refiner_use_checkpoint: bool = True,
@@ -112,6 +116,11 @@ class Sam3Image(torch.nn.Module):
             score_embed_dim=int(encoder_refiner_score_embed_dim),
             score_intra_attn_type=encoder_refiner_score_intra_attn_type,
             feature_intra_attn_type=encoder_refiner_feature_intra_attn_type,
+            clip_native_dim=self.clip_image_native_dim,
+            score_intra_use_clip_mid=encoder_refiner_score_intra_use_clip_mid,
+            score_inter_use_clip_text_mean=encoder_refiner_score_inter_use_clip_text_mean,
+            feature_intra_use_sam_fpn=encoder_refiner_feature_intra_use_sam_fpn,
+            feature_inter_use_sam_text_mean=encoder_refiner_feature_inter_use_sam_text_mean,
             num_heads=int(encoder_refiner_num_heads),
             window_size=int(encoder_refiner_window_size),
             shift_size=int(encoder_refiner_shift_size),
@@ -248,6 +257,7 @@ class Sam3Image(torch.nn.Module):
         clip_out = self.clip_image_encoder.encode_raw_images(
             raw_images=input.raw_images,
             device=device,
+            keep_intermediate_grad=self.encoder_refiner.score_intra_use_clip_mid,
         )
 
         if not isinstance(clip_out, dict):
@@ -303,7 +313,10 @@ class Sam3Image(torch.nn.Module):
                     f"clip_mid_features[{i}] spatial size mismatch: "
                     f"{tuple(feat.shape[-2:])} vs {clip_grid_hw}."
                 )
-            clean_mid_features.append(feat.detach().contiguous())
+            clean_mid_features.append(
+                feat.contiguous() if keep_image_graph and self.encoder_refiner.score_intra_use_clip_mid
+                else feat.detach().contiguous()
+            )
 
         return {
             "clip_image_feat_map_native": clip_feat_map,
@@ -420,7 +433,7 @@ class Sam3Image(torch.nn.Module):
                 f"got {tuple(cross_attended_encoder_features_72.shape[:2])}."
             )
 
-        return {
+        cache = {
             "cross_attended_encoder_features_72": cross_attended_encoder_features_72,
             "backbone_fpn": backbone_fpn,
             "clip_image_feat_map": clip_image_cache["clip_image_feat_map_native"],
@@ -430,6 +443,25 @@ class Sam3Image(torch.nn.Module):
             "class_ids": merged_class_ids,
             "chunk_class_counts": chunk_class_counts,
         }
+        if self.encoder_refiner.feature_inter_use_sam_text_mean:
+            cache["sam_text_mean"] = self._masked_sam_text_mean(
+                self._text_cache["language_features"], self._text_cache["language_mask"]
+            ).detach().contiguous()
+        return cache
+
+    @staticmethod
+    def _masked_sam_text_mean(features: torch.Tensor, padding_mask: torch.Tensor) -> torch.Tensor:
+        """Mean valid SAM3 tokens: [tokens, classes, 256] → [classes, 256]."""
+        if features.ndim != 3 or features.shape[-1] != 256:
+            raise ValueError("SAM text features must have shape [tokens, classes, 256]")
+        if tuple(padding_mask.shape) != (features.shape[1], features.shape[0]):
+            raise ValueError("SAM text padding mask must have shape [classes, tokens]")
+        valid = ~padding_mask.bool()
+        counts = valid.sum(dim=1)
+        if (counts == 0).any():
+            raise ValueError("Each SAM3 class prompt must contain at least one valid token")
+        masked = features.masked_fill(padding_mask.bool().T.unsqueeze(-1), 0)
+        return masked.sum(dim=0) / counts[:, None].to(features.dtype)
 
     def _hidden_states_to_feature_72(
         self,
@@ -522,12 +554,20 @@ class Sam3Image(torch.nn.Module):
         cross_attended_encoder_features_72: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
         class_names: List[str],
+        clip_mid_features: list[torch.Tensor] | None = None,
+        clip_mid_layer_indices: tuple[int, ...] | None = None,
+        sam_fpn_72: torch.Tensor | None = None,
+        sam_text_mean: torch.Tensor | None = None,
     ) -> Dict[str, torch.Tensor]:
         """Run the 36×36 Refiner on all classes simultaneously."""
         return self.encoder_refiner(
             encoder_features_72=cross_attended_encoder_features_72,
             clip_image_feat_map=clip_image_feat_map,
             class_names=class_names,
+            clip_mid_features=clip_mid_features,
+            clip_mid_layer_indices=clip_mid_layer_indices,
+            sam_fpn_72=sam_fpn_72,
+            sam_text_mean=sam_text_mean,
         )
 
     def run_encoder_refiner_lowres_from_cache(
@@ -559,6 +599,14 @@ class Sam3Image(torch.nn.Module):
             ),
             clip_image_feat_map=clip_image_feat_map,
             class_names=batch_class_names,
+            clip_mid_features=encoder_refiner_cache[OUTPUT_KEYS.clip_mid_features]
+                if self.encoder_refiner.score_intra_use_clip_mid else None,
+            clip_mid_layer_indices=encoder_refiner_cache["clip_mid_layer_indices"]
+                if self.encoder_refiner.score_intra_use_clip_mid else None,
+            sam_fpn_72=encoder_refiner_cache["backbone_fpn"][2]
+                if self.encoder_refiner.feature_intra_use_sam_fpn else None,
+            sam_text_mean=encoder_refiner_cache.get("sam_text_mean")
+                if self.encoder_refiner.feature_inter_use_sam_text_mean else None,
         )
 
         result: Dict[str, torch.Tensor] = {

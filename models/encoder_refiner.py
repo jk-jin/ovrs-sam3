@@ -20,7 +20,9 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
     Takes the full 6-layer SAM3 encoder output after prompt cross-attention
     as input. The feature stream is the bilinear-downsampled encoder feature
-    without any FPN injection. The score stream comes directly from
+    without any FPN injection. Optional FPN/text/CLIP guidance only extends
+    attention Q/K; single-value updates and the initial streams are unchanged.
+    The score stream comes directly from
     ClipScoreEmbedding (score_embeddings.py) without any SAM3 FPN fusion.
 
     The Refiner outputs 36×36 features. High-resolution decoding is handled
@@ -67,12 +69,27 @@ class ClassConditionedEncoderRefiner(nn.Module):
         text_prompt_use_checkpoint: bool = True,
         score_intra_attn_type: str = "window",
         feature_intra_attn_type: str = "window",
+        clip_native_dim: int | None = None,
+        score_intra_use_clip_mid: bool = False,
+        score_inter_use_clip_text_mean: bool = False,
+        feature_intra_use_sam_fpn: bool = False,
+        feature_inter_use_sam_text_mean: bool = False,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
         self.score_embed_dim = int(score_embed_dim)
         self.use_checkpoint = bool(use_checkpoint)
         self.num_fusion_layers = int(fusion_layers)
+        guidance_flags = dict(
+            score_intra_use_clip_mid=score_intra_use_clip_mid,
+            score_inter_use_clip_text_mean=score_inter_use_clip_text_mean,
+            feature_intra_use_sam_fpn=feature_intra_use_sam_fpn,
+            feature_inter_use_sam_text_mean=feature_inter_use_sam_text_mean,
+        )
+        for name, enabled in guidance_flags.items():
+            if not isinstance(enabled, bool):
+                raise ValueError(f"{name} must be a bool")
+            setattr(self, name, enabled)
 
         if prompt_templates is None:
             raise ValueError(
@@ -104,6 +121,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 score_attention_type="intra" if layer_index % 2 == 0 else "inter",
                 score_intra_attn_type=score_intra_attn_type,
                 feature_intra_attn_type=feature_intra_attn_type,
+                **guidance_flags,
             )
             for layer_index in range(self.num_fusion_layers)
         ])
@@ -116,6 +134,13 @@ class ClassConditionedEncoderRefiner(nn.Module):
         self.decoder_input_fusion = DecoderInputFusion(
             use_checkpoint=self.use_checkpoint,
         )
+        if self.score_intra_use_clip_mid:
+            if clip_native_dim is None or clip_native_dim <= 0:
+                raise ValueError("clip_native_dim must be positive when CLIP middle guidance is enabled")
+            self.clip_native_dim = int(clip_native_dim)
+            self.clip_mid_proj = nn.Conv2d(self.clip_native_dim * 2, 256, kernel_size=1)
+        if self.score_inter_use_clip_text_mean:
+            self.clip_text_mean_proj = nn.Linear(int(clip_dim), 256)
 
     def fuse_decoder_input_chunk(
         self,
@@ -141,6 +166,10 @@ class ClassConditionedEncoderRefiner(nn.Module):
         encoder_features_72: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
         class_names: List[str],
+        clip_mid_features: list[torch.Tensor] | None = None,
+        clip_mid_layer_indices: tuple[int, ...] | None = None,
+        sam_fpn_72: torch.Tensor | None = None,
+        sam_text_mean: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Run the full 36×36 Refiner on all classes simultaneously.
 
@@ -215,6 +244,35 @@ class ClassConditionedEncoderRefiner(nn.Module):
             remoteclip_feat_map=clip_image_feat_map,
         )
 
+        # Prepare shared guidance once; attention norms/projections remain per sublayer.
+        clip_mid_36 = clip_text_mean_36 = sam_fpn_36 = sam_text_mean_36 = None
+        if self.score_intra_use_clip_mid:
+            if clip_mid_features is None or clip_mid_layer_indices is None:
+                raise ValueError("CLIP middle guidance requires features and layer indices [7, 15]")
+            if len(clip_mid_features) != len(clip_mid_layer_indices) or len(set(clip_mid_layer_indices)) != len(clip_mid_layer_indices):
+                raise ValueError("CLIP middle feature indices must be unique and match the feature count")
+            by_layer = dict(zip(clip_mid_layer_indices, clip_mid_features))
+            if 7 not in by_layer or 15 not in by_layer:
+                raise ValueError("CLIP middle guidance requires indices 7 and 15 (layers 8 and 16)")
+            mids = [by_layer[7], by_layer[15]]
+            if any(tuple(x.shape) != (batch_size, self.clip_native_dim, 36, 36) for x in mids):
+                raise ValueError("CLIP middle features must match native channels and the 36×36 grid")
+            projected = self.clip_mid_proj(torch.cat(mids, dim=1))
+            clip_mid_36 = projected[:, None].expand(-1, num_classes, -1, -1, -1)
+        if self.score_inter_use_clip_text_mean:
+            projected = self.clip_text_mean_proj(template_clip_text.mean(dim=1))
+            clip_text_mean_36 = projected[None, :, :, None, None].expand(batch_size, -1, -1, 36, 36)
+        if self.feature_intra_use_sam_fpn:
+            if sam_fpn_72 is None or tuple(sam_fpn_72.shape) != (batch_size, 256, 72, 72):
+                raise ValueError("SAM FPN guidance requires [B, 256, 72, 72] backbone_fpn[2]")
+            downsampled = F.interpolate(sam_fpn_72, size=(36, 36), mode="bilinear", align_corners=False)
+            sam_fpn_36 = downsampled[:, None].expand(-1, num_classes, -1, -1, -1)
+        if self.feature_inter_use_sam_text_mean:
+            if sam_text_mean is None or tuple(sam_text_mean.shape) != (num_classes, 256):
+                raise ValueError("SAM text guidance requires [num_classes, 256] masked token means")
+            sam_text_mean_36 = sam_text_mean[None, :, :, None, None].expand(batch_size, -1, -1, 36, 36)
+        guidance = (clip_mid_36, clip_text_mean_36, sam_fpn_36, sam_text_mean_36)
+
         base_feature_36 = F.interpolate(
             encoder_features_72.reshape(
                 batch_size * num_classes,
@@ -245,12 +303,17 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     layer,
                     feature_36,
                     score_embed_36,
+                    *guidance,
                     use_reentrant=False,
                 )
             else:
                 feature_36, score_embed_36 = layer(
                     feature_36=feature_36,
                     score_embed_36=score_embed_36,
+                    clip_mid_36=clip_mid_36,
+                    clip_text_mean=clip_text_mean_36,
+                    sam_fpn_36=sam_fpn_36,
+                    sam_text_mean=sam_text_mean_36,
                 )
 
         # Normalize the accumulated feature stream once after all Refiner layers.

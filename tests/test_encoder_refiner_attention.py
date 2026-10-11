@@ -160,7 +160,7 @@ class AlternatingAttentionTests(unittest.TestCase):
                 events = []
 
                 def update(name, amount):
-                    def forward(feature, score_embed):
+                    def forward(feature, score_embed, guidance=None):
                         events.append((name, feature.clone(), score_embed.clone()))
                         return torch.full_like(feature, amount)
                     return forward
