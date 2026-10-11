@@ -128,6 +128,8 @@ class EncoderRefinerConfig:
     refiner_hw: int = 36
     encoder_hw: int = 72
 
+    score_intra_attn_type: str = "window"
+    feature_intra_attn_type: str = "window"
     window_size: int = 12
     shift_size: int = 6
 

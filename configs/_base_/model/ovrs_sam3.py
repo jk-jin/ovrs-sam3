@@ -113,6 +113,9 @@ model = dict(
         refiner_hw=36,
         encoder_hw=72,
 
+        # Independently select "window" or four consecutive "local_3x3" steps.
+        score_intra_attn_type="window",
+        feature_intra_attn_type="window",
         window_size=12,
         shift_size=6,
 

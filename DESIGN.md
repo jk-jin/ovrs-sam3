@@ -220,30 +220,52 @@ Q/K 输入是 512 通道；不再拼接 SAM 文本均值，也不再保留双 Va
 
 **A 层（第 1、3 层，`score_attention_type="intra"`）：**
 
-1. Regular WindowScoreAttention：Value 仅来自 score embedding，输出直接残差到 score。
-2. Shifted WindowScoreAttention：使用上一步更新后的 score，重新 pre-norm 和生成 Q/K；Value 仍仅来自 score，继续残差更新 score。
-3. ClassScoreAttention：使用两次窗口更新后的 score 与本层尚未更新的 feature 生成 Q/K；Value 仅来自 feature，输出残差到 feature。
-4. Feature FFN：更新 feature。
-5. Score FFN：更新 score。
+1. 类内注意力：由 `score_intra_attn_type` 选择两次窗口或四次局部 3×3 注意力。Value 仅来自 score embedding，每次输出直接残差到 score。
+2. ClassScoreAttention：使用类内更新后的 score 与本层尚未更新的 feature 重新生成 Q/K；Value 仅来自 feature，输出残差到 feature。
+3. Feature FFN：更新 feature。
+4. Score FFN：更新 score。
 
 **B 层（第 2、4 层，`score_attention_type="inter"`）：**
 
 1. ClassScoreAttention：Value 仅来自 score embedding，输出直接残差到 score。
-2. Regular WindowScoreAttention：使用刚更新的 score 与 feature 生成 Q/K；Value 仅来自 feature，输出残差到 feature。
-3. Shifted WindowScoreAttention：使用上一步更新后的 feature 和同一份已更新 score，重新 pre-norm 和生成 Q/K；Value 仅来自 feature，继续残差更新 feature。
-4. Feature FFN：更新 feature。
-5. Score FFN：更新 score。
+2. 类内注意力：由 `feature_intra_attn_type` 选择两次窗口或四次局部 3×3 注意力。使用刚更新的 score 提供指导，Value 仅来自 feature，每次输出直接残差到 feature。
+3. Feature FFN：更新 feature。
+4. Score FFN：更新 score。
 
 | 层 | score 更新方式 | feature 更新方式 | 最后 |
 | --- | --- | --- | --- |
-| 1（A） | 普通窗口→移位窗口 | 类间注意力 | Feature FFN→Score FFN |
-| 2（B） | 类间注意力 | 普通窗口→移位窗口 | Feature FFN→Score FFN |
-| 3（A） | 普通窗口→移位窗口 | 类间注意力 | Feature FFN→Score FFN |
-| 4（B） | 类间注意力 | 普通窗口→移位窗口 | Feature FFN→Score FFN |
+| 1（A） | 类内：`score_intra_attn_type` | 类间注意力 | Feature FFN→Score FFN |
+| 2（B） | 类间注意力 | 类内：`feature_intra_attn_type` | Feature FFN→Score FFN |
+| 3（A） | 类内：`score_intra_attn_type` | 类间注意力 | Feature FFN→Score FFN |
+| 4（B） | 类间注意力 | 类内：`feature_intra_attn_type` | Feature FFN→Score FFN |
 
-类间注意力在每个空间位置跨全部展开提示计算；类内注意力在各提示内沿空间维计算，
-继续使用原来的 12×12 非移位窗口和 shift=6 的移位窗口、相对位置偏置、shift mask。
-本次不改变窗口划分或注意力 softmax 轴，不引入逐像素 3×3 注意力。
+类间注意力在每个空间位置跨全部展开提示计算；类内注意力只在各提示内沿空间维计算。
+`encoder_refiner_cfg` 中的两个类内类型配置相互独立，均支持以下取值，默认均为 `"window"`：
+
+| 取值 | 单层 Refiner 内的类内子步骤 |
+| --- | --- |
+| `"window"` | 一次普通窗口注意力→一次移位窗口注意力；沿用 `window_size=12`、`shift_size=6`、窗口相对位置偏置和 shift mask |
+| `"local_3x3"` | 连续四次逐像素普通 3×3 注意力；每个像素关注自身和相邻八个位置；步长 1，无空洞或采样间隔 |
+
+局部模式为每个注意力头的九个邻居位置学习独立相对位置偏置，位置顺序为从左上到右下。
+图像边界外的 key 在 softmax 前屏蔽，softmax 仅沿有效邻居维执行，不混合类别。
+四次注意力的投影、相对位置偏置和两条流的 pre-norm 参数均独立；每次残差后重新生成 Q/K/V。
+四次之间不额外插入 FFN。每层只实例化选中的类内模块，局部模式不创建窗口模块；
+两项均为局部模式时，`window_size` 和 `shift_size` 不参与构建或校验。
+
+例如，在实验配置中只覆盖模型的两个字段：
+
+```python
+model = dict(
+    encoder_refiner_cfg=dict(
+        score_intra_attn_type="window",
+        feature_intra_attn_type="local_3x3",
+    ),
+)
+```
+
+四组对照实验分别为 window/window、window/local_3x3、local_3x3/window、local_3x3/local_3x3
+（顺序均为 score/feature）。类型值写错时直接报错。
 
 每个子层均执行 `pre-norm → attention/FFN → output projection → dropout → direct residual`。
 Value 和 output projection 只保留目标流一条分支。另一条流仅提供 Q/K 指导，不直接残差
@@ -257,7 +279,8 @@ Refiner 内部不设置固定或可学习残差系数。
 LayerNorm，再将归一化后的 refiner_features_36 送入 DecoderInputFusion。
 最终 score stream 不执行额外输出 LayerNorm。
 
-`fusion_layers` 默认仍为 4；由层序号自动交替 A/B，不新增实验开关。
+`fusion_layers` 默认仍为 4；由层序号自动交替 A/B。局部模式的四次注意力属于一层内部，
+不会增加 Refiner 总层数。
 non-reentrant checkpoint 只传入 feature 和 score 两条流。
 
 ### 5.3 单尺度 Decoder Input Fusion
@@ -517,7 +540,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 | `models/sam3_image.py`                | 类别 chunk、缓存、SAM3 encoder、低分辨率 refiner、逐 chunk 学生/教师解码 |
 | `models/encoder_refiner.py`           | 全类别 Refiner、最终 feature LayerNorm 与单尺度融合接口 |
 | `models/decoder_input_fusion.py`      | 单尺度语义—细节双路融合，输出替换 Pixel Decoder 最后一层 FPN 输入 |
-| `models/encoder_refiner_attention.py` | 交替单 Value 跨类别/窗口注意力、双流 FFN、pre-norm 与直接残差更新            |
+| `models/encoder_refiner_attention.py` | 交替单 Value 跨类别注意力、独立可选窗口/局部 3×3 类内注意力、双流 FFN、pre-norm 与直接残差更新 |
 | `models/maskformer_segmentation.py`   | prompt attention、Pixel Decoder 和原始 semantic head |
 | `models/score_embeddings.py`          | 64 模板相似度图、归一化 CLIP 融合和空间卷积增强 |
 | `models/openclip_image_encoder.py`    | 36×36 dense RemoteCLIP 图像特征              |
@@ -553,7 +576,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 17. teacher 只来自原始 encoder72 解码路径并且必须 detach。teacher 和 student 都为 288×288。
 18. 蒸馏只监督存在类别。每个存在提示均监督全部 GT 有效像素，并额外监督其原始类别 GT 外侧 `sam3_mask_distill_boundary_width` 像素范围内且标签为 255 的边界环。远处 255 区域不参与蒸馏。多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
 19. 最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
-20. Refiner 按 A→B→A→B 交替，每层先更新 score 再更新 feature，Q/K 仅拼接 score 和 feature。类间注意力、常规窗口注意力、移位窗口注意力均为单 Value，只残差更新指定的目标流；它们与双流 FFN 均采用 pre-norm，不允许重新引入固定或可学习残差系数。全部 Refiner 层结束后，必须对最终 feature_36 执行一次通道 LayerNorm；最终 score_embed_36 不执行额外输出 LayerNorm。
+20. Refiner 按 A→B→A→B 交替，每层先更新 score 再更新 feature，Q/K 仅拼接 score 和 feature。两种目标流的类内注意力独立选择普通/移位窗口或四次连续普通 3×3 局部注意力。所有注意力均为单 Value，只残差更新指定的目标流；它们与双流 FFN 均采用 pre-norm，不允许重新引入固定或可学习残差系数。全部 Refiner 层结束后，必须对最终 feature_36 执行一次通道 LayerNorm；最终 score_embed_36 不执行额外输出 LayerNorm。
 21. TTA 必须先平均提示空间分数（`raw_prompt_score_map`），再合并提示到原始类别，最后进行相对阈值过滤。
 22. `reduce_zero_label` 与 `background_cfg` 各自只执行其定义的一次标签空间变换。
 23. 完整恢复必须严格校验 checkpoint schema；模型权重迁移必须走独立入口。
@@ -677,5 +700,14 @@ Checkpoint schema 版本为 4。实验追踪状态不再保存在 checkpoint 中
 
 CPU 回归验证入口：`python -m unittest discover -s tests -v`。
 覆盖单 Value 来源、类间聚合轴、窗口隔离与边缘 shift mask、两种层的更新顺序和残差目标、
-指导流梯度，以及实际 36×36/256 通道四层 Refiner 在 checkpoint 开关两种路径下的输出和梯度一致性。
+指导流梯度，以及四种类内配置组合的实际 36×36/256 通道四层 Refiner 在 checkpoint 开关两种路径下的输出和梯度一致性。
+局部注意力另验证与逐像素参考计算（含相对位置偏置）一致、单 Value 来源、边界屏蔽、类别隔离和四次连续更新。
 测试中的文本编码器使用确定性的轻量替身，不需要下载 SAM3 或 RemoteCLIP 权重。
+
+本次类内注意力配置扩展：
+
+* 新增 `score_intra_attn_type`、`feature_intra_attn_type`，默认均为 `window`。
+* 默认窗口路径保留该临时分支原有参数名称、结构和更新行为。
+* 选用 `local_3x3` 的层改为 `local_attn.0` 至 `local_attn.3` 及独立的 pre-norm 参数，
+  不加载或映射窗口参数。切换注意力类型后应开启新实验，不能严格恢复另一种结构的训练 checkpoint。
+* 类间注意力、A/B 交替顺序、FFN、score embedding、融合、冻结分割流程与损失不变。

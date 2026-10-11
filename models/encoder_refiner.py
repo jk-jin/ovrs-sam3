@@ -65,6 +65,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
         use_checkpoint: bool = True,
         text_prompt_batch_size: int = 64,
         text_prompt_use_checkpoint: bool = True,
+        score_intra_attn_type: str = "window",
+        feature_intra_attn_type: str = "window",
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -100,6 +102,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 shift_size=int(shift_size),
                 dropout=float(dropout),
                 score_attention_type="intra" if layer_index % 2 == 0 else "inter",
+                score_intra_attn_type=score_intra_attn_type,
+                feature_intra_attn_type=feature_intra_attn_type,
             )
             for layer_index in range(self.num_fusion_layers)
         ])

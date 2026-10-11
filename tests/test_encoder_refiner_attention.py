@@ -3,6 +3,8 @@
 Run with: python -m unittest discover -s tests -v
 """
 from copy import deepcopy
+from contextlib import ExitStack
+from itertools import product
 import unittest
 from unittest.mock import patch
 
@@ -13,6 +15,7 @@ from models.encoder_refiner import ClassConditionedEncoderRefiner
 from models.encoder_refiner_attention import (
     ClassScoreAttention,
     EncoderRefinerLayer,
+    LocalScoreAttention,
     WindowScoreAttention,
 )
 
@@ -26,8 +29,14 @@ def uniform_attention(module):
         for projection in (module.v_proj, module.out_proj):
             projection.weight.copy_(torch.eye(4))
             projection.bias.zero_()
-        if isinstance(module, WindowScoreAttention):
+        if hasattr(module, "relative_position_bias_table"):
             module.relative_position_bias_table.zero_()
+
+
+def intra_steps(layer):
+    if layer.intra_attn_type == "window":
+        return [layer.window_attn_regular, layer.window_attn_shifted]
+    return list(layer.local_attn)
 
 
 class FakeTextEncoder(nn.Module):
@@ -80,19 +89,74 @@ class AlternatingAttentionTests(unittest.TestCase):
                     torch.testing.assert_close(out[..., 0, 0], torch.zeros_like(out[..., 0, 0]))
                     self.assertGreater(out[0, 0, 0, -1, -1].item(), 0)
 
+    def test_local_attention_matches_explicit_neighbors_with_position_bias(self):
+        # A direct per-pixel reference checks neighbor layout, mask, and single V.
+        for stream in ("feature", "score"):
+            attention = LocalScoreAttention(4, 6, 2, dropout=0, value_stream=stream)
+            feature = torch.randn(2, 2, 4, 3, 4)
+            score = torch.randn(2, 2, 6, 3, 4)
+            actual = attention(feature, score)
+            expected = torch.empty_like(actual)
+            with torch.no_grad():
+                for batch, cls, y, x in product(range(2), range(2), range(3), range(4)):
+                    query_input = torch.cat([score[batch, cls, :, y, x], feature[batch, cls, :, y, x]])
+                    query = attention.q_proj(query_input).reshape(2, 2)
+                    keys, values, biases = [], [], []
+                    for index, (dy, dx) in enumerate(product((-1, 0, 1), repeat=2)):
+                        ny, nx = y + dy, x + dx
+                        if not (0 <= ny < 3 and 0 <= nx < 4):
+                            continue
+                        key_input = torch.cat([score[batch, cls, :, ny, nx], feature[batch, cls, :, ny, nx]])
+                        selected = feature if stream == "feature" else score
+                        keys.append(attention.k_proj(key_input).reshape(2, 2))
+                        values.append(attention.v_proj(selected[batch, cls, :, ny, nx]).reshape(2, 2))
+                        biases.append(attention.relative_position_bias_table[index])
+                    logits = (torch.stack(keys) * query).sum(-1) / (2 ** 0.5) + torch.stack(biases)
+                    weights = logits.softmax(dim=0)
+                    out = (weights.unsqueeze(-1) * torch.stack(values)).sum(0).flatten()
+                    expected[batch, cls, :, y, x] = attention.out_proj(out)
+            torch.testing.assert_close(actual, expected)
+
+    def test_local_attention_masks_edges_and_does_not_mix_classes(self):
+        for stream, grid in product(("feature", "score"), ((1, 1), (2, 3), (6, 6))):
+            with self.subTest(stream=stream, grid=grid):
+                attention = LocalScoreAttention(4, 4, 1, dropout=0, value_stream=stream)
+                uniform_attention(attention)
+                values = torch.ones(1, 2, 4, *grid)
+                values[:, 1] = 7
+                guidance = torch.randn_like(values) * 100
+                feature, score = (values, guidance) if stream == "feature" else (guidance, values)
+                # Constant class-specific maps stay constant, including all edges.
+                torch.testing.assert_close(attention(feature, score), values)
+                values.zero_()
+                values[:, 0, :, -1, -1] = 1
+                out = attention(feature, score)
+                self.assertTrue(torch.isfinite(out).all())
+                torch.testing.assert_close(out[:, 1], torch.zeros_like(out[:, 1]))
+                if grid == (6, 6):
+                    torch.testing.assert_close(out[..., 0, 0], torch.zeros_like(out[..., 0, 0]))
+                    torch.testing.assert_close(out[0, 0, :, -1, -1], torch.full((4,), 0.25))
+
+    def test_invalid_intra_attention_types_are_rejected(self):
+        for name in ("score_intra_attn_type", "feature_intra_attn_type"):
+            for kind in ("intra", "local", "", None):
+                with self.subTest(name=name, kind=kind):
+                    with self.assertRaisesRegex(ValueError, name):
+                        EncoderRefinerLayer(**{name: kind})
+
     def test_layer_order_and_residual_targets_use_updated_score(self):
         feature = torch.randn(1, 2, 4, 6, 6)
         score = torch.randn_like(feature)
-        for kind in ("intra", "inter"):
-            with self.subTest(kind=kind):
+        for kind, score_type, feature_type in product(
+            ("intra", "inter"), ("window", "local_3x3"), ("window", "local_3x3")
+        ):
+            with self.subTest(kind=kind, score_type=score_type, feature_type=feature_type):
                 layer = EncoderRefinerLayer(
                     4, 4, 1, window_size=3, shift_size=1,
                     dropout=0, score_attention_type=kind,
+                    score_intra_attn_type=score_type, feature_intra_attn_type=feature_type,
                 )
-                # Bypass normalization to observe exact residual inputs.
-                for name, module in list(layer.named_children()):
-                    if isinstance(module, nn.LayerNorm):
-                        setattr(layer, name, nn.Identity())
+                steps = intra_steps(layer)
                 events = []
 
                 def update(name, amount):
@@ -101,34 +165,42 @@ class AlternatingAttentionTests(unittest.TestCase):
                         return torch.full_like(feature, amount)
                     return forward
 
-                with (
-                    patch.object(layer.class_attn, "forward", side_effect=update("class", 3)),
-                    patch.object(layer.window_attn_regular, "forward", side_effect=update("regular", 1)),
-                    patch.object(layer.window_attn_shifted, "forward", side_effect=update("shifted", 2)),
-                    patch.object(layer, "_ffn_feature_update", side_effect=lambda x: torch.full_like(x, 4)),
-                    patch.object(layer, "_ffn_score_update", side_effect=lambda x: torch.full_like(x, 5)),
-                ):
+                with ExitStack() as stack:
+                    stack.enter_context(patch(
+                        "models.encoder_refiner_attention.apply_layer_norm_bcdhw",
+                        side_effect=lambda x, norm: x,
+                    ))
+                    stack.enter_context(patch.object(layer.class_attn, "forward", side_effect=update("class", 3)))
+                    for index, attention in enumerate(steps, 1):
+                        stack.enter_context(patch.object(attention, "forward", side_effect=update(str(index), index)))
+                    stack.enter_context(patch.object(layer, "_ffn_feature_update", side_effect=lambda x: torch.full_like(x, 4)))
+                    stack.enter_context(patch.object(layer, "_ffn_score_update", side_effect=lambda x: torch.full_like(x, 5)))
                     out_feature, out_score = layer(feature, score)
-                torch.testing.assert_close(out_feature, feature + 7)
-                torch.testing.assert_close(out_score, score + 8)
+                total = sum(range(1, len(steps) + 1))
+                torch.testing.assert_close(out_feature, feature + (3 if kind == "intra" else total) + 4)
+                torch.testing.assert_close(out_score, score + (total if kind == "intra" else 3) + 5)
+                names = [str(index) for index in range(1, len(steps) + 1)]
                 expected_order = (
-                    ["regular", "shifted", "class"] if kind == "intra"
-                    else ["class", "regular", "shifted"]
+                    names + ["class"] if kind == "intra" else ["class"] + names
                 )
                 self.assertEqual([event[0] for event in events], expected_order)
-                torch.testing.assert_close(events[0][1], feature)
-                torch.testing.assert_close(events[0][2], score)
-                torch.testing.assert_close(events[1][1], feature)
-                torch.testing.assert_close(events[1][2], score + (1 if kind == "intra" else 3))
-                torch.testing.assert_close(events[2][1], feature + (0 if kind == "intra" else 1))
-                torch.testing.assert_close(events[2][2], score + 3)
+                expected_feature, expected_score = feature.clone(), score.clone()
+                for name, seen_feature, seen_score in events:
+                    torch.testing.assert_close(seen_feature, expected_feature)
+                    torch.testing.assert_close(seen_score, expected_score)
+                    amount = 3 if name == "class" else int(name)
+                    if (name == "class") == (kind == "inter"):
+                        expected_score = expected_score + amount
+                    else:
+                        expected_feature = expected_feature + amount
 
     def test_guidance_and_selected_values_both_receive_gradients(self):
-        for kind in ("intra", "inter"):
-            with self.subTest(kind=kind):
+        for kind, intra_type in product(("intra", "inter"), ("window", "local_3x3")):
+            with self.subTest(kind=kind, intra_type=intra_type):
                 layer = EncoderRefinerLayer(
                     8, 8, 2, window_size=3, shift_size=1,
                     dropout=0, score_attention_type=kind,
+                    score_intra_attn_type=intra_type, feature_intra_attn_type=intra_type,
                 )
                 feature = torch.randn(1, 3, 8, 6, 6, requires_grad=True)
                 score = torch.randn_like(feature, requires_grad=True)
@@ -138,17 +210,23 @@ class AlternatingAttentionTests(unittest.TestCase):
                 for tensor in (feature, score):
                     self.assertTrue(torch.isfinite(tensor.grad).all())
                     self.assertGreater(tensor.grad.abs().sum().item(), 0)
-                for attention in (layer.class_attn, layer.window_attn_regular, layer.window_attn_shifted):
+                for attention in [layer.class_attn] + intra_steps(layer):
                     for projection in (attention.q_proj, attention.k_proj, attention.v_proj, attention.out_proj):
                         self.assertTrue(torch.isfinite(projection.weight.grad).all())
                         self.assertGreater(projection.weight.grad.abs().sum().item(), 0)
-                for attention in (layer.window_attn_regular, layer.window_attn_shifted):
+                for attention in intra_steps(layer):
                     self.assertGreater(attention.relative_position_bias_table.grad.abs().sum().item(), 0)
 
     def test_full_refiner_checkpoint_matches_outputs_and_gradients(self):
+        for score_type, feature_type in product(("window", "local_3x3"), repeat=2):
+            with self.subTest(score_type=score_type, feature_type=feature_type):
+                self.check_full_refiner_checkpoint(score_type, feature_type)
+
+    def check_full_refiner_checkpoint(self, score_type, feature_type):
         plain = ClassConditionedEncoderRefiner(
             FakeTextEncoder(), clip_dim=8, fusion_layers=4,
             prompt_templates=["{}"] * 64, use_checkpoint=False,
+            score_intra_attn_type=score_type, feature_intra_attn_type=feature_type,
         ).train()
         checked = deepcopy(plain)
         checked.use_checkpoint = True
@@ -161,8 +239,12 @@ class AlternatingAttentionTests(unittest.TestCase):
             ["feature", "score", "feature", "score"],
         )
         self.assertEqual(
-            [layer.window_attn_regular.value_stream for layer in plain.layers],
+            [intra_steps(layer)[0].value_stream for layer in plain.layers],
             ["score", "feature", "score", "feature"],
+        )
+        self.assertEqual(
+            [layer.intra_attn_type for layer in plain.layers],
+            [score_type, feature_type, score_type, feature_type],
         )
         encoder = torch.randn(1, 2, 256, 72, 72)
         clip = torch.randn(1, 8, 36, 36)
