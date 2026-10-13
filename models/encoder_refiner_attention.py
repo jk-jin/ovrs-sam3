@@ -505,6 +505,7 @@ class EncoderRefinerLayer(nn.Module):
         score_inter_use_clip_text_mean: bool = False,
         feature_intra_use_sam_fpn: bool = False,
         feature_inter_use_sam_text_mean: bool = False,
+        clip_text_dim: int = 768,
     ):
         super().__init__()
         if score_attention_type not in ("intra", "inter"):
@@ -525,13 +526,19 @@ class EncoderRefinerLayer(nn.Module):
         self.use_class_guidance = (
             feature_inter_use_sam_text_mean if score_attention_type == "intra" else score_inter_use_clip_text_mean
         )
+        class_guidance_dim = (
+            (256 if score_attention_type == "intra" else int(clip_text_dim))
+            if self.use_class_guidance else 0
+        )
+        if self.use_class_guidance and class_guidance_dim <= 0:
+            raise ValueError("class guidance channels must be positive")
         self.class_attn = ClassScoreAttention(
             hidden_dim=hidden_dim,
             score_embed_dim=score_embed_dim,
             num_heads=num_heads,
             dropout=dropout,
             value_stream=class_value_stream,
-            guidance_dim=256 if self.use_class_guidance else 0,
+            guidance_dim=class_guidance_dim,
         )
         if self.intra_attn_type == "window":
             self.window_attn_regular = WindowScoreAttention(
@@ -575,7 +582,7 @@ class EncoderRefinerLayer(nn.Module):
         self.ffn_fc2_score = nn.Linear(score_embed_dim * 4, score_embed_dim)
         self.ffn_dropout_score = nn.Dropout(float(dropout))
         if self.use_class_guidance:
-            self.class_norm_guidance = nn.LayerNorm(256)
+            self.class_norm_guidance = nn.LayerNorm(class_guidance_dim)
         if self.use_intra_guidance:
             if self.intra_attn_type == "window":
                 self.intra_norm_guidance = nn.ModuleList([nn.LayerNorm(256) for _ in range(2)])

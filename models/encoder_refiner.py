@@ -121,6 +121,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 score_attention_type="intra" if layer_index % 2 == 0 else "inter",
                 score_intra_attn_type=score_intra_attn_type,
                 feature_intra_attn_type=feature_intra_attn_type,
+                clip_text_dim=int(clip_dim),
                 **guidance_flags,
             )
             for layer_index in range(self.num_fusion_layers)
@@ -139,8 +140,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 raise ValueError("clip_native_dim must be positive when CLIP middle guidance is enabled")
             self.clip_native_dim = int(clip_native_dim)
             self.clip_mid_proj = nn.Conv2d(self.clip_native_dim * 2, 256, kernel_size=1)
-        if self.score_inter_use_clip_text_mean:
-            self.clip_text_mean_proj = nn.Linear(int(clip_dim), 256)
 
     def fuse_decoder_input_chunk(
         self,
@@ -260,8 +259,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
             projected = self.clip_mid_proj(torch.cat(mids, dim=1))
             clip_mid_36 = projected[:, None].expand(-1, num_classes, -1, -1, -1)
         if self.score_inter_use_clip_text_mean:
-            projected = self.clip_text_mean_proj(template_clip_text.mean(dim=1))
-            clip_text_mean_36 = projected[None, :, :, None, None].expand(batch_size, -1, -1, 36, 36)
+            text_mean = template_clip_text.mean(dim=1)
+            clip_text_mean_36 = text_mean[None, :, :, None, None].expand(batch_size, -1, -1, 36, 36)
         if self.feature_intra_use_sam_fpn:
             if sam_fpn_72 is None or tuple(sam_fpn_72.shape) != (batch_size, 256, 72, 72):
                 raise ValueError("SAM FPN guidance requires [B, 256, 72, 72] backbone_fpn[2]")
