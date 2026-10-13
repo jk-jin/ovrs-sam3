@@ -123,7 +123,7 @@ SAM3 图像 backbone 在训练中冻结并运行于 `eval()`。图像特征使�
 
 每个图像与每个提示组成一个 prompt pair。冻结的 SAM3 文本编码器和 6 层 transformer encoder 为每个 pair 生成类条件图像特征。所有 6 层在 `torch.no_grad()` 中一次运行完毕。
 
-完整 encoder 输出后，执行一次 prompt cross-attention（同样在 `no_grad()` 中），得到 cross-attended full-encoder feature。Refiner 不再计算或接收 SAM 文本 token 均值；原始 SAM3 encoder 和前置 prompt cross-attention 仍正常使用完整文本提示。
+完整 encoder 输出后，执行一次 prompt cross-attention（同样在 `no_grad()` 中），得到 cross-attended full-encoder feature。启用 `feature_inter_use_sam_text_mean` 时，Refiner 接收有效 SAM 文本 token 均值，经可训练 256→256 Linear 后作为 Q/K 指导；原始 SAM3 encoder 和前置 prompt cross-attention 仍正常使用完整文本提示。
 
 所有提示块按原始顺序重新拼接。
 
@@ -222,9 +222,9 @@ FPN144 和 FPN288 由原始 Pixel Decoder 内部消费。
 所有注意力的 Q/K 均由逐像素通道 LayerNorm 后的 score embedding 和 feature
 按通道顺序 `[score_embed, feature]` 拼接后独立线性投影。对应增强开关开启时，
 额外拼接经过独立通道 LayerNorm 的指导特征，顺序为 `[score_embed, feature, guidance]`。
-CLIP 文本模板均值保持原始 CLIP 文本投影维度（ViT-L/14 为 768），其余三种指导为 256 通道。
-两路均为 256 通道时，关闭开关的 Q/K 输入为 512 通道；开启 score 类间 CLIP 文本指导时为
-1280 通道（256+256+768），开启其余指导时为 768 通道；
+四种指导在拼接时均为 256 通道。CLIP 文本模板均值先经过实际 CLIP 文本维度→256 的 Linear，
+SAM3 有效 token 均值先经过 256→256 的 Linear。两路均为 256 通道时，
+关闭开关的 Q/K 输入为 512 通道，开启对应指导时为 768 通道；
 Q/K 投影输出仍为 256 通道，Value 和输出投影始终只保留目标流一条分支。
 
 **A 层（第 1、3 层，`score_attention_type="intra"`）：**
@@ -281,17 +281,17 @@ model = dict(
 | 配置开关（默认均为 False） | 作用位置 | 额外 Q/K 指导 |
 | --- | --- | --- |
 | `score_intra_use_clip_mid` | A 层更新 score 的类内注意力 | CLIP 第 8、16 层原生特征沿通道拼接，经共享 1×1 Conv 到 256；按图像广播给全部提示 |
-| `score_inter_use_clip_text_mean` | B 层更新 score 的类间注意力 | 复用 `template_clip_text`，每类 64 个原始模板向量求算术均值，保留原始通道直接广播到 batch 和整个 36×36 网格；不经过额外 Linear |
+| `score_inter_use_clip_text_mean` | B 层更新 score 的类间注意力 | 复用 `template_clip_text`，每类 64 个原始模板向量求算术均值，经共享 Linear 将实际 CLIP 文本通道映射到 256，再广播到 batch 和整个 36×36 网格 |
 | `feature_intra_use_sam_fpn` | B 层更新 feature 的类内注意力 | `backbone_fpn[2]` 从 72×72 双线性下采样到 36×36（align_corners=False）；保持 256 通道，无额外通道投影，广播到提示维 |
-| `feature_inter_use_sam_text_mean` | A 层更新 feature 的类间注意力 | 每个 SAM3 类别文本的 `language_features` 沿有效 token 求均值，排除 `language_mask=True` 的 padding；本身为 256 通道，无额外投影，广播到 batch 和空间 |
+| `feature_inter_use_sam_text_mean` | A 层更新 feature 的类间注意力 | 每个 SAM3 类别文本的 `language_features` 沿有效 token 求均值，排除 `language_mask=True` 的 padding；经共享 256→256 Linear 后，广播到 batch 和空间 |
 
 四个开关严格接受 bool，相互独立，且与两个类内模式选择独立。
 窗口模式的两个子步骤或局部模式的四个子步骤均使用对应的同一份指导信息，
 但各子步骤的 guidance LayerNorm 和注意力 Q/K 投影独立。
-CLIP 中间特征的卷积放在 Refiner 入口，每次前向计算一次后再广播，
-不按提示复制原生 CLIP 中间特征。CLIP 模板均值在入口直接求平均和广播，
-不创建文本均值通道投影层；对应类间 attention 的 guidance LayerNorm 使用实际 CLIP 文本维度。
-全部模块使用常规初始化。
+CLIP 中间特征的卷积、CLIP 文本均值的线性投影及 SAM3 文本均值的线性投影均放在 Refiner 入口，
+每次前向各计算一次后再广播，各层共享这些投影，不按提示复制原生 CLIP 中间特征。
+两个文本线性层仅在各自开关开启时创建，投影结果再经过每个类间注意力独立的 256 通道 guidance LayerNorm。
+两个线性层采用常规初始化，无额外激活、门控或残差；全部模块使用常规初始化。
 CLIP 模板均值直接使用当前模板向量求平均，不额外重新编码、不改为 SAM 文本或 pooled token。
 SAM 文本均值复用冻结文本缓存，顺序与全提示列表一致，不混入几何 prompt。
 
@@ -620,7 +620,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 17. teacher 只来自原始 encoder72 解码路径并且必须 detach。teacher 和 student 都为 288×288。
 18. 蒸馏只监督存在类别。每个存在提示均监督全部 GT 有效像素，并额外监督其原始类别 GT 外侧 `sam3_mask_distill_boundary_width` 像素范围内且标签为 255 的边界环。远处 255 区域不参与蒸馏。多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
 19. 最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
-20. Refiner 按 A→B→A→B 交替，每层先更新 score 再更新 feature。Q/K 拼接 score 和 feature，并由四个独立开关决定是否拼接各自的指导信息。CLIP 文本模板均值保留原始 CLIP 文本通道，其余指导为 256 通道。两种目标流的类内注意力独立选择普通/移位窗口或四次连续普通 3×3 局部注意力。所有注意力均为单 Value，只残差更新指定的目标流；它们与双流 FFN 均采用 pre-norm，不允许重新引入固定或可学习残差系数。全部 Refiner 层结束后，必须对最终 feature_36 执行一次通道 LayerNorm；最终 score_embed_36 不执行额外输出 LayerNorm。
+20. Refiner 按 A→B→A→B 交替，每层先更新 score 再更新 feature。Q/K 拼接 score 和 feature，并由四个独立开关决定是否拼接各自的指导信息。四种指导均以 256 通道拼接；CLIP 和 SAM3 文本均值分别先经过各自的线性投影。两种目标流的类内注意力独立选择普通/移位窗口或四次连续普通 3×3 局部注意力。所有注意力均为单 Value，只残差更新指定的目标流；它们与双流 FFN 均采用 pre-norm，不允许重新引入固定或可学习残差系数。全部 Refiner 层结束后，必须对最终 feature_36 执行一次通道 LayerNorm；最终 score_embed_36 不执行额外输出 LayerNorm。
 21. TTA 必须先平均提示空间分数（`raw_prompt_score_map`），再合并提示到原始类别，最后进行相对阈值过滤。
 22. `reduce_zero_label` 与 `background_cfg` 各自只执行其定义的一次标签空间变换。
 23. 完整恢复必须严格校验 checkpoint schema；模型权重迁移必须走独立入口。
@@ -759,19 +759,20 @@ CPU 回归验证入口：`python -m unittest discover -s tests -v`。
 本次可选 Q/K 指导增强：
 
 * 新增四个指导开关，默认全关；关闭时保留上一版的参数结构与行为。
-* 开启时只扩展对应注意力的 Q/K 输入：score 类间 CLIP 文本指导为 512 加实际 CLIP 文本通道（ViT-L/14 合计 1280），其余指导为 768；V、输出维度和残差更新对象不变。
-* CLIP 中间图像投影共享于各 Refiner 层；CLIP 模板均值直接拼接，无额外通道投影。每个增强注意力子步骤拥有独立的 guidance LayerNorm。
+* 开启时只扩展对应注意力的 Q/K 输入为 768 通道；V、输出维度和残差更新对象不变。
+* CLIP 中间图像投影与两个独立的文本均值线性投影共享于各 Refiner 层；每个增强注意力子步骤拥有独立的 guidance LayerNorm。
 * 不对关闭分支创建参数占位或旧权重映射。改变开关会改变模型结构，必须开启新实验；
   打开开关后，旧 512 通道 Q/K 权重不能直接严格恢复或同名加载至增强后的通道维度。
 * `tests/test_refiner_guidance.py` 覆盖全部 16 种开关组合、两种层和两种类内模式的路由，
   指导只作用于权重而不进入 Value、投影只执行一次、均值/索引/广播、SAM padding 排除、
   CLIP 中间梯度在提取与缓存处的保留、debug detach、实际配置构建链路及启用增强时的 checkpoint 一致性。
 
-本次 score 类间 CLIP 文本指导简化：
+本次文本均值投影更新：
 
-* 删除 `core.encoder_refiner.clip_text_mean_proj.*`；对 `template_clip_text` 沿模板维求均值后直接广播并拼接进 Q/K。
-* `EncoderRefinerLayer.clip_text_dim` 由已有 CLIP 文本维度传入，不增加用户配置字段。
-* 开启时对应 B 层的类间 guidance LayerNorm 从 256 改为实际 CLIP 文本维度，Q/K 输入由 768 改为 512 加该维度。
-* 关闭开关的参数结构与行为不变，其余三个指导开关及 Value、FFN、融合、损失均不变。
-* 开启该开关的旧训练权重不兼容新的 Q/K 和 guidance norm 形状；不添加旧参数映射或兼容层。
-* 回归测试验证原始模板均值直接广播、真实 768 通道文本形成 1280 通道 Q/K 输入、模板梯度以及各配置组合的 checkpoint 一致性。
+* 恢复 `core.encoder_refiner.clip_text_mean_proj.*`：CLIP 模板向量先沿模板维求均值，再经实际 CLIP 文本通道→256 Linear。ViT-L/14 对应 768→256。
+* 新增 `core.encoder_refiner.sam_text_mean_proj.*`：SAM3 文本 token 均值排除 padding 后，再经 256→256 Linear；SAM3 文本编码器继续冻结，新增线性层可训练。
+* 两个投影独立，各由对应文本开关控制，均在 Refiner 入口按类别投影后再广播，每次前向只计算一次。
+* 删除仅用于原始文本直拼的 `EncoderRefinerLayer.clip_text_dim` 内部参数。两个类间 guidance norm 均为 256 通道，开启时 Q/K 输入均为 768 通道。
+* Value、FFN、交替顺序、图像指导、融合与损失不变；两个文本开关关闭时的参数结构和行为不变。
+* 原始 768 通道文本直拼版的 Q/K 和 guidance norm 形状不兼容；新增 SAM 投影也改变了模型参数结构。使用新实验，不提供旧参数映射或兼容层。
+* 回归测试验证两个投影的输入来源、256 通道输出、单次计算与广播、投影和 CLIP 模板梯度、全部开关组合，以及四种类内模式组合的 checkpoint 一致性。

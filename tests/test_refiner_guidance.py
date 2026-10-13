@@ -65,10 +65,10 @@ class GuidanceTests(unittest.TestCase):
         for enabled, kind, mode in product(product((False, True), repeat=4), ("intra", "inter"), ("window", "local_3x3")):
             flags = dict(zip(FLAGS, enabled))
             with self.subTest(flags=enabled, kind=kind, mode=mode):
-                layer = EncoderRefinerLayer(8, 8, 2, 3, 1, 0, kind, mode, mode, clip_text_dim=12, **flags)
+                layer = EncoderRefinerLayer(8, 8, 2, 3, 1, 0, kind, mode, mode, **flags)
                 feature = torch.randn(1, 2, 8, 6, 6)
                 score = torch.randn_like(feature)
-                guides = [torch.randn(1, 2, channels, 6, 6) for channels in (256, 12, 256, 256)]
+                guides = [torch.randn(1, 2, channels, 6, 6) for channels in (256, 256, 256, 256)]
                 intra_index, class_index = (0, 3) if kind == "intra" else (2, 1)
                 seen = []
 
@@ -120,30 +120,41 @@ class GuidanceTests(unittest.TestCase):
             score_intra_attn_type=score_mode, feature_intra_attn_type=feature_mode, **flags,
         )
 
-    def test_raw_clip_text_channels_reach_qk_and_receive_gradients(self):
-        # Real RemoteCLIP width: only the usual Q/K projections reduce channels.
-        layer = EncoderRefinerLayer(
-            256, 256, 8, 3, 1, 0, "inter", score_inter_use_clip_text_mean=True,
-            clip_text_dim=768,
+    def test_both_text_projections_feed_256_channels_to_qk_and_receive_gradients(self):
+        model = ClassConditionedEncoderRefiner(
+            nn.Identity(), clip_dim=768, fusion_layers=2, window_size=3, shift_size=1,
+            prompt_templates=["{}"] * 64, use_checkpoint=False, dropout=0,
+            score_inter_use_clip_text_mean=True, feature_inter_use_sam_text_mean=True,
         )
-        self.assertEqual(layer.class_attn.q_proj.in_features, 1280)
-        self.assertEqual(layer.class_attn.k_proj.in_features, 1280)
-        self.assertEqual(layer.class_norm_guidance.normalized_shape, (768,))
-        self.assertEqual(layer.class_attn.v_proj.in_features, 256)
-        self.assertEqual(layer.class_attn.out_proj.out_features, 256)
+        self.assertEqual(tuple(model.clip_text_mean_proj.weight.shape), (256, 768))
+        self.assertEqual(tuple(model.sam_text_mean_proj.weight.shape), (256, 256))
         templates = torch.randn(3, 64, 768, requires_grad=True)
-        mean = templates.mean(dim=1)
-        guide = mean[None, :, :, None, None].expand(1, -1, -1, 6, 6)
-        feature = torch.randn(1, 3, 256, 6, 6)
-        score = torch.randn_like(feature)
-        captured = []
-        with layer.class_attn.q_proj.register_forward_pre_hook(lambda module, args: captured.append(args[0])):
-            out, _ = layer(feature, score, clip_text_mean=guide)
-        expected = layer.class_norm_guidance(mean)[None].expand(36, -1, -1)
-        torch.testing.assert_close(captured[0][..., 512:], expected)
-        (out * torch.randn_like(out)).mean().backward()
+        sam_mean = torch.randn(3, 256)  # Frozen SAM3 source; projection stays trainable.
+        for layer, projection, mean, name in (
+            (model.layers[1], model.clip_text_mean_proj, templates.mean(dim=1), "clip_text_mean"),
+            (model.layers[0], model.sam_text_mean_proj, sam_mean, "sam_text_mean"),
+        ):
+            self.assertEqual(layer.class_attn.q_proj.in_features, 768)
+            self.assertEqual(layer.class_attn.k_proj.in_features, 768)
+            self.assertEqual(layer.class_norm_guidance.normalized_shape, (256,))
+            self.assertEqual(layer.class_attn.v_proj.in_features, 256)
+            self.assertEqual(layer.class_attn.out_proj.out_features, 256)
+            projected = projection(mean)
+            guide = projected[None, :, :, None, None].expand(1, -1, -1, 6, 6)
+            feature = torch.randn(1, 3, 256, 6, 6)
+            score = torch.randn_like(feature)
+            captured = []
+            with layer.class_attn.q_proj.register_forward_pre_hook(lambda module, args: captured.append(args[0])):
+                out, _ = layer(feature, score, **{name: guide})
+            expected = layer.class_norm_guidance(projected)[None].expand(36, -1, -1)
+            torch.testing.assert_close(captured[0][..., 512:], expected)
+            (out * torch.randn_like(out)).mean().backward()
+            for parameter in (projection.weight, projection.bias):
+                self.assertTrue(torch.isfinite(parameter.grad).all())
+                self.assertGreater(parameter.grad.abs().sum().item(), 0)
         self.assertTrue(torch.isfinite(templates.grad).all())
         self.assertGreater(templates.grad.abs().sum().item(), 0)
+        self.assertIsNone(sam_mean.grad)
 
     def inputs(self):
         return dict(
@@ -158,28 +169,34 @@ class GuidanceTests(unittest.TestCase):
     def test_guidance_is_prepared_once_with_correct_means_and_broadcasts(self):
         model = self.make_refiner(**dict.fromkeys(FLAGS, True))
         inputs = self.inputs()
-        seen, mid_inputs = [], []
+        seen, mid_inputs, clip_text_inputs, sam_text_inputs = [], [], [], []
 
         def record_layer(layer, args, kwargs):
             seen.append(kwargs)
 
         with ExitStack() as stack:
             stack.enter_context(model.clip_mid_proj.register_forward_pre_hook(lambda m, args: mid_inputs.append(args[0].clone())))
+            stack.enter_context(model.clip_text_mean_proj.register_forward_pre_hook(lambda m, args: clip_text_inputs.append(args[0].clone())))
+            stack.enter_context(model.sam_text_mean_proj.register_forward_pre_hook(lambda m, args: sam_text_inputs.append(args[0].clone())))
             for layer in model.layers:
                 stack.enter_context(layer.register_forward_pre_hook(record_layer, with_kwargs=True))
             out = model(**inputs)
         self.assertEqual(len(mid_inputs), 1)
-        self.assertFalse(hasattr(model, "clip_text_mean_proj"))
+        self.assertEqual(len(clip_text_inputs), 1)
+        self.assertEqual(len(sam_text_inputs), 1)
+        torch.testing.assert_close(clip_text_inputs[0], out["template_clip_text"].mean(dim=1))
+        torch.testing.assert_close(sam_text_inputs[0], inputs["sam_text_mean"])
         torch.testing.assert_close(mid_inputs[0], torch.cat(inputs["clip_mid_features"][::-1], dim=1))
         expected_mid = model.clip_mid_proj(mid_inputs[0])
-        expected_text = out["template_clip_text"].mean(dim=1)
+        expected_text = model.clip_text_mean_proj(out["template_clip_text"].mean(dim=1))
+        expected_sam_text = model.sam_text_mean_proj(inputs["sam_text_mean"])
         expected_fpn = F.interpolate(inputs["sam_fpn_72"], size=(36, 36), mode="bilinear", align_corners=False)
         for supplied in seen:
             for cls in range(2):
                 torch.testing.assert_close(supplied["clip_mid_36"][:, cls], expected_mid)
                 torch.testing.assert_close(supplied["sam_fpn_36"][:, cls], expected_fpn)
                 torch.testing.assert_close(supplied["clip_text_mean"][0, cls], expected_text[cls, :, None, None].expand(-1, 36, 36))
-                torch.testing.assert_close(supplied["sam_text_mean"][0, cls], inputs["sam_text_mean"][cls, :, None, None].expand(-1, 36, 36))
+                torch.testing.assert_close(supplied["sam_text_mean"][0, cls], expected_sam_text[cls, :, None, None].expand(-1, 36, 36))
 
     def test_all_guidance_checkpoint_matches_outputs_and_gradients(self):
         # Full native grid and channels, covering all four spatial-mode combinations.
@@ -198,8 +215,7 @@ class GuidanceTests(unittest.TestCase):
                     (out["refiner_features_36"] * target).mean().backward()
                     results.append(out)
                     mid_grads.append([x.grad for x in data["clip_mid_features"]])
-                    self.assertFalse(hasattr(model, "clip_text_mean_proj"))
-                    for projection in (model.clip_mid_proj,):
+                    for projection in (model.clip_mid_proj, model.clip_text_mean_proj, model.sam_text_mean_proj):
                         self.assertTrue(torch.isfinite(projection.weight.grad).all())
                         self.assertGreater(projection.weight.grad.abs().sum().item(), 0)
                 for key in results[0]:
@@ -233,6 +249,7 @@ class GuidanceTests(unittest.TestCase):
         baseline = self.make_refiner()
         self.assertFalse(hasattr(baseline, "clip_mid_proj"))
         self.assertFalse(hasattr(baseline, "clip_text_mean_proj"))
+        self.assertFalse(hasattr(baseline, "sam_text_mean_proj"))
         data = self.inputs()
         with torch.no_grad():
             first = baseline(**data)
@@ -337,9 +354,10 @@ class GuidanceTests(unittest.TestCase):
             self.assertEqual([layer.use_class_guidance for layer in refiner.layers], [enabled[3], enabled[1], enabled[3], enabled[1]])
             self.assertEqual([layer.use_intra_guidance for layer in refiner.layers], [enabled[0], enabled[2], enabled[0], enabled[2]])
             self.assertEqual(hasattr(refiner, "clip_mid_proj"), enabled[0])
-            self.assertFalse(hasattr(refiner, "clip_text_mean_proj"))
+            self.assertEqual(hasattr(refiner, "clip_text_mean_proj"), enabled[1])
+            self.assertEqual(hasattr(refiner, "sam_text_mean_proj"), enabled[3])
             for layer in refiner.layers:
-                dim = (256 if layer.score_attention_type == "intra" else 8) if layer.use_class_guidance else 0
+                dim = 256 if layer.use_class_guidance else 0
                 self.assertEqual(layer.class_attn.guidance_dim, dim)
                 self.assertEqual(layer.class_attn.q_proj.in_features, 512 + dim)
         for flag in FLAGS:
