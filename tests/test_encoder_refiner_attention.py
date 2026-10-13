@@ -173,10 +173,10 @@ class AlternatingAttentionTests(unittest.TestCase):
                     stack.enter_context(patch.object(layer.class_attn, "forward", side_effect=update("class", 3)))
                     for index, attention in enumerate(steps, 1):
                         stack.enter_context(patch.object(attention, "forward", side_effect=update(str(index), index)))
-                    stack.enter_context(patch.object(layer, "_ffn_feature_update", side_effect=lambda x: torch.full_like(x, 4)))
-                    stack.enter_context(patch.object(layer, "_ffn_score_update", side_effect=lambda x: torch.full_like(x, 5)))
+                    stack.enter_context(patch.object(layer, "_ffn_feature_update", side_effect=lambda x: torch.full_like(x[:, :, :4], 4)))
+                    stack.enter_context(patch.object(layer, "_ffn_score_update", side_effect=lambda x: torch.full_like(x[:, :, :4], 5)))
                     guide = torch.randn(1, 2, 256, 6, 6)
-                    out_feature, out_score = layer(feature, score, guide, guide, guide)
+                    out_feature, out_score = layer(feature, score, guide, guide, feature, score)
                 total = sum(range(1, len(steps) + 1))
                 torch.testing.assert_close(out_feature, feature + (3 if kind == "intra" else total) + 4)
                 torch.testing.assert_close(out_score, score + (total if kind == "intra" else 3) + 5)
@@ -207,7 +207,7 @@ class AlternatingAttentionTests(unittest.TestCase):
                 score = torch.randn_like(feature, requires_grad=True)
                 # Feature output alone must supervise the earlier score update.
                 guide = torch.randn(1, 3, 256, 6, 6)
-                out_feature, _ = layer(feature, score, guide, guide, guide)
+                out_feature, _ = layer(feature, score, guide, guide, feature, score)
                 (out_feature * torch.randn_like(out_feature)).sum().backward()
                 for tensor in (feature, score):
                     self.assertTrue(torch.isfinite(tensor.grad).all())

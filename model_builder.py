@@ -280,6 +280,9 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 f"encoder_refiner_cfg.fusion_layers must be positive, got {cfg.fusion_layers}."
             )
 
+        if isinstance(cfg.decoder_input_fusion_layers, bool) or not isinstance(cfg.decoder_input_fusion_layers, int) or cfg.decoder_input_fusion_layers <= 0:
+            raise ValueError("encoder_refiner_cfg.decoder_input_fusion_layers must be a positive integer.")
+
         if cfg.num_heads <= 0:
             raise ValueError(
                 f"encoder_refiner_cfg.num_heads must be positive, got {cfg.num_heads}."
@@ -797,6 +800,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             text_prompt_batch_size=int(cfg.openclip_cfg.text_prompt_batch_size),
             text_prompt_use_checkpoint=bool(cfg.openclip_cfg.text_prompt_use_checkpoint),
             encoder_refiner_fusion_layers=int(refiner_cfg.fusion_layers),
+            decoder_input_fusion_layers=refiner_cfg.decoder_input_fusion_layers,
             encoder_refiner_num_heads=int(refiner_cfg.num_heads),
             encoder_refiner_dropout=float(refiner_cfg.dropout),
             encoder_refiner_hidden_dim=int(refiner_cfg.hidden_dim),

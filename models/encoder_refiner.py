@@ -20,18 +20,18 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
     Takes the full 6-layer SAM3 encoder output after prompt cross-attention
     as input. The feature stream is the bilinear-downsampled encoder feature
-    without any FPN injection. Fixed CLIP middle/FPN and per-B-layer template guidance extend
-    attention Q/K; single-value updates and the initial streams are unchanged.
+    without any FPN injection. Fixed CLIP middle/FPN guidance extends
+    intra-class attention Q/K. Every FFN concatenates its current stream
+    with the same corresponding module-entry stream, preserving gradients.
     The score stream comes directly from
     ClipScoreEmbedding (score_embeddings.py) without any SAM3 FPN fusion.
 
     The Refiner outputs 36×36 features. High-resolution decoding is handled
-    by the single-scale DecoderInputFusion at 72×72, where the semantic
-    branch fuses the upsampled Refiner with the original cross-attended
-    encoder72 feature and the detail branch fuses the Refiner with the
-    original SAM3 backbone FPN72. Both branches use independent Refiner
-    projections. The fused 72×72 feature replaces the last FPN level of the
-    original SAM3 Pixel Decoder.
+    by configurable DecoderInputFusion layers at 72×72 (two by default).
+    After one upsampling, each layer concatenates its input with the same
+    original encoder72 and projects to 256 channels before independent
+    semantic/detail branches use original encoder72/FPN72 respectively.
+    The final fused feature replaces the original Pixel Decoder's last FPN.
 
     After all Refiner layers, the accumulated 36×36 feature stream is
     normalized once with a channel-wise LayerNorm before being returned
@@ -70,6 +70,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         score_intra_attn_type: str = "window",
         feature_intra_attn_type: str = "window",
         clip_native_dim: int | None = None,
+        decoder_input_fusion_layers: int = 2,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -106,7 +107,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 score_attention_type="intra" if layer_index % 2 == 0 else "inter",
                 score_intra_attn_type=score_intra_attn_type,
                 feature_intra_attn_type=feature_intra_attn_type,
-                clip_dim=int(clip_dim),
             )
             for layer_index in range(self.num_fusion_layers)
         ])
@@ -118,12 +118,12 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
         self.decoder_input_fusion = DecoderInputFusion(
             use_checkpoint=self.use_checkpoint,
+            num_layers=decoder_input_fusion_layers,
         )
         if clip_native_dim is None or clip_native_dim <= 0:
             raise ValueError("clip_native_dim must be positive for CLIP middle guidance")
         self.clip_native_dim = int(clip_native_dim)
         self.clip_mid_proj = nn.Conv2d(self.clip_native_dim * 2, 256, kernel_size=1)
-        self.template_text_proj = nn.Linear(int(clip_dim), 256)
 
     def fuse_decoder_input_chunk(
         self,
@@ -269,20 +269,15 @@ class ClassConditionedEncoderRefiner(nn.Module):
         score_embed_36 = clip_score_embed_36
 
         for layer in self.layers:
-            clip_template_guidance = None
-            if layer.score_attention_type == "inter":
-                # Each B layer starts from the original encoded templates.
-                attended_templates = layer.template_attention(template_clip_text)
-                text_vector = self.template_text_proj(attended_templates).sum(dim=1)
-                clip_template_guidance = text_vector[None, :, :, None, None].expand(batch_size, -1, -1, 36, 36)
             if self.use_checkpoint and self.training:
                 feature_36, score_embed_36 = checkpoint(
                     layer,
                     feature_36,
                     score_embed_36,
                     clip_mid_36,
-                    clip_template_guidance,
                     sam_fpn_36,
+                    base_feature_36,
+                    clip_score_embed_36,
                     use_reentrant=False,
                 )
             else:
@@ -290,8 +285,9 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     feature_36=feature_36,
                     score_embed_36=score_embed_36,
                     clip_mid_36=clip_mid_36,
-                    clip_template_guidance=clip_template_guidance,
                     sam_fpn_36=sam_fpn_36,
+                    initial_feature_36=base_feature_36,
+                    initial_score_embed_36=clip_score_embed_36,
                 )
 
         # Normalize the accumulated feature stream once after all Refiner layers.

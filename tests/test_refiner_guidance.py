@@ -1,4 +1,4 @@
-"""CPU tests for optional Q/K guidance; no pretrained weights required."""
+"""CPU tests for fixed Q/K guidance and initial FFN anchors; no pretrained weights required."""
 import ast
 from contextlib import ExitStack
 from copy import deepcopy
@@ -16,7 +16,7 @@ from config_dataclasses import EncoderRefinerConfig, SegmentorBuildConfig
 from models.encoder_refiner import ClassConditionedEncoderRefiner
 from models.encoder_refiner_attention import (
     ClassScoreAttention, EncoderRefinerLayer, LocalScoreAttention,
-    WindowScoreAttention, ClipTemplateClassAttention, apply_layer_norm_bcdhw,
+    WindowScoreAttention, apply_layer_norm_bcdhw,
 )
 from models.openclip_image_encoder import OpenCLIPImageEncoder
 from test_encoder_refiner_attention import FakeTextEncoder, intra_steps
@@ -72,78 +72,58 @@ class GuidanceTests(unittest.TestCase):
             clip_mid_layer_indices=(15, 7), sam_fpn_72=torch.randn(1, 256, 72, 72),
         )
 
-    def test_template_attention_mixes_classes_at_the_same_template_index(self):
-        module = ClipTemplateClassAttention(8, 2, 0)
-        module.norm = nn.Identity()
-        with torch.no_grad():
-            module.attention.in_proj_weight.zero_()
-            module.attention.in_proj_weight[16:].copy_(torch.eye(8))
-            module.attention.in_proj_bias.zero_()
-            module.attention.out_proj.weight.copy_(torch.eye(8))
-            module.attention.out_proj.bias.zero_()
-        templates = torch.randn(3, 64, 8)
-        before = templates.clone()
-        expected = templates + templates.mean(dim=0, keepdim=True)
-        torch.testing.assert_close(module(templates), expected)
-        torch.testing.assert_close(templates, before, rtol=0, atol=0)
-        impulse = torch.zeros_like(templates)
-        impulse[0, 9] = 1
-        actual = module(impulse)
-        torch.testing.assert_close(actual[:, :9], torch.zeros_like(actual[:, :9]))
-        torch.testing.assert_close(actual[:, 10:], torch.zeros_like(actual[:, 10:]))
-        torch.testing.assert_close(actual[1:, 9], torch.full((2, 8), 1 / 3))
-
-    def test_template_attention_preserves_class_permutation_and_gradients(self):
-        module = ClipTemplateClassAttention(768, 8, 0)
-        templates = torch.randn(3, 64, 768, requires_grad=True)
-        order = torch.tensor([2, 0, 1])
-        out = module(templates)
-        self.assertEqual(tuple(out.shape), (3, 64, 768))
-        torch.testing.assert_close(module(templates[order]), out[order])
-        projection = nn.Linear(768, 256)
-        vector = projection(out).sum(dim=1)
-        self.assertEqual(tuple(vector.shape), (3, 256))
-        (vector * torch.randn_like(vector)).mean().backward()
-        for value in (templates.grad, module.attention.in_proj_weight.grad, projection.weight.grad):
-            self.assertTrue(torch.isfinite(value).all())
-            self.assertGreater(value.abs().sum().item(), 0)
-        with self.assertRaisesRegex(ValueError, "64"):
-            module(torch.randn(3, 63, 768))
-
-    def test_only_b_layers_use_original_templates_and_project_then_sum(self):
+    def test_every_layer_uses_the_same_module_entry_anchors(self):
         model = self.make_refiner()
-        self.assertEqual([hasattr(layer, "template_attention") for layer in model.layers], [False, True, False, True])
-        self.assertIsNot(model.layers[1].template_attention, model.layers[3].template_attention)
-        raw = model.clip_score_embed.clip_text_encoder.templates
-        original = raw.detach().clone()
-        seen_inputs, projection_inputs, layer_inputs = [], [], []
-        with torch.no_grad():
-            model.template_text_proj.weight.zero_()
-            model.template_text_proj.bias.fill_(1)
+        inputs = self.inputs()
+        seen = []
         with ExitStack() as stack:
-            for index in (1, 3):
-                block = model.layers[index].template_attention
-                stack.enter_context(block.register_forward_pre_hook(lambda m, args: seen_inputs.append(args[0].detach().clone())))
-                stack.enter_context(patch.object(block, "forward", return_value=raw + index))
-            stack.enter_context(model.template_text_proj.register_forward_pre_hook(lambda m, args: projection_inputs.append(args[0].detach().clone())))
             for layer in model.layers:
-                stack.enter_context(layer.register_forward_pre_hook(lambda m, args, kwargs: layer_inputs.append(kwargs), with_kwargs=True))
-            out = model(**self.inputs())
-        self.assertEqual(len(seen_inputs), 2)
-        self.assertEqual(len(projection_inputs), 2)
-        for seen in seen_inputs:
-            torch.testing.assert_close(seen, original)
-        torch.testing.assert_close(projection_inputs[0], original + 1)
-        torch.testing.assert_close(projection_inputs[1], original + 3)
-        for index, supplied in enumerate(layer_inputs):
-            guide = supplied["clip_template_guidance"]
-            if index % 2 == 0:
-                self.assertIsNone(guide)
-            else:
-                # Bias=1 for each projected template gives 64 after summation.
-                torch.testing.assert_close(guide, torch.full((1, 2, 256, 36, 36), 64.0))
-        torch.testing.assert_close(out["template_clip_text"], original)
-        torch.testing.assert_close(raw.detach(), original, rtol=0, atol=0)
+                stack.enter_context(layer.register_forward_pre_hook(lambda m, args, kwargs: seen.append(kwargs), with_kwargs=True))
+            out = model(**inputs)
+        expected = F.interpolate(inputs["encoder_features_72"].reshape(2, 256, 72, 72), size=(36, 36), mode="bilinear", align_corners=False).reshape(1, 2, 256, 36, 36)
+        self.assertEqual(len(seen), 4)
+        for supplied in seen:
+            torch.testing.assert_close(supplied["initial_feature_36"], expected)
+            self.assertIs(supplied["initial_feature_36"], seen[0]["initial_feature_36"])
+            self.assertIs(supplied["initial_score_embed_36"], out["clip_score_embed_36"])
+            self.assertTrue(supplied["initial_score_embed_36"].requires_grad)
+        self.assertGreater((seen[1]["feature_36"] - expected).abs().sum().item(), 0)
+        self.assertGreater((seen[1]["score_embed_36"] - out["clip_score_embed_36"]).abs().sum().item(), 0)
+
+    def test_ffn_concatenates_current_and_fixed_anchors_and_preserves_anchor_gradients(self):
+        layer = EncoderRefinerLayer(8, 8, 2, window_size=3, shift_size=1, dropout=0)
+        feature = torch.randn(1, 2, 8, 6, 6, requires_grad=True)
+        score = torch.randn_like(feature, requires_grad=True)
+        initial_feature = torch.randn_like(feature, requires_grad=True)
+        initial_score = torch.randn_like(feature, requires_grad=True)
+        seen = []
+        def record(name, x):
+            seen.append((name, x.clone()))
+            return x[:, :, :8] * 0
+        with (
+            patch("models.encoder_refiner_attention.apply_layer_norm_bcdhw", side_effect=lambda x, norm: x),
+            patch.object(layer, "_update_intra", side_effect=lambda f, s, g: (f + 2, s + 3)),
+            patch.object(layer, "_class_update", side_effect=lambda f, s: torch.ones_like(f) * 5),
+            patch.object(layer, "_ffn_feature_update", side_effect=lambda x: record("feature", x)),
+            patch.object(layer, "_ffn_score_update", side_effect=lambda x: record("score", x)),
+        ):
+            out_f, out_s = layer(feature, score, initial_feature_36=initial_feature, initial_score_embed_36=initial_score)
+        torch.testing.assert_close(seen[0][1], torch.cat([feature + 7, initial_feature], dim=2))
+        torch.testing.assert_close(seen[1][1], torch.cat([score + 3, initial_score], dim=2))
+        torch.testing.assert_close(out_f, feature + 7)
+        torch.testing.assert_close(out_s, score + 3)
+        self.assertEqual(layer.ffn_fc1_feature.in_features, 16)
+        self.assertEqual(layer.ffn_fc1_feature.out_features, 32)
+        with (
+            patch.object(layer, "_update_intra", side_effect=lambda f, s, g: (f, s)),
+            patch.object(layer, "_class_update", side_effect=lambda f, s: torch.zeros_like(f)),
+        ):
+            out_f, out_s = layer(feature, score, initial_feature_36=initial_feature, initial_score_embed_36=initial_score)
+        loss = (out_f * torch.randn_like(out_f)).mean() + (out_s * torch.randn_like(out_s)).mean()
+        loss.backward()
+        for tensor in (initial_feature, initial_score):
+            self.assertTrue(torch.isfinite(tensor.grad).all())
+            self.assertGreater(tensor.grad.abs().sum().item(), 0)
 
     def test_fixed_image_guidance_is_prepared_once_and_routes_to_the_correct_stream(self):
         model = self.make_refiner()
@@ -159,7 +139,7 @@ class GuidanceTests(unittest.TestCase):
         projected = model.clip_mid_proj(mid_inputs[0])
         fpn = F.interpolate(data["sam_fpn_72"], size=(36, 36), mode="bilinear", align_corners=False)
         for layer, supplied in zip(model.layers, seen):
-            self.assertEqual(layer.class_attn.q_proj.in_features, 512 if layer.score_attention_type == "intra" else 768)
+            self.assertEqual(layer.class_attn.q_proj.in_features, 512)
             for attention in intra_steps(layer):
                 self.assertEqual(attention.q_proj.in_features, 768)
                 self.assertEqual(attention.v_proj.in_features, 256)
@@ -167,7 +147,7 @@ class GuidanceTests(unittest.TestCase):
                 torch.testing.assert_close(supplied["clip_mid_36"][:, cls], projected)
                 torch.testing.assert_close(supplied["sam_fpn_36"][:, cls], fpn)
 
-    def test_new_branches_receive_gradients_and_match_checkpoint_with_dropout(self):
+    def test_initial_anchor_and_image_branches_match_checkpoint_with_dropout(self):
         plain = self.make_refiner("local_3x3", "window", dropout=0.1).train()
         checked = deepcopy(plain)
         checked.use_checkpoint = True
@@ -182,9 +162,8 @@ class GuidanceTests(unittest.TestCase):
             results.append(out)
             middle_grads.append([x.grad for x in inputs["clip_mid_features"]])
             for value in (
-                model.template_text_proj.weight.grad, model.clip_mid_proj.weight.grad,
-                model.layers[1].template_attention.attention.in_proj_weight.grad,
-                model.layers[3].template_attention.attention.in_proj_weight.grad,
+                model.clip_mid_proj.weight.grad, model.layers[0].ffn_fc1_feature.weight.grad,
+                model.layers[0].ffn_fc1_score.weight.grad,
                 model.clip_score_embed.clip_text_encoder.templates.grad,
             ):
                 self.assertTrue(torch.isfinite(value).all())
@@ -286,7 +265,7 @@ class GuidanceTests(unittest.TestCase):
         text.output_dim, image.output_dim, image.native_dim = 8, 8, 5
         Builder._create_openclip_encoders = staticmethod(lambda cfg: (text, image))
         for score_mode, feature_mode in product(("window", "local_3x3"), repeat=2):
-            cfg_data = dict(score_intra_attn_type=score_mode, feature_intra_attn_type=feature_mode)
+            cfg_data = dict(score_intra_attn_type=score_mode, feature_intra_attn_type=feature_mode, decoder_input_fusion_layers=3)
             refiner_cfg = Builder.validate_encoder_refiner_cfg(cfg_data)
             cfg = SegmentorBuildConfig(encoder_refiner_cfg=refiner_cfg, load_from_hf=False)
             cfg.openclip_cfg.enabled = True
@@ -295,7 +274,12 @@ class GuidanceTests(unittest.TestCase):
             self.assertEqual([layer.intra_attn_type for layer in refiner.layers], [score_mode, feature_mode, score_mode, feature_mode])
             self.assertFalse(hasattr(refiner, "sam_text_mean_proj"))
             self.assertFalse(hasattr(refiner, "clip_text_mean_proj"))
-            self.assertEqual(len([name for name, _ in refiner.named_modules() if name == "template_text_proj"]), 1)
+            self.assertFalse(hasattr(refiner, "template_text_proj"))
+            self.assertTrue(all(not hasattr(layer, "template_attention") for layer in refiner.layers))
+            self.assertEqual(len(refiner.decoder_input_fusion.layers), 3)
+        for invalid in (0, -1, 2.5, True, None):
+            with self.assertRaisesRegex(ValueError, "decoder_input_fusion_layers"):
+                Builder.validate_encoder_refiner_cfg(dict(decoder_input_fusion_layers=invalid))
         cfg.openclip_cfg.image_intermediate_layers = [3, 7]
         with self.assertRaisesRegex(ValueError, "include"):
             Builder.build_semantic_core_model(cfg)
