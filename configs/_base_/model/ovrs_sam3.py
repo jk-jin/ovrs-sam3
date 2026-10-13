@@ -116,11 +116,6 @@ model = dict(
         # Independently select "window" or four consecutive "local_3x3" steps.
         score_intra_attn_type="window",
         feature_intra_attn_type="window",
-        # Optional guidance is appended to Q/K only; each switch is independent.
-        score_intra_use_clip_mid=False,
-        score_inter_use_clip_text_mean=False,
-        feature_intra_use_sam_fpn=False,
-        feature_inter_use_sam_text_mean=False,
         window_size=12,
         shift_size=6,
 

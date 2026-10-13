@@ -175,7 +175,8 @@ class AlternatingAttentionTests(unittest.TestCase):
                         stack.enter_context(patch.object(attention, "forward", side_effect=update(str(index), index)))
                     stack.enter_context(patch.object(layer, "_ffn_feature_update", side_effect=lambda x: torch.full_like(x, 4)))
                     stack.enter_context(patch.object(layer, "_ffn_score_update", side_effect=lambda x: torch.full_like(x, 5)))
-                    out_feature, out_score = layer(feature, score)
+                    guide = torch.randn(1, 2, 256, 6, 6)
+                    out_feature, out_score = layer(feature, score, guide, guide, guide)
                 total = sum(range(1, len(steps) + 1))
                 torch.testing.assert_close(out_feature, feature + (3 if kind == "intra" else total) + 4)
                 torch.testing.assert_close(out_score, score + (total if kind == "intra" else 3) + 5)
@@ -205,7 +206,8 @@ class AlternatingAttentionTests(unittest.TestCase):
                 feature = torch.randn(1, 3, 8, 6, 6, requires_grad=True)
                 score = torch.randn_like(feature, requires_grad=True)
                 # Feature output alone must supervise the earlier score update.
-                out_feature, _ = layer(feature, score)
+                guide = torch.randn(1, 3, 256, 6, 6)
+                out_feature, _ = layer(feature, score, guide, guide, guide)
                 (out_feature * torch.randn_like(out_feature)).sum().backward()
                 for tensor in (feature, score):
                     self.assertTrue(torch.isfinite(tensor.grad).all())
@@ -224,7 +226,7 @@ class AlternatingAttentionTests(unittest.TestCase):
 
     def check_full_refiner_checkpoint(self, score_type, feature_type):
         plain = ClassConditionedEncoderRefiner(
-            FakeTextEncoder(), clip_dim=8, fusion_layers=4,
+            FakeTextEncoder(), clip_dim=8, clip_native_dim=5, fusion_layers=4,
             prompt_templates=["{}"] * 64, use_checkpoint=False,
             score_intra_attn_type=score_type, feature_intra_attn_type=feature_type,
         ).train()
@@ -250,10 +252,12 @@ class AlternatingAttentionTests(unittest.TestCase):
         clip = torch.randn(1, 8, 36, 36)
         target = torch.randn(1, 2, 256, 36, 36)
         outputs, input_grads = [], []
+        mids = [torch.randn(1, 5, 36, 36), torch.randn(1, 5, 36, 36)]
+        fpn = torch.randn(1, 256, 72, 72)
         for model in (plain, checked):
             image = clip.clone().requires_grad_()
             torch.manual_seed(91)  # Match dropout, including checkpoint recomputation.
-            out = model(encoder, image, ["building", "road"])
+            out = model(encoder, image, ["building", "road"], mids, (7, 15), fpn)
             self.assertEqual(tuple(out["refiner_features_36"].shape), (1, 2, 256, 36, 36))
             loss = (out["refiner_features_36"] * target).mean()
             loss.backward()

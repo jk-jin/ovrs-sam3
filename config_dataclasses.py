@@ -130,10 +130,6 @@ class EncoderRefinerConfig:
 
     score_intra_attn_type: str = "window"
     feature_intra_attn_type: str = "window"
-    score_intra_use_clip_mid: bool = False
-    score_inter_use_clip_text_mean: bool = False
-    feature_intra_use_sam_fpn: bool = False
-    feature_inter_use_sam_text_mean: bool = False
     window_size: int = 12
     shift_size: int = 6
 

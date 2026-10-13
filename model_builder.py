@@ -290,10 +290,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 raise ValueError(
                     f"encoder_refiner_cfg.{name} must be 'window' or 'local_3x3'."
                 )
-        for name in ("score_intra_use_clip_mid", "score_inter_use_clip_text_mean",
-                     "feature_intra_use_sam_fpn", "feature_inter_use_sam_text_mean"):
-            if not isinstance(getattr(cfg, name), bool):
-                raise ValueError(f"encoder_refiner_cfg.{name} must be a bool.")
         if "window" in (cfg.score_intra_attn_type, cfg.feature_intra_attn_type):
             if cfg.window_size <= 0 or cfg.refiner_hw % cfg.window_size != 0:
                 raise ValueError(
@@ -760,7 +756,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
     @classmethod
     def build_semantic_core_model(cls, cfg: SegmentorBuildConfig) -> nn.Module:
         refiner_cfg = cfg.encoder_refiner_cfg
-        if refiner_cfg.score_intra_use_clip_mid and not {7, 15}.issubset(cfg.openclip_cfg.image_intermediate_layers):
+        if not {7, 15}.issubset(cfg.openclip_cfg.image_intermediate_layers):
             raise ValueError("CLIP middle guidance requires image_intermediate_layers to include [7, 15].")
         bpe_path = resolve_bpe_path(cfg.bpe_path)
         compile_mode = "default" if cfg.compile else None
@@ -807,10 +803,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             encoder_refiner_score_embed_dim=int(refiner_cfg.score_embed_dim),
             encoder_refiner_score_intra_attn_type=refiner_cfg.score_intra_attn_type,
             encoder_refiner_feature_intra_attn_type=refiner_cfg.feature_intra_attn_type,
-            encoder_refiner_score_intra_use_clip_mid=refiner_cfg.score_intra_use_clip_mid,
-            encoder_refiner_score_inter_use_clip_text_mean=refiner_cfg.score_inter_use_clip_text_mean,
-            encoder_refiner_feature_intra_use_sam_fpn=refiner_cfg.feature_intra_use_sam_fpn,
-            encoder_refiner_feature_inter_use_sam_text_mean=refiner_cfg.feature_inter_use_sam_text_mean,
             encoder_refiner_window_size=int(refiner_cfg.window_size),
             encoder_refiner_shift_size=int(refiner_cfg.shift_size),
             encoder_refiner_use_checkpoint=bool(refiner_cfg.use_checkpoint),

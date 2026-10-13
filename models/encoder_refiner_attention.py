@@ -475,8 +475,30 @@ class LocalScoreAttention(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# EncoderRefinerLayer
+# ClipTemplateClassAttention
 # ---------------------------------------------------------------------------
+
+
+class ClipTemplateClassAttention(nn.Module):
+    """Across-class attention independently for each of the 64 template indices."""
+
+    def __init__(self, clip_dim: int = 768, num_heads: int = 8, dropout: float = 0.1):
+        super().__init__()
+        self.clip_dim = int(clip_dim)
+        if self.clip_dim <= 0 or num_heads <= 0 or self.clip_dim % num_heads:
+            raise ValueError("CLIP template channels must be positive and divisible by num_heads")
+        self.norm = nn.LayerNorm(self.clip_dim)
+        self.attention = nn.MultiheadAttention(self.clip_dim, num_heads, dropout=dropout, batch_first=True)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, original_templates: torch.Tensor) -> torch.Tensor:
+        if original_templates.ndim != 3 or tuple(original_templates.shape[1:]) != (64, self.clip_dim):
+            raise ValueError("CLIP templates must have shape [classes, 64, clip_dim]")
+        # Template index is the batch axis; attention tokens are the classes.
+        x = original_templates.transpose(0, 1)
+        normalized = self.norm(x)
+        update, _ = self.attention(normalized, normalized, normalized, need_weights=False)
+        return (x + self.dropout(update)).transpose(0, 1).contiguous()
 
 
 class EncoderRefinerLayer(nn.Module):
@@ -487,6 +509,9 @@ class EncoderRefinerLayer(nn.Module):
     score_attention_type="inter": inter-class attention updates score,
     then configured intra-class attention updates feature.
     Each stream independently chooses two windows or four local 3×3 steps.
+    Intra-class guidance is fixed: CLIP middle features for score, FPN36
+    for feature. Only score-inter layers own a template attention module;
+    the outer Refiner generates their guidance from original templates.
     Both finish with independent Feature FFN and Score FFN.
     """
 
@@ -501,10 +526,7 @@ class EncoderRefinerLayer(nn.Module):
         score_attention_type: str = "intra",
         score_intra_attn_type: str = "window",
         feature_intra_attn_type: str = "window",
-        score_intra_use_clip_mid: bool = False,
-        score_inter_use_clip_text_mean: bool = False,
-        feature_intra_use_sam_fpn: bool = False,
-        feature_inter_use_sam_text_mean: bool = False,
+        clip_dim: int = 768,
     ):
         super().__init__()
         if score_attention_type not in ("intra", "inter"):
@@ -519,12 +541,7 @@ class EncoderRefinerLayer(nn.Module):
         )
         class_value_stream = "feature" if score_attention_type == "intra" else "score"
         intra_value_stream = "score" if score_attention_type == "intra" else "feature"
-        self.use_intra_guidance = (
-            score_intra_use_clip_mid if score_attention_type == "intra" else feature_intra_use_sam_fpn
-        )
-        self.use_class_guidance = (
-            feature_inter_use_sam_text_mean if score_attention_type == "intra" else score_inter_use_clip_text_mean
-        )
+        self.use_class_guidance = score_attention_type == "inter"
         class_guidance_dim = 256 if self.use_class_guidance else 0
         self.class_attn = ClassScoreAttention(
             hidden_dim=hidden_dim,
@@ -539,20 +556,20 @@ class EncoderRefinerLayer(nn.Module):
                 hidden_dim=hidden_dim, score_embed_dim=score_embed_dim,
                 num_heads=num_heads, window_size=window_size, shift_size=0,
                 dropout=dropout, value_stream=intra_value_stream,
-                guidance_dim=256 if self.use_intra_guidance else 0,
+                guidance_dim=256,
             )
             self.window_attn_shifted = WindowScoreAttention(
                 hidden_dim=hidden_dim, score_embed_dim=score_embed_dim,
                 num_heads=num_heads, window_size=window_size, shift_size=shift_size,
                 dropout=dropout, value_stream=intra_value_stream,
-                guidance_dim=256 if self.use_intra_guidance else 0,
+                guidance_dim=256,
             )
         else:
             self.local_attn = nn.ModuleList([
                 LocalScoreAttention(
                     hidden_dim=hidden_dim, score_embed_dim=score_embed_dim,
                     num_heads=num_heads, dropout=dropout, value_stream=intra_value_stream,
-                    guidance_dim=256 if self.use_intra_guidance else 0,
+                    guidance_dim=256,
                 )
                 for _ in range(4)
             ])
@@ -577,11 +594,10 @@ class EncoderRefinerLayer(nn.Module):
         self.ffn_dropout_score = nn.Dropout(float(dropout))
         if self.use_class_guidance:
             self.class_norm_guidance = nn.LayerNorm(class_guidance_dim)
-        if self.use_intra_guidance:
-            if self.intra_attn_type == "window":
-                self.intra_norm_guidance = nn.ModuleList([nn.LayerNorm(256) for _ in range(2)])
-            else:
-                self.intra_norm_guidance = nn.ModuleList([nn.LayerNorm(256) for _ in range(4)])
+            self.template_attention = ClipTemplateClassAttention(clip_dim, num_heads, dropout)
+        self.intra_norm_guidance = nn.ModuleList([
+            nn.LayerNorm(256) for _ in range(2 if self.intra_attn_type == "window" else 4)
+        ])
 
     def _class_update(
         self,
@@ -602,7 +618,7 @@ class EncoderRefinerLayer(nn.Module):
         score: torch.Tensor,
         guidance: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        validate_guidance(guidance, feature, 256 if self.use_intra_guidance else 0)
+        validate_guidance(guidance, feature, 256)
         steps = (
             ((self.window_attn_regular, self.regular_norm_feature, self.regular_norm_score),
              (self.window_attn_shifted, self.shifted_norm_feature, self.shifted_norm_score))
@@ -613,7 +629,7 @@ class EncoderRefinerLayer(nn.Module):
             update = attention(
                 feature=apply_layer_norm_bcdhw(feature, feature_norm),
                 score_embed=apply_layer_norm_bcdhw(score, score_norm),
-                guidance=apply_layer_norm_bcdhw(guidance, self.intra_norm_guidance[index]) if guidance is not None else None,
+                guidance=apply_layer_norm_bcdhw(guidance, self.intra_norm_guidance[index]),
             )
             if self.score_attention_type == "intra":
                 score = score + update
@@ -652,17 +668,12 @@ class EncoderRefinerLayer(nn.Module):
         feature_36: torch.Tensor,
         score_embed_36: torch.Tensor,
         clip_mid_36: torch.Tensor | None = None,
-        clip_text_mean: torch.Tensor | None = None,
+        clip_template_guidance: torch.Tensor | None = None,
         sam_fpn_36: torch.Tensor | None = None,
-        sam_text_mean: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Update [B, C, 256, 36, 36] streams, score first then feature."""
         intra_guidance = clip_mid_36 if self.score_attention_type == "intra" else sam_fpn_36
-        class_guidance = sam_text_mean if self.score_attention_type == "intra" else clip_text_mean
-        if not self.use_intra_guidance:
-            intra_guidance = None
-        if not self.use_class_guidance:
-            class_guidance = None
+        class_guidance = clip_template_guidance if self.score_attention_type == "inter" else None
         if self.score_attention_type == "intra":
             feature_36, score_embed_36 = self._update_intra(feature_36, score_embed_36, intra_guidance)
             feature_36 = feature_36 + self._class_update(feature_36, score_embed_36, class_guidance)
