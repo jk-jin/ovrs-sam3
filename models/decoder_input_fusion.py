@@ -6,12 +6,21 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 
-class DecoderInputFusionLayer(nn.Module):
-    """One 72×72 layer: encoder concatenation, then semantic/detail fusion."""
+class DecoderInputFusion(nn.Module):
+    """Fuse Refiner36, original encoder72 and image-level FPN72.
 
-    def __init__(self):
+    The output replaces the last FPN level consumed by the original SAM3
+    Pixel Decoder. Semantic branch pairs the Refiner feature with the
+    original encoder72 feature; detail branch pairs the Refiner feature with
+    the image-level FPN72 feature. Both branches operate in 128-channel
+    compact space with independent standard 3×3 conv blocks and independent
+    Refiner projections, are summed with equal weight after projecting back
+    to 256 channels, and pass through a final 1×1 Conv.
+    """
+
+    def __init__(self, use_checkpoint: bool = True):
         super().__init__()
-        self.input_fusion = nn.Conv2d(512, 256, 1, bias=False)
+        self.use_checkpoint = bool(use_checkpoint)
         self.semantic_refiner_proj = self._projection()
         self.detail_refiner_proj = self._projection()
         self.encoder_proj = self._projection()
@@ -39,19 +48,22 @@ class DecoderInputFusionLayer(nn.Module):
             nn.GroupNorm(8, 128),
         )
 
-    def forward(
+    def _forward_impl(
         self,
-        input_feature_72: torch.Tensor,
+        refiner_feature_36: torch.Tensor,
         original_encoder_feature_72: torch.Tensor,
         sam_fpn_72: torch.Tensor,
     ) -> torch.Tensor:
         batch_size = sam_fpn_72.shape[0]
-        num_pairs = input_feature_72.shape[0]
+        num_pairs = refiner_feature_36.shape[0]
         num_prompts = num_pairs // batch_size
 
-        refiner_72 = self.input_fusion(torch.cat(
-            [input_feature_72, original_encoder_feature_72], dim=1
-        ))
+        refiner_72 = F.interpolate(
+            refiner_feature_36,
+            size=(72, 72),
+            mode="bilinear",
+            align_corners=False,
+        )
         semantic_input = (
             self.semantic_refiner_proj(refiner_72)
             + self.encoder_proj(original_encoder_feature_72)
@@ -70,23 +82,6 @@ class DecoderInputFusionLayer(nn.Module):
             self.semantic_out_proj(semantic_feature)
             + self.detail_out_proj(detail_feature)
         )
-
-
-class DecoderInputFusion(nn.Module):
-    """Upsample Refiner36 once and apply independent 72×72 fusion layers."""
-
-    def __init__(self, use_checkpoint: bool = True, num_layers: int = 2):
-        super().__init__()
-        if isinstance(num_layers, bool) or not isinstance(num_layers, int) or num_layers <= 0:
-            raise ValueError("num_layers must be a positive integer")
-        self.use_checkpoint = bool(use_checkpoint)
-        self.layers = nn.ModuleList([DecoderInputFusionLayer() for _ in range(num_layers)])
-
-    def _forward_impl(self, refiner_feature_36, original_encoder_feature_72, sam_fpn_72):
-        feature_72 = F.interpolate(refiner_feature_36, size=(72, 72), mode="bilinear", align_corners=False)
-        for layer in self.layers:
-            feature_72 = layer(feature_72, original_encoder_feature_72, sam_fpn_72)
-        return feature_72
 
     def forward(
         self,

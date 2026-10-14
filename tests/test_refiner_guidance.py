@@ -1,4 +1,4 @@
-"""CPU tests for fixed Q/K guidance and initial FFN anchors; no pretrained weights required."""
+"""CPU tests for fixed image Q/K guidance; no pretrained weights required."""
 import ast
 from contextlib import ExitStack
 from copy import deepcopy
@@ -72,59 +72,6 @@ class GuidanceTests(unittest.TestCase):
             clip_mid_layer_indices=(15, 7), sam_fpn_72=torch.randn(1, 256, 72, 72),
         )
 
-    def test_every_layer_uses_the_same_module_entry_anchors(self):
-        model = self.make_refiner()
-        inputs = self.inputs()
-        seen = []
-        with ExitStack() as stack:
-            for layer in model.layers:
-                stack.enter_context(layer.register_forward_pre_hook(lambda m, args, kwargs: seen.append(kwargs), with_kwargs=True))
-            out = model(**inputs)
-        expected = F.interpolate(inputs["encoder_features_72"].reshape(2, 256, 72, 72), size=(36, 36), mode="bilinear", align_corners=False).reshape(1, 2, 256, 36, 36)
-        self.assertEqual(len(seen), 4)
-        for supplied in seen:
-            torch.testing.assert_close(supplied["initial_feature_36"], expected)
-            self.assertIs(supplied["initial_feature_36"], seen[0]["initial_feature_36"])
-            self.assertIs(supplied["initial_score_embed_36"], out["clip_score_embed_36"])
-            self.assertTrue(supplied["initial_score_embed_36"].requires_grad)
-        self.assertGreater((seen[1]["feature_36"] - expected).abs().sum().item(), 0)
-        self.assertGreater((seen[1]["score_embed_36"] - out["clip_score_embed_36"]).abs().sum().item(), 0)
-
-    def test_ffn_concatenates_current_and_fixed_anchors_and_preserves_anchor_gradients(self):
-        layer = EncoderRefinerLayer(8, 8, 2, window_size=3, shift_size=1, dropout=0)
-        feature = torch.randn(1, 2, 8, 6, 6, requires_grad=True)
-        score = torch.randn_like(feature, requires_grad=True)
-        initial_feature = torch.randn_like(feature, requires_grad=True)
-        initial_score = torch.randn_like(feature, requires_grad=True)
-        seen = []
-        def record(name, x):
-            seen.append((name, x.clone()))
-            return x[:, :, :8] * 0
-        with (
-            patch("models.encoder_refiner_attention.apply_layer_norm_bcdhw", side_effect=lambda x, norm: x),
-            patch.object(layer, "_update_intra", side_effect=lambda f, s, g: (f + 2, s + 3)),
-            patch.object(layer, "_class_update", side_effect=lambda f, s: torch.ones_like(f) * 5),
-            patch.object(layer, "_ffn_feature_update", side_effect=lambda x: record("feature", x)),
-            patch.object(layer, "_ffn_score_update", side_effect=lambda x: record("score", x)),
-        ):
-            out_f, out_s = layer(feature, score, initial_feature_36=initial_feature, initial_score_embed_36=initial_score)
-        torch.testing.assert_close(seen[0][1], torch.cat([feature + 7, initial_feature], dim=2))
-        torch.testing.assert_close(seen[1][1], torch.cat([score + 3, initial_score], dim=2))
-        torch.testing.assert_close(out_f, feature + 7)
-        torch.testing.assert_close(out_s, score + 3)
-        self.assertEqual(layer.ffn_fc1_feature.in_features, 16)
-        self.assertEqual(layer.ffn_fc1_feature.out_features, 32)
-        with (
-            patch.object(layer, "_update_intra", side_effect=lambda f, s, g: (f, s)),
-            patch.object(layer, "_class_update", side_effect=lambda f, s: torch.zeros_like(f)),
-        ):
-            out_f, out_s = layer(feature, score, initial_feature_36=initial_feature, initial_score_embed_36=initial_score)
-        loss = (out_f * torch.randn_like(out_f)).mean() + (out_s * torch.randn_like(out_s)).mean()
-        loss.backward()
-        for tensor in (initial_feature, initial_score):
-            self.assertTrue(torch.isfinite(tensor.grad).all())
-            self.assertGreater(tensor.grad.abs().sum().item(), 0)
-
     def test_fixed_image_guidance_is_prepared_once_and_routes_to_the_correct_stream(self):
         model = self.make_refiner()
         data = self.inputs()
@@ -147,7 +94,7 @@ class GuidanceTests(unittest.TestCase):
                 torch.testing.assert_close(supplied["clip_mid_36"][:, cls], projected)
                 torch.testing.assert_close(supplied["sam_fpn_36"][:, cls], fpn)
 
-    def test_initial_anchor_and_image_branches_match_checkpoint_with_dropout(self):
+    def test_image_guidance_and_streams_match_checkpoint_with_dropout(self):
         plain = self.make_refiner("local_3x3", "window", dropout=0.1).train()
         checked = deepcopy(plain)
         checked.use_checkpoint = True
@@ -265,7 +212,7 @@ class GuidanceTests(unittest.TestCase):
         text.output_dim, image.output_dim, image.native_dim = 8, 8, 5
         Builder._create_openclip_encoders = staticmethod(lambda cfg: (text, image))
         for score_mode, feature_mode in product(("window", "local_3x3"), repeat=2):
-            cfg_data = dict(score_intra_attn_type=score_mode, feature_intra_attn_type=feature_mode, decoder_input_fusion_layers=3)
+            cfg_data = dict(score_intra_attn_type=score_mode, feature_intra_attn_type=feature_mode)
             refiner_cfg = Builder.validate_encoder_refiner_cfg(cfg_data)
             cfg = SegmentorBuildConfig(encoder_refiner_cfg=refiner_cfg, load_from_hf=False)
             cfg.openclip_cfg.enabled = True
@@ -276,10 +223,14 @@ class GuidanceTests(unittest.TestCase):
             self.assertFalse(hasattr(refiner, "clip_text_mean_proj"))
             self.assertFalse(hasattr(refiner, "template_text_proj"))
             self.assertTrue(all(not hasattr(layer, "template_attention") for layer in refiner.layers))
-            self.assertEqual(len(refiner.decoder_input_fusion.layers), 3)
-        for invalid in (0, -1, 2.5, True, None):
-            with self.assertRaisesRegex(ValueError, "decoder_input_fusion_layers"):
-                Builder.validate_encoder_refiner_cfg(dict(decoder_input_fusion_layers=invalid))
+            self.assertFalse(hasattr(refiner.decoder_input_fusion, "layers"))
+            self.assertFalse(hasattr(refiner.decoder_input_fusion, "input_fusion"))
+            self.assertFalse(hasattr(refiner_cfg, "decoder_input_fusion_layers"))
+            for layer in refiner.layers:
+                self.assertEqual(layer.ffn_norm_feature.normalized_shape, (256,))
+                self.assertEqual(layer.ffn_norm_score.normalized_shape, (256,))
+                self.assertEqual(layer.ffn_fc1_feature.in_features, 256)
+                self.assertEqual(layer.ffn_fc1_score.in_features, 256)
         cfg.openclip_cfg.image_intermediate_layers = [3, 7]
         with self.assertRaisesRegex(ValueError, "include"):
             Builder.build_semantic_core_model(cfg)

@@ -488,8 +488,7 @@ class EncoderRefinerLayer(nn.Module):
     then configured intra-class attention updates feature.
     Each stream independently chooses two windows or four local 3×3 steps.
     Intra-class guidance is fixed: CLIP middle features for score, FPN36
-    for feature. Both class attention kinds use score/feature only. FFNs concatenate
-    their current stream with the fixed, undetached module-entry stream.
+    for feature. Both class attention kinds use score/feature only.
     Both finish with independent Feature FFN and Score FFN.
     """
 
@@ -558,13 +557,13 @@ class EncoderRefinerLayer(nn.Module):
         else:
             self.local_norm_feature = nn.ModuleList([nn.LayerNorm(hidden_dim) for _ in range(4)])
             self.local_norm_score = nn.ModuleList([nn.LayerNorm(score_embed_dim) for _ in range(4)])
-        self.ffn_norm_feature = nn.LayerNorm(hidden_dim * 2)
-        self.ffn_norm_score = nn.LayerNorm(score_embed_dim * 2)
+        self.ffn_norm_feature = nn.LayerNorm(hidden_dim)
+        self.ffn_norm_score = nn.LayerNorm(score_embed_dim)
 
-        self.ffn_fc1_feature = nn.Linear(hidden_dim * 2, hidden_dim * 4)
+        self.ffn_fc1_feature = nn.Linear(hidden_dim, hidden_dim * 4)
         self.ffn_fc2_feature = nn.Linear(hidden_dim * 4, hidden_dim)
         self.ffn_dropout_feature = nn.Dropout(float(dropout))
-        self.ffn_fc1_score = nn.Linear(score_embed_dim * 2, score_embed_dim * 4)
+        self.ffn_fc1_score = nn.Linear(score_embed_dim, score_embed_dim * 4)
         self.ffn_fc2_score = nn.Linear(score_embed_dim * 4, score_embed_dim)
         self.ffn_dropout_score = nn.Dropout(float(dropout))
         self.intra_norm_guidance = nn.ModuleList([
@@ -638,15 +637,9 @@ class EncoderRefinerLayer(nn.Module):
         score_embed_36: torch.Tensor,
         clip_mid_36: torch.Tensor | None = None,
         sam_fpn_36: torch.Tensor | None = None,
-        initial_feature_36: torch.Tensor | None = None,
-        initial_score_embed_36: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Update [B, C, 256, 36, 36] streams, score first then feature."""
         intra_guidance = clip_mid_36 if self.score_attention_type == "intra" else sam_fpn_36
-        if initial_feature_36 is None or initial_feature_36.shape != feature_36.shape:
-            raise ValueError("initial_feature_36 must match the feature stream")
-        if initial_score_embed_36 is None or initial_score_embed_36.shape != score_embed_36.shape:
-            raise ValueError("initial_score_embed_36 must match the score stream")
         if self.score_attention_type == "intra":
             feature_36, score_embed_36 = self._update_intra(feature_36, score_embed_36, intra_guidance)
             feature_36 = feature_36 + self._class_update(feature_36, score_embed_36)
@@ -655,9 +648,9 @@ class EncoderRefinerLayer(nn.Module):
             feature_36, score_embed_36 = self._update_intra(feature_36, score_embed_36, intra_guidance)
 
         feature_36 = feature_36 + self._ffn_feature_update(
-            apply_layer_norm_bcdhw(torch.cat([feature_36, initial_feature_36], dim=2), self.ffn_norm_feature)
+            apply_layer_norm_bcdhw(feature_36, self.ffn_norm_feature)
         )
         score_embed_36 = score_embed_36 + self._ffn_score_update(
-            apply_layer_norm_bcdhw(torch.cat([score_embed_36, initial_score_embed_36], dim=2), self.ffn_norm_score)
+            apply_layer_norm_bcdhw(score_embed_36, self.ffn_norm_score)
         )
         return feature_36, score_embed_36

@@ -1,4 +1,4 @@
-"""CPU checks for stacked 72×72 semantic/detail fusion."""
+"""CPU checks for single-stage 72×72 semantic/detail fusion."""
 from contextlib import ExitStack
 from copy import deepcopy
 import unittest
@@ -25,38 +25,31 @@ class DecoderFusionTests(unittest.TestCase):
             torch.randn(batch, 256, 72, 72),
         )
 
-    def test_stack_upsamples_once_and_each_layer_reuses_original_encoder(self):
+    def test_single_fusion_upsamples_once_and_routes_original_inputs(self):
         model = DecoderInputFusion(use_checkpoint=False).eval()
-        self.assertEqual(len(model.layers), 2)
-        self.assertIsNot(model.layers[0].input_fusion, model.layers[1].input_fusion)
+        self.assertFalse(hasattr(model, "layers"))
+        self.assertFalse(hasattr(model, "input_fusion"))
         refiner, encoder, fpn = self.inputs()
-        original = encoder.clone()
-        concatenated, mixed, branch_inputs, stage_outputs, encoder_inputs, fpn_inputs = [], [], [], [], [], []
+        original_encoder, original_fpn = encoder.clone(), fpn.clone()
+        branch_inputs, encoder_inputs, fpn_inputs = [], [], []
         interpolate = F.interpolate
         with ExitStack() as stack:
             resize = stack.enter_context(patch("models.decoder_input_fusion.F.interpolate", wraps=interpolate))
-            for layer in model.layers:
-                stack.enter_context(layer.input_fusion.register_forward_pre_hook(lambda m, args: concatenated.append(args[0])))
-                stack.enter_context(layer.input_fusion.register_forward_hook(lambda m, args, out: mixed.append(out)))
-                for projection in (layer.semantic_refiner_proj, layer.detail_refiner_proj):
-                    stack.enter_context(projection.register_forward_pre_hook(lambda m, args: branch_inputs.append(args[0])))
-                stack.enter_context(layer.encoder_proj.register_forward_pre_hook(lambda m, args: encoder_inputs.append(args[0])))
-                stack.enter_context(layer.fpn_proj.register_forward_pre_hook(lambda m, args: fpn_inputs.append(args[0])))
-                stack.enter_context(layer.register_forward_hook(lambda m, args, out: stage_outputs.append(out)))
+            for projection in (model.semantic_refiner_proj, model.detail_refiner_proj):
+                stack.enter_context(projection.register_forward_pre_hook(lambda m, args: branch_inputs.append(args[0])))
+            stack.enter_context(model.encoder_proj.register_forward_pre_hook(lambda m, args: encoder_inputs.append(args[0])))
+            stack.enter_context(model.fpn_proj.register_forward_pre_hook(lambda m, args: fpn_inputs.append(args[0])))
             with torch.no_grad():
                 result = model(refiner, encoder, fpn)
             self.assertEqual(resize.call_count, 1)
         self.assertEqual(tuple(result.shape), (2, 256, 72, 72))
-        expected_first = interpolate(refiner, size=(72, 72), mode="bilinear", align_corners=False)
-        torch.testing.assert_close(concatenated[0][:, :256], expected_first)
-        torch.testing.assert_close(concatenated[1][:, :256], stage_outputs[0])
-        for index in range(2):
-            torch.testing.assert_close(concatenated[index][:, 256:], original)
-            self.assertIs(encoder_inputs[index], encoder)
-            self.assertIs(fpn_inputs[index], fpn)
-            self.assertIs(branch_inputs[index * 2], mixed[index])
-            self.assertIs(branch_inputs[index * 2 + 1], mixed[index])
-        torch.testing.assert_close(encoder, original, rtol=0, atol=0)
+        expected = interpolate(refiner, size=(72, 72), mode="bilinear", align_corners=False)
+        torch.testing.assert_close(branch_inputs[0], expected)
+        self.assertIs(branch_inputs[0], branch_inputs[1])
+        self.assertIs(encoder_inputs[0], encoder)
+        self.assertIs(fpn_inputs[0], fpn)
+        torch.testing.assert_close(encoder, original_encoder, rtol=0, atol=0)
+        torch.testing.assert_close(fpn, original_fpn, rtol=0, atol=0)
 
     def test_prompt_chunking_preserves_per_image_fpn_broadcast(self):
         model = DecoderInputFusion(use_checkpoint=False).eval()
@@ -68,7 +61,7 @@ class DecoderFusionTests(unittest.TestCase):
                 chunks.append(model(refiner[indices], encoder[indices], fpn))
         torch.testing.assert_close(whole, torch.stack(chunks, dim=1))
 
-    def test_checkpoint_matches_outputs_and_gradients_through_both_layers(self):
+    def test_checkpoint_matches_outputs_and_gradients_through_both_branches(self):
         plain = DecoderInputFusion(use_checkpoint=False).train()
         checked = deepcopy(plain)
         checked.use_checkpoint = True
@@ -83,10 +76,9 @@ class DecoderFusionTests(unittest.TestCase):
             grads.append(refiner.grad)
             self.assertTrue(torch.isfinite(refiner.grad).all())
             self.assertGreater(refiner.grad.abs().sum().item(), 0)
-            for layer in model.layers:
-                for projection in (layer.input_fusion, layer.semantic_out_proj, layer.detail_out_proj):
-                    self.assertTrue(torch.isfinite(projection.weight.grad).all())
-                    self.assertGreater(projection.weight.grad.abs().sum().item(), 0)
+            for projection in (model.semantic_refiner_proj[0], model.detail_refiner_proj[0], model.semantic_out_proj, model.detail_out_proj):
+                self.assertTrue(torch.isfinite(projection.weight.grad).all())
+                self.assertGreater(projection.weight.grad.abs().sum().item(), 0)
         torch.testing.assert_close(outputs[0], outputs[1])
         torch.testing.assert_close(grads[0], grads[1])
         for (name, first), (other_name, second) in zip(plain.named_parameters(), checked.named_parameters()):
@@ -95,12 +87,7 @@ class DecoderFusionTests(unittest.TestCase):
         self.assertIsNone(data[1].grad)
         self.assertIsNone(data[2].grad)
 
-    def test_layer_count_and_entry_shapes_are_validated(self):
-        for invalid in (0, -1, 2.5, True, None):
-            with self.assertRaisesRegex(ValueError, "positive integer"):
-                DecoderInputFusion(num_layers=invalid)
-        for count in (1, 3):
-            self.assertEqual(len(DecoderInputFusion(num_layers=count).layers), count)
+    def test_entry_shapes_are_validated(self):
         model = DecoderInputFusion(use_checkpoint=False)
         data = list(self.inputs())
         for index, shape in ((0, (2, 256, 72, 72)), (1, (1, 256, 72, 72)), (2, (3, 256, 72, 72))):

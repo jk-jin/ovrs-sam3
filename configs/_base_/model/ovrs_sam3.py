@@ -105,7 +105,6 @@ model = dict(
     encoder_refiner_cfg=dict(
         enabled=True,
         fusion_layers=4,  # A/B/A/B: score intra/inter, then feature inter/intra.
-        decoder_input_fusion_layers=2,
         num_heads=8,
         dropout=0.1,
         hidden_dim=256,
