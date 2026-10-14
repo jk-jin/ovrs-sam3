@@ -104,7 +104,7 @@ model = dict(
 
     encoder_refiner_cfg=dict(
         enabled=True,
-        fusion_layers=4,
+        fusion_layers=4,  # A/B/A/B: score intra/inter, then feature inter/intra.
         num_heads=8,
         dropout=0.1,
         hidden_dim=256,
@@ -113,6 +113,9 @@ model = dict(
         refiner_hw=36,
         encoder_hw=72,
 
+        # Independently select "window" or four consecutive "local_3x3" steps.
+        score_intra_attn_type="local_3x3",
+        feature_intra_attn_type="local_3x3",
         window_size=12,
         shift_size=6,
 

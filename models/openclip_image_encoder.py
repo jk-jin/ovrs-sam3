@@ -527,8 +527,13 @@ class OpenCLIPImageEncoder(nn.Module):
     # Public encode methods
     # ------------------------------------------------------------------
 
-    def encode_image_with_intermediate(self, images: torch.Tensor) -> dict:
+    def encode_image_with_intermediate(
+        self, images: torch.Tensor, keep_intermediate_grad: bool = False,
+    ) -> dict:
         """
+        keep_intermediate_grad preserves middle-feature gradients only when
+        the image branch is already trainable and autograd is enabled.
+
         Returns:
             {
                 "feat_map":          [B, D_clip, 36, 36],
@@ -556,12 +561,16 @@ class OpenCLIPImageEncoder(nn.Module):
             dense_tokens, grid_h=grid_h, grid_w=grid_w
         )
 
-        mid_features_out = [x.detach().contiguous() for x in mid_features]
+        mid_features_out = [
+            x.contiguous() if keep_intermediate_grad and grad_enabled else x.detach().contiguous()
+            for x in mid_features
+        ]
 
         return {
             "feat_map": feat_map,
             "mid_features": mid_features_out,
-            "mid_layer_indices": self.intermediate_layers,
+            # Features are collected in transformer traversal order.
+            "mid_layer_indices": tuple(sorted(set(self.intermediate_layers))),
         }
 
     # ------------------------------------------------------------------
@@ -609,6 +618,7 @@ class OpenCLIPImageEncoder(nn.Module):
         self,
         raw_images: List[torch.Tensor],
         device: torch.device,
+        keep_intermediate_grad: bool = False,
     ) -> dict:
         """
         Full raw-image-to-dense-CLIP-features pipeline.
@@ -621,7 +631,7 @@ class OpenCLIPImageEncoder(nn.Module):
             }
         """
         images = self.preprocess_raw_images(raw_images=raw_images, device=device)
-        return self.encode_image_with_intermediate(images)
+        return self.encode_image_with_intermediate(images, keep_intermediate_grad=keep_intermediate_grad)
 
     def forward(self, images: torch.Tensor) -> dict:
         return self.encode_image_with_intermediate(images)

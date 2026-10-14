@@ -43,6 +43,8 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_dropout: float = 0.1,
         encoder_refiner_hidden_dim: int = 256,
         encoder_refiner_score_embed_dim: int = 256,
+        encoder_refiner_score_intra_attn_type: str = "window",
+        encoder_refiner_feature_intra_attn_type: str = "window",
         encoder_refiner_window_size: int = 12,
         encoder_refiner_shift_size: int = 6,
         encoder_refiner_use_checkpoint: bool = True,
@@ -108,6 +110,9 @@ class Sam3Image(torch.nn.Module):
             hidden_dim=int(encoder_refiner_hidden_dim),
             clip_dim=self.clip_align_dim,
             score_embed_dim=int(encoder_refiner_score_embed_dim),
+            score_intra_attn_type=encoder_refiner_score_intra_attn_type,
+            feature_intra_attn_type=encoder_refiner_feature_intra_attn_type,
+            clip_native_dim=self.clip_image_native_dim,
             num_heads=int(encoder_refiner_num_heads),
             window_size=int(encoder_refiner_window_size),
             shift_size=int(encoder_refiner_shift_size),
@@ -244,6 +249,7 @@ class Sam3Image(torch.nn.Module):
         clip_out = self.clip_image_encoder.encode_raw_images(
             raw_images=input.raw_images,
             device=device,
+            keep_intermediate_grad=True,
         )
 
         if not isinstance(clip_out, dict):
@@ -299,7 +305,10 @@ class Sam3Image(torch.nn.Module):
                     f"clip_mid_features[{i}] spatial size mismatch: "
                     f"{tuple(feat.shape[-2:])} vs {clip_grid_hw}."
                 )
-            clean_mid_features.append(feat.detach().contiguous())
+            clean_mid_features.append(
+                feat.contiguous() if keep_image_graph
+                else feat.detach().contiguous()
+            )
 
         return {
             "clip_image_feat_map_native": clip_feat_map,
@@ -352,7 +361,6 @@ class Sam3Image(torch.nn.Module):
         encoder_feature_chunks: list[torch.Tensor] = []
         chunk_class_counts: list[int] = []
         merged_class_ids: list[int] = []
-        sam_text_mean_chunks: list[torch.Tensor] = []
 
         for start in range(0, num_classes, chunk_size):
             end = min(start + chunk_size, num_classes)
@@ -395,7 +403,6 @@ class Sam3Image(torch.nn.Module):
             )
 
             encoder_feature_chunks.append(chunk_out["encoder_features_72"])
-            sam_text_mean_chunks.append(chunk_out["sam_text_mean"])
             merged_class_ids.extend(chunk_class_ids)
             chunk_class_counts.append(num_chunk_classes)
 
@@ -418,61 +425,17 @@ class Sam3Image(torch.nn.Module):
                 f"got {tuple(cross_attended_encoder_features_72.shape[:2])}."
             )
 
-        return {
+        cache = {
             "cross_attended_encoder_features_72": cross_attended_encoder_features_72,
             "backbone_fpn": backbone_fpn,
             "clip_image_feat_map": clip_image_cache["clip_image_feat_map_native"],
-            "sam_text_mean": torch.cat(sam_text_mean_chunks, dim=1),
             OUTPUT_KEYS.clip_mid_features: clip_image_cache[OUTPUT_KEYS.clip_mid_features],
             "clip_mid_layer_indices": clip_image_cache["clip_mid_layer_indices"],
             "class_names": class_texts,
             "class_ids": merged_class_ids,
             "chunk_class_counts": chunk_class_counts,
         }
-
-    @staticmethod
-    def _masked_mean_prompt_tokens(
-        prompt: torch.Tensor,
-        prompt_mask: torch.Tensor,
-        batch_size: int,
-        num_chunk_classes: int,
-    ) -> torch.Tensor:
-        if prompt.ndim != 3:
-            raise ValueError(
-                f"prompt must be [T, B*C_chunk, D], got {tuple(prompt.shape)}."
-            )
-        if prompt_mask.ndim != 2:
-            raise ValueError(
-                f"prompt_mask must be [B*C_chunk, T], got {tuple(prompt_mask.shape)}."
-            )
-
-        token_len, pair_count, hidden_dim = prompt.shape
-        expected_pairs = batch_size * num_chunk_classes
-
-        if pair_count != expected_pairs:
-            raise ValueError(
-                f"prompt pair count mismatch: expected {expected_pairs}, "
-                f"got {pair_count}."
-            )
-
-        if tuple(prompt_mask.shape) != (expected_pairs, token_len):
-            raise ValueError(
-                f"prompt_mask shape mismatch: expected {(expected_pairs, token_len)}, "
-                f"got {tuple(prompt_mask.shape)}."
-            )
-
-        tokens = prompt.transpose(0, 1)  # [B*C_chunk, T, D]
-
-        valid = (~prompt_mask.bool()).to(device=tokens.device, dtype=tokens.dtype).unsqueeze(-1)
-        denom = valid.sum(dim=1).clamp_min(1.0)
-
-        mean = (tokens * valid).sum(dim=1) / denom  # [B*C_chunk, D]
-
-        return mean.reshape(
-            batch_size,
-            num_chunk_classes,
-            hidden_dim,
-        ).contiguous()
+        return cache
 
     def _hidden_states_to_feature_72(
         self,
@@ -564,15 +527,19 @@ class Sam3Image(torch.nn.Module):
         self,
         cross_attended_encoder_features_72: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
-        sam_text_mean: torch.Tensor,
         class_names: List[str],
+        clip_mid_features: list[torch.Tensor] | None = None,
+        clip_mid_layer_indices: tuple[int, ...] | None = None,
+        sam_fpn_72: torch.Tensor | None = None,
     ) -> Dict[str, torch.Tensor]:
         """Run the 36×36 Refiner on all classes simultaneously."""
         return self.encoder_refiner(
             encoder_features_72=cross_attended_encoder_features_72,
             clip_image_feat_map=clip_image_feat_map,
-            sam_text_mean=sam_text_mean,
             class_names=class_names,
+            clip_mid_features=clip_mid_features,
+            clip_mid_layer_indices=clip_mid_layer_indices,
+            sam_fpn_72=sam_fpn_72,
         )
 
     def run_encoder_refiner_lowres_from_cache(
@@ -590,7 +557,6 @@ class Sam3Image(torch.nn.Module):
             "cross_attended_encoder_features_72"
         ]
         clip_image_feat_map = encoder_refiner_cache["clip_image_feat_map"]
-        sam_text_mean = encoder_refiner_cache["sam_text_mean"]
 
         cached_class_names = list(encoder_refiner_cache["class_names"])
         batch_class_names = list(batch.find_text_batch)
@@ -604,8 +570,10 @@ class Sam3Image(torch.nn.Module):
                 cross_attended_encoder_features_72
             ),
             clip_image_feat_map=clip_image_feat_map,
-            sam_text_mean=sam_text_mean,
             class_names=batch_class_names,
+            clip_mid_features=encoder_refiner_cache[OUTPUT_KEYS.clip_mid_features],
+            clip_mid_layer_indices=encoder_refiner_cache["clip_mid_layer_indices"],
+            sam_fpn_72=encoder_refiner_cache["backbone_fpn"][2],
         )
 
         result: Dict[str, torch.Tensor] = {
@@ -921,16 +889,8 @@ class Sam3Image(torch.nn.Module):
                 num_chunk_classes=num_chunk_classes,
             )
 
-            sam_text_mean = self._masked_mean_prompt_tokens(
-                prompt=prompt,
-                prompt_mask=prompt_mask,
-                batch_size=batch_size,
-                num_chunk_classes=num_chunk_classes,
-            )
-
         return {
             "encoder_features_72": encoder_features_72,
-            "sam_text_mean": sam_text_mean,
         }
 
     def forward(self, input: BatchedDatapoint) -> Dict[str, torch.Tensor]:
