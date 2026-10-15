@@ -144,5 +144,8 @@ model = dict(
         eps=1e-6,
         sam3_mask_distill_weight=0.5,
         sam3_mask_distill_boundary_width=3,
+        confidence_bce_weight=0.05,  # 0 disables hard self-target BCE.
+        confidence_bce_threshold=0.5,
+        confidence_bce_present_only=True,  # False selects all prompts.
     ),
 )

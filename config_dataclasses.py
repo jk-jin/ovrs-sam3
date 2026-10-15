@@ -148,6 +148,12 @@ class SemanticCriterionConfig:
     sam3_mask_distill_weight: float = 0.05
     sam3_mask_distill_boundary_width: int = 2
 
+    # Hard self-target BCE over the full output, including ignore pixels.
+    # A zero weight disables this loss.
+    confidence_bce_weight: float = 0.05
+    confidence_bce_threshold: float = 0.5
+    confidence_bce_present_only: bool = True
+
 
 @dataclass
 class AdapterConfig:

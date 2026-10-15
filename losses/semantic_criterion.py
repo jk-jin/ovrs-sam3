@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Dict, Optional
 
 import torch
@@ -46,6 +47,9 @@ class SemanticStreamingContext:
     # Number of valid pixels multiplied by P.
     total_valid_pixels: int
 
+    # Full spatial extent times selected image-prompt pairs (ignore included).
+    confidence_pixel_denom: int
+
     sam3_mask_distill_weight: float
 
 
@@ -64,11 +68,25 @@ class SemanticCriterion(nn.Module):
            - Only present image-prompt pairs
            - All valid GT pixels plus a configurable class-specific
              outer boundary restricted to ignore pixels
+
+        4. Full-image hard self-target BCE on final_logits
+           - Detached sigmoid probabilities >= threshold become target 1
+           - All spatial positions, including ignore pixels
+           - All prompts or only GT-present image-prompt pairs
     """
 
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
         super().__init__()
         self.cfg = cfg or SemanticCriterionConfig()
+
+        confidence_weight = float(self.cfg.confidence_bce_weight)
+        if not math.isfinite(confidence_weight) or confidence_weight < 0.0:
+            raise ValueError("confidence_bce_weight must be finite and >= 0.")
+        confidence_threshold = float(self.cfg.confidence_bce_threshold)
+        if not 0.0 < confidence_threshold < 1.0:
+            raise ValueError("confidence_bce_threshold must be between 0 and 1.")
+        if not isinstance(self.cfg.confidence_bce_present_only, bool):
+            raise TypeError("confidence_bce_present_only must be a bool.")
 
         distill_weight = float(self.cfg.sam3_mask_distill_weight)
         if distill_weight < 0.0:
@@ -277,6 +295,15 @@ class SemanticCriterion(nn.Module):
             presence_target.sum().item()
         )
 
+        selected_pairs = (
+            num_present_pairs
+            if self.cfg.confidence_bce_present_only
+            else int(label_map.shape[0]) * num_prompt_channels
+        )
+        confidence_pixel_denom = (
+            selected_pairs * int(label_map.shape[-2]) * int(label_map.shape[-1])
+        )
+
         boundary_width = int(
             self.cfg.sam3_mask_distill_boundary_width
         )
@@ -349,6 +376,7 @@ class SemanticCriterion(nn.Module):
             num_present_pairs=num_present_pairs,
             distill_pixel_denom=distill_pixel_denom,
             total_valid_pixels=total_valid_pixels,
+            confidence_pixel_denom=confidence_pixel_denom,
             sam3_mask_distill_weight=float(
                 self.cfg.sam3_mask_distill_weight
             ),
@@ -498,11 +526,38 @@ class SemanticCriterion(nn.Module):
             distill_weight * distill_contribution
         )
 
+        # ---- Full-image hard self-target BCE (ignore pixels included) ----
+        confidence_weight = float(self.cfg.confidence_bce_weight)
+        if confidence_weight > 0.0 and context.confidence_pixel_denom > 0:
+            hard_target = (
+                final_logits_chunk.detach().float().sigmoid()
+                >= float(self.cfg.confidence_bce_threshold)
+            ).to(dtype=dtype)
+            confidence_per_pixel = F.binary_cross_entropy_with_logits(
+                final_logits_chunk,
+                hard_target,
+                reduction="none",
+            )
+            if self.cfg.confidence_bce_present_only:
+                confidence_per_pixel = confidence_per_pixel * present_mask[
+                    :, :, None, None
+                ].to(dtype=confidence_per_pixel.dtype)
+            confidence_contribution = (
+                confidence_per_pixel.sum() / context.confidence_pixel_denom
+            )
+        else:
+            confidence_contribution = zero
+
+        weighted_confidence_contribution = (
+            confidence_weight * confidence_contribution
+        )
+
         # ---- Total ----
         chunk_total = (
             float(self.cfg.final_balanced_bce_weight) * plain_bce_contribution
             + dice_weight * dice_contribution
             + weighted_distill_contribution
+            + weighted_confidence_contribution
         )
 
         return {
@@ -510,6 +565,8 @@ class SemanticCriterion(nn.Module):
             "loss_final_dice": dice_contribution,
             "loss_sam3_mask_distill_bce": distill_contribution,
             "loss_sam3_mask_distill_weighted": weighted_distill_contribution,
+            "loss_confidence_bce": confidence_contribution,
+            "loss_confidence_weighted": weighted_confidence_contribution,
             "total_loss": chunk_total,
         }
 

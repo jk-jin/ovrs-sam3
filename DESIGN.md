@@ -401,6 +401,22 @@ loss_final_bce = (bce_per_pixel * valid_mask).sum() / total_valid_pixels
 14. 分母是全部存在提示对应的有效像素与类别外环像素总数（全局分母，不按 chunk 单独计算）。
 15. 多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
 
+**全图确定性 BCE**（基础配置 `confidence_bce_weight=0.05`）：
+
+使用学生最终 `final_logits` 生成硬伪标签，再监督同一次前向的输出，使概率趋近 0 或 1：
+
+* 将 `final_logits.detach()` 转为 float32 后做独立 sigmoid；概率大于或等于 `confidence_bce_threshold` 的位置标为 1，其余标为 0。目标不参与梯度计算。
+* 原始、保留梯度的 logits 与硬目标计算 `binary_cross_entropy_with_logits`，不对 logits 做阈值截断。
+* 覆盖全部 288×288 空间位置，包括 GT 为 255 的忽略区域，不使用主 BCE 的有效像素掩码或蒸馏外环掩码。
+* `confidence_bce_present_only=True`（默认）按每张图的 GT 选择存在类别；存在性沿用当前损失分辨率上的 GT 判定，并映射到每个提示。选中后监督该提示的全图。
+* `confidence_bce_present_only=False` 对所有图像—提示对启用，包括不存在类别。
+* 同一类别的多个提示分别从自己的预测生成硬目标，并按提示独立计数，不做提示合并或跨类别 softmax。
+* 全局分母为选中的图像—提示对数乘输出高度、宽度；每个 chunk 贡献相加，等价于一次性计算全部提示。
+* 无选中提示时返回可反向传播的零损失；全图标签均为 255 时，仅存在类别模式无选中提示，而所有类别模式仍计算全图损失。
+* 阈值默认 0.5，要求严格处于 0 和 1 之间；权重必须有限且非负，设为 0 时跳过本项计算并记录零值。
+
+本项强化当前预测的确定性，也可能强化错误预测，因此基础配置使用较小权重。阈值调高会增加目标为 0 的位置，调低会增加目标为 1 的位置。
+
 总损失：
 
 ```python
@@ -408,10 +424,13 @@ total_loss = (
     1.0 * loss_final_bce
     + 0.0 * loss_final_dice
     + 0.5 * loss_sam3_mask_distill_bce
+    + 0.05 * loss_confidence_bce
 )
 ```
 
 `loss_sam3_mask_distill_bce` 为未经权重的原始蒸馏 BCE；`loss_sam3_mask_distill_weighted` 为真正加入总损失的加权贡献。蒸馏权重在整个训练期间固定不变。
+
+`loss_confidence_bce` 为未经权重的确定性 BCE，`loss_confidence_weighted` 为其加权贡献；两项均在训练日志中跨 chunk 累加。
 
 上面的数值取自 `configs/_base_/model/ovrs_sam3.py` 的当前取值（蒸馏权重 0.5、外环宽度 3）。`config_dataclasses.py` 中的通用默认值不同，实验实际使用的数值取决于最终合并配置。
 
@@ -493,6 +512,8 @@ Ctrl+C 使用 Python 默认 `KeyboardInterrupt`。训练和验证均立即退出
 | `loss_final_bce` | 朴素 BCE，所有有效像素等权全局均值（跨 chunk 累加后求均值） |
 | `loss_sam3_mask_distill_bce` | 未经权重的原始蒸馏 BCE（跨 chunk 累加后求均值） |
 | `loss_sam3_mask_distill_weighted` | 真正加入总损失的加权蒸馏贡献（跨 chunk 累加后求均值） |
+| `loss_confidence_bce` | 全图硬伪标签 BCE，按选中提示的全部空间位置归一化 |
+| `loss_confidence_weighted` | 加入总损失的加权确定性 BCE 贡献 |
 
 ## 10. 配置与主要文件
 
@@ -525,7 +546,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 | `models/score_embeddings.py`          | 64 模板相似度图、归一化 CLIP 融合和空间卷积增强 |
 | `models/openclip_image_encoder.py`    | 36×36 dense RemoteCLIP 图像特征              |
 | `models/openclip_text_encoder.py`     | 模板文本编码、micro-batch 与梯度控制                 |
-| `losses/semantic_criterion.py`        | Streaming 正负平衡 BCE、Dice 和 SAM3 teacher 蒸馏 |
+| `losses/semantic_criterion.py`        | Streaming 朴素 BCE、Dice、SAM3 teacher 蒸馏及全图确定性 BCE |
 | `engine/trainer.py`                   | 高分辨率逐 chunk loss/backward 与 proxy 梯度回传 |
 | `engine/checkpoint.py`                | 安全、原子、严格的 checkpoint 保存与加载               |
 | `engine/runtime_state.py`             | RNG 捕获与恢复                                |
