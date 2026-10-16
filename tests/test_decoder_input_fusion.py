@@ -10,7 +10,6 @@ import unittest
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torch.utils.checkpoint import checkpoint
 
 from models.decoder_input_fusion import DecoderInputFusion
 from models.encoder_refiner import ClassConditionedEncoderRefiner
@@ -18,7 +17,7 @@ from models.encoder_refiner_attention import EncoderRefinerLayer
 from models.maskformer_segmentation import UniversalSegmentationHead
 
 ROOT = Path(__file__).resolve().parents[1]
-KEYS = SimpleNamespace(final_logits='final_logits', sam3_teacher_logits='teacher_logits')
+KEYS = SimpleNamespace(final_logits='final_logits', sam3_teacher_logits='teacher_logits', clip_mid_features='clip_mid_features')
 
 
 def sam_method(name):
@@ -86,6 +85,10 @@ def inputs(num_prompts=2):
     )
 
 
+def refiner_inputs(data):
+    return {k: v for k, v in data.items() if k not in ('prompt_features', 'prompt_mask')}
+
+
 class ConstantAttention(nn.Module):
     def __init__(self, value):
         super().__init__()
@@ -103,7 +106,7 @@ class PromptRefinerTest(unittest.TestCase):
     def setUp(self):
         torch.manual_seed(9)
 
-    def test_feature_replacement_has_no_outer_residual(self):
+    def test_original_attention_and_both_ffn_residuals_are_restored(self):
         for kind in ('intra', 'inter'):
             for mode in ('window', 'local_3x3'):
                 with self.subTest(kind=kind, mode=mode):
@@ -116,19 +119,18 @@ class PromptRefinerTest(unittest.TestCase):
                         layer.window_attn_regular, layer.window_attn_shifted = map(ConstantAttention, constants)
                     else:
                         layer.local_attn = nn.ModuleList(map(ConstantAttention, constants))
-                    calls = []
-                    def prompt_op(x, tokens, mask):
-                        calls.append(x.detach().clone())
-                        return x + 10  # the prompt module's internal residual is already included
+                    layer._ffn_feature_update = lambda x: torch.full_like(x, 7)
+                    layer._ffn_score_update = lambda x: torch.full_like(x, 11)
                     x = torch.full((1, 2, 256, 4, 4), 100.)
                     score = torch.zeros_like(x)
-                    out, updated_score = layer(x, score, prompt_op,
-                        torch.zeros(1, 2, 1, 256), torch.zeros(1, 2, 1, dtype=torch.bool), x, x)
-                    torch.testing.assert_close(out, torch.full_like(x, 12 if kind == 'intra' else constants[-1] + 10))
-                    self.assertEqual(len(calls), 1 if kind == 'intra' else len(constants))
-                    self.assertTrue(torch.isfinite(updated_score).all())
-                    self.assertFalse(any('ffn' in n and 'feature' in n for n, _ in layer.named_parameters()))
-                    self.assertTrue(any('ffn_fc1_score' in n for n, _ in layer.named_parameters()))
+                    out, updated_score = layer(x, score, x, x)
+                    feature_expected = 100 + (2 if kind == 'intra' else sum(constants)) + 7
+                    score_expected = (sum(constants) if kind == 'intra' else 2) + 11
+                    torch.testing.assert_close(out, torch.full_like(x, feature_expected))
+                    torch.testing.assert_close(updated_score, torch.full_like(score, score_expected))
+                    names = dict(layer.named_parameters())
+                    self.assertIn('ffn_fc1_feature.weight', names)
+                    self.assertIn('ffn_fc1_score.weight', names)
 
     def test_prompt_adapter_mask_order_and_single_internal_residual(self):
         head = PromptHead()
@@ -193,8 +195,7 @@ class PromptRefinerTest(unittest.TestCase):
                 results = []
                 for model in (plain, checked):
                     x = data['encoder_features_72'].clone().requires_grad_()
-                    args = dict(data, encoder_features_72=x,
-                        prompt_cross_attention=head.apply_prompt_cross_attention_to_features)
+                    args = dict(refiner_inputs(data), encoder_features_72=x)
                     out = model(**args)['refiner_features_36']
                     (out * torch.linspace(-1, 1, 256)[None, None, :, None, None]).mean().backward()
                     grads = {n: p.grad.clone() for n, p in model.named_parameters() if p.grad is not None}
@@ -206,17 +207,35 @@ class PromptRefinerTest(unittest.TestCase):
                 for name, grad in results[0][2].items():
                     torch.testing.assert_close(grad, results[1][2][name], atol=1e-7, rtol=1e-4)
                 self.assertTrue(all(p.grad is None for p in head.parameters()))
+                for i in range(4):
+                    self.assertGreater(results[0][2][f'layers.{i}.ffn_fc1_feature.weight'].abs().sum().item(), 0)
+                    if i < 3:  # final score output is not part of this feature-only loss
+                        self.assertGreater(results[0][2][f'layers.{i}.ffn_fc1_score.weight'].abs().sum().item(), 0)
                 self.assertFalse(any('cross_attend_prompt' in n for n, _ in plain.named_parameters()))
 
-    def test_default_four_layers_have_six_prompt_calls(self):
-        model, head, data = make_refiner(), PromptHead(), inputs(1)
+    def test_lowres_cache_routing_never_calls_prompt_attention(self):
+        run_low = sam_method('_run_encoder_refiner_lowres')
+        run_cache = sam_method('run_encoder_refiner_lowres_from_cache')
+        class Model(nn.Module):
+            _run_encoder_refiner_lowres = run_low
+            run_encoder_refiner_lowres_from_cache = run_cache
+            def __init__(self):
+                super().__init__()
+                self.encoder_refiner = make_refiner()
+                self.segmentation_head = PromptHead()
+        model, data = Model(), inputs(1)
         calls = []
-        def prompt_op(x, tokens, mask):
-            calls.append(x.shape[-2:])
-            return head.apply_prompt_cross_attention_to_features(x, tokens, mask)
+        hook = model.segmentation_head.cross_attend_prompt.register_forward_hook(
+            lambda *args: calls.append(True))
+        cache = dict(refiner_inputs(data), backbone_fpn=[None, None, data['sam_fpn_72']],
+            clip_mid_features=data['clip_mid_features'])
+        batch = SimpleNamespace(find_text_batch=data['class_names'])
         with torch.no_grad():
-            model(**data, prompt_cross_attention=prompt_op)
-        self.assertEqual(calls, [(36, 36)] * 6)
+            out = model.run_encoder_refiner_lowres_from_cache(cache, batch)
+            expected = model.encoder_refiner(**refiner_inputs(data))
+        torch.testing.assert_close(out['refiner_features_36'], expected['refiner_features_36'])
+        self.assertEqual(calls, [])
+        hook.remove()
 
     def test_dual_branch_and_chunk_teacher_student_routing(self):
         convert = sam_method('_feature_72_to_hidden_states')
@@ -238,7 +257,11 @@ class PromptRefinerTest(unittest.TestCase):
             teacher = model.segmentation_head.apply_prompt_cross_attention_to_features(original[:, 1:2], tokens, mask)
             fused = model.encoder_refiner.fuse_decoder_input_chunk(x.flatten(0, 1), original[:, 1:2].flatten(0, 1), data['sam_fpn_72'])
             student = model.segmentation_head.apply_prompt_cross_attention_to_features(fused[:, None], tokens, mask)
+        prompt_calls = []
+        hook = model.segmentation_head.cross_attend_prompt.register_forward_hook(
+            lambda module, args, result: prompt_calls.append(torch.is_grad_enabled()))
         result = model.decode_encoder_refiner_chunk_from_cache(cache, x, 1, 2, True)
+        self.assertEqual(prompt_calls, [False, True])
         calls = model.segmentation_head.calls
         torch.testing.assert_close(calls[0][0], convert(teacher))
         torch.testing.assert_close(calls[1][0], convert(student))
@@ -248,6 +271,13 @@ class PromptRefinerTest(unittest.TestCase):
         self.assertGreater(x.grad.abs().sum().item(), 0)
         self.assertGreater(model.encoder_refiner.decoder_input_fusion.encoder_proj[0].weight.grad.abs().sum().item(), 0)
         self.assertTrue(all(p.grad is None for p in model.segmentation_head.parameters()))
+        prompt_calls.clear()
+        with torch.no_grad():
+            inferred = model.decode_encoder_refiner_chunk_from_cache(cache, x, 1, 2, False)
+        self.assertEqual(prompt_calls, [False])
+        self.assertNotIn('teacher_logits', inferred)
+        torch.testing.assert_close(result['final_logits'].detach(), inferred['final_logits'])
+        hook.remove()
 
     def test_streaming_proxy_matches_joint_backward(self):
         data, head = inputs(2), PromptHead()
@@ -255,7 +285,7 @@ class PromptRefinerTest(unittest.TestCase):
         streaming = copy.deepcopy(plain)
         results = []
         for model, use_proxy in ((plain, False), (streaming, True)):
-            low = model(**data, prompt_cross_attention=head.apply_prompt_cross_attention_to_features)['refiner_features_36']
+            low = model(**refiner_inputs(data))['refiner_features_36']
             features = low.detach().requires_grad_() if use_proxy else low
             losses = []
             for i in range(2):

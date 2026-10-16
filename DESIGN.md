@@ -124,7 +124,7 @@ SAM3 图像 backbone 在训练中冻结并运行于 `eval()`。图像特征使�
 
 每个图像与每个提示组成一个 prompt pair。冻结的 SAM3 文本编码器和 6 层 transformer encoder 为每个 pair 生成类条件图像特征。所有 6 层在 `torch.no_grad()` 中一次运行完毕。
 
-完整 encoder 输出后直接缓存原始 encoder72，不提前执行分割头 prompt cross-attention。同步缓存每个图像—提示对的完整 SAM3 prompt token 和 padding mask；不同 chunk 的 token 长度补齐，新增位置 mask 为 True。Refiner 不使用文本 token 均值，而是在 feature 更新时复用分割头的完整提示交叉注意力。SAM3 encoder 内部原有文本交互保持不变。
+完整 encoder 输出后直接缓存原始 encoder72，不提前执行分割头 prompt cross-attention。同步缓存每个图像—提示对的完整 SAM3 prompt token 和 padding mask；不同 chunk 的 token 长度补齐，新增位置 mask 为 True。Refiner 不接收分割头提示 token；缓存的完整提示只在融合后及教师解码前使用。SAM3 encoder 内部原有文本交互保持不变。
 
 所有提示块按原始顺序重新拼接。
 
@@ -218,20 +218,20 @@ FPN144 和 FPN288 由原始 Pixel Decoder 内部消费。
 ### 5.2 固定图像指导与标准 FFN
 
 四层按 A→B→A→B 执行，每层始终先更新 score stream，再更新 feature stream，
-最后只执行 Score FFN。Feature FFN 及其 LayerNorm、Linear、dropout 全部删除。各层 Refiner 注意力参数独立，提示交叉注意力始终共享原分割头参数。
+最后执行 Feature FFN 和 Score FFN。各层注意力参数独立。
 不保留四个可选指导开关，注意力不使用 CLIP 或 SAM3 文本 token 指导。
 原始 CLIP 文本模板编码仍用于生成初始 score embedding。
 
 | 层 | score 更新 | feature 更新 | 最后 |
 | --- | --- | --- | --- |
-| 1、3（A） | 类内注意力，固定 CLIP 中间层指导 | 类间注意力输出→共享 prompt cross-attention→直接替换 feature | Score FFN |
-| 2、4（B） | 类间注意力 | 每次类内注意力输出→共享 prompt cross-attention→直接替换 feature，固定 FPN36 指导 | Score FFN |
+| 1、3（A） | 类内注意力，固定 CLIP 中间层指导 | 类间注意力 | Feature FFN→Score FFN |
+| 2、4（B） | 类间注意力 | 类内注意力，固定 FPN36 指导 | Feature FFN→Score FFN |
 
 类内注意力分别对 score、feature 和图像指导做逐像素通道 LayerNorm，
 Q/K 按 `[score_embed, feature, guidance]` 拼接后独立线性投影。
 两种类间注意力都只拼接 `[score_embed, feature]`。
 两路均为 256 通道时，类内 Q/K 输入为 768，类间为 512，投影后为 256 通道。
-Value 始终仅来自指定的目标流。score 注意力继续直接残差到 score；feature 注意力输出先经过分割头提示交叉注意力，再直接替换当前 feature，外层不加旧 feature 残差。
+Value 始终仅来自指定的目标流，输出直接残差到同一条流。
 后续子步骤使用已经更新的 score 或 feature，重新计算 pre-norm、Q/K/V 和注意力权重。
 
 **固定图像指导：**
@@ -256,24 +256,15 @@ Value 始终仅来自指定的目标流。score 注意力继续直接残差到 s
 每个空间子步骤的投影、LayerNorm、相对位置偏置独立，图像指导在所有子步骤中固定使用。
 四次局部子步骤属于一层内部，不增加 Refiner 总层数。
 
-**Feature 提示交叉注意力与 Score FFN：**
+**标准双流 FFN：**
 
-以 feature 为 Value 的每次 Refiner 注意力输出作为分割头交叉注意力的输入。
-模块先对该输出做原有通道 LayerNorm，以它为 Query、对应提示完整 token 为 Key/Value，
-沿用 padding mask；模块内部将提示注意力增量加回其输入，返回值直接成为新的 feature。
-不能在外面再叠加旧 feature 或再次叠加该注意力输出。
-窗口模式的普通窗口、移位窗口分别调用；局部模式的四次3×3子步骤分别调用。
-默认四层窗口配置中，A层各1次、B层各2次，共6次36×36提示交叉注意力；
-feature 类内改成 local_3x3 时，共10次。融合后额外执行1次72×72提示交叉注意力。
-计数指逻辑前向，不包含 checkpoint 重计算和可选教师调用。
+Feature FFN 和 Score FFN 分别处理各自当前注意力后的 256 通道特征。
+每路执行通道 LayerNorm(256)、独立逐 token `256→1024→256` FFN（GELU 和 dropout），
+输出直接残差到对应当前流。不拼接模块入口初始特征或本层入口特征。
+全部层结束后仅对 feature_36 执行一次通道 LayerNorm；最终 score 不加输出 LayerNorm。
+图像子层沿用 non-reentrant checkpoint，显式传入固定 CLIP 中间层和 FPN36 指导。
 
-所有位置复用同一个 `segmentation_head.cross_attend_prompt` 及 `cross_attn_norm`，
-冻结参数并保持 eval，但学生调用保留对输入的梯度。通过 bound-method 参数传递共享操作，
-不把分割头注册为 Refiner 子模块，不复制参数。
-
-Score FFN 保持通道 LayerNorm(256)、256→1024→256、GELU/dropout，并残差到 score。
-Feature FFN 被删除；Refiner 全部层结束后仍对 feature 做一次 `feature_output_norm`。
-checkpoint 显式传入 prompt token、mask、指导特征和共享提示操作，使用 non-reentrant 模式。
+Refiner 内部不调用分割头提示交叉注意力，也不接收 prompt token、mask 或分割头回调。
 
 ### 5.3 单尺度 Decoder Input Fusion
 
@@ -328,7 +319,7 @@ output = fusion_out_proj(fused_out)
 
 ## 6. 冻结 SAM3 分割头与梯度边界
 
-主路径在 Refiner 之前不执行分割头 prompt cross-attention。每次 feature 注意力输出在36×36执行共享提示交叉注意力并直接替换 feature；双分支融合后在72×72再执行一次，返回值直接进入 Pixel Decoder。只有模块内部残差，外面不再额外相加。教师对原始 encoder72 仍执行一次原有提示交叉注意力后解码。
+主路径在 Refiner 之前和内部均不执行分割头 prompt cross-attention。Refiner 完整恢复原注意力残差、feature FFN和score FFN。双分支融合后仅在72×72执行一次提示交叉注意力，直接使用其包含内部残差的返回值进入 Pixel Decoder，外层不额外相加。教师对原始 encoder72 仍执行一次原有提示交叉注意力后解码。
 
 Pixel Decoder 与 semantic head 的参数始终冻结（`requires_grad=False`）并保持 `eval()`。学生和教师复用同一个 `segmentation_head` 对象，参数不复制。
 
@@ -350,7 +341,7 @@ DecoderInputFusion 消费 Refiner36、原始 encoder72 和 FPN72；Pixel Decoder
 * geometry encoder；
 * segmentation head（Pixel Decoder 参数冻结并保持 `eval()`。教师路径在 `no_grad()` 中执行，学生路径在梯度开启状态下执行。semantic head 在教师路径中产生 detach 的 teacher logits，在学生路径中产生可回传梯度的 student logits）。
 
-完整 SAM3 encoder 和提示编码不保留计算图，缓存原始 encoder72、完整提示 token 与 mask。教师提示注意力在 no_grad 中执行；学生的 Refiner 内部及融合后提示注意力保留输入梯度，参数仍冻结。
+完整 SAM3 encoder 和提示编码不保留计算图，缓存原始 encoder72、完整提示 token 与 mask。教师提示注意力在 no_grad 中执行；学生融合后的提示注意力保留输入梯度，参数仍冻结。
 
 `core.encoder_refiner` 完整训练。其内部的 Refiner 层、`feature_output_norm`、score embedding 和 `DecoderInputFusion` 同属一个参数组，由现有 `trainable_modules=["core.encoder_refiner"]` 自动覆盖，使用基础学习率 `1e-4`。最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
 
@@ -531,7 +522,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 | `models/sam3_image.py`                | 类别 chunk、缓存、SAM3 encoder、低分辨率 refiner、逐 chunk 学生/教师解码 |
 | `models/encoder_refiner.py`           | 全类别 Refiner、最终 feature LayerNorm 与单尺度融合接口 |
 | `models/decoder_input_fusion.py`      | 单尺度语义—细节双路融合，输出替换 Pixel Decoder 最后一层 FPN 输入 |
-| `models/encoder_refiner_attention.py` | 交替单 Value 注意力、可选窗口/局部3×3、feature共享提示交叉注意力替换更新、score FFN |
+| `models/encoder_refiner_attention.py` | 交替单 Value 注意力、可选窗口/局部3×3、原始注意力残差与feature/score双FFN |
 | `models/maskformer_segmentation.py`   | prompt attention、Pixel Decoder 和原始 semantic head |
 | `models/score_embeddings.py`          | 64 模板相似度图、归一化 CLIP 融合和空间卷积增强 |
 | `models/openclip_image_encoder.py`    | 36×36 dense RemoteCLIP 图像特征              |
@@ -567,7 +558,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 17. teacher 只来自原始 encoder72→原有提示交叉注意力→冻结解码路径且必须detach；teacher和student均为288×288。
 18. 蒸馏只监督存在类别。每个存在提示均监督全部 GT 有效像素，并额外监督其原始类别 GT 外侧 `sam3_mask_distill_boundary_width` 像素范围内且标签为 255 的边界环。远处 255 区域不参与蒸馏。多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
 19. 最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
-20. Refiner 按 A→B→A→B 交替，先 score 后 feature。score 保持原注意力残差及 FFN；feature 注意力输出经过共享提示交叉注意力直接替换旧 feature，外层无残差。删除 feature FFN，保留最终 feature LayerNorm、固定CLIP/FPN指导和两种类内空间模式。
+20. Refiner 按 A→B→A→B 交替，先score后feature；两种注意力均恢复直接残差，feature FFN和score FFN分别pre-norm后残差到当前流。保留最终feature LayerNorm、固定CLIP/FPN指导和两种类内空间模式，Refiner内部无分割头提示交叉注意力。
 21. TTA 必须先平均提示空间分数（`raw_prompt_score_map`），再合并提示到原始类别，最后进行相对阈值过滤。
 22. `reduce_zero_label` 与 `background_cfg` 各自只执行其定义的一次标签空间变换。
 23. 完整恢复必须严格校验 checkpoint schema；模型权重迁移必须走独立入口。
@@ -588,6 +579,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 * 不支持动态 SAM3/refiner 空间尺寸或多尺度 TTA；
 * `clip_mid_features` 固定参与 score 类内 Q/K 指导，debug 输出单独 detach；
 * 当前默认训练集为 iSAID，验证集为 LoveDA。
+
 
 
 ## 12. Checkpoint 非兼容变更
@@ -717,3 +709,19 @@ Checkpoint schema 版本为 4。实验追踪状态不再保存在 checkpoint 中
 CPU测试覆盖更新替换与残差次数、窗口/局部调用次数、score FFN保留、提示padding与图像—类别顺序、
 原始encoder直通缓存、教师等价路径、双分支融合后提示操作、冻结参数下输入梯度、checkpoint一致性和分块proxy回传。
 测试不下载模型权重，不替代完整数据集训练。
+
+
+本次简化为“仅移动分割头提示交叉注意力位置”的实验（覆盖上一版层内多次调用）：
+
+* Refiner Attention 完整恢复master `63c0cfa`的直接残差和双FFN设计：恢复feature FFN全部参数、pre-norm、dropout及残差；保留score FFN和最终feature LayerNorm。
+* 移除Refiner所有分割头提示交叉注意力调用，以及对应的prompt token、mask和回调参数；窗口和local_3x3均恢复原更新方式。
+* 原始完整encoder72直接下采样进入Refiner，主路径前置交叉注意力仍不执行；语义支路继续使用该原始encoder72。
+* 语义—细节双分支融合后仅执行一次原分割头提示交叉注意力，使用其内部残差返回值，外层不再额外相加。
+* prompt token和mask缓存继续用于融合后学生及教师；教师保持原始encoder72→提示交叉注意力→冻结解码，损失及逐chunk回传不变。
+* 交叉注意力、Pixel Decoder和semantic head参数仍冻结并保持eval；学生输入梯度保留。
+* 相对最初双分支基线，仅主路径分割头提示交叉注意力的位置由Refiner之前移至融合之后。
+* 与上一版严格resume不兼容，因为feature FFN恢复。使用新的work directory；不添加兼容层，checkpoint容器schema仍为4。
+
+本版CPU测试验证恢复后的两路FFN和残差、Refiner无提示调用、融合后恰好一次提示调用、
+提示mask及顺序、原始encoder缓存、教师路径、checkpoint梯度与streaming proxy回传一致性。
+验证命令：`python -m unittest discover -s tests -v`；未运行完整数据集训练。

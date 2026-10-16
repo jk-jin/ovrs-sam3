@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -482,7 +480,7 @@ class LocalScoreAttention(nn.Module):
 
 
 class EncoderRefinerLayer(nn.Module):
-    """Alternating single-value layer with shared frozen prompt cross-attention.
+    """Alternating single-value Refiner layer with pre-norm/direct residuals.
 
     score_attention_type="intra": configured intra-class attention updates score,
     then inter-class attention updates feature.
@@ -491,8 +489,7 @@ class EncoderRefinerLayer(nn.Module):
     Each stream independently chooses two windows or four local 3×3 steps.
     Intra-class guidance is fixed: CLIP middle features for score, FPN36
     for feature. Both class attention kinds use score/feature only.
-    Feature updates are replaced by prompt-attended attention outputs, with
-    only the prompt module's internal residual. Only Score FFN remains.
+    Both finish with independent Feature FFN and Score FFN.
     """
 
     def __init__(
@@ -560,8 +557,12 @@ class EncoderRefinerLayer(nn.Module):
         else:
             self.local_norm_feature = nn.ModuleList([nn.LayerNorm(hidden_dim) for _ in range(4)])
             self.local_norm_score = nn.ModuleList([nn.LayerNorm(score_embed_dim) for _ in range(4)])
+        self.ffn_norm_feature = nn.LayerNorm(hidden_dim)
         self.ffn_norm_score = nn.LayerNorm(score_embed_dim)
 
+        self.ffn_fc1_feature = nn.Linear(hidden_dim, hidden_dim * 4)
+        self.ffn_fc2_feature = nn.Linear(hidden_dim * 4, hidden_dim)
+        self.ffn_dropout_feature = nn.Dropout(float(dropout))
         self.ffn_fc1_score = nn.Linear(score_embed_dim, score_embed_dim * 4)
         self.ffn_fc2_score = nn.Linear(score_embed_dim * 4, score_embed_dim)
         self.ffn_dropout_score = nn.Dropout(float(dropout))
@@ -583,9 +584,6 @@ class EncoderRefinerLayer(nn.Module):
         self,
         feature: torch.Tensor,
         score: torch.Tensor,
-        prompt_cross_attention: Callable,
-        prompt_features: torch.Tensor,
-        prompt_mask: torch.Tensor,
         guidance: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         validate_guidance(guidance, feature, 256)
@@ -604,10 +602,21 @@ class EncoderRefinerLayer(nn.Module):
             if self.score_attention_type == "intra":
                 score = score + update
             else:
-                # The shared prompt module already owns the residual to update.
-                # Replace feature directly: do not add the previous feature again.
-                feature = prompt_cross_attention(update, prompt_features, prompt_mask)
+                feature = feature + update
         return feature, score
+
+    def _ffn_feature_update(
+        self,
+        feature: torch.Tensor,
+    ) -> torch.Tensor:
+        """Per-token FFN for pre-normalized feature. Returns update only."""
+        B, C, D, H, W = feature.shape
+        x = feature.permute(0, 1, 3, 4, 2)
+        x = self.ffn_fc2_feature(
+            self.ffn_dropout_feature(F.gelu(self.ffn_fc1_feature(x)))
+        )
+        x = self.ffn_dropout_feature(x)
+        return x.permute(0, 1, 4, 2, 3).contiguous()
 
     def _ffn_score_update(
         self,
@@ -626,28 +635,21 @@ class EncoderRefinerLayer(nn.Module):
         self,
         feature_36: torch.Tensor,
         score_embed_36: torch.Tensor,
-        prompt_cross_attention: Callable,
-        prompt_features: torch.Tensor,
-        prompt_mask: torch.Tensor,
         clip_mid_36: torch.Tensor | None = None,
         sam_fpn_36: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Update score first; replace feature by prompt-attended attention output."""
+        """Update [B, C, 256, 36, 36] streams, score first then feature."""
         intra_guidance = clip_mid_36 if self.score_attention_type == "intra" else sam_fpn_36
         if self.score_attention_type == "intra":
-            feature_36, score_embed_36 = self._update_intra(
-                feature_36, score_embed_36, prompt_cross_attention,
-                prompt_features, prompt_mask, intra_guidance,
-            )
-            update = self._class_update(feature_36, score_embed_36)
-            feature_36 = prompt_cross_attention(update, prompt_features, prompt_mask)
+            feature_36, score_embed_36 = self._update_intra(feature_36, score_embed_36, intra_guidance)
+            feature_36 = feature_36 + self._class_update(feature_36, score_embed_36)
         else:
             score_embed_36 = score_embed_36 + self._class_update(feature_36, score_embed_36)
-            feature_36, score_embed_36 = self._update_intra(
-                feature_36, score_embed_36, prompt_cross_attention,
-                prompt_features, prompt_mask, intra_guidance,
-            )
+            feature_36, score_embed_36 = self._update_intra(feature_36, score_embed_36, intra_guidance)
 
+        feature_36 = feature_36 + self._ffn_feature_update(
+            apply_layer_norm_bcdhw(feature_36, self.ffn_norm_feature)
+        )
         score_embed_36 = score_embed_36 + self._ffn_score_update(
             apply_layer_norm_bcdhw(score_embed_36, self.ffn_norm_score)
         )
