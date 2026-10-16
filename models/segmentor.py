@@ -83,7 +83,7 @@ class SAM3Segmentor(nn.Module):
         encoder_refiner_cache: Dict[str, Any],
         batch: BatchedDatapoint,
         return_debug: bool = False,
-    ) -> Dict[str, torch.Tensor]:
+    ) -> Dict[str, Any]:
         return self.core.run_encoder_refiner_lowres_from_cache(
             encoder_refiner_cache=encoder_refiner_cache,
             batch=batch,
@@ -96,14 +96,24 @@ class SAM3Segmentor(nn.Module):
         refiner_feature_36_chunk: torch.Tensor,
         class_start: int,
         class_end: int,
-        return_teacher_logits: bool = False,
     ) -> Dict[str, torch.Tensor]:
         return self.core.decode_encoder_refiner_chunk_from_cache(
             encoder_refiner_cache=encoder_refiner_cache,
             refiner_feature_36_chunk=refiner_feature_36_chunk,
             class_start=class_start,
             class_end=class_end,
-            return_teacher_logits=return_teacher_logits,
+        )
+
+    def decode_independent_distill_pairs_from_cache(
+        self,
+        encoder_refiner_cache: Dict[str, Any],
+        distill_inputs: Dict[str, torch.Tensor],
+        pair_indices: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        return self.core.decode_independent_distill_pairs_from_cache(
+            encoder_refiner_cache=encoder_refiner_cache,
+            distill_inputs=distill_inputs,
+            pair_indices=pair_indices,
         )
 
     def run_encoder_refiner_from_cache(

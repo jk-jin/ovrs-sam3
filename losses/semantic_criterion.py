@@ -59,7 +59,7 @@ class SemanticCriterion(nn.Module):
 
         2. Optional Dice on final_logits (default weight 0.0)
 
-        3. SAM3 teacher mask distillation BCE (fixed weight)
+        3. SAM3 teacher mask distillation BCE on independent students (fixed weight)
            - Frozen SAM3 semantic head logits as soft targets
            - Only present image-prompt pairs
            - All valid GT pixels plus a configurable class-specific
@@ -109,7 +109,7 @@ class SemanticCriterion(nn.Module):
         num_label_classes: int,
         reduction: str = "mean",
     ) -> TensorDict:
-        """Full prompt-space loss forward."""
+        """Full main-branch GT loss; distillation uses forward_distill_pairs()."""
         if reduction != "mean":
             raise ValueError(
                 "SemanticCriterion only supports reduction='mean', "
@@ -458,64 +458,70 @@ class SemanticCriterion(nn.Module):
         else:
             dice_contribution = zero
 
-        # ---- SAM3 teacher distillation ----
-        distill_weight = float(context.sam3_mask_distill_weight)
-        if distill_weight > 0.0 and context.distill_pixel_denom > 0:
-            if OUTPUT_KEYS.sam3_teacher_logits not in outputs:
-                raise ValueError(
-                    "sam3_mask_distill_weight > 0 but "
-                    f"{OUTPUT_KEYS.sam3_teacher_logits!r} is missing."
-                )
-            chunk_presence_float = present_mask.to(dtype=torch.float32)
-
-            outer_boundary_chunk = (
-                context.distill_outer_boundary_by_class.index_select(
-                    dim=1,
-                    index=prompt_class_ids,
-                )
-            )
-
-            # Fixed design:
-            # all valid pixels + class-specific outer ignore boundary.
-            distill_mask_chunk = (
-                context.valid_mask[:, None, :, :]
-                | outer_boundary_chunk
-            )
-
-            distill_contribution = self._distill_contribution_chunk(
-                final_logits=final_logits_chunk,
-                teacher_logits=outputs[
-                    OUTPUT_KEYS.sam3_teacher_logits
-                ],
-                distill_mask_chunk=distill_mask_chunk,
-                presence_target_chunk=chunk_presence_float,
-                global_denom=context.distill_pixel_denom,
-            )
-        else:
-            distill_contribution = zero
-
-        weighted_distill_contribution = (
-            distill_weight * distill_contribution
-        )
-
+        # Main logits receive GT losses only. Independent student pairs are
+        # supervised separately by forward_distill_pairs().
         # ---- Total ----
         chunk_total = (
             float(self.cfg.final_balanced_bce_weight) * plain_bce_contribution
             + dice_weight * dice_contribution
-            + weighted_distill_contribution
         )
 
         return {
             "loss_final_bce": plain_bce_contribution,
             "loss_final_dice": dice_contribution,
-            "loss_sam3_mask_distill_bce": distill_contribution,
-            "loss_sam3_mask_distill_weighted": weighted_distill_contribution,
+            "loss_sam3_mask_distill_bce": zero,
+            "loss_sam3_mask_distill_weighted": zero,
             "total_loss": chunk_total,
         }
 
     # ------------------------------------------------------------------
     # Distillation (per-chunk, global denominator)
     # ------------------------------------------------------------------
+
+    def forward_distill_pairs(
+        self,
+        outputs: TensorDict,
+        context: SemanticStreamingContext,
+        pair_indices: torch.Tensor,
+    ) -> TensorDict:
+        """Distill independent [N, 1, H, W] students with the global denominator.
+
+        pair_indices contains the original (image, expanded prompt) indices.
+        Aliases inherit their class mask but count independently, as before.
+        No GT BCE or Dice is applied to these students.
+        """
+        student = outputs[OUTPUT_KEYS.distill_student_logits]
+        teacher = outputs[OUTPUT_KEYS.sam3_teacher_logits]
+        if pair_indices.ndim != 2 or pair_indices.shape[1] != 2:
+            raise ValueError("pair_indices must be [N, 2].")
+        expected = (pair_indices.shape[0], 1, *context.label_map.shape[-2:])
+        if tuple(student.shape) != expected or teacher.shape != student.shape:
+            raise ValueError("Independent teacher/student logits must be [N, 1, H, W].")
+        image_ids, prompt_ids = pair_indices.unbind(dim=1)
+        presence = context.presence_target[image_ids, prompt_ids][:, None]
+        if not bool((presence > 0.5).all()):
+            raise ValueError("Independent distillation accepts present pairs only.")
+        class_ids = context.prompt_to_class_id[prompt_ids]
+        mask = (
+            context.valid_mask[image_ids]
+            | context.distill_outer_boundary_by_class[image_ids, class_ids]
+        )[:, None]
+        if context.sam3_mask_distill_weight > 0 and context.distill_pixel_denom > 0:
+            raw = self._distill_contribution_chunk(
+                student_logits=student,
+                teacher_logits=teacher,
+                distill_mask_chunk=mask,
+                presence_target_chunk=presence,
+                global_denom=context.distill_pixel_denom,
+            )
+        else:
+            raw = self._zero_loss(student)
+        weighted = context.sam3_mask_distill_weight * raw
+        return {
+            "loss_sam3_mask_distill_bce": raw,
+            "loss_sam3_mask_distill_weighted": weighted,
+            "total_loss": weighted,
+        }
 
     @staticmethod
     def _build_outer_distill_boundary_by_class(
@@ -568,7 +574,7 @@ class SemanticCriterion(nn.Module):
 
     def _distill_contribution_chunk(
         self,
-        final_logits: torch.Tensor,
+        student_logits: torch.Tensor,
         teacher_logits: torch.Tensor,
         distill_mask_chunk: torch.Tensor,
         presence_target_chunk: torch.Tensor,
@@ -578,7 +584,7 @@ class SemanticCriterion(nn.Module):
         teacher_prob = teacher_logits.detach().sigmoid()
 
         pixel_ce = F.binary_cross_entropy_with_logits(
-            final_logits,
+            student_logits,
             teacher_prob,
             reduction="none",
         )
@@ -586,7 +592,7 @@ class SemanticCriterion(nn.Module):
         present = presence_target_chunk > 0.5
 
         if not bool(present.any().item()):
-            return final_logits.sum() * 0.0
+            return student_logits.sum() * 0.0
 
         pair_pixel_mask = (
             present.to(

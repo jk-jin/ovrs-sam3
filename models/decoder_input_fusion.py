@@ -53,6 +53,7 @@ class DecoderInputFusion(nn.Module):
         refiner_feature_36: torch.Tensor,
         original_encoder_feature_72: torch.Tensor,
         sam_fpn_72: torch.Tensor,
+        image_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         batch_size = sam_fpn_72.shape[0]
         num_pairs = refiner_feature_36.shape[0]
@@ -68,13 +69,16 @@ class DecoderInputFusion(nn.Module):
             self.semantic_refiner_proj(refiner_72)
             + self.encoder_proj(original_encoder_feature_72)
         )
-        detail_refiner = self.detail_refiner_proj(refiner_72).reshape(
-            batch_size, num_prompts, 128, 72, 72
-        )
-        # FPN is projected per image and broadcast over the prompt dimension.
-        detail_input = (
-            detail_refiner + self.fpn_proj(sam_fpn_72)[:, None]
-        ).reshape(num_pairs, 128, 72, 72)
+        detail_refiner = self.detail_refiner_proj(refiner_72)
+        # Project before selecting pairs: never duplicate 256-channel FPN.
+        fpn_projected = self.fpn_proj(sam_fpn_72)
+        if image_ids is None:
+            detail_input = (
+                detail_refiner.reshape(batch_size, num_prompts, 128, 72, 72)
+                + fpn_projected[:, None]
+            ).reshape(num_pairs, 128, 72, 72)
+        else:
+            detail_input = detail_refiner + fpn_projected[image_ids]
 
         semantic_feature = semantic_input + self.semantic_block(semantic_input)
         detail_feature = detail_input + self.detail_block(detail_input)
@@ -88,6 +92,7 @@ class DecoderInputFusion(nn.Module):
         refiner_feature_36: torch.Tensor,
         original_encoder_feature_72: torch.Tensor,
         sam_fpn_72: torch.Tensor,
+        image_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if (
             refiner_feature_36.ndim != 4
@@ -100,8 +105,13 @@ class DecoderInputFusion(nn.Module):
         if sam_fpn_72.ndim != 4 or tuple(sam_fpn_72.shape[1:]) != (256, 72, 72):
             raise ValueError("sam_fpn_72 must be [B, 256, 72, 72].")
         batch_size = sam_fpn_72.shape[0]
-        if batch_size <= 0 or num_pairs <= 0 or num_pairs % batch_size:
-            raise ValueError("N must be positive and divisible by positive B.")
+        if batch_size <= 0 or num_pairs <= 0:
+            raise ValueError("Batch and pair counts must be positive.")
+        if image_ids is None:
+            if num_pairs % batch_size:
+                raise ValueError("N must be divisible by B without explicit image_ids.")
+        elif image_ids.shape != (num_pairs,) or image_ids.dtype != torch.long:
+            raise ValueError("image_ids must be a long tensor of shape [N].")
         if not (
             refiner_feature_36.device
             == original_encoder_feature_72.device
@@ -115,10 +125,12 @@ class DecoderInputFusion(nn.Module):
                 refiner_feature_36,
                 original_encoder_feature_72,
                 sam_fpn_72,
+                image_ids,
                 use_reentrant=False,
             )
         return self._forward_impl(
             refiner_feature_36,
             original_encoder_feature_72,
             sam_fpn_72,
+            image_ids,
         )

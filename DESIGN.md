@@ -1,6 +1,6 @@
 # OVRS-SAM3 设计说明
 
-适用分支：`master`
+适用分支：`tmp/independent-class-refiner-distill-20261016`（基于 `master` 的 `63c0cfa`）
 项目仓库：`jk-jin/ovrs-sam3`
 当前任务：开放词汇遥感语义分割
 
@@ -48,29 +48,30 @@ feature_36 + score_embed_36
   → Refiner layer 1..4（A→B→A→B，全提示同时运行）
   → refiner_features_36 [B, P, 256, 36, 36]
 
-随后按 prompt_chunk_size 逐提示块执行：
-
-教师（仅当蒸馏启用时执行，全程 torch.no_grad()）：
-
-original_encoder_feature_72_chunk
-  → 冻结的 SAM3 Pixel Decoder（内部继续使用原始 FPN144/FPN288）
-  → 冻结的 SAM3 semantic_seg_head
-  → sam3_teacher_logits（detached）
-
-学生：
-
+主分支按 prompt_chunk_size 逐提示块执行：
 refiner_feature_36_chunk + original_encoder_feature_72_chunk + sam_fpn_72
   → 双线性插值 36→72
   → 单层 DecoderInputFusion：语义支路（Refiner + 原始 encoder72），细节支路（Refiner + FPN72）
-  → fused_feature_72 [B×P_chunk, 256, 72, 72]
+  → fused_feature_72
+  → 冻结 SAM3 Pixel Decoder 与 semantic_seg_head（梯度开启）
+  → final_logits_chunk，仅接受 GT BCE / 可选 Dice
 
-fused_feature_72
-  → 替换原始 Pixel Decoder 最后一层 FPN 输入
-  → 冻结的 SAM3 Pixel Decoder 与 semantic_seg_head（梯度开启）
-  → final_logits_chunk
+独立蒸馏学生（仅训练且蒸馏启用时）：
+  → 根据 GT 选取存在的（图像、展开提示）对
+  → 取该对的原始 encoder72 下采样特征 + 初始 clip_score_embed_36
+  → 共享 Refiner 四层 A→B→A→B，每对的提示维度固定为 1
+  → 共享 DecoderInputFusion + 冻结 Pixel Decoder / semantic_seg_head
+  → distill_student_logits，只接受教师蒸馏 BCE
 
-学生和教师共用同一个冻结 segmentation_head 对象，参数不复制。
-每个 chunk 立即计算 loss 和 backward，不再拼接全类别 logits。
+教师（仅对相同的存在提示，全程 torch.no_grad()）：
+  → 原始 encoder72，不经过 Refiner 或 DecoderInputFusion
+  → 同一个冻结 Pixel Decoder / semantic_seg_head
+  → sam3_teacher_logits（detached）
+
+主分支、独立蒸馏学生和教师共用同一个冻结 segmentation_head。
+主分支和独立学生共享 Refiner、score embedding、DecoderInputFusion 参数。
+主分支逐提示块 backward；独立学生逐存在对块 backward。
+不拼接全类别高分辨率计算图，不重复编码 SAM3 或 RemoteCLIP。
 ```
 
 ## 2. 张量约定
@@ -103,7 +104,8 @@ fused_feature_72
 | `refiner_features_36`         | `[B, P, 256, 36, 36]`              | Refiner 的图像特征流                 |
 | `fused_feature_72`            | `[B×P_chunk, 256, 72, 72]`（逐 chunk） | DecoderInputFusion 输出，替换 Pixel Decoder 的最后一层 FPN 输入 |
 | `final_logits`                | `[B, P_chunk, 288, 288]`（逐 chunk） | 学生路径输出的最终语义分割 logits |
-| `sam3_teacher_logits`         | `[B, P_chunk, 288, 288]`（逐 chunk） | 教师路径输出的 detached teacher logits |
+| `distill_student_logits` | `[N, 1, 288, 288]`（逐存在对块） | 独立 Refiner 分支的可训练学生输出 |
+| `sam3_teacher_logits` | `[N, 1, 288, 288]`（逐存在对块） | 相同存在对的 detached 教师输出；此处 N 为当前块的存在对数 |
 
 训练损失和评测会在必要时用最近邻插值把标签映射到 logits 尺度。
 
@@ -129,7 +131,7 @@ SAM3 图像 backbone 在训练中冻结并运行于 `eval()`。图像特征使�
 
 ### 3.3 共享冻结 Pixel Decoder
 
-同一套冻结 Pixel Decoder 与 semantic head 同时服务学生和教师两条路径，参数不复制。
+同一套冻结 Pixel Decoder 与 semantic head 同时服务主分支、独立蒸馏学生和教师三条路径，参数不复制。
 
 ```text
 类条件 72×72 特征（学生为 fused_feature_72，教师为原始 encoder72；替换 FPN 最后一层）
@@ -249,7 +251,8 @@ Value 始终仅来自指定的目标流，输出直接残差到同一条流。
 | `score_intra_attn_type` | `window` / `local_3x3` | 更新 score 的类内实现 |
 | `feature_intra_attn_type` | `window` / `local_3x3` | 更新 feature 的类内实现 |
 
-默认均为 `window`，执行一次普通窗口与一次移位窗口，沿用窗口相对位置偏置和 shift mask。
+构造函数默认均为 `window`；当前基础模型配置显式将两种类内模式设为 `local_3x3`。
+`window` 执行一次普通窗口与一次移位窗口，沿用窗口相对位置偏置和 shift mask。
 `local_3x3` 执行四次连续普通逐像素 3×3 注意力：步长 1，无空洞或采样间隔，
 含中心及八个相邻位置，每头九个独立相对位置偏置，图像外的 key 在 softmax 前屏蔽。
 每个空间子步骤的投影、LayerNorm、相对位置偏置独立，图像指导在所有子步骤中固定使用。
@@ -290,7 +293,8 @@ fpn_proj:              sam_fpn_72  [B, 256, 72, 72] → [B, 128, 72, 72]
 
 语义和细节分支各自使用独立的 Refiner 投影（`semantic_refiner_proj` 和 `detail_refiner_proj`），参数不共享。
 
-FPN 先按图像投影到 128 通道，再通过广播与 Refiner 逐提示相加。不使用 `repeat` 或 `repeat_interleave` 复制 256 通道 FPN。
+FPN 先按图像投影到 128 通道，再通过广播与主分支 Refiner 逐提示相加。
+独立蒸馏分支传入 `image_ids`，从投影后的 FPN 中索引对应图像，支持任意顺序和重复图像索引。不使用 `repeat` 或 `repeat_interleave` 复制 256 通道 FPN。
 
 两条独立支路（不能共享参数），结构相同：
 
@@ -321,8 +325,8 @@ Prompt cross-attention 在完整 6 层 encoder 之后、Refiner 之前执行一�
 
 Pixel Decoder 与 semantic head 的参数始终冻结（`requires_grad=False`）并保持 `eval()`。学生和教师复用同一个 `segmentation_head` 对象，参数不复制。
 
-- **教师路径**：原始 encoder72 送入 Pixel Decoder，整个调用位于 `torch.no_grad()` 中，只保留 detached logits。学生计算图此时尚未建立或已释放。
-- **学生路径**：`fused_feature_72` 送入同一个 Pixel Decoder，不使用 `no_grad()`、不 detach，也不主动 `enable_grad()`，完全服从外层的梯度状态。
+- **教师路径**：仅选取存在提示的原始 encoder72 送入 Pixel Decoder，整个调用位于 `torch.no_grad()` 中，只保留 detached logits。对应独立学生的 Refiner / 解码图此时尚未建立。
+- **主分支与独立学生路径**：各自的 `fused_feature_72` 送入同一个 Pixel Decoder，不使用 `no_grad()`、不 detach，也不主动 `enable_grad()`，完全服从外层的梯度状态。主分支接受 GT 损失，独立学生接受蒸馏。
 
 冻结参数的 `requires_grad=False` 只阻止参数更新，不阻止对输入求梯度。学生路径误加 `no_grad()` 会同时切断主 BCE 和蒸馏对 DecoderInputFusion、Refiner 的监督。
 
@@ -386,7 +390,7 @@ loss_final_bce = (bce_per_pixel * valid_mask).sum() / total_valid_pixels
 蒸馏监督范围：
 
 1. 冻结的 SAM3 semantic head 产生的 teacher logits 做 sigmoid，得到 soft probability 目标。
-2. student 使用 raw `final_logits`。
+2. student 使用独立分支的 raw `distill_student_logits`，不对主分支 `final_logits` 做蒸馏。
 3. 用 `binary_cross_entropy_with_logits` 逐像素计算蒸馏损失。
 4. 只对 GT 中存在的图像—提示对计算。
 5. 所有 `label != 255` 的有效像素参与蒸馏。
@@ -415,16 +419,26 @@ total_loss = (
 
 上面的数值取自 `configs/_base_/model/ovrs_sam3.py` 的当前取值（蒸馏权重 0.5、外环宽度 3）。`config_dataclasses.py` 中的通用默认值不同，实验实际使用的数值取决于最终合并配置。
 
+**独立类别蒸馏分支**：
+
+* 存在性沿用当前 loss context：标签最近邻映射到 288×288 后，按图像判断哪些原始类别存在。
+* 每个存在类别的每个展开提示独立运行，同义提示也不互相注意。
+* 初始 feature、score 和指导特征在主 Refiner 前准备；独立分支从这些初始特征开始，不取主 Refiner 的输出。
+* 独立分支将存在对放在 batch 维，提示维固定为 1；四层结构、类内注意力、FFN、残差和最终 feature LayerNorm 全部保留。
+* 单提示类间 softmax 在 dropout 前恒为 1；保留 Value / 输出投影与残差。蒸馏不为类间 Query / Key 投影提供有效梯度，主分支仍正常训练它们。
+* 主分支与独立分支共享全部可训练模块，初始 score embedding 和 CLIP 指导图复用同一次编码结果，梯度相加。
+* 独立学生不额外接受 GT BCE / Dice。蒸馏权重为 0 或无存在提示时，不运行独立学生或教师。
+* 推理只运行主分支，不需要 GT，不执行独立学生或教师。
+
 **训练显存设计**：
 
-* Refiner36 对全部提示一次计算。
-* 高分辨率按 chunk 计算。
-* 每个 chunk 立即计算 loss 和 backward。
-* 使用 detached leaf proxy 累积高分辨率梯度。
-* 所有 chunk 完成后把 proxy.grad 一次传回真实 Refiner 图。
+* 主 Refiner36 对全部提示一次计算，高分辨率主分支按提示块执行 GT loss 和 backward。
+* 主 Refiner 输出使用 detached leaf proxy 累积高分辨率梯度。
+* 独立蒸馏分支每块最多处理 `prompt_chunk_size` 个存在对（不超过主分支最大提示块大小），依次执行教师、独立 Refiner、融合、学生解码及蒸馏 backward。
+* 初始 score embedding 和投影后 CLIP 指导图使用独立 leaf proxy 累积蒸馏梯度；每次独立 Refiner 的参数梯度直接累加。
+* 所有块完成后，将主 Refiner 输出梯度和初始共享特征梯度放入同一次 `torch.autograd.backward`，穿过共享 RemoteCLIP / score embedding 图。保持 AMP 缩放一致，只在 optimizer step 前统一 unscale。
+* 不使用 `retain_graph=True`，不跨块保留高分辨率计算图，不重复编码 SAM3 或 RemoteCLIP。
 * optimizer/scaler/scheduler 每个 batch 只更新一次。
-* 不保留多个 chunk 的融合特征或 logits。
-* 不使用 `retain_graph=True`。
 
 ## 8. 推理与评测
 
@@ -525,7 +539,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 | `models/score_embeddings.py`          | 64 模板相似度图、归一化 CLIP 融合和空间卷积增强 |
 | `models/openclip_image_encoder.py`    | 36×36 dense RemoteCLIP 图像特征              |
 | `models/openclip_text_encoder.py`     | 模板文本编码、micro-batch 与梯度控制                 |
-| `losses/semantic_criterion.py`        | Streaming 正负平衡 BCE、Dice 和 SAM3 teacher 蒸馏 |
+| `losses/semantic_criterion.py`        | 主分支朴素 BCE / Dice；独立存在对的 SAM3 teacher 蒸馏 |
 | `engine/trainer.py`                   | 高分辨率逐 chunk loss/backward 与 proxy 梯度回传 |
 | `engine/checkpoint.py`                | 安全、原子、严格的 checkpoint 保存与加载               |
 | `engine/runtime_state.py`             | RNG 捕获与恢复                                |
@@ -548,19 +562,19 @@ python tools/train.py configs/train/isaid_loveda_full.py
 9. SAM3 FPN72 用于固定 Refiner Q/K 指导及 72 尺度融合；FPN144 和 FPN288 只在原始 Pixel Decoder 内部使用。
 10. 可训练 RemoteCLIP 文本特征不能跨 optimizer step 缓存。
 11. 验证不得重新开启 RemoteCLIP 图像分支的 autograd。
-12. Refiner 必须先在全部提示上执行，再按 chunk 做高分辨率解码。Refiner 不能放进 chunk 循环。
+12. 主 Refiner 必须先在全部提示上执行，再按 chunk 做主分支高分辨率解码。独立蒸馏 Refiner 在存在对块循环内执行，提示维固定为 1。
 13. 学生和教师复用同一个冻结 Pixel Decoder 与 semantic head；教师路径必须在 `torch.no_grad()` 中，学生路径不得使用 `no_grad()`、`detach()` 或 `enable_grad()`。
 14. DecoderInputFusion 只在 72×72 执行一次，不做多层堆叠或支路前额外 encoder 拼接，输出替换原始 Pixel Decoder 的最后一层 FPN 输入。
 15. 教师始终使用缓存中的原始 encoder72，不使用融合输出或被 Refiner 更新后的特征。
 16. clip_score_embed_36 保持纯 RemoteCLIP 输出，用于 debug。
 17. teacher 只来自原始 encoder72 解码路径并且必须 detach。teacher 和 student 都为 288×288。
-18. 蒸馏只监督存在类别。每个存在提示均监督全部 GT 有效像素，并额外监督其原始类别 GT 外侧 `sam3_mask_distill_boundary_width` 像素范围内且标签为 255 的边界环。远处 255 区域不参与蒸馏。多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
+18. 蒸馏只监督存在类别的独立分支结果，不监督主分支 final_logits。每个存在提示均监督全部 GT 有效像素，并额外监督其原始类别 GT 外侧 `sam3_mask_distill_boundary_width` 像素范围内且标签为 255 的边界环。远处 255 区域不参与蒸馏。多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
 19. 最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
 20. Refiner 按 A→B→A→B 交替，每层先更新 score 再更新 feature。score 类内固定拼接 CLIP 中间层融合特征，feature 类内固定拼接 FPN36；两种类间 Q/K 都不拼接文本。所有注意力单 Value、pre-norm、直接残差。双路 FFN 各处理当前 256 通道特征，256→1024→256 后直接残差到当前流；保留最终 feature LayerNorm。
 21. TTA 必须先平均提示空间分数（`raw_prompt_score_map`），再合并提示到原始类别，最后进行相对阈值过滤。
 22. `reduce_zero_label` 与 `background_cfg` 各自只执行其定义的一次标签空间变换。
 23. 完整恢复必须严格校验 checkpoint schema；模型权重迁移必须走独立入口。
-24. 训练不使用完整 `[B,C,288,288]` 计算图。逐 chunk backward 通过 proxy leaf 隔离。
+24. 训练不使用完整 `[B,C,288,288]` 计算图。主分支与独立蒸馏逐块 backward，通过主输出及初始输入 proxy leaf 隔离共享图，最后统一回传。
 25. optimizer.zero_grad / scaler.step / scaler.update / scheduler.step 每 batch 只执行一次。
 26. 不使用 `retain_graph=True`。
 27. backbone_fpn 顺序固定为 `[288, 144, 72]`，即 `backbone_fpn[0]` 为 288、`[1]` 为 144、`[2]` 为 72。
@@ -697,3 +711,13 @@ checkpoint 输出和参数/Refiner 输入梯度、输入形状检查。
 * 初始 CLIP score embedding、原始 SAM3 流程、教师、冻结解码头、损失和逐 chunk 梯度设计保留。
 * 旧 checkpoint 的 FFN 形状和融合参数名称不匹配；新实验使用新的 work directory，不提供兼容层。
 * checkpoint 容器 schema 保持 4。
+
+
+本次独立类别 Refiner 蒸馏重构：
+
+* 蒸馏监督从主 `final_logits` 转移至存在提示单独运行完整共享 Refiner / Fusion / 分割头的 `distill_student_logits`。
+* 新增 `refine_streams()`、`decode_independent_distill_pairs_from_cache()` 和 `forward_distill_pairs()`。
+* 教师、有效像素加忽略区外环的掩码、全局分母、权重和推理主分支保持原设计。
+* 不增加可训练参数，不改变模型参数名称或 shape，checkpoint 容器 schema 保持 4。
+* 旧训练 checkpoint 的优化目标不同；新实验建议使用新的 work directory。仅迁移参数可使用 `--load-model-from`。
+* CPU 回归：`python -m unittest discover -s tests -v`。新增测试覆盖独立分支路由、教师 detach、双图像与同义提示映射、掩码和全局分母、窗口/局部四层的独立性与 checkpoint 梯度、融合图像索引、逐块与一次性反向梯度一致、模拟 AMP 缩放、蒸馏关闭与全忽略标签跳过。

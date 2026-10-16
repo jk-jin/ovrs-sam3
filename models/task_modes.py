@@ -38,6 +38,8 @@ class ModelOutputKeys:
     # Frozen SAM3 teacher logits — per-chunk temporary output during training,
     # no longer a concatenated full-class output that must be saved.
     sam3_teacher_logits: str = "sam3_teacher_logits"
+    # Independent present-pair student outputs, [N, 1, H, W].
+    distill_student_logits: str = "distill_student_logits"
 
 
 OUTPUT_KEYS = ModelOutputKeys()

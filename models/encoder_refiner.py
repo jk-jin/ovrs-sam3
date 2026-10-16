@@ -126,6 +126,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         refiner_feature_36: torch.Tensor,
         original_encoder_feature_72: torch.Tensor,
         sam_fpn_72: torch.Tensor,
+        image_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Return [N, 256, 72, 72] for the original SAM3 Pixel Decoder.
 
@@ -133,11 +134,13 @@ class ClassConditionedEncoderRefiner(nn.Module):
             refiner_feature_36:          [N, 256, 36, 36]
             original_encoder_feature_72: [N, 256, 72, 72]
             sam_fpn_72:                  [B, 256, 72, 72]
+            image_ids:                   [N], for selected independent pairs
         """
         return self.decoder_input_fusion(
             refiner_feature_36=refiner_feature_36,
             original_encoder_feature_72=original_encoder_feature_72,
             sam_fpn_72=sam_fpn_72,
+            image_ids=image_ids,
         )
 
     def forward(
@@ -264,6 +267,34 @@ class ClassConditionedEncoderRefiner(nn.Module):
         # directly. No SAM3 FPN injection is performed before attention.
         score_embed_36 = clip_score_embed_36
 
+        feature_36, score_embed_36 = self.refine_streams(
+            feature_36, score_embed_36, clip_mid_36, sam_fpn_36,
+        )
+
+        return {
+            "refiner_features_36": feature_36,
+            "score_embed_36": score_embed_36,
+            "clip_score_embed_36": clip_score_embed_36,
+            "clip_score_maps_36": clip_score_maps_36,
+            "template_clip_text": template_clip_text,
+            "initial_feature_36": base_feature_36,
+            "clip_guidance_36": projected,
+            "fpn_guidance_36": downsampled,
+        }
+
+    def refine_streams(
+        self,
+        feature_36: torch.Tensor,
+        score_embed_36: torch.Tensor,
+        clip_mid_36: torch.Tensor,
+        sam_fpn_36: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Run shared A/B/A/B layers; a singleton prompt axis isolates classes.
+
+        All inputs use [batch, prompts, channels, height, width]. Independent
+        distillation pairs are packed on the batch axis, never the prompt axis.
+        Inputs are initial streams, not the main branch's refined outputs.
+        """
         for layer in self.layers:
             if self.use_checkpoint and self.training:
                 feature_36, score_embed_36 = checkpoint(
@@ -288,10 +319,4 @@ class ClassConditionedEncoderRefiner(nn.Module):
             self.feature_output_norm,
         )
 
-        return {
-            "refiner_features_36": feature_36,
-            "score_embed_36": score_embed_36,
-            "clip_score_embed_36": clip_score_embed_36,
-            "clip_score_maps_36": clip_score_maps_36,
-            "template_clip_text": template_clip_text,
-        }
+        return feature_36, score_embed_36

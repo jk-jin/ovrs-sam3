@@ -547,7 +547,7 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_cache: Dict[str, Any],
         batch: BatchedDatapoint,
         return_debug: bool = False,
-    ) -> Dict[str, torch.Tensor]:
+    ) -> Dict[str, Any]:
         """Run the all-class Encoder Refiner at 36×36 and return its output.
 
         Does NOT perform any 72/144/288 decoding. Returns refiner features
@@ -576,8 +576,14 @@ class Sam3Image(torch.nn.Module):
             sam_fpn_72=encoder_refiner_cache["backbone_fpn"][2],
         )
 
-        result: Dict[str, torch.Tensor] = {
+        result: Dict[str, Any] = {
             "refiner_features_36": refiner_out["refiner_features_36"],
+            "distill_inputs": {
+                "initial_feature_36": refiner_out["initial_feature_36"],
+                "initial_score_36": refiner_out["clip_score_embed_36"],
+                "clip_guidance_36": refiner_out["clip_guidance_36"],
+                "fpn_guidance_36": refiner_out["fpn_guidance_36"],
+            },
         }
 
         if return_debug:
@@ -607,16 +613,11 @@ class Sam3Image(torch.nn.Module):
         refiner_feature_36_chunk: torch.Tensor,
         class_start: int,
         class_end: int,
-        return_teacher_logits: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """Single-scale fusion followed by shared frozen SAM3 decoding.
 
-        Steps:
-        1. Optionally run the teacher path (no_grad): original encoder72 →
-           frozen Pixel Decoder → frozen semantic head → detached logits.
-        2. Fuse Refiner36, original encoder72 and FPN72 into 72×72.
-        3. Student path (gradients enabled): fused 72×72 replaces the last
-           FPN level of the same frozen Pixel Decoder and semantic head.
+        Main branch only: fuse Refiner36, original encoder72 and FPN72,
+        then decode with the shared frozen Pixel Decoder and semantic head.
         """
         original_features_72 = encoder_refiner_cache[
             "cross_attended_encoder_features_72"
@@ -643,24 +644,6 @@ class Sam3Image(torch.nn.Module):
         ).repeat_interleave(num_prompts)
 
         result: Dict[str, torch.Tensor] = {}
-        if return_teacher_logits:
-            # Teacher runs first so its high-resolution intermediates do not
-            # stay resident alongside the student graph.
-            with torch.no_grad():
-                teacher_outputs = self.segmentation_head(
-                    backbone_feats=backbone_fpn,
-                    image_ids=image_ids,
-                    encoder_hidden_states=self._feature_72_to_hidden_states(
-                        original_chunk
-                    ),
-                )
-                result[OUTPUT_KEYS.sam3_teacher_logits] = (
-                    teacher_outputs["semantic_seg"]
-                    .reshape(batch_size, num_prompts, 288, 288)
-                    .detach()
-                )
-            del teacher_outputs
-
         num_pairs = batch_size * num_prompts
         fused_feature_72_flat = self.encoder_refiner.fuse_decoder_input_chunk(
             refiner_feature_36=refiner_feature_36_chunk.reshape(
@@ -683,6 +666,56 @@ class Sam3Image(torch.nn.Module):
             batch_size, num_prompts, 288, 288
         )
         return result
+
+    def decode_independent_distill_pairs_from_cache(
+        self,
+        encoder_refiner_cache: Dict[str, Any],
+        distill_inputs: Dict[str, torch.Tensor],
+        pair_indices: torch.Tensor,
+    ) -> Dict[str, torch.Tensor]:
+        """Decode selected (image, prompt) pairs with prompt dimension one.
+
+        The trainer selects present pairs and supplies proxy initial inputs.
+        Reuse all weights and frozen SAM3 caches; only Refiner and decoding
+        run again. Packing pairs as batch items cannot mix their classes.
+        """
+        if pair_indices.ndim != 2 or pair_indices.shape[1] != 2 or not pair_indices.shape[0]:
+            raise ValueError("pair_indices must be a nonempty [N, 2] tensor")
+        image_ids, prompt_ids = pair_indices.unbind(dim=1)
+        num_pairs = pair_indices.shape[0]
+        backbone_fpn = encoder_refiner_cache["backbone_fpn"]
+        original_72 = encoder_refiner_cache["cross_attended_encoder_features_72"][
+            image_ids, prompt_ids
+        ][:, None]
+
+        with torch.no_grad():
+            teacher = self.segmentation_head(
+                backbone_feats=backbone_fpn,
+                image_ids=image_ids,
+                encoder_hidden_states=self._feature_72_to_hidden_states(original_72),
+            )["semantic_seg"].reshape(num_pairs, 1, 288, 288).detach()
+
+        feature_36, _ = self.encoder_refiner.refine_streams(
+            distill_inputs["initial_feature_36"][image_ids, prompt_ids][:, None],
+            distill_inputs["initial_score_36"][image_ids, prompt_ids][:, None],
+            distill_inputs["clip_guidance_36"][image_ids][:, None],
+            distill_inputs["fpn_guidance_36"][image_ids][:, None],
+        )
+        fused_72 = self.encoder_refiner.fuse_decoder_input_chunk(
+            refiner_feature_36=feature_36[:, 0],
+            original_encoder_feature_72=original_72[:, 0],
+            sam_fpn_72=backbone_fpn[2],
+            image_ids=image_ids,
+        )
+        student = self.segmentation_head(
+            backbone_feats=backbone_fpn,
+            image_ids=image_ids,
+            encoder_hidden_states=self._feature_72_to_hidden_states(fused_72[:, None]),
+        )["semantic_seg"].reshape(num_pairs, 1, 288, 288)
+        return {
+            OUTPUT_KEYS.distill_student_logits: student,
+            OUTPUT_KEYS.sam3_teacher_logits: teacher,
+        }
 
     # ------------------------------------------------------------------
     # Inference / validation: full forward (not chunked backward)
@@ -740,7 +773,6 @@ class Sam3Image(torch.nn.Module):
                 refiner_feature_36_chunk=refiner_feature_36_chunk,
                 class_start=chunk_start,
                 class_end=chunk_end,
-                return_teacher_logits=False,
             )
 
             final_logits[:, chunk_start:chunk_end].copy_(

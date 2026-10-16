@@ -205,11 +205,10 @@ class Trainer:
     ) -> Dict[str, torch.Tensor]:
         """Streaming per-chunk loss/backward with proxy leaf gradient isolation.
 
-        Low-resolution Refiner runs once on all classes. High-resolution
-        decoding, loss and backward run per chunk. A detached proxy leaf
-        accumulates gradients from all chunks; after all chunks, the
-        accumulated gradient is handed back to the real Refiner graph in
-        a single backward call.
+        The main Refiner runs jointly; present pairs rerun the shared Refiner
+        independently for distillation. Each branch backpropagates per chunk.
+        Proxy gradients for main features and shared initial inputs are handed
+        back together, so RemoteCLIP is encoded/backpropagated only once.
         """
         if not hasattr(self.model, "build_encoder_refiner_cache"):
             raise AttributeError(
@@ -232,6 +231,7 @@ class Trainer:
             )
 
         refiner_features_36 = refiner_out["refiner_features_36"]
+        distill_inputs = refiner_out["distill_inputs"]
         del refiner_out
 
         B, C_total = refiner_features_36.shape[:2]
@@ -283,7 +283,7 @@ class Trainer:
             loss_context.sam3_mask_distill_weight
         )
 
-        need_teacher_logits = (
+        need_distillation = (
             effective_distill_weight > 0.0
             and loss_context.distill_pixel_denom > 0
         )
@@ -308,7 +308,6 @@ class Trainer:
                         refiner_feature_36_chunk=refiner_proxy_chunk,
                         class_start=chunk_start,
                         class_end=chunk_end,
-                        return_teacher_logits=need_teacher_logits,
                     )
                 )
 
@@ -351,19 +350,47 @@ class Trainer:
                 f"expected C_total={C_total}."
             )
 
-        # ---- Hand proxy gradient back to real Refiner graph ----
+        # Independent present-pair branches start from the initial streams.
+        # Their classes live on the batch axis, with prompt dimension one.
+        # Keep every trainable shared input connected through a proxy, avoiding
+        # retain_graph and repeated backward through the RemoteCLIP graph.
+        distill_proxies = {}
+        if need_distillation:
+            distill_proxies = {
+                name: value.detach().requires_grad_(value.requires_grad)
+                for name, value in distill_inputs.items()
+            }
+            present_pairs = (loss_context.presence_target > 0.5).nonzero(as_tuple=False)
+            pair_chunk_size = max(chunk_class_counts)
+            for pairs in present_pairs.split(pair_chunk_size):
+                with autocast(device_type=self.device.type, enabled=use_amp):
+                    outputs = self.model.decode_independent_distill_pairs_from_cache(
+                        encoder_refiner_cache=encoder_refiner_cache,
+                        distill_inputs=distill_proxies,
+                        pair_indices=pairs,
+                    )
+                    losses = self.criterion.forward_distill_pairs(
+                        outputs=outputs, context=loss_context, pair_indices=pairs,
+                    )
+                self.scaler.scale(losses["total_loss"]).backward()
+                for key, value in losses.items():
+                    accum[key] = accum.get(key, 0) + value.detach()
+                del outputs, losses
+
+        # ---- Hand all scaled proxy gradients back in one traversal ----
         if refiner_proxy.grad is None:
             raise RuntimeError(
                 "No gradient was accumulated on refiner_proxy. "
                 "Check that chunk losses have non-zero contribution."
             )
 
-        scaled_refiner_grad = refiner_proxy.grad.detach()
-
-        torch.autograd.backward(
-            tensors=refiner_features_36,
-            grad_tensors=scaled_refiner_grad,
-        )
+        tensors = [refiner_features_36]
+        gradients = [refiner_proxy.grad.detach()]
+        for name, proxy in distill_proxies.items():
+            if proxy.grad is not None:
+                tensors.append(distill_inputs[name])
+                gradients.append(proxy.grad.detach())
+        torch.autograd.backward(tensors=tensors, grad_tensors=gradients)
 
         return accum
 
