@@ -315,6 +315,41 @@ class UniversalSegmentationHead(SegmentationHead):
         )[0]
         return encoder_hidden_states + update
 
+    def apply_prompt_cross_attention_to_features(
+        self,
+        features: torch.Tensor,
+        prompt_features: torch.Tensor,
+        prompt_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Apply the shared prompt module, including its sole residual.
+
+        features: [B, P, D, H, W]; prompts: [B, P, T, D]; mask: [B, P, T].
+        This adapter preserves autograd and works at both 36 and 72 grids.
+        """
+        if features.ndim != 5 or features.shape[2] != self.d_model:
+            raise ValueError("features must be [B, P, D, H, W] with D=d_model.")
+        batch_size, num_prompts, channels, height, width = features.shape
+        if (
+            prompt_features.ndim != 4
+            or prompt_features.shape[:2] != features.shape[:2]
+            or prompt_features.shape[-1] != channels
+            or prompt_features.shape[2] == 0
+        ):
+            raise ValueError("prompt_features must be [B, P, T, D] with T>0.")
+        if prompt_mask.shape != prompt_features.shape[:3] or prompt_mask.dtype != torch.bool:
+            raise ValueError("prompt_mask must be boolean [B, P, T].")
+        if not (features.device == prompt_features.device == prompt_mask.device):
+            raise ValueError("Features and prompts must be on the same device.")
+        num_pairs = batch_size * num_prompts
+        hidden_states = features.reshape(num_pairs, channels, height * width).permute(2, 0, 1)
+        prompts = prompt_features.reshape(num_pairs, -1, channels).permute(1, 0, 2)
+        updated = self.apply_prompt_cross_attention(
+            encoder_hidden_states=hidden_states,
+            prompt=prompts,
+            prompt_mask=prompt_mask.reshape(num_pairs, -1),
+        )
+        return updated.permute(1, 2, 0).reshape_as(features).contiguous()
+
     def forward(
         self,
         backbone_feats: List[torch.Tensor],

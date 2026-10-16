@@ -359,6 +359,8 @@ class Sam3Image(torch.nn.Module):
             raise ValueError("CLIP image cache is required.")
 
         encoder_feature_chunks: list[torch.Tensor] = []
+        prompt_feature_chunks: list[torch.Tensor] = []
+        prompt_mask_chunks: list[torch.Tensor] = []
         chunk_class_counts: list[int] = []
         merged_class_ids: list[int] = []
 
@@ -403,6 +405,8 @@ class Sam3Image(torch.nn.Module):
             )
 
             encoder_feature_chunks.append(chunk_out["encoder_features_72"])
+            prompt_feature_chunks.append(chunk_out["prompt_features"])
+            prompt_mask_chunks.append(chunk_out["prompt_mask"])
             merged_class_ids.extend(chunk_class_ids)
             chunk_class_counts.append(num_chunk_classes)
 
@@ -416,17 +420,22 @@ class Sam3Image(torch.nn.Module):
                 f"Got {merged_class_ids}, expected {expected_class_ids}."
             )
 
-        cross_attended_encoder_features_72 = torch.cat(encoder_feature_chunks, dim=1)
+        encoder_features_72 = torch.cat(encoder_feature_chunks, dim=1)
 
-        if tuple(cross_attended_encoder_features_72.shape[:2]) != (batch_size, num_classes):
+        if tuple(encoder_features_72.shape[:2]) != (batch_size, num_classes):
             raise ValueError(
                 "Merged encoder features shape mismatch: expected "
                 f"{(batch_size, num_classes)}, "
-                f"got {tuple(cross_attended_encoder_features_72.shape[:2])}."
+                f"got {tuple(encoder_features_72.shape[:2])}."
             )
 
+        prompt_features, prompt_mask = self._merge_prompt_chunks(
+            prompt_feature_chunks, prompt_mask_chunks,
+        )
         cache = {
-            "cross_attended_encoder_features_72": cross_attended_encoder_features_72,
+            "encoder_features_72": encoder_features_72,
+            "prompt_features": prompt_features,
+            "prompt_mask": prompt_mask,
             "backbone_fpn": backbone_fpn,
             "clip_image_feat_map": clip_image_cache["clip_image_feat_map_native"],
             OUTPUT_KEYS.clip_mid_features: clip_image_cache[OUTPUT_KEYS.clip_mid_features],
@@ -436,6 +445,23 @@ class Sam3Image(torch.nn.Module):
             "chunk_class_counts": chunk_class_counts,
         }
         return cache
+
+    @staticmethod
+    def _merge_prompt_chunks(
+        feature_chunks: list[torch.Tensor],
+        mask_chunks: list[torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Pad token lengths and concatenate prompts in image-major order."""
+        max_tokens = max(x.shape[2] for x in feature_chunks)
+        features = torch.cat([
+            F.pad(x, (0, 0, 0, max_tokens - x.shape[2]))
+            for x in feature_chunks
+        ], dim=1)
+        masks = torch.cat([
+            F.pad(x, (0, max_tokens - x.shape[2]), value=True)
+            for x in mask_chunks
+        ], dim=1)
+        return features.detach().contiguous(), masks.detach().contiguous()
 
     def _hidden_states_to_feature_72(
         self,
@@ -525,18 +551,23 @@ class Sam3Image(torch.nn.Module):
 
     def _run_encoder_refiner_lowres(
         self,
-        cross_attended_encoder_features_72: torch.Tensor,
+        encoder_features_72: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
         class_names: List[str],
+        prompt_features: torch.Tensor,
+        prompt_mask: torch.Tensor,
         clip_mid_features: list[torch.Tensor] | None = None,
         clip_mid_layer_indices: tuple[int, ...] | None = None,
         sam_fpn_72: torch.Tensor | None = None,
     ) -> Dict[str, torch.Tensor]:
         """Run the 36×36 Refiner on all classes simultaneously."""
         return self.encoder_refiner(
-            encoder_features_72=cross_attended_encoder_features_72,
+            encoder_features_72=encoder_features_72,
             clip_image_feat_map=clip_image_feat_map,
             class_names=class_names,
+            prompt_cross_attention=self.segmentation_head.apply_prompt_cross_attention_to_features,
+            prompt_features=prompt_features,
+            prompt_mask=prompt_mask,
             clip_mid_features=clip_mid_features,
             clip_mid_layer_indices=clip_mid_layer_indices,
             sam_fpn_72=sam_fpn_72,
@@ -553,8 +584,8 @@ class Sam3Image(torch.nn.Module):
         Does NOT perform any 72/144/288 decoding. Returns refiner features
         and score embeddings for downstream per-chunk high-res decoding.
         """
-        cross_attended_encoder_features_72 = encoder_refiner_cache[
-            "cross_attended_encoder_features_72"
+        encoder_features_72 = encoder_refiner_cache[
+            "encoder_features_72"
         ]
         clip_image_feat_map = encoder_refiner_cache["clip_image_feat_map"]
 
@@ -566,11 +597,11 @@ class Sam3Image(torch.nn.Module):
             )
 
         refiner_out = self._run_encoder_refiner_lowres(
-            cross_attended_encoder_features_72=(
-                cross_attended_encoder_features_72
-            ),
+            encoder_features_72=encoder_features_72,
             clip_image_feat_map=clip_image_feat_map,
             class_names=batch_class_names,
+            prompt_features=encoder_refiner_cache["prompt_features"],
+            prompt_mask=encoder_refiner_cache["prompt_mask"],
             clip_mid_features=encoder_refiner_cache[OUTPUT_KEYS.clip_mid_features],
             clip_mid_layer_indices=encoder_refiner_cache["clip_mid_layer_indices"],
             sam_fpn_72=encoder_refiner_cache["backbone_fpn"][2],
@@ -585,7 +616,7 @@ class Sam3Image(torch.nn.Module):
                 OUTPUT_KEYS.clip_mid_features
             ]
             result.update({
-                OUTPUT_KEYS.encoder_features: cross_attended_encoder_features_72.detach().contiguous(),
+                OUTPUT_KEYS.encoder_features: encoder_features_72.detach().contiguous(),
                 "score_embed_36": refiner_out["score_embed_36"].detach().contiguous(),
                 "clip_score_embed_36": refiner_out["clip_score_embed_36"].detach().contiguous(),
                 "clip_score_maps_36": refiner_out["clip_score_maps_36"].detach().contiguous(),
@@ -612,14 +643,15 @@ class Sam3Image(torch.nn.Module):
         """Single-scale fusion followed by shared frozen SAM3 decoding.
 
         Steps:
-        1. Optionally run the teacher path (no_grad): original encoder72 →
-           frozen Pixel Decoder → frozen semantic head → detached logits.
-        2. Fuse Refiner36 and FPN72 into 72×72 in one 256-channel branch.
+        1. Optionally run the teacher path (no_grad): raw encoder72 →
+           prompt cross-attention → frozen Pixel Decoder → frozen semantic head → detached logits.
+        2. Fuse Refiner36, raw encoder72 and FPN72 into 72×72, then apply
+           the shared prompt module once (including its internal residual).
         3. Student path (gradients enabled): fused 72×72 replaces the last
            FPN level of the same frozen Pixel Decoder and semantic head.
         """
         original_features_72 = encoder_refiner_cache[
-            "cross_attended_encoder_features_72"
+            "encoder_features_72"
         ]
         total_prompts = original_features_72.shape[1]
         if not 0 <= class_start < class_end <= total_prompts:
@@ -636,6 +668,8 @@ class Sam3Image(torch.nn.Module):
             )
 
         original_chunk = original_features_72[:, class_start:class_end]
+        prompt_features = encoder_refiner_cache["prompt_features"][:, class_start:class_end]
+        prompt_mask = encoder_refiner_cache["prompt_mask"][:, class_start:class_end]
         image_ids = torch.arange(
             batch_size,
             device=original_chunk.device,
@@ -647,11 +681,14 @@ class Sam3Image(torch.nn.Module):
             # Teacher runs first so its high-resolution intermediates do not
             # stay resident alongside the student graph.
             with torch.no_grad():
+                teacher_feature_72 = self.segmentation_head.apply_prompt_cross_attention_to_features(
+                    original_chunk, prompt_features, prompt_mask,
+                )
                 teacher_outputs = self.segmentation_head(
                     backbone_feats=backbone_fpn,
                     image_ids=image_ids,
                     encoder_hidden_states=self._feature_72_to_hidden_states(
-                        original_chunk
+                        teacher_feature_72
                     ),
                 )
                 result[OUTPUT_KEYS.sam3_teacher_logits] = (
@@ -659,18 +696,24 @@ class Sam3Image(torch.nn.Module):
                     .reshape(batch_size, num_prompts, 288, 288)
                     .detach()
                 )
-            del teacher_outputs
+            del teacher_outputs, teacher_feature_72
 
         num_pairs = batch_size * num_prompts
         fused_feature_72_flat = self.encoder_refiner.fuse_decoder_input_chunk(
             refiner_feature_36=refiner_feature_36_chunk.reshape(
                 num_pairs, 256, 36, 36
             ),
+            original_encoder_feature_72=original_chunk.reshape(
+                num_pairs, 256, 72, 72
+            ),
             sam_fpn_72=backbone_fpn[2],
         )
-        student_hidden_states = self._feature_72_to_hidden_states(
-            fused_feature_72_flat.reshape(batch_size, num_prompts, 256, 72, 72)
+        fused_feature_72 = self.segmentation_head.apply_prompt_cross_attention_to_features(
+            fused_feature_72_flat.reshape(batch_size, num_prompts, 256, 72, 72),
+            prompt_features,
+            prompt_mask,
         )
+        student_hidden_states = self._feature_72_to_hidden_states(fused_feature_72)
         student_outputs = self.segmentation_head(
             backbone_feats=backbone_fpn,
             image_ids=image_ids,
@@ -757,14 +800,14 @@ class Sam3Image(torch.nn.Module):
         }
 
         if return_debug:
-            cross_attended_encoder_features_72 = encoder_refiner_cache[
-                "cross_attended_encoder_features_72"
+            encoder_features_72 = encoder_refiner_cache[
+                "encoder_features_72"
             ]
             clip_mid_features = encoder_refiner_cache[
                 OUTPUT_KEYS.clip_mid_features
             ]
             result.update({
-                OUTPUT_KEYS.encoder_features: cross_attended_encoder_features_72.detach().contiguous(),
+                OUTPUT_KEYS.encoder_features: encoder_features_72.detach().contiguous(),
                 OUTPUT_KEYS.refiner_features_36: refiner_features_36.detach().contiguous(),
                 OUTPUT_KEYS.score_embed_36: refiner_out["score_embed_36"].detach().contiguous(),
                 OUTPUT_KEYS.clip_score_embed_36: refiner_out["clip_score_embed_36"].detach().contiguous(),
@@ -872,22 +915,21 @@ class Sam3Image(torch.nn.Module):
                 prompt_mask=prompt_mask,
             )
 
-            cross_attended_hidden_states = (
-                self.segmentation_head.apply_prompt_cross_attention(
-                    encoder_hidden_states=encoder_out["memory"],
-                    prompt=prompt,
-                    prompt_mask=prompt_mask,
-                )
-            )
-
             encoder_features_72 = self._hidden_states_to_feature_72(
-                cross_attended_hidden_states,
+                encoder_out["memory"],
                 batch_size=batch_size,
                 num_chunk_classes=num_chunk_classes,
             )
 
+        num_tokens = prompt.shape[0]
         return {
-            "encoder_features_72": encoder_features_72,
+            "encoder_features_72": encoder_features_72.detach(),
+            "prompt_features": prompt.permute(1, 0, 2).reshape(
+                batch_size, num_chunk_classes, num_tokens, self.hidden_dim,
+            ).detach(),
+            "prompt_mask": prompt_mask.reshape(
+                batch_size, num_chunk_classes, num_tokens,
+            ).detach(),
         }
 
     def forward(self, input: BatchedDatapoint) -> Dict[str, torch.Tensor]:
@@ -904,4 +946,3 @@ class Sam3Image(torch.nn.Module):
             encoder_refiner_cache=encoder_refiner_cache,
             batch=input,
         )
-

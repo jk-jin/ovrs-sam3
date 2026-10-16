@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import List
 
 import torch
@@ -18,17 +19,18 @@ from .decoder_input_fusion import DecoderInputFusion
 class ClassConditionedEncoderRefiner(nn.Module):
     """Encoder feature refiner operating at 36×36.
 
-    Takes the full 6-layer SAM3 encoder output after prompt cross-attention
+    Takes the raw full 6-layer SAM3 encoder output before prompt cross-attention
     as input. The feature stream is the bilinear-downsampled encoder feature
     without any FPN injection. Fixed CLIP middle/FPN guidance extends
-    intra-class attention Q/K. Each FFN updates only its current stream.
+    intra-class attention Q/K. Only the score stream retains an FFN. Feature attention outputs pass
+    through the shared frozen prompt module and replace the feature stream.
     The score stream comes directly from
     ClipScoreEmbedding (score_embeddings.py) without any SAM3 FPN fusion.
 
     The Refiner outputs 36×36 features. High-resolution decoding is handled
-    by one DecoderInputFusion at 72×72. After one upsampling, the Refiner
-    and image-level FPN72 are concatenated and fused in a single 256-channel
-    convolutional branch, without a direct original encoder72 input.
+    by one DecoderInputFusion at 72×72. After one upsampling, independent
+    semantic/detail branches fuse the Refiner with original encoder72/FPN72
+    respectively, without an extra encoder concatenation before the branches.
     The final fused feature replaces the original Pixel Decoder's last FPN.
 
     After all Refiner layers, the accumulated 36×36 feature stream is
@@ -37,7 +39,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
     post-normalized.
 
     Forward inputs:
-        encoder_features_72:  [B, C, 256, 72, 72]  (full encoder + cross-attention)
+        encoder_features_72:  [B, C, 256, 72, 72]  (raw full encoder, before prompt cross-attention)
         clip_image_feat_map:  [B, D_clip, 36, 36]
         class_names:          list of C class names
 
@@ -108,7 +110,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
             for layer_index in range(self.num_fusion_layers)
         ])
 
-        # Final normalization for the accumulated feature residual stream.
+        # Final normalization for the updated feature stream.
         # This is applied once after all Refiner layers and before the
         # 36×36 feature enters the single-scale Decoder Input Fusion.
         self.feature_output_norm = nn.LayerNorm(self.hidden_dim)
@@ -124,16 +126,19 @@ class ClassConditionedEncoderRefiner(nn.Module):
     def fuse_decoder_input_chunk(
         self,
         refiner_feature_36: torch.Tensor,
+        original_encoder_feature_72: torch.Tensor,
         sam_fpn_72: torch.Tensor,
     ) -> torch.Tensor:
         """Return [N, 256, 72, 72] for the original SAM3 Pixel Decoder.
 
         Args:
             refiner_feature_36:          [N, 256, 36, 36]
+            original_encoder_feature_72: [N, 256, 72, 72]
             sam_fpn_72:                  [B, 256, 72, 72]
         """
         return self.decoder_input_fusion(
             refiner_feature_36=refiner_feature_36,
+            original_encoder_feature_72=original_encoder_feature_72,
             sam_fpn_72=sam_fpn_72,
         )
 
@@ -142,6 +147,9 @@ class ClassConditionedEncoderRefiner(nn.Module):
         encoder_features_72: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
         class_names: List[str],
+        prompt_cross_attention: Callable,
+        prompt_features: torch.Tensor,
+        prompt_mask: torch.Tensor,
         clip_mid_features: list[torch.Tensor] | None = None,
         clip_mid_layer_indices: tuple[int, ...] | None = None,
         sam_fpn_72: torch.Tensor | None = None,
@@ -150,8 +158,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
         Args:
             encoder_features_72:
-                [B, C, 256, 72, 72] full encoder output after
-                prompt cross-attention.
+                [B, C, 256, 72, 72] raw full encoder output before
+                the segmentation head's prompt cross-attention.
             clip_image_feat_map:
                 [B, D_clip, 36, 36] dense RemoteCLIP feature map.
             class_names:
@@ -267,6 +275,9 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     layer,
                     feature_36,
                     score_embed_36,
+                    prompt_cross_attention,
+                    prompt_features,
+                    prompt_mask,
                     clip_mid_36,
                     sam_fpn_36,
                     use_reentrant=False,
@@ -275,11 +286,14 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 feature_36, score_embed_36 = layer(
                     feature_36=feature_36,
                     score_embed_36=score_embed_36,
+                    prompt_cross_attention=prompt_cross_attention,
+                    prompt_features=prompt_features,
+                    prompt_mask=prompt_mask,
                     clip_mid_36=clip_mid_36,
                     sam_fpn_36=sam_fpn_36,
                 )
 
-        # Normalize the accumulated feature stream once after all Refiner layers.
+        # Normalize the feature stream once after all Refiner layers.
         feature_36 = apply_layer_norm_bcdhw(
             feature_36,
             self.feature_output_norm,
@@ -292,4 +306,3 @@ class ClassConditionedEncoderRefiner(nn.Module):
             "clip_score_maps_36": clip_score_maps_36,
             "template_clip_text": template_clip_text,
         }
-
