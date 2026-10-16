@@ -614,7 +614,7 @@ class Sam3Image(torch.nn.Module):
         Steps:
         1. Optionally run the teacher path (no_grad): original encoder72 →
            frozen Pixel Decoder → frozen semantic head → detached logits.
-        2. Fuse Refiner36, original encoder72 and FPN72 into 72×72.
+        2. Fuse Refiner36 and FPN72 into 72×72 in one 256-channel branch.
         3. Student path (gradients enabled): fused 72×72 replaces the last
            FPN level of the same frozen Pixel Decoder and semantic head.
         """
@@ -665,9 +665,6 @@ class Sam3Image(torch.nn.Module):
         fused_feature_72_flat = self.encoder_refiner.fuse_decoder_input_chunk(
             refiner_feature_36=refiner_feature_36_chunk.reshape(
                 num_pairs, 256, 36, 36
-            ),
-            original_encoder_feature_72=original_chunk.reshape(
-                num_pairs, 256, 72, 72
             ),
             sam_fpn_72=backbone_fpn[2],
         )
@@ -907,3 +904,4 @@ class Sam3Image(torch.nn.Module):
             encoder_refiner_cache=encoder_refiner_cache,
             batch=input,
         )
+

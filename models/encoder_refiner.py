@@ -26,9 +26,9 @@ class ClassConditionedEncoderRefiner(nn.Module):
     ClipScoreEmbedding (score_embeddings.py) without any SAM3 FPN fusion.
 
     The Refiner outputs 36×36 features. High-resolution decoding is handled
-    by one DecoderInputFusion at 72×72. After one upsampling, independent
-    semantic/detail branches fuse the Refiner with original encoder72/FPN72
-    respectively, without an extra encoder concatenation before the branches.
+    by one DecoderInputFusion at 72×72. After one upsampling, the Refiner
+    and image-level FPN72 are concatenated and fused in a single 256-channel
+    convolutional branch, without a direct original encoder72 input.
     The final fused feature replaces the original Pixel Decoder's last FPN.
 
     After all Refiner layers, the accumulated 36×36 feature stream is
@@ -124,19 +124,16 @@ class ClassConditionedEncoderRefiner(nn.Module):
     def fuse_decoder_input_chunk(
         self,
         refiner_feature_36: torch.Tensor,
-        original_encoder_feature_72: torch.Tensor,
         sam_fpn_72: torch.Tensor,
     ) -> torch.Tensor:
         """Return [N, 256, 72, 72] for the original SAM3 Pixel Decoder.
 
         Args:
             refiner_feature_36:          [N, 256, 36, 36]
-            original_encoder_feature_72: [N, 256, 72, 72]
             sam_fpn_72:                  [B, 256, 72, 72]
         """
         return self.decoder_input_fusion(
             refiner_feature_36=refiner_feature_36,
-            original_encoder_feature_72=original_encoder_feature_72,
             sam_fpn_72=sam_fpn_72,
         )
 
@@ -295,3 +292,4 @@ class ClassConditionedEncoderRefiner(nn.Module):
             "clip_score_maps_36": clip_score_maps_36,
             "template_clip_text": template_clip_text,
         }
+

@@ -1,6 +1,6 @@
 # OVRS-SAM3 设计说明
 
-适用分支：`master`
+适用分支：`tmp/single-branch-fpn-fusion-20261016`（基于 master `63c0cfa`）
 项目仓库：`jk-jin/ovrs-sam3`
 当前任务：开放词汇遥感语义分割
 
@@ -12,7 +12,7 @@ OVRS-SAM3 接收一批遥感图像和当前数据集的类别名称，输出每�
 
 * SAM3 提供稳定的多尺度图像特征、文本提示编码、类条件 transformer encoder 和分割解码器。
 * RemoteCLIP 提供面向遥感场景的局部图文对齐。
-* Encoder refiner 在低分辨率融合两者，通过单层 72×72 语义—细节双路融合生成掩码。
+* Encoder refiner 在低分辨率融合两者，通过单层 72×72、256 通道 Refiner/FPN 单分支融合生成掩码。
 
 当前只实现 semantic 模式，不支持实例分割、hybrid 模式或非空几何提示训练。
 
@@ -59,9 +59,10 @@ original_encoder_feature_72_chunk
 
 学生：
 
-refiner_feature_36_chunk + original_encoder_feature_72_chunk + sam_fpn_72
-  → 双线性插值 36→72
-  → 单层 DecoderInputFusion：语义支路（Refiner + 原始 encoder72），细节支路（Refiner + FPN72）
+refiner_feature_36_chunk + sam_fpn_72
+  → Refiner 双线性插值 36→72
+  → 与对应图像的 FPN72 沿通道拼接为 512 通道
+  → 1×1 Conv 512→256 → GroupNorm(8,256) → GELU → 普通 3×3 Conv 256→256
   → fused_feature_72 [B×P_chunk, 256, 72, 72]
 
 fused_feature_72
@@ -94,7 +95,7 @@ fused_feature_72
 | `cross_attended_encoder_features_72` | `[B, P, 256, 72, 72]`       | 完整 6 层 encoder 与 prompt cross-attention 后的提示条件特征 |
 | `sam_fpn_288`                  | `[B, 256, 288, 288]`               | SAM3 backbone 图像级 FPN288，只在原始 Pixel Decoder 内使用 |
 | `sam_fpn_144`                  | `[B, 256, 144, 144]`               | SAM3 backbone 图像级 FPN144，只在原始 Pixel Decoder 内使用 |
-| `sam_fpn_72`                   | `[B, 256, 72, 72]`                 | SAM3 backbone 图像级 FPN72，用于单尺度融合的细节支路 |
+| `sam_fpn_72`                   | `[B, 256, 72, 72]`                 | SAM3 backbone 图像级 FPN72，用于单尺度256通道融合 |
 | `remoteclip_feat_map`         | `[B, 768, 36, 36]`                 | RemoteCLIP dense image feature |
 | `template_clip_text`          | `[P, 64, 768]`                     | 每提示 64 个模板的文本特征                |
 | `clip_score_maps_36`          | `[B, P, 64, 36, 36]`               | 局部图文相似度图                       |
@@ -210,7 +211,7 @@ score_embeddings.py 生成的 clip_score_embed_36 直接作为 score
 stream。进入所有 Refiner Attention 层之前不再融合任何 SAM3 FPN
 特征，也不再设置额外残差系数。
 
-SAM3 FPN72 用于后续单尺度 DecoderInputFusion 的细节支路，并固定下采样到 36×36，
+SAM3 FPN72 用于后续单分支 DecoderInputFusion，并固定下采样到 36×36，
 为更新 feature 的类内注意力提供 Q/K 指导，仍不注入初始 score embedding。
 FPN144 和 FPN288 由原始 Pixel Decoder 内部消费。
 
@@ -266,54 +267,36 @@ Feature FFN 和 Score FFN 分别处理各自当前注意力后的 256 通道特�
 ### 5.3 单尺度 Decoder Input Fusion
 
 Refiner 在全部提示上统一执行后，最终 36×36 feature stream 先经过一次通道 LayerNorm，
-再进入 `DecoderInputFusion`。融合只在 72×72 执行一次，输出 256 通道 72×72 特征，
-替换原始 SAM3 Pixel Decoder 的最后一层 FPN 输入。
+再进入 `DecoderInputFusion`。融合只在 72×72 执行一次，输出 256 通道特征，
+送入原始冻结 SAM3 Pixel Decoder。
 
-**输入**（`N = B×P_chunk`）：
+**输入**（`B` 为图像数，`P_chunk` 为当前提示数，`N = B×P_chunk` 为图像—提示对数）：
 
 - refiner_feature_36 `[N, 256, 36, 36]`
-- original_encoder_feature_72 `[N, 256, 72, 72]`
 - sam_fpn_72 `[B, 256, 72, 72]`
 
-Refiner 特征先双线性插值到 72×72（`align_corners=False`）。这里使用缓存中的
-`cross_attended_encoder_features_72` 作为原始 encoder72，它已经过完整 6 层 encoder 和一次
-前置 prompt cross-attention，且未被 Refiner 更新。
+不再接收独立的原始 encoder72 输入。原始 encoder72 仍用于 Refiner 初始化和教师解码。
+Refiner 特征双线性插值到 72×72（`align_corners=False`），然后恢复图像、提示两维。
+FPN72 通过 `[:, None].expand(...)` 按提示广播，保持图像优先、提示次之的展平顺序。
+两路在通道维拼接，再展平图像、提示维，得到 `[N, 512, 72, 72]`。
+广播本身不复制 FPN；拼接会分配实际的 512 通道融合输入，不使用 `repeat` 或 `repeat_interleave`。
 
-四路独立的 256→128 投影（`1×1 Conv + GroupNorm`，无激活）：
-
-```text
-semantic_refiner_proj: refiner_72  [N, 256, 72, 72] → [N, 128, 72, 72]
-detail_refiner_proj:   refiner_72  [N, 256, 72, 72] → [N, 128, 72, 72]
-encoder_proj:          encoder_72  [N, 256, 72, 72] → [N, 128, 72, 72]
-fpn_proj:              sam_fpn_72  [B, 256, 72, 72] → [B, 128, 72, 72]
-```
-
-语义和细节分支各自使用独立的 Refiner 投影（`semantic_refiner_proj` 和 `detail_refiner_proj`），参数不共享。
-
-FPN 先按图像投影到 128 通道，再通过广播与 Refiner 逐提示相加。不使用 `repeat` 或 `repeat_interleave` 复制 256 通道 FPN。
-
-两条独立支路（不能共享参数），结构相同：
+唯一的可训练融合支路为：
 
 ```text
-block: 普通 3×3 Conv (128→128) → GN(8,128) → GELU
-     → 1×1 Conv (128→128) → GN(8,128)
-output = input + block(input)   # block 内部残差
+fusion.0: 1×1 Conv 512→256（bias=False）
+fusion.1: GroupNorm(8, 256)
+fusion.2: GELU
+fusion.3: 普通 3×3 Conv 256→256（padding=1，bias=False）
 ```
 
-语义支路融合独立 Refiner 语义投影与原始 encoder72；细节支路融合独立 Refiner 细节投影与原始 FPN72。
+输出保持 `[N, 256, 72, 72]`。无128通道中间特征、双流支路、内部或外部残差、门控、
+融合系数、零初始化、升维投影或额外输出投影。最后的3×3卷积后不加归一化或激活。
+模块使用常规初始化，并在训练、配置启用且外层梯度开启时执行一次 non-reentrant checkpoint。
+推理和 `torch.no_grad()` 下不重新开启梯度。
 
-两条支路分别使用独立的 128→256 `1×1 Conv`（无 norm、无激活）恢复到 256 通道。
-
-两路直接相加，再经过一个 256→256 的 `1×1 Conv`（`fusion_out_proj`）输出：
-
-```python
-fused_out = semantic_out + detail_out
-output = fusion_out_proj(fused_out)
-```
-
-模块不包含融合系数、门控或零初始化，输出端不加 GroupNorm、GELU、ReLU，也不加原始 encoder 残差。融合模块只有这一层，不存在多尺度堆叠。
-
-整个模块使用一次 non-reentrant checkpoint（`self.training and self.use_checkpoint` 时开启）。支路通道数固定为 128，SAM3 通道数固定为 256。
+本实验只修改 Decoder Input Fusion；损失设置沿用基线，包括现有的主路径掩码蒸馏及边界环。
+此前讨论的“独立 encoder36 学生路径＋全图蒸馏”属于另一次训练策略修改，本分支未引入。
 
 ## 6. 冻结 SAM3 分割头与梯度边界
 
@@ -326,7 +309,7 @@ Pixel Decoder 与 semantic head 的参数始终冻结（`requires_grad=False`）
 
 冻结参数的 `requires_grad=False` 只阻止参数更新，不阻止对输入求梯度。学生路径误加 `no_grad()` 会同时切断主 BCE 和蒸馏对 DecoderInputFusion、Refiner 的监督。
 
-DecoderInputFusion 消费 Refiner36、原始 encoder72 和 FPN72；Pixel Decoder 内部继续使用原始 FPN144 与 FPN288。教师路径不消费融合输出。
+DecoderInputFusion 仅消费 Refiner36 和 FPN72；Pixel Decoder 内部继续使用原始 FPN144 与 FPN288。教师路径不消费融合输出。
 
 ## 7. 训练设计
 
@@ -519,7 +502,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 | ------------------------------------- | ---------------------------------------- |
 | `models/sam3_image.py`                | 类别 chunk、缓存、SAM3 encoder、低分辨率 refiner、逐 chunk 学生/教师解码 |
 | `models/encoder_refiner.py`           | 全类别 Refiner、最终 feature LayerNorm 与单尺度融合接口 |
-| `models/decoder_input_fusion.py`      | 单尺度语义—细节双路融合，输出替换 Pixel Decoder 最后一层 FPN 输入 |
+| `models/decoder_input_fusion.py`      | 单尺度256通道 Refiner/FPN 单分支卷积融合，输出送入 Pixel Decoder |
 | `models/encoder_refiner_attention.py` | 交替单 Value 跨类别注意力、独立可选窗口/局部 3×3 类内注意力、双流 FFN、pre-norm 与直接残差更新 |
 | `models/maskformer_segmentation.py`   | prompt attention、Pixel Decoder 和原始 semantic head |
 | `models/score_embeddings.py`          | 64 模板相似度图、归一化 CLIP 融合和空间卷积增强 |
@@ -564,10 +547,10 @@ python tools/train.py configs/train/isaid_loveda_full.py
 25. optimizer.zero_grad / scaler.step / scaler.update / scheduler.step 每 batch 只执行一次。
 26. 不使用 `retain_graph=True`。
 27. backbone_fpn 顺序固定为 `[288, 144, 72]`，即 `backbone_fpn[0]` 为 288、`[1]` 为 144、`[2]` 为 72。
-28. 原始 FPN 在 256 通道时不按提示复制；FPN 先按图像投影到 128 通道，再按提示广播。
-29. FPN 投影模块可训练，每个 chunk 重新计算，不跨 chunk 缓存计算图。
-30. 融合支路固定 `branch_dim=128`，3×3 卷积使用普通卷积（无分组）。
-31. 融合输出直接作为 Pixel Decoder 的最后一层输入；模块内无融合系数、门控、零初始化、额外残差或输出归一化。
+28. 原始256通道 FPN 用 expand 按提示广播，与上采样 Refiner 沿通道拼接；仅拼接时分配512通道输入。
+29. 单分支融合卷积可训练，每个 chunk 重新计算，不跨 chunk 缓存计算图。
+30. 融合固定为512→256的1×1卷积、GroupNorm(8,256)、GELU和256→256普通3×3卷积。
+31. 融合输出直接作为 Pixel Decoder 的最后一层输入；模块内无融合系数、门控、零初始化、残差或额外输出投影，输出不加归一化或激活。
 32. 最终 logits 由冻结 `semantic_seg_head` 生成。
 
 当前限制：
@@ -678,14 +661,6 @@ Checkpoint schema 版本为 4。实验追踪状态不再保存在 checkpoint 中
 * 类内 Q/K 拼接顺序也发生变化，即使旧权重 shape 匹配，直接加载亦不保证数值等价；建议本次新实验从默认初始化开始。
 * `_CHECKPOINT_VERSION` 保持 4，因为 checkpoint 容器格式不变。
 
-CPU 回归验证入口：`python -m unittest discover -s tests -v`。
-18 项 CPU 测试覆盖单 Value、类间聚合轴、窗口/局部边界、更新顺序和残差目标，
-四种类内配置的实际 36×36/256 通道四层 checkpoint 输出与梯度一致性，
-固定图像指导、两种类间注意力均不拼接文本、标准 FFN 通道、完整配置构建，
-以及单层融合只上采样一次、原始 encoder/FPN 输入复用、逐提示广播、
-checkpoint 输出和参数/Refiner 输入梯度、输入形状检查。
-测试不需要下载 SAM3 或 RemoteCLIP 权重。
-
 本次简化为固定图像指导版本：
 
 * 固定保留 score 类内的 CLIP 第 8、16 层融合指导和 feature 类内的 FPN36 指导。
@@ -697,3 +672,19 @@ checkpoint 输出和参数/Refiner 输入梯度、输入形状检查。
 * 初始 CLIP score embedding、原始 SAM3 流程、教师、冻结解码头、损失和逐 chunk 梯度设计保留。
 * 旧 checkpoint 的 FFN 形状和融合参数名称不匹配；新实验使用新的 work directory，不提供兼容层。
 * checkpoint 容器 schema 保持 4。
+
+
+
+本次256通道单分支融合实验：
+
+* 删除旧 `decoder_input_fusion` 四路投影、两条支路及三个输出投影。
+* 新增 `core.encoder_refiner.decoder_input_fusion.fusion.0.*`、`fusion.1.*` 和 `fusion.3.*`。
+* 融合模块和 Refiner 包装接口均移除 `original_encoder_feature_72` 参数；教师仍使用原始 encoder72。
+* 主分割、教师、冻结状态、损失、Refiner Attention 和逐 chunk 梯度回传策略沿用基线。
+* 旧 checkpoint 无法严格恢复；使用新 work directory。可通过 `--load-model-from` 迁移名称及形状匹配的未变化参数，新融合模块使用默认初始化，不添加兼容层。
+* checkpoint 容器 schema 保持4。
+
+CPU 回归验证入口：`python -m unittest discover -s tests -v`。
+测试覆盖单分支的多图多提示对应关系、checkpoint前向及输入/参数梯度一致性、
+冻结下游的梯度传播、外层no_grad、非法输入，以及真实chunk解码方法的融合调用与教师输入隔离。
+使用轻量冻结头替身验证调用边界，不下载 SAM3 或 RemoteCLIP 权重；不替代完整训练验证。
