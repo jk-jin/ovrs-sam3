@@ -143,6 +143,8 @@ model = dict(
         final_dice_weight=0.0,
         eps=1e-6,
         sam3_mask_distill_weight=0.5,
-        sam3_mask_distill_boundary_width=3,
+        sam3_mask_distill_teacher_threshold=0.5,
+        sam3_mask_distill_high_weight=0.5,
+        sam3_mask_distill_class_scope="present",  # "present" or "all"
     ),
 )

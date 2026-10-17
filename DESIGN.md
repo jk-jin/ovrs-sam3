@@ -383,23 +383,37 @@ loss_final_bce = (bce_per_pixel * valid_mask).sum() / total_valid_pixels
 
 蒸馏权重在整个训练过程中保持不变。只要当前 batch 存在可蒸馏提示，就计算 teacher logits。
 
-蒸馏监督范围：
+蒸馏始终在完整 288×288 图像上计算，包括所有标签为 255 的位置。
+GT 只在 `present` 模式下判断类别是否存在，不用于筛选蒸馏像素；不构建边界环。
 
-1. 冻结的 SAM3 semantic head 产生的 teacher logits 做 sigmoid，得到 soft probability 目标。
-2. student 使用 raw `final_logits`。
-3. 用 `binary_cross_entropy_with_logits` 逐像素计算蒸馏损失。
-4. 只对 GT 中存在的图像—提示对计算。
-5. 所有 `label != 255` 的有效像素参与蒸馏。
-6. 对每个存在原始类别，额外包含 GT 外侧指定宽度的边界环。
-7. 外侧边界环只保留 `label == 255` 的位置。
-8. 外环宽度由 `sam3_mask_distill_boundary_width` 控制，基础配置为 3。
-9. 宽度 0 表示不增加外环，仅蒸馏全部有效像素。
-10. 远离物体的 255 区域不参与蒸馏。
-11. 不存在类别不参与蒸馏。
-12. teacher 和 student 都在 288×288 分辨率，不做尺度变换。
-13. teacher 必须 detach。
-14. 分母是全部存在提示对应的有效像素与类别外环像素总数（全局分母，不按 chunk 单独计算）。
-15. 多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
+1. 教师 logits detach 后做 sigmoid，得到软概率；学生使用 raw `final_logits`。
+2. `sam3_mask_distill_class_scope="present"`（默认）只选择 GT 存在的图像—提示对；
+   `"all"` 选择所有图像—提示对，包括 GT 中不存在的类别。
+3. 对每个被选中的图像—提示对，按教师概率划分两个区域：
+   大于 `sam3_mask_distill_teacher_threshold` 为高分区域，小于或等于阈值为低分区域。
+   阈值默认 0.5，允许配置为 0 到 1。
+4. `binary_cross_entropy_with_logits` 的监督目标始终是教师软概率。
+   阈值只用于区域划分，不将监督目标二值化。
+5. 分别对两个区域内部的逐像素 BCE 求平均，每个图像—提示对独立归一化。
+6. `sam3_mask_distill_high_weight` 对应高分区域权重 a，默认 0.5，允许配置为 0 到 1；
+   低分区域使用权重 1-a。a 越大，越侧重教师高分区域。
+7. 空区域的平均损失记为 0；另一区域保留原权重，不重新归一化。
+8. 将上述加权结果在选中的图像—提示对上取平均，再乘蒸馏总权重。
+   没有被选中的图像—提示对时，蒸馏损失为可反向传播的零，且跳过教师解码。
+9. 每个 chunk 的类别损失和除以全 batch 的选中图像—提示对数量，
+   不按 chunk 分别求均值，确保 chunk 大小不影响结果与梯度。
+10. 多个提示映射到同一原始类别时共享 GT 存在性，各提示独立计算教师区域并等权计数，
+    保持现有提示空间的训练约定。
+11. 蒸馏的 sigmoid、逐像素 BCE 和区域求和使用 FP32，避免半精度大图累加溢出。
+
+基础配置：
+
+```python
+sam3_mask_distill_weight=0.5,             # 蒸馏总权重
+sam3_mask_distill_teacher_threshold=0.5,  # 划分高分与低分区域
+sam3_mask_distill_high_weight=0.5,        # 高分权重 a；低分权重为 1-a
+sam3_mask_distill_class_scope="present", # 改为 "all" 时监督全部类别
+```
 
 总损失：
 
@@ -411,9 +425,9 @@ total_loss = (
 )
 ```
 
-`loss_sam3_mask_distill_bce` 为未经权重的原始蒸馏 BCE；`loss_sam3_mask_distill_weighted` 为真正加入总损失的加权贡献。蒸馏权重在整个训练期间固定不变。
+`loss_sam3_mask_distill_bce` 为已经完成高低区域加权、尚未乘蒸馏总权重的 BCE；`loss_sam3_mask_distill_weighted` 为真正加入总损失的加权贡献。蒸馏权重在整个训练期间固定不变。
 
-上面的数值取自 `configs/_base_/model/ovrs_sam3.py` 的当前取值（蒸馏权重 0.5、外环宽度 3）。`config_dataclasses.py` 中的通用默认值不同，实验实际使用的数值取决于最终合并配置。
+上面的数值取自 `configs/_base_/model/ovrs_sam3.py` 的当前取值（蒸馏总权重 0.5、阈值 0.5、高分权重 0.5、类别范围 present）。`config_dataclasses.py` 中的通用默认值不同，实验实际使用的数值取决于最终合并配置。
 
 **训练显存设计**：
 
@@ -491,7 +505,7 @@ Ctrl+C 使用 Python 默认 `KeyboardInterrupt`。训练和验证均立即退出
 | 键 | 含义 |
 | --- | --- |
 | `loss_final_bce` | 朴素 BCE，所有有效像素等权全局均值（跨 chunk 累加后求均值） |
-| `loss_sam3_mask_distill_bce` | 未经权重的原始蒸馏 BCE（跨 chunk 累加后求均值） |
+| `loss_sam3_mask_distill_bce` | 按教师区域加权后的蒸馏 BCE，未乘蒸馏总权重（跨 chunk 累加） |
 | `loss_sam3_mask_distill_weighted` | 真正加入总损失的加权蒸馏贡献（跨 chunk 累加后求均值） |
 
 ## 10. 配置与主要文件
@@ -554,7 +568,10 @@ python tools/train.py configs/train/isaid_loveda_full.py
 15. 教师始终使用缓存中的原始 encoder72，不使用融合输出或被 Refiner 更新后的特征。
 16. clip_score_embed_36 保持纯 RemoteCLIP 输出，用于 debug。
 17. teacher 只来自原始 encoder72 解码路径并且必须 detach。teacher 和 student 都为 288×288。
-18. 蒸馏只监督存在类别。每个存在提示均监督全部 GT 有效像素，并额外监督其原始类别 GT 外侧 `sam3_mask_distill_boundary_width` 像素范围内且标签为 255 的边界环。远处 255 区域不参与蒸馏。多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
+18. 蒸馏始终覆盖完整图像，包括标签为 255 的位置。类别范围可选 `present` 或 `all`；
+    每个选中的图像—提示对按教师软概率阈值分为高低两区，各区独立求 BCE 均值，
+    分别乘 a 和 1-a 后在选中对上平均。空区域为零且不重新分配权重；教师概率不二值化。
+    全局分母为选中图像—提示对总数，不能使用像素总数或每个 chunk 的类别数。
 19. 最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
 20. Refiner 按 A→B→A→B 交替，每层先更新 score 再更新 feature。score 类内固定拼接 CLIP 中间层融合特征，feature 类内固定拼接 FPN36；两种类间 Q/K 都不拼接文本。所有注意力单 Value、pre-norm、直接残差。双路 FFN 各处理当前 256 通道特征，256→1024→256 后直接残差到当前流；保留最终 feature LayerNorm。
 21. TTA 必须先平均提示空间分数（`raw_prompt_score_map`），再合并提示到原始类别，最后进行相对阈值过滤。
@@ -697,3 +714,15 @@ checkpoint 输出和参数/Refiner 输入梯度、输入形状检查。
 * 初始 CLIP score embedding、原始 SAM3 流程、教师、冻结解码头、损失和逐 chunk 梯度设计保留。
 * 旧 checkpoint 的 FFN 形状和融合参数名称不匹配；新实验使用新的 work directory，不提供兼容层。
 * checkpoint 容器 schema 保持 4。
+
+本次全图分区加权蒸馏修改：
+
+* 删除 `sam3_mask_distill_boundary_width`、GT 外环构建及蒸馏像素分母，不提供旧字段兼容。
+* 新增教师概率阈值、高分区域权重和类别范围配置，具体定义见 7.3。
+* 教师、学生解码路径与模型参数结构不变；训练器按选中图像—提示对数量决定是否计算教师。
+* 主 BCE 和 Dice 继续使用各自原有定义，蒸馏全图范围不受 GT ignore mask 限制。
+* 蒸馏语义和配置已变化，新实验使用新的 work directory；checkpoint 容器 schema 保持 4。
+* CPU 回归验证：`python -m unittest discover -s tests -v`。
+  测试覆盖区域均值与权重、阈值相等、软目标、两种类别范围、空区域、无存在类别、
+  全 ignore 标签、提示别名、分块损失与梯度一致性，以及训练器教师调用与 proxy 梯度回传。
+  无需下载 SAM3 或 RemoteCLIP 权重。
