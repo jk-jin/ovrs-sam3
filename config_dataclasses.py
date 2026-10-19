@@ -141,12 +141,20 @@ class SemanticCriterionConfig:
     ignore_index: int = 255
 
     final_balanced_bce_weight: float = 1.0
-    final_dice_weight: float = 0.0
+    instance_bce_weight: float = 1.0
+    fusion_bce_weight: float = 0.1
+    presence_bce_weight: float = 0.1
+    absent_query_bce_weight: float = 0.1
 
     eps: float = 1e-6
 
     sam3_mask_distill_weight: float = 0.05
     sam3_mask_distill_boundary_width: int = 2
+    instance_mask_distill_weight: float = 0.5
+    instance_score_distill_weight: float = 0.1
+    instance_match_num_points: int = 1024
+    # Fully annotated datasets can supervise absence, including background-only crops.
+    presence_annotations_complete: bool = True
 
 
 @dataclass
@@ -167,6 +175,7 @@ class SegmentorBuildConfig:
     compile: bool = False
 
     prompt_chunk_size: Optional[int] = None
+    instance_score_threshold: float = 0.5
 
     freeze_cfg: FreezeConfig = field(default_factory=FreezeConfig)
     openclip_cfg: OpenCLIPConfig = field(default_factory=OpenCLIPConfig)

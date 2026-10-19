@@ -39,9 +39,12 @@ from .models.adapters.semantic_adapter import (
     SemanticSegAdapter,
 )
 from .models.encoder import TransformerEncoderFusion, TransformerEncoderLayer
+from .models.decoder import TransformerDecoder, TransformerDecoderLayer
 from .models.geometry_encoders import SequenceGeometryEncoder
 from .models.maskformer_segmentation import PixelDecoder, UniversalSegmentationHead
 from .models.model_misc import (
+    DotProductScoring,
+    MLP,
     MultiheadAttentionWrapper as MultiheadAttention,
     TransformerWrapper,
 )
@@ -433,13 +436,31 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         )
 
     @staticmethod
-    def _create_encoder_only_transformer() -> TransformerWrapper:
+    def _create_transformer() -> TransformerWrapper:
         encoder = SAM3ModelBuilder._create_transformer_encoder()
+        layer = TransformerDecoderLayer(
+            activation="relu", d_model=256, dim_feedforward=2048, dropout=0.1,
+            cross_attention=MultiheadAttention(num_heads=8, dropout=0.1, embed_dim=256),
+            n_heads=8, use_text_cross_attention=True,
+        )
+        decoder = TransformerDecoder(
+            layer=layer, num_layers=6, num_queries=200, return_intermediate=True,
+            box_refine=True, num_o2m_queries=0, dac=False, boxRPB="log",
+            d_model=256, frozen=True, interaction_layer=None,
+            dac_use_selfatt_ln=True, use_act_checkpoint=True, presence_token=True,
+            # Coordinates are created lazily on the input device, including CPU.
+        )
         return TransformerWrapper(
             encoder=encoder,
-            decoder=None,
+            decoder=decoder,
             d_model=256,
         )
+
+    @staticmethod
+    def _create_dot_product_scoring():
+        prompt_mlp = MLP(256, 2048, 256, 2, dropout=0.1,
+                         residual=True, out_norm=nn.LayerNorm(256))
+        return DotProductScoring(d_model=256, d_proj=256, prompt_mlp=prompt_mlp)
 
     @staticmethod
     def _create_segmentation_head(compile_mode=None):
@@ -458,7 +479,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             hidden_dim=256,
             upsampling_stages=3,
             aux_masks=False,
-            no_dec=True,
+            no_dec=False,
             presence_head=False,
             dot_product_scorer=None,
             act_ckpt=True,
@@ -574,6 +595,17 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             }
 
         missing_keys, unexpected_keys = model.load_state_dict(ckpt, strict=False)
+        required_prefixes = (
+            "transformer.decoder.", "dot_prod_scoring.",
+            "segmentation_head.instance_seg_head.",
+            "segmentation_head.mask_predictor.",
+        )
+        missing_instance = [k for k in missing_keys if k.startswith(required_prefixes)]
+        if missing_instance:
+            raise RuntimeError(
+                "SAM3 instance weights are incomplete; load the original full SAM3 "
+                f"checkpoint. Missing keys: {missing_instance}"
+            )
         if len(missing_keys) > 0 or len(unexpected_keys) > 0:
             print(
                 f"Loaded {checkpoint_path} with missing keys={missing_keys} "
@@ -775,7 +807,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 cfg.openclip_cfg
             )
 
-        transformer = cls._create_encoder_only_transformer()
+        transformer = cls._create_transformer()
         segmentation_head = cls._create_segmentation_head(compile_mode=compile_mode)
         input_geometry_encoder = cls._create_geometry_encoder()
 
@@ -786,7 +818,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             segmentation_head=segmentation_head,
             num_feature_levels=1,
             o2m_mask_predict=True,
-            dot_prod_scoring=None,
+            dot_prod_scoring=cls._create_dot_product_scoring(),
             use_instance_query=True,
             multimask_output=True,
             matcher=None,
@@ -807,6 +839,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             encoder_refiner_shift_size=int(refiner_cfg.shift_size),
             encoder_refiner_use_checkpoint=bool(refiner_cfg.use_checkpoint),
             task_mode=TASK_MODE_SEMANTIC,
+            instance_score_threshold=float(cfg.instance_score_threshold),
         )
 
         checkpoint_path = cfg.checkpoint_path
@@ -865,6 +898,11 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         # --- Then force frozen modules back to eval ---
         if core is not None:
+            # These parameters are shared with the immutable SAM3 teacher.
+            for module in (core.backbone, core.transformer, core.geometry_encoder,
+                           core.segmentation_head, core.dot_prod_scoring):
+                module.requires_grad_(False)
+                module.eval()
             # SAM3 frozen modules.
             core.backbone.eval()
             core.transformer.eval()

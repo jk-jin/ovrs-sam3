@@ -279,14 +279,7 @@ class Trainer:
                 target_hw=(288, 288),
             )
 
-        effective_distill_weight = float(
-            loss_context.sam3_mask_distill_weight
-        )
-
-        need_teacher_logits = (
-            effective_distill_weight > 0.0
-            and loss_context.distill_pixel_denom > 0
-        )
+        need_teacher_logits = self.criterion.needs_teacher(loss_context)
 
         chunk_class_counts = encoder_refiner_cache["chunk_class_counts"]
 
@@ -309,6 +302,7 @@ class Trainer:
                         class_start=chunk_start,
                         class_end=chunk_end,
                         return_teacher_logits=need_teacher_logits,
+                        teacher_pair_mask=loss_context.presence_target[:, chunk_start:chunk_end],
                     )
                 )
 
@@ -325,13 +319,7 @@ class Trainer:
             self.scaler.scale(chunk_total_loss).backward()
 
             # Accumulate detached stats on GPU.
-            for key in (
-                "loss_final_bce",
-                "loss_final_dice",
-                "loss_sam3_mask_distill_bce",
-                "loss_sam3_mask_distill_weighted",
-                "total_loss",
-            ):
+            for key in chunk_loss_dict:
                 val = chunk_loss_dict.get(key)
                 if val is not None and torch.is_tensor(val):
                     detached = val.detach()

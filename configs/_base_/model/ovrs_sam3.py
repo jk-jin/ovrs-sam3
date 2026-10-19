@@ -6,7 +6,8 @@ model = dict(
     device="cuda",
     eval_mode=False,
     compile=False,
-    prompt_chunk_size=4,
+    # Each prompt now carries 200 high-resolution masks.
+    prompt_chunk_size=1,
 
     openclip_cfg=dict(
         enabled=True,
@@ -137,10 +138,19 @@ model = dict(
         class_relative_eps=1e-6,
     ),
 
+    instance_score_threshold=0.5,
+
     criterion_cfg=dict(
         ignore_index=255,
         final_balanced_bce_weight=1.0,
-        final_dice_weight=0.0,
+        instance_bce_weight=1.0,
+        fusion_bce_weight=0.1,
+        presence_bce_weight=0.1,
+        absent_query_bce_weight=0.1,
+        instance_mask_distill_weight=0.5,
+        instance_score_distill_weight=0.1,
+        instance_match_num_points=1024,
+        presence_annotations_complete=True,
         eps=1e-6,
         sam3_mask_distill_weight=0.5,
         sam3_mask_distill_boundary_width=3,

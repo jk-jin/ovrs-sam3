@@ -157,7 +157,11 @@ def _short_key_name(key: str) -> str:
 def _compact_key_name(key: str) -> str:
     mapping = {
         "final_balanced_bce_weight": "bbce",
-        "final_dice_weight": "dice",
+        "instance_bce_weight": "instance",
+        "fusion_bce_weight": "fusion",
+        "presence_bce_weight": "presence",
+        "instance_mask_distill_weight": "mask_kd",
+        "instance_score_distill_weight": "score_kd",
         "sam3_mask_distill_weight": "distill",
         "score_embed_dim": "score_dim",
         "layer_scale_init": "lsi",

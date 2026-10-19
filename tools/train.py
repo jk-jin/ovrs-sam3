@@ -293,7 +293,7 @@ def main():
         default=None,
         help=(
             "Override config options, e.g. "
-            "train_cfg.max_iters=1000 model.criterion_cfg.final_dice_weight=0.3"
+            "train_cfg.max_iters=1000 model.criterion_cfg.fusion_bce_weight=0.1"
         ),
     )
     parser.add_argument(

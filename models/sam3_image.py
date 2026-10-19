@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Iterator, List, Optional, Tuple
+import math
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from .data_misc import BatchedDatapoint, FindStage
 from .encoder_refiner import ClassConditionedEncoderRefiner
 from .geometry_encoders import Prompt
+from .instance_utils import aggregate_instances, log_prob_to_logits
 from .task_modes import OUTPUT_KEYS, TASK_MODE_SEMANTIC, normalize_task_mode
 from .vl_combiner import SAM3VLBackbone
 
@@ -49,6 +52,7 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_shift_size: int = 6,
         encoder_refiner_use_checkpoint: bool = True,
         task_mode: str = TASK_MODE_SEMANTIC,
+        instance_score_threshold: float = 0.5,
         **kwargs,
     ):
         super().__init__()
@@ -68,6 +72,9 @@ class Sam3Image(torch.nn.Module):
         self.matcher = matcher
         self.num_interactive_steps_val = num_interactive_steps_val
         self.use_dot_prod_scoring = use_dot_prod_scoring
+        if not math.isfinite(instance_score_threshold) or not 0 <= instance_score_threshold <= 1:
+            raise ValueError("instance_score_threshold must be in [0, 1].")
+        self.instance_score_threshold = float(instance_score_threshold)
 
         self.clip_image_encoder = clip_image_encoder
         self.clip_text_encoder = clip_text_encoder
@@ -361,6 +368,7 @@ class Sam3Image(torch.nn.Module):
         encoder_feature_chunks: list[torch.Tensor] = []
         chunk_class_counts: list[int] = []
         merged_class_ids: list[int] = []
+        query_chunks = {}
 
         for start in range(0, num_classes, chunk_size):
             end = min(start + chunk_size, num_classes)
@@ -403,6 +411,7 @@ class Sam3Image(torch.nn.Module):
             )
 
             encoder_feature_chunks.append(chunk_out["encoder_features_72"])
+            query_chunks[(start, end)] = chunk_out["query_inputs"]
             merged_class_ids.extend(chunk_class_ids)
             chunk_class_counts.append(num_chunk_classes)
 
@@ -434,6 +443,7 @@ class Sam3Image(torch.nn.Module):
             "class_names": class_texts,
             "class_ids": merged_class_ids,
             "chunk_class_counts": chunk_class_counts,
+            "query_chunks": query_chunks,
         }
         return cache
 
@@ -601,6 +611,39 @@ class Sam3Image(torch.nn.Module):
     # Per-chunk high-resolution decoding
     # ------------------------------------------------------------------
 
+    def _decode_queries(self, memory, query_inputs):
+        """Original SAM3 query decoder, with DAC explicitly disabled."""
+        decoder = self.transformer.decoder
+        tgt = decoder.query_embed.weight[:, None].expand(-1, memory.shape[1], -1)
+        hs, _, presence, _ = decoder(
+            tgt=tgt, memory=memory,
+            memory_key_padding_mask=query_inputs["padding_mask"],
+            pos=query_inputs["pos_embed"],
+            level_start_index=query_inputs["level_start_index"],
+            spatial_shapes=query_inputs["spatial_shapes"],
+            valid_ratios=query_inputs["valid_ratios"],
+            memory_text=query_inputs["prompt"],
+            text_attention_mask=query_inputs["prompt_mask"],
+            apply_dac=False,
+        )
+        # Decoder is sequence-first; the scoring and mask heads are batch-first.
+        final_hs = hs[-1:].transpose(1, 2)
+        scores = self.dot_prod_scoring(
+            final_hs, query_inputs["prompt"], query_inputs["prompt_mask"]
+        )[0, ..., 0]
+        return final_hs[0], scores, presence[-1, 0]
+
+    @staticmethod
+    def _select_query_inputs(query_inputs, indices):
+        selected = dict(query_inputs)
+        for key in ("memory", "pos_embed", "prompt", "padding_mask"):
+            value = selected[key]
+            if value is not None:
+                selected[key] = value.index_select(1, indices)
+        for key in ("prompt_mask", "valid_ratios"):
+            selected[key] = selected[key].index_select(0, indices)
+        return selected
+
     def decode_encoder_refiner_chunk_from_cache(
         self,
         encoder_refiner_cache: Dict[str, Any],
@@ -608,80 +651,85 @@ class Sam3Image(torch.nn.Module):
         class_start: int,
         class_end: int,
         return_teacher_logits: bool = False,
+        teacher_pair_mask: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
-        """Single-scale fusion followed by shared frozen SAM3 decoding.
+        """Shared frozen dual heads; teacher runs only on present pairs.
 
-        Steps:
-        1. Optionally run the teacher path (no_grad): original encoder72 →
-           frozen Pixel Decoder → frozen semantic head → detached logits.
-        2. Fuse Refiner36, original encoder72 and FPN72 into 72×72.
-        3. Student path (gradients enabled): fused 72×72 replaces the last
-           FPN level of the same frozen Pixel Decoder and semantic head.
+        Teacher memory is the raw six-layer encoder output. Its pixel input
+        is the cached prompt-cross-attended memory. Student memory and pixel
+        input both use DecoderInputFusion, without repeating prompt attention.
         """
-        original_features_72 = encoder_refiner_cache[
-            "cross_attended_encoder_features_72"
-        ]
-        total_prompts = original_features_72.shape[1]
+        original = encoder_refiner_cache["cross_attended_encoder_features_72"]
+        batch_size, total_prompts = original.shape[:2]
         if not 0 <= class_start < class_end <= total_prompts:
             raise ValueError("Chunk indices are out of range.")
-
-        backbone_fpn = encoder_refiner_cache["backbone_fpn"]
-        batch_size = original_features_72.shape[0]
         num_prompts = class_end - class_start
-        expected_shape = (batch_size, num_prompts, 256, 36, 36)
-        if tuple(refiner_feature_36_chunk.shape) != expected_shape:
-            raise ValueError(
-                f"Expected refiner chunk {expected_shape}, "
-                f"got {tuple(refiner_feature_36_chunk.shape)}."
-            )
-
-        original_chunk = original_features_72[:, class_start:class_end]
-        image_ids = torch.arange(
-            batch_size,
-            device=original_chunk.device,
-            dtype=torch.long,
-        ).repeat_interleave(num_prompts)
-
-        result: Dict[str, torch.Tensor] = {}
-        if return_teacher_logits:
-            # Teacher runs first so its high-resolution intermediates do not
-            # stay resident alongside the student graph.
-            with torch.no_grad():
-                teacher_outputs = self.segmentation_head(
-                    backbone_feats=backbone_fpn,
-                    image_ids=image_ids,
-                    encoder_hidden_states=self._feature_72_to_hidden_states(
-                        original_chunk
-                    ),
-                )
-                result[OUTPUT_KEYS.sam3_teacher_logits] = (
-                    teacher_outputs["semantic_seg"]
-                    .reshape(batch_size, num_prompts, 288, 288)
-                    .detach()
-                )
-            del teacher_outputs
-
         num_pairs = batch_size * num_prompts
-        fused_feature_72_flat = self.encoder_refiner.fuse_decoder_input_chunk(
-            refiner_feature_36=refiner_feature_36_chunk.reshape(
-                num_pairs, 256, 36, 36
-            ),
-            original_encoder_feature_72=original_chunk.reshape(
-                num_pairs, 256, 72, 72
-            ),
+        if tuple(refiner_feature_36_chunk.shape) != (batch_size, num_prompts, 256, 36, 36):
+            raise ValueError("Unexpected Refiner chunk shape.")
+        query_inputs = encoder_refiner_cache["query_chunks"][(class_start, class_end)]
+        backbone_fpn = encoder_refiner_cache["backbone_fpn"]
+        original_chunk = original[:, class_start:class_end]
+        image_ids = torch.arange(batch_size, device=original.device).repeat_interleave(num_prompts)
+        result = {}
+        if return_teacher_logits:
+            if teacher_pair_mask is None or teacher_pair_mask.shape != (batch_size, num_prompts):
+                raise ValueError("Teacher decoding requires the current GT presence mask [B, P_chunk].")
+            indices = teacher_pair_mask.flatten().nonzero(as_tuple=True)[0]
+            if indices.numel():
+                with torch.no_grad():
+                    teacher_inputs = self._select_query_inputs(query_inputs, indices)
+                    queries, scores, _ = self._decode_queries(teacher_inputs["memory"], teacher_inputs)
+                    teacher = self.segmentation_head(
+                        backbone_feats=backbone_fpn, image_ids=image_ids[indices],
+                        encoder_hidden_states=self._feature_72_to_hidden_states(original_chunk).index_select(1, indices),
+                        obj_queries=queries,
+                    )
+                    result.update({
+                        "teacher_pair_indices": indices,
+                        "teacher_semantic_logits": teacher["semantic_seg"][:, 0].detach(),
+                        "teacher_instance_logits": teacher["pred_masks"].detach(),
+                        "teacher_query_logits": scores.detach(),
+                    })
+                del teacher, queries, teacher_inputs
+
+        fused = self.encoder_refiner.fuse_decoder_input_chunk(
+            refiner_feature_36=refiner_feature_36_chunk.reshape(num_pairs, 256, 36, 36),
+            original_encoder_feature_72=original_chunk.reshape(num_pairs, 256, 72, 72),
             sam_fpn_72=backbone_fpn[2],
         )
-        student_hidden_states = self._feature_72_to_hidden_states(
-            fused_feature_72_flat.reshape(batch_size, num_prompts, 256, 72, 72)
+        memory = self._feature_72_to_hidden_states(
+            fused.reshape(batch_size, num_prompts, 256, 72, 72)
         )
-        student_outputs = self.segmentation_head(
-            backbone_feats=backbone_fpn,
-            image_ids=image_ids,
-            encoder_hidden_states=student_hidden_states,
+        if torch.is_grad_enabled() and memory.requires_grad and self.encoder_refiner.use_checkpoint:
+            queries, scores, presence = checkpoint(
+                self._decode_queries, memory, query_inputs, use_reentrant=False
+            )
+        else:
+            queries, scores, presence = self._decode_queries(memory, query_inputs)
+        student = self.segmentation_head(
+            backbone_feats=backbone_fpn, image_ids=image_ids,
+            encoder_hidden_states=memory, obj_queries=queries,
         )
-        result[OUTPUT_KEYS.final_logits] = student_outputs["semantic_seg"].reshape(
-            batch_size, num_prompts, 288, 288
-        )
+        semantic = student["semantic_seg"].reshape(batch_size, num_prompts, 288, 288)
+        masks = student["pred_masks"].reshape(batch_size, num_prompts, 200, 288, 288)
+        scores = scores.reshape(batch_size, num_prompts, 200)
+        presence = presence.reshape(batch_size, num_prompts)
+        aggregate_args = (semantic, masks, scores, presence, self.instance_score_threshold)
+        if torch.is_grad_enabled() and masks.requires_grad and self.encoder_refiner.use_checkpoint:
+            union_log_prob, fused_log_prob = checkpoint(
+                aggregate_instances, *aggregate_args, use_reentrant=False
+            )
+        else:
+            union_log_prob, fused_log_prob = aggregate_instances(*aggregate_args)
+        result.update({
+            OUTPUT_KEYS.final_logits: semantic,
+            "instance_logits": masks,
+            "query_logits": scores,
+            "presence_logits": presence,
+            "instance_union_log_prob": union_log_prob,
+            "fused_log_prob": fused_log_prob,
+        })
         return result
 
     # ------------------------------------------------------------------
@@ -724,7 +772,7 @@ class Sam3Image(torch.nn.Module):
         final_logits = torch.empty(
             B, C, 288, 288,
             device=refiner_features_36.device,
-            dtype=refiner_features_36.dtype,
+            dtype=torch.float32,
         )
 
         chunk_start = 0
@@ -744,7 +792,7 @@ class Sam3Image(torch.nn.Module):
             )
 
             final_logits[:, chunk_start:chunk_end].copy_(
-                chunk_outputs[OUTPUT_KEYS.final_logits]
+                log_prob_to_logits(chunk_outputs["fused_log_prob"])
             )
 
             chunk_start = chunk_end
@@ -891,6 +939,9 @@ class Sam3Image(torch.nn.Module):
 
         return {
             "encoder_features_72": encoder_features_72,
+            "query_inputs": self._detach_tree({
+                **encoder_out, "prompt": prompt, "prompt_mask": prompt_mask,
+            }),
         }
 
     def forward(self, input: BatchedDatapoint) -> Dict[str, torch.Tensor]:
