@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Dict, Optional
 
@@ -47,6 +48,8 @@ class SemanticStreamingContext:
     total_valid_pixels: int
 
     sam3_mask_distill_weight: float
+    instance_presence_target: torch.Tensor
+    instance_valid_images: torch.Tensor
 
 
 class SemanticCriterion(nn.Module):
@@ -69,6 +72,14 @@ class SemanticCriterion(nn.Module):
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
         super().__init__()
         self.cfg = cfg or SemanticCriterionConfig()
+
+        for name in ("instance_presence_bce_weight", "instance_score_bce_weight"):
+            value = float(getattr(self.cfg, name))
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and non-negative.")
+        threshold = float(self.cfg.instance_mask_threshold)
+        if not math.isfinite(threshold) or not 0 < threshold < 1:
+            raise ValueError("instance_mask_threshold must be finite and in (0, 1).")
 
         distill_weight = float(self.cfg.sam3_mask_distill_weight)
         if distill_weight < 0.0:
@@ -161,9 +172,9 @@ class SemanticCriterion(nn.Module):
         target_hw: tuple[int, int] = (288, 288),
     ) -> SemanticStreamingContext:
         """Build full-batch statistics before the prompt chunk loop."""
-        label_map = self._extract_label_map(targets)
+        original_label_map = self._extract_label_map(targets)
         label_map = self._resize_label_map_to_hw(
-            label_map=label_map,
+            label_map=original_label_map,
             target_hw=target_hw,
         )
 
@@ -352,6 +363,12 @@ class SemanticCriterion(nn.Module):
             sam3_mask_distill_weight=float(
                 self.cfg.sam3_mask_distill_weight
             ),
+            # Presence uses original GT so tiny objects survive loss-scale downsampling.
+            instance_valid_images=(original_label_map != self.cfg.ignore_index).flatten(1).any(dim=1),
+            instance_presence_target=torch.stack([
+                (original_label_map == class_id).flatten(1).any(dim=1)
+                for class_id in prompt_to_class_id
+            ], dim=1),
         )
 
     def forward_chunk(
@@ -498,11 +515,18 @@ class SemanticCriterion(nn.Module):
             distill_weight * distill_contribution
         )
 
-        # ---- Total ----
+        presence_contribution, score_contribution = self._instance_loss_chunk(
+            outputs, context, class_start, class_end, target_bool,
+        )
+        weighted_presence = self.cfg.instance_presence_bce_weight * presence_contribution
+        weighted_score = self.cfg.instance_score_bce_weight * score_contribution
+
+        # ---- Total: semantic supervision is applied to semantic logits only. ----
         chunk_total = (
             float(self.cfg.final_balanced_bce_weight) * plain_bce_contribution
             + dice_weight * dice_contribution
             + weighted_distill_contribution
+            + weighted_presence + weighted_score
         )
 
         return {
@@ -510,8 +534,61 @@ class SemanticCriterion(nn.Module):
             "loss_final_dice": dice_contribution,
             "loss_sam3_mask_distill_bce": distill_contribution,
             "loss_sam3_mask_distill_weighted": weighted_distill_contribution,
+            "loss_instance_presence_bce": presence_contribution,
+            "loss_instance_score_bce": score_contribution,
+            "loss_instance_presence_weighted": weighted_presence,
+            "loss_instance_score_weighted": weighted_score,
             "total_loss": chunk_total,
         }
+
+    @staticmethod
+    @torch.no_grad()
+    def build_instance_quality_targets(mask_logits, target_bool, valid_mask, threshold):
+        """Class precision per frozen mask; ignore unknown-only masks, penalize empty ones."""
+        foreground = mask_logits.sigmoid() > threshold
+        valid_region = foreground & valid_mask[:, None, None]
+        area = valid_region.sum(dim=(-2, -1))
+        overlap = (valid_region & target_bool[:, :, None]).sum(dim=(-2, -1))
+        quality = overlap.float() / area.clamp_min(1)
+        empty = ~foreground.any(dim=(-2, -1))
+        known_image = valid_mask.flatten(1).any(dim=1)
+        supervised = ((area > 0) | empty) & known_image[:, None, None]
+        return quality, supervised
+
+    def _instance_loss_chunk(self, outputs, context, start, end, target_bool):
+        zero = self._zero_loss(outputs[OUTPUT_KEYS.final_logits])
+        if self.cfg.instance_presence_bce_weight == 0 and self.cfg.instance_score_bce_weight == 0:
+            return zero, zero
+        score_logits = outputs["instance_score_logits"].float()
+        presence_logits = outputs["instance_presence_logits"].float()
+        mask_logits = outputs["instance_mask_logits"].detach()
+        expected = (*target_bool.shape[:2], score_logits.shape[-1])
+        if tuple(score_logits.shape) != expected or tuple(presence_logits.shape) != expected[:2]:
+            raise ValueError("Instance score/presence dimensions do not match the prompt chunk.")
+        if tuple(mask_logits.shape) != (*expected, *target_bool.shape[-2:]):
+            raise ValueError("Instance masks must align with GT at the semantic loss resolution.")
+        valid_images = context.instance_valid_images
+        # Global image-prompt denominator: summing arbitrary prompt chunks is identical.
+        denominator = (valid_images.sum() * context.num_prompt_channels).clamp_min(1)
+        presence_loss = F.binary_cross_entropy_with_logits(
+            presence_logits, context.instance_presence_target[:, start:end].float(), reduction="none",
+        )
+        presence_loss = (presence_loss * valid_images[:, None]).sum() / denominator
+        quality, supervised = self.build_instance_quality_targets(
+            mask_logits, target_bool, context.valid_mask, self.cfg.instance_mask_threshold,
+        )
+        per_query = F.binary_cross_entropy_with_logits(score_logits, quality, reduction="none")
+        # Within each image-prompt pair, average nonzero-quality and zero-quality
+        # groups separately. A large pool of background queries cannot drown useful masks.
+        groups = [supervised & (quality > 0), supervised & (quality == 0)]
+        pair_loss = torch.zeros_like(presence_logits)
+        group_count = torch.zeros_like(presence_logits)
+        for group in groups:
+            count = group.sum(dim=-1)
+            pair_loss = pair_loss + (per_query * group).sum(dim=-1) / count.clamp_min(1)
+            group_count = group_count + (count > 0)
+        score_loss = (pair_loss / group_count.clamp_min(1)).sum() / denominator
+        return presence_loss, score_loss
 
     # ------------------------------------------------------------------
     # Distillation (per-chunk, global denominator)
@@ -736,3 +813,4 @@ class HybridCriterion(nn.Module):
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError("HybridCriterion is not implemented yet.")
+

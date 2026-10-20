@@ -8,9 +8,11 @@ optim_wrapper = dict(
             norm_decay_mult=0.0,
             custom_keys={
                 "core.encoder_refiner": dict(lr_mult=1.0, decay_mult=1.0),
+                "core.instance_score_adapter": dict(lr_mult=1.0, decay_mult=1.0),
                 "core.clip_text_encoder": dict(lr_mult=0.01, decay_mult=1.0),
                 "core.clip_image_encoder": dict(lr_mult=0.01, decay_mult=1.0),
             },
         ),
     )
 )
+

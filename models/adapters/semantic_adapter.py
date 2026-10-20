@@ -345,13 +345,17 @@ class SemanticSegAdapter(nn.Module):
                 OUTPUT_KEYS.final_logits: prompt_logits,
             }
 
+        raw_prompt_score_map = torch.maximum(
+            prompt_logits.sigmoid(), raw_outputs["instance_score_map"],
+        )
+        # Inference logits describe the same fused probabilities as score maps.
+        # output_mode="final" above still returns untouched semantic logits.
+        prompt_logits = torch.logit(raw_prompt_score_map.clamp(1e-6, 1 - 1e-6))
         class_logits = self._merge_prompt_channels(
             prompt_map=prompt_logits,
             prompt_to_class_id=prompt_to_class_id,
             num_classes=num_classes,
         )
-
-        raw_prompt_score_map = prompt_logits.sigmoid()
 
         outputs = dict(raw_outputs)
         outputs[OUTPUT_KEYS.prompt_logits] = prompt_logits

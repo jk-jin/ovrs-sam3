@@ -17,6 +17,7 @@ from .config_dataclasses import (
     CheckpointManagerConfig,
     EncoderRefinerConfig,
     FreezeConfig,
+    InstanceScoringConfig,
     LoggerHookConfig,
     MetricsJsonlHookConfig,
     OpenCLIPConfig,
@@ -38,12 +39,15 @@ from .models.adapters.semantic_adapter import (
     HybridSegAdapter,
     SemanticSegAdapter,
 )
+from .models.decoder import TransformerDecoder, TransformerDecoderLayer
 from .models.encoder import TransformerEncoderFusion, TransformerEncoderLayer
 from .models.geometry_encoders import SequenceGeometryEncoder
 from .models.maskformer_segmentation import PixelDecoder, UniversalSegmentationHead
 from .models.model_misc import (
     MultiheadAttentionWrapper as MultiheadAttention,
     TransformerWrapper,
+    DotProductScoring,
+    MLP,
 )
 from .models.necks import Sam3DualViTDetNeck
 from .models.openclip_image_encoder import OpenCLIPImageEncoder
@@ -194,6 +198,9 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         cfg.freeze_cfg = cls._coerce_freeze_cfg(cfg.freeze_cfg)
         cfg.openclip_cfg = cls._coerce_openclip_cfg(cfg.openclip_cfg)
         cfg.encoder_refiner_cfg = cls._coerce_encoder_refiner_cfg(cfg.encoder_refiner_cfg)
+        cfg.instance_scoring_cfg = cls._coerce_config(
+            cfg.instance_scoring_cfg, InstanceScoringConfig, "instance_scoring_cfg"
+        )
         cfg.criterion_cfg = cls._coerce_criterion_cfg(cfg.criterion_cfg)
         cfg.adapter_cfg = cls._coerce_adapter_cfg(cfg.adapter_cfg)
         return cfg
@@ -433,13 +440,33 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         )
 
     @staticmethod
-    def _create_encoder_only_transformer() -> TransformerWrapper:
-        encoder = SAM3ModelBuilder._create_transformer_encoder()
-        return TransformerWrapper(
-            encoder=encoder,
-            decoder=None,
-            d_model=256,
+    def _create_transformer_decoder() -> TransformerDecoder:
+        layer = TransformerDecoderLayer(
+            activation="relu", d_model=256, dim_feedforward=2048, dropout=0.1,
+            cross_attention=MultiheadAttention(num_heads=8, dropout=0.1, embed_dim=256),
+            n_heads=8, use_text_cross_attention=True,
         )
+        return TransformerDecoder(
+            layer=layer, num_layers=6, num_queries=200, return_intermediate=True,
+            box_refine=True, num_o2m_queries=0, dac=True, boxRPB="log",
+            d_model=256, frozen=False, interaction_layer=None,
+            dac_use_selfatt_ln=True, resolution=1008, stride=14,
+            use_act_checkpoint=True, presence_token=True,
+        )
+
+    @staticmethod
+    def _create_transformer() -> TransformerWrapper:
+        return TransformerWrapper(
+            encoder=SAM3ModelBuilder._create_transformer_encoder(),
+            decoder=SAM3ModelBuilder._create_transformer_decoder(), d_model=256,
+        )
+
+    @staticmethod
+    def _create_dot_product_scoring():
+        prompt_mlp = MLP(
+            256, 2048, 256, 2, dropout=0.1, residual=True, out_norm=nn.LayerNorm(256),
+        )
+        return DotProductScoring(d_model=256, d_proj=256, prompt_mlp=prompt_mlp)
 
     @staticmethod
     def _create_segmentation_head(compile_mode=None):
@@ -458,7 +485,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             hidden_dim=256,
             upsampling_stages=3,
             aux_masks=False,
-            no_dec=True,
+            no_dec=False,
             presence_head=False,
             dot_product_scorer=None,
             act_ckpt=True,
@@ -574,6 +601,16 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             }
 
         missing_keys, unexpected_keys = model.load_state_dict(ckpt, strict=False)
+        required_prefixes = (
+            "transformer.decoder.", "dot_prod_scoring.",
+            "segmentation_head.mask_predictor.", "segmentation_head.instance_seg_head.",
+        )
+        missing_instance = [key for key in missing_keys if key.startswith(required_prefixes)]
+        if missing_instance:
+            raise ValueError(
+                "The frozen instance path requires original SAM3 checkpoint weights; "
+                f"missing: {missing_instance}"
+            )
         if len(missing_keys) > 0 or len(unexpected_keys) > 0:
             print(
                 f"Loaded {checkpoint_path} with missing keys={missing_keys} "
@@ -775,7 +812,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 cfg.openclip_cfg
             )
 
-        transformer = cls._create_encoder_only_transformer()
+        transformer = cls._create_transformer()
         segmentation_head = cls._create_segmentation_head(compile_mode=compile_mode)
         input_geometry_encoder = cls._create_geometry_encoder()
 
@@ -786,7 +823,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             segmentation_head=segmentation_head,
             num_feature_levels=1,
             o2m_mask_predict=True,
-            dot_prod_scoring=None,
+            dot_prod_scoring=cls._create_dot_product_scoring(),
+            instance_scoring_cfg=cfg.instance_scoring_cfg,
             use_instance_query=True,
             multimask_output=True,
             matcher=None,
@@ -865,7 +903,12 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         # --- Then force frozen modules back to eval ---
         if core is not None:
-            # SAM3 frozen modules.
+            # Enforce frozen SAM3 even if a broad config requests training.
+            for module in (core.backbone, core.transformer, core.geometry_encoder,
+                           core.segmentation_head, core.dot_prod_scoring):
+                module.requires_grad_(False)
+                module.eval()
+            core.instance_score_adapter.requires_grad_(True)
             core.backbone.eval()
             core.transformer.eval()
             core.geometry_encoder.eval()
@@ -1071,3 +1114,4 @@ def build_train_runtime_components(
         cfg,
         work_dir_override=work_dir_override,
     )
+

@@ -122,10 +122,17 @@ model = dict(
         use_checkpoint=True,
     ),
 
+    instance_scoring_cfg=dict(
+        num_heads=8,
+        dropout=0.0,
+        query_keep_threshold=0.5,
+    ),
+
     freeze_cfg=dict(
         train_adapters_only=True,
         trainable_modules=[
             "core.encoder_refiner",
+            "core.instance_score_adapter",
         ],
         frozen_modules=[],
         openclip_text_finetune="attention",
@@ -141,8 +148,12 @@ model = dict(
         ignore_index=255,
         final_balanced_bce_weight=1.0,
         final_dice_weight=0.0,
+        instance_presence_bce_weight=0.1,
+        instance_score_bce_weight=0.1,
+        instance_mask_threshold=0.5,
         eps=1e-6,
         sam3_mask_distill_weight=0.5,
         sam3_mask_distill_boundary_width=3,
     ),
 )
+

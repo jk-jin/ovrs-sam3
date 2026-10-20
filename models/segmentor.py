@@ -38,6 +38,7 @@ class SAM3Segmentor(nn.Module):
         core.transformer.eval()
         core.geometry_encoder.eval()
         core.segmentation_head.eval()
+        core.dot_prod_scoring.eval()
 
         # OpenCLIP image encoder stays eval even when partially trainable:
         # we train selected weights, not dropout / patch-dropout behavior.

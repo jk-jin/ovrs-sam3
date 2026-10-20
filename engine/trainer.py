@@ -330,6 +330,10 @@ class Trainer:
                 "loss_final_dice",
                 "loss_sam3_mask_distill_bce",
                 "loss_sam3_mask_distill_weighted",
+                "loss_instance_presence_bce",
+                "loss_instance_score_bce",
+                "loss_instance_presence_weighted",
+                "loss_instance_score_weighted",
                 "total_loss",
             ):
                 val = chunk_loss_dict.get(key)
@@ -917,3 +921,4 @@ class Trainer:
             print(f"finalized final checkpoint with validation stats at iter={self.global_iter}: {final_ckpt_path}")
 
         self.hook_manager.call("after_run", self)
+

@@ -137,6 +137,13 @@ class EncoderRefinerConfig:
 
 
 @dataclass
+class InstanceScoringConfig:
+    num_heads: int = 8
+    dropout: float = 0.0
+    query_keep_threshold: float = 0.5
+
+
+@dataclass
 class SemanticCriterionConfig:
     ignore_index: int = 255
 
@@ -144,6 +151,9 @@ class SemanticCriterionConfig:
     final_dice_weight: float = 0.0
 
     eps: float = 1e-6
+    instance_presence_bce_weight: float = 0.1
+    instance_score_bce_weight: float = 0.1
+    instance_mask_threshold: float = 0.5
 
     sam3_mask_distill_weight: float = 0.05
     sam3_mask_distill_boundary_width: int = 2
@@ -171,6 +181,7 @@ class SegmentorBuildConfig:
     freeze_cfg: FreezeConfig = field(default_factory=FreezeConfig)
     openclip_cfg: OpenCLIPConfig = field(default_factory=OpenCLIPConfig)
     encoder_refiner_cfg: EncoderRefinerConfig = field(default_factory=EncoderRefinerConfig)
+    instance_scoring_cfg: InstanceScoringConfig = field(default_factory=InstanceScoringConfig)
     criterion_cfg: SemanticCriterionConfig = field(
         default_factory=SemanticCriterionConfig
     )
@@ -266,3 +277,4 @@ class VisualizerConfig:
 
     image_folder_pattern: str = "image_{image_id:06d}"
     ignore_index: int = 255
+
