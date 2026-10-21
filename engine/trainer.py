@@ -309,6 +309,12 @@ class Trainer:
                         class_start=chunk_start,
                         class_end=chunk_end,
                         return_teacher_logits=need_teacher_logits,
+                        return_instance_teacher=(
+                            loss_context.sam3_instance_distill_weight > 0.0
+                            and bool(loss_context.instance_presence_target[
+                                :, chunk_start:chunk_end
+                            ].any().item())
+                        ),
                     )
                 )
 
@@ -330,6 +336,8 @@ class Trainer:
                 "loss_final_dice",
                 "loss_sam3_mask_distill_bce",
                 "loss_sam3_mask_distill_weighted",
+                "loss_sam3_instance_distill_bce",
+                "loss_sam3_instance_distill_weighted",
                 "total_loss",
             ):
                 val = chunk_loss_dict.get(key)

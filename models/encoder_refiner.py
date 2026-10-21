@@ -13,6 +13,7 @@ from .encoder_refiner_attention import (
     apply_layer_norm_bcdhw,
 )
 from .decoder_input_fusion import DecoderInputFusion
+from .instance_query_attention import InstanceQueryAttention
 
 
 class ClassConditionedEncoderRefiner(nn.Module):
@@ -29,7 +30,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
     by one DecoderInputFusion at 72×72. After one upsampling, independent
     semantic/detail branches fuse the Refiner with original encoder72/FPN72
     respectively, without an extra encoder concatenation before the branches.
-    The final fused feature replaces the original Pixel Decoder's last FPN.
+    The final fused feature reads the frozen instance queries with one
+    trainable cross-attention before replacing the Pixel Decoder's last FPN.
 
     After all Refiner layers, the accumulated 36×36 feature stream is
     normalized once with a channel-wise LayerNorm before being returned
@@ -113,6 +115,9 @@ class ClassConditionedEncoderRefiner(nn.Module):
         # 36×36 feature enters the single-scale Decoder Input Fusion.
         self.feature_output_norm = nn.LayerNorm(self.hidden_dim)
 
+        self.instance_query_attention = InstanceQueryAttention(
+            hidden_dim=self.hidden_dim, num_heads=int(num_heads),
+        )
         self.decoder_input_fusion = DecoderInputFusion(
             use_checkpoint=self.use_checkpoint,
         )

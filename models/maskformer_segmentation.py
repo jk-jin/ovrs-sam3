@@ -320,6 +320,9 @@ class UniversalSegmentationHead(SegmentationHead):
         backbone_feats: List[torch.Tensor],
         image_ids: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
+        instance_queries: Optional[torch.Tensor] = None,
+        instance_keep: Optional[torch.Tensor] = None,
+        instance_presence: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         pixel_embed = self._embed_pixels(
             backbone_feats=backbone_feats,
@@ -327,6 +330,30 @@ class UniversalSegmentationHead(SegmentationHead):
             encoder_hidden_states=encoder_hidden_states,
         )
 
-        return {
-            "semantic_seg": self.semantic_seg_head(pixel_embed),
-        }
+        outputs = {"semantic_seg": self.semantic_seg_head(pixel_embed)}
+        if instance_queries is not None:
+            outputs["instance_teacher_probs"] = self.predict_instance_teacher(
+                pixel_embed, instance_queries, instance_keep, instance_presence,
+            )
+        return outputs
+
+    @torch.no_grad()
+    def predict_instance_teacher(self, pixel_embed, queries, keep, presence):
+        """Max of selected mask probabilities times presence; empty sets yield zero.
+
+        Process one image-prompt pair and at most 32 queries at a time, avoiding
+        a full [batch*prompts, 200, 288, 288] mask allocation.
+        """
+        if keep is None or presence is None:
+            raise ValueError("Instance teachers require query selection and presence.")
+        teachers = pixel_embed.new_zeros((pixel_embed.shape[0], *pixel_embed.shape[-2:]), dtype=torch.float32)
+        for pair in range(pixel_embed.shape[0]):
+            selected = queries[pair, keep[pair]]
+            if selected.shape[0] == 0:
+                continue
+            pixels = self.instance_seg_head(pixel_embed[pair:pair + 1])
+            for chunk in selected.split(32):
+                logits = self.mask_predictor(chunk[None], pixels)
+                probs = logits.float().sigmoid().amax(dim=1)[0] * presence[pair].float()
+                teachers[pair] = torch.maximum(teachers[pair], probs)
+        return teachers

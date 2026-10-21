@@ -120,6 +120,7 @@ model = dict(
         shift_size=6,
 
         use_checkpoint=True,
+        instance_score_threshold=0.5,  # Keep query_probability * presence > threshold.
     ),
 
     freeze_cfg=dict(
@@ -144,5 +145,6 @@ model = dict(
         eps=1e-6,
         sam3_mask_distill_weight=0.5,
         sam3_mask_distill_boundary_width=3,
+        sam3_instance_distill_weight=0.5,  # Present classes, full image including ignore pixels.
     ),
 )

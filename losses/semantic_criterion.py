@@ -47,6 +47,9 @@ class SemanticStreamingContext:
     total_valid_pixels: int
 
     sam3_mask_distill_weight: float
+    instance_presence_target: torch.Tensor
+    instance_distill_pixel_denom: int
+    sam3_instance_distill_weight: float
 
 
 class SemanticCriterion(nn.Module):
@@ -64,6 +67,9 @@ class SemanticCriterion(nn.Module):
            - Only present image-prompt pairs
            - All valid GT pixels plus a configurable class-specific
              outer boundary restricted to ignore pixels
+
+        4. Instance teacher BCE on the whole image (including ignore pixels),
+           only for classes present in the original, pre-resize GT.
     """
 
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
@@ -76,6 +82,10 @@ class SemanticCriterion(nn.Module):
                 "sam3_mask_distill_weight must be >= 0, "
                 f"got {distill_weight}."
             )
+
+        instance_weight = float(self.cfg.sam3_instance_distill_weight)
+        if not 0.0 <= instance_weight < float("inf"):
+            raise ValueError("sam3_instance_distill_weight must be finite and >= 0.")
 
         boundary_width = (
             self.cfg.sam3_mask_distill_boundary_width
@@ -161,9 +171,9 @@ class SemanticCriterion(nn.Module):
         target_hw: tuple[int, int] = (288, 288),
     ) -> SemanticStreamingContext:
         """Build full-batch statistics before the prompt chunk loop."""
-        label_map = self._extract_label_map(targets)
+        source_label_map = self._extract_label_map(targets)
         label_map = self._resize_label_map_to_hw(
-            label_map=label_map,
+            label_map=source_label_map,
             target_hw=target_hw,
         )
 
@@ -252,6 +262,17 @@ class SemanticCriterion(nn.Module):
             num_label_classes,
             device=label_map.device,
             dtype=torch.long,
+        )
+
+        # Determine new instance-distillation presence BEFORE resizing labels:
+        # tiny GT objects must not disappear from the set of present classes.
+        instance_presence_by_class = torch.stack([
+            (source_label_map == class_id).flatten(1).any(dim=1)
+            for class_id in class_ids
+        ], dim=1)
+        instance_presence_target = instance_presence_by_class.index_select(1, prompt_to_class_id)
+        instance_distill_pixel_denom = (
+            int(instance_presence_target.sum().item()) * label_map.shape[-2] * label_map.shape[-1]
         )
 
         # [B, M, H, W]
@@ -352,6 +373,9 @@ class SemanticCriterion(nn.Module):
             sam3_mask_distill_weight=float(
                 self.cfg.sam3_mask_distill_weight
             ),
+            instance_presence_target=instance_presence_target,
+            instance_distill_pixel_denom=instance_distill_pixel_denom,
+            sam3_instance_distill_weight=float(self.cfg.sam3_instance_distill_weight),
         )
 
     def forward_chunk(
@@ -498,11 +522,29 @@ class SemanticCriterion(nn.Module):
             distill_weight * distill_contribution
         )
 
+        # ---- Instance teacher: present classes, ALL pixels, including ignore ----
+        instance_weight = context.sam3_instance_distill_weight
+        instance_present = context.instance_presence_target[:, class_start:class_end].to(device)
+        instance_contribution = zero
+        if instance_weight > 0.0 and bool(instance_present.any().item()):
+            teacher = self._extract_4d_tensor(
+                outputs, OUTPUT_KEYS.sam3_instance_teacher_probs, "[B, C_chunk, H, W]",
+            )
+            if teacher.shape != final_logits_chunk.shape:
+                raise ValueError("Instance teacher and student spatial/channel shapes must match.")
+            instance_contribution = F.binary_cross_entropy_with_logits(
+                final_logits_chunk[instance_present].float(),
+                teacher.detach().to(device=device, dtype=torch.float32)[instance_present],
+                reduction="sum",
+            ) / context.instance_distill_pixel_denom
+        weighted_instance_contribution = instance_weight * instance_contribution
+
         # ---- Total ----
         chunk_total = (
             float(self.cfg.final_balanced_bce_weight) * plain_bce_contribution
             + dice_weight * dice_contribution
             + weighted_distill_contribution
+            + weighted_instance_contribution
         )
 
         return {
@@ -510,6 +552,8 @@ class SemanticCriterion(nn.Module):
             "loss_final_dice": dice_contribution,
             "loss_sam3_mask_distill_bce": distill_contribution,
             "loss_sam3_mask_distill_weighted": weighted_distill_contribution,
+            "loss_sam3_instance_distill_bce": instance_contribution,
+            "loss_sam3_instance_distill_weighted": weighted_instance_contribution,
             "total_loss": chunk_total,
         }
 
