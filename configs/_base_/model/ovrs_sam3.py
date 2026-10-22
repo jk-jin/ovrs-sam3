@@ -120,6 +120,8 @@ model = dict(
         shift_size=6,
 
         use_checkpoint=True,
+        instance_fusion_enabled=True,
+        instance_teacher_score_threshold=0.5,
     ),
 
     freeze_cfg=dict(
@@ -144,5 +146,7 @@ model = dict(
         eps=1e-6,
         sam3_mask_distill_weight=0.5,
         sam3_mask_distill_boundary_width=3,
+        instance_bce_weight=1.0,
+        instance_distill_weight=0.5,
     ),
 )

@@ -134,6 +134,8 @@ class EncoderRefinerConfig:
     shift_size: int = 6
 
     use_checkpoint: bool = True
+    instance_fusion_enabled: bool = True
+    instance_teacher_score_threshold: float = 0.5
 
 
 @dataclass
@@ -147,6 +149,8 @@ class SemanticCriterionConfig:
 
     sam3_mask_distill_weight: float = 0.05
     sam3_mask_distill_boundary_width: int = 2
+    instance_bce_weight: float = 1.0
+    instance_distill_weight: float = 0.5
 
 
 @dataclass

@@ -17,6 +17,9 @@ class ModelOutputKeys:
     # Final outputs
     # Original-class inference outputs.
     final_logits: str = "final_logits"
+    instance_logits: str = "instance_logits"
+    instance_teacher_probs: str = "instance_teacher_probs"
+    instance_teacher_valid: str = "instance_teacher_valid"
     raw_final_score_map: str = "raw_final_score_map"
     final_score_map: str = "final_score_map"
     final_pred: str = "final_pred"

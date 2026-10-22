@@ -277,6 +277,7 @@ class Trainer:
                 prompt_to_class_id=prompt_to_class_id,
                 num_label_classes=num_label_classes,
                 target_hw=(288, 288),
+                instance_teacher_valid=encoder_refiner_cache[OUTPUT_KEYS.instance_teacher_valid],
             )
 
         effective_distill_weight = float(
@@ -286,6 +287,10 @@ class Trainer:
         need_teacher_logits = (
             effective_distill_weight > 0.0
             and loss_context.distill_pixel_denom > 0
+        )
+        need_instance_teacher = (
+            float(self.criterion.cfg.instance_distill_weight) > 0
+            and loss_context.num_instance_distill_pairs > 0
         )
 
         chunk_class_counts = encoder_refiner_cache["chunk_class_counts"]
@@ -309,6 +314,7 @@ class Trainer:
                         class_start=chunk_start,
                         class_end=chunk_end,
                         return_teacher_logits=need_teacher_logits,
+                        return_instance_teacher=need_instance_teacher,
                     )
                 )
 
@@ -330,6 +336,10 @@ class Trainer:
                 "loss_final_dice",
                 "loss_sam3_mask_distill_bce",
                 "loss_sam3_mask_distill_weighted",
+                "loss_instance_bce",
+                "loss_instance_weighted",
+                "loss_instance_distill_bce",
+                "loss_instance_distill_weighted",
                 "total_loss",
             ):
                 val = chunk_loss_dict.get(key)

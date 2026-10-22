@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Dict, Optional
 
 import torch
@@ -47,6 +48,8 @@ class SemanticStreamingContext:
     total_valid_pixels: int
 
     sam3_mask_distill_weight: float
+    instance_distill_pairs: torch.Tensor
+    num_instance_distill_pairs: int
 
 
 class SemanticCriterion(nn.Module):
@@ -69,6 +72,10 @@ class SemanticCriterion(nn.Module):
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
         super().__init__()
         self.cfg = cfg or SemanticCriterionConfig()
+        for name in ("instance_bce_weight", "instance_distill_weight"):
+            value = float(getattr(self.cfg, name))
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and non-negative.")
 
         distill_weight = float(self.cfg.sam3_mask_distill_weight)
         if distill_weight < 0.0:
@@ -136,6 +143,7 @@ class SemanticCriterion(nn.Module):
             prompt_to_class_id=prompt_to_class_id,
             num_label_classes=int(num_label_classes),
             target_hw=final_logits.shape[-2:],
+            instance_teacher_valid=outputs.get(OUTPUT_KEYS.instance_teacher_valid),
         )
 
         target_full, _ = self._build_binary_targets(
@@ -159,6 +167,7 @@ class SemanticCriterion(nn.Module):
         prompt_to_class_id: torch.Tensor,
         num_label_classes: int,
         target_hw: tuple[int, int] = (288, 288),
+        instance_teacher_valid: Optional[torch.Tensor] = None,
     ) -> SemanticStreamingContext:
         """Build full-batch statistics before the prompt chunk loop."""
         label_map = self._extract_label_map(targets)
@@ -336,6 +345,15 @@ class SemanticCriterion(nn.Module):
             .item()
         )
 
+        if instance_teacher_valid is None:
+            instance_distill_pairs = torch.zeros_like(presence_target, dtype=torch.bool)
+        else:
+            if instance_teacher_valid.shape != presence_target.shape:
+                raise ValueError("instance_teacher_valid must have shape [B, P].")
+            instance_distill_pairs = presence_target.bool() & instance_teacher_valid.to(
+                device=presence_target.device, dtype=torch.bool,
+            )
+
         return SemanticStreamingContext(
             label_map=label_map,
             valid_mask=valid_mask,
@@ -352,6 +370,8 @@ class SemanticCriterion(nn.Module):
             sam3_mask_distill_weight=float(
                 self.cfg.sam3_mask_distill_weight
             ),
+            instance_distill_pairs=instance_distill_pairs,
+            num_instance_distill_pairs=int(instance_distill_pairs.sum().item()),
         )
 
     def forward_chunk(
@@ -498,11 +518,44 @@ class SemanticCriterion(nn.Module):
             distill_weight * distill_contribution
         )
 
+        # One learned instance-branch class mask, supervised on all valid GT pixels.
+        instance_bce = zero
+        instance_distill = zero
+        instance_weight = float(self.cfg.instance_bce_weight)
+        instance_distill_weight = float(self.cfg.instance_distill_weight)
+        if instance_weight > 0 or instance_distill_weight > 0:
+            instance_logits = outputs[OUTPUT_KEYS.instance_logits]
+            if instance_logits.shape != final_logits_chunk.shape:
+                raise ValueError("instance_logits must match semantic logits shape.")
+            if instance_weight > 0:
+                instance_bce = (
+                    F.binary_cross_entropy_with_logits(
+                        instance_logits, target_chunk, reduction="none",
+                    ) * valid_float
+                ).sum() / max(context.total_valid_pixels, 1)
+            if instance_distill_weight > 0 and context.num_instance_distill_pairs > 0:
+                teacher_probs = outputs[OUTPUT_KEYS.instance_teacher_probs].detach()
+                teacher_valid = outputs[OUTPUT_KEYS.instance_teacher_valid].bool()
+                pairs = context.instance_distill_pairs[:, class_start:class_end]
+                if teacher_probs.shape != instance_logits.shape or teacher_valid.shape != pairs.shape:
+                    raise ValueError("Instance teacher shapes do not match the prompt chunk.")
+                if bool((pairs & ~teacher_valid).any()):
+                    raise ValueError("Teacher availability changed after building the loss context.")
+                # Full image, including ignore pixels; mean over eligible pairs globally.
+                per_pair = F.binary_cross_entropy_with_logits(
+                    instance_logits.float(), teacher_probs.float(), reduction="none",
+                ).mean(dim=(-2, -1))
+                instance_distill = (
+                    per_pair * pairs.to(per_pair.dtype)
+                ).sum() / context.num_instance_distill_pairs
+
         # ---- Total ----
         chunk_total = (
             float(self.cfg.final_balanced_bce_weight) * plain_bce_contribution
             + dice_weight * dice_contribution
             + weighted_distill_contribution
+            + instance_weight * instance_bce
+            + instance_distill_weight * instance_distill
         )
 
         return {
@@ -510,6 +563,10 @@ class SemanticCriterion(nn.Module):
             "loss_final_dice": dice_contribution,
             "loss_sam3_mask_distill_bce": distill_contribution,
             "loss_sam3_mask_distill_weighted": weighted_distill_contribution,
+            "loss_instance_bce": instance_bce,
+            "loss_instance_weighted": instance_weight * instance_bce,
+            "loss_instance_distill_bce": instance_distill,
+            "loss_instance_distill_weighted": instance_distill_weight * instance_distill,
             "total_loss": chunk_total,
         }
 
