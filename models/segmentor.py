@@ -38,7 +38,6 @@ class SAM3Segmentor(nn.Module):
         core.transformer.eval()
         core.geometry_encoder.eval()
         core.segmentation_head.eval()
-        core.dot_prod_scoring.eval()
 
         # OpenCLIP image encoder stays eval even when partially trainable:
         # we train selected weights, not dropout / patch-dropout behavior.
@@ -98,7 +97,6 @@ class SAM3Segmentor(nn.Module):
         class_start: int,
         class_end: int,
         return_teacher_logits: bool = False,
-        return_instance_teacher: bool = False,
     ) -> Dict[str, torch.Tensor]:
         return self.core.decode_encoder_refiner_chunk_from_cache(
             encoder_refiner_cache=encoder_refiner_cache,
@@ -106,7 +104,6 @@ class SAM3Segmentor(nn.Module):
             class_start=class_start,
             class_end=class_end,
             return_teacher_logits=return_teacher_logits,
-            return_instance_teacher=return_instance_teacher,
         )
 
     def run_encoder_refiner_from_cache(

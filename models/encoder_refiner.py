@@ -13,7 +13,6 @@ from .encoder_refiner_attention import (
     apply_layer_norm_bcdhw,
 )
 from .decoder_input_fusion import DecoderInputFusion
-from .learnable_instance_branch import LearnableInstanceBranch
 
 
 class ClassConditionedEncoderRefiner(nn.Module):
@@ -28,8 +27,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
     The Refiner outputs 36×36 features. High-resolution decoding is handled
     by one DecoderInputFusion at 72×72. After one upsampling, independent
-    semantic/detail branches fuse the Refiner with original encoder72/FPN72
-    respectively, without an extra encoder concatenation before the branches.
+    semantic/detail/query branches fuse the Refiner with cross-attended
+    encoder72, FPN72 and raw encoder72 updated by the original queries.
     The final fused feature replaces the original Pixel Decoder's last FPN.
 
     After all Refiner layers, the accumulated 36×36 feature stream is
@@ -41,6 +40,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         encoder_features_72:  [B, C, 256, 72, 72]  (full encoder + cross-attention)
         clip_image_feat_map:  [B, D_clip, 36, 36]
         class_names:          list of C class names
+        presence_tokens:      [B, C, 256] frozen decoder presence hidden features
 
     Forward outputs:
         refiner_features_36:  [B, C, 256, 36, 36]
@@ -116,9 +116,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
         self.decoder_input_fusion = DecoderInputFusion(
             use_checkpoint=self.use_checkpoint,
-        )
-        self.instance_branch = LearnableInstanceBranch(
-            num_heads=num_heads, dropout=dropout, use_checkpoint=self.use_checkpoint,
+            num_heads=num_heads, dropout=dropout,
         )
         if clip_native_dim is None or clip_native_dim <= 0:
             raise ValueError("clip_native_dim must be positive for CLIP middle guidance")
@@ -130,6 +128,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
         refiner_feature_36: torch.Tensor,
         original_encoder_feature_72: torch.Tensor,
         sam_fpn_72: torch.Tensor,
+        raw_encoder_feature_72: torch.Tensor,
+        instance_queries: torch.Tensor,
     ) -> torch.Tensor:
         """Return [N, 256, 72, 72] for the original SAM3 Pixel Decoder.
 
@@ -137,11 +137,15 @@ class ClassConditionedEncoderRefiner(nn.Module):
             refiner_feature_36:          [N, 256, 36, 36]
             original_encoder_feature_72: [N, 256, 72, 72]
             sam_fpn_72:                  [B, 256, 72, 72]
+            raw_encoder_feature_72:      [N, 256, 72, 72], before prompt attention
+            instance_queries:            [N, 200, 256], before mask MLP
         """
         return self.decoder_input_fusion(
             refiner_feature_36=refiner_feature_36,
             original_encoder_feature_72=original_encoder_feature_72,
             sam_fpn_72=sam_fpn_72,
+            raw_encoder_feature_72=raw_encoder_feature_72,
+            instance_queries=instance_queries,
         )
 
     def forward(
@@ -149,6 +153,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         encoder_features_72: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
         class_names: List[str],
+        presence_tokens: torch.Tensor,
         clip_mid_features: list[torch.Tensor] | None = None,
         clip_mid_layer_indices: tuple[int, ...] | None = None,
         sam_fpn_72: torch.Tensor | None = None,
@@ -186,6 +191,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
         batch_size, num_classes, hidden_dim, height, width = (
             encoder_features_72.shape
         )
+        if tuple(presence_tokens.shape) != (batch_size, num_classes, 256):
+            raise ValueError("presence_tokens must be [B, P, 256].")
 
         if hidden_dim != self.hidden_dim:
             raise ValueError(
@@ -274,6 +281,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     layer,
                     feature_36,
                     score_embed_36,
+                    presence_tokens,
                     clip_mid_36,
                     sam_fpn_36,
                     use_reentrant=False,
@@ -282,6 +290,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 feature_36, score_embed_36 = layer(
                     feature_36=feature_36,
                     score_embed_36=score_embed_36,
+                    presence_tokens=presence_tokens,
                     clip_mid_36=clip_mid_36,
                     sam_fpn_36=sam_fpn_36,
                 )

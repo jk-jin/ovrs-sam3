@@ -69,7 +69,7 @@ def validate_guidance(guidance, feature, guidance_dim):
 class ClassScoreAttention(nn.Module):
     """Single-value inter-class attention at each spatial position.
 
-    Q/K concatenate pre-normalized score and feature. Only value_stream
+    Q/K concatenate pre-normalized score, feature and presence guidance. Only value_stream
     supplies values; the returned update is added by the outer layer.
     """
 
@@ -488,7 +488,7 @@ class EncoderRefinerLayer(nn.Module):
     then configured intra-class attention updates feature.
     Each stream independently chooses two windows or four local 3×3 steps.
     Intra-class guidance is fixed: CLIP middle features for score, FPN36
-    for feature. Both class attention kinds use score/feature only.
+    for feature. Both class attention kinds concatenate presence guidance.
     Both finish with independent Feature FFN and Score FFN.
     """
 
@@ -523,7 +523,7 @@ class EncoderRefinerLayer(nn.Module):
             num_heads=num_heads,
             dropout=dropout,
             value_stream=class_value_stream,
-            guidance_dim=0,
+            guidance_dim=256,
         )
         if self.intra_attn_type == "window":
             self.window_attn_regular = WindowScoreAttention(
@@ -549,6 +549,7 @@ class EncoderRefinerLayer(nn.Module):
             ])
         self.class_norm_feature = nn.LayerNorm(hidden_dim)
         self.class_norm_score = nn.LayerNorm(score_embed_dim)
+        self.class_norm_presence = nn.LayerNorm(256)
         if self.intra_attn_type == "window":
             self.regular_norm_feature = nn.LayerNorm(hidden_dim)
             self.regular_norm_score = nn.LayerNorm(score_embed_dim)
@@ -574,10 +575,17 @@ class EncoderRefinerLayer(nn.Module):
         self,
         feature: torch.Tensor,
         score: torch.Tensor,
+        presence_tokens: torch.Tensor,
     ) -> torch.Tensor:
+        if tuple(presence_tokens.shape) != (*feature.shape[:2], 256):
+            raise ValueError("presence_tokens must be [B, P, 256].")
+        guidance = self.class_norm_presence(presence_tokens)[..., None, None].expand(
+            -1, -1, -1, *feature.shape[-2:]
+        )
         return self.class_attn(
             feature=apply_layer_norm_bcdhw(feature, self.class_norm_feature),
             score_embed=apply_layer_norm_bcdhw(score, self.class_norm_score),
+            guidance=guidance,
         )
 
     def _update_intra(
@@ -635,6 +643,7 @@ class EncoderRefinerLayer(nn.Module):
         self,
         feature_36: torch.Tensor,
         score_embed_36: torch.Tensor,
+        presence_tokens: torch.Tensor,
         clip_mid_36: torch.Tensor | None = None,
         sam_fpn_36: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -642,9 +651,9 @@ class EncoderRefinerLayer(nn.Module):
         intra_guidance = clip_mid_36 if self.score_attention_type == "intra" else sam_fpn_36
         if self.score_attention_type == "intra":
             feature_36, score_embed_36 = self._update_intra(feature_36, score_embed_36, intra_guidance)
-            feature_36 = feature_36 + self._class_update(feature_36, score_embed_36)
+            feature_36 = feature_36 + self._class_update(feature_36, score_embed_36, presence_tokens)
         else:
-            score_embed_36 = score_embed_36 + self._class_update(feature_36, score_embed_36)
+            score_embed_36 = score_embed_36 + self._class_update(feature_36, score_embed_36, presence_tokens)
             feature_36, score_embed_36 = self._update_intra(feature_36, score_embed_36, intra_guidance)
 
         feature_36 = feature_36 + self._ffn_feature_update(
