@@ -28,6 +28,7 @@ class ModelOutputKeys:
     # Encoder feature refiner outputs
     encoder_features: str = "encoder_features"
     refiner_features_36: str = "refiner_features_36"
+    refiner_mask_logits: str = "refiner_mask_logits"
     score_embed_36: str = "score_embed_36"
     clip_score_embed_36: str = "clip_score_embed_36"
     template_clip_text_features: str = "template_clip_text_features"

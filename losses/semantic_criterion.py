@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Dict, Optional
 
 import torch
@@ -69,6 +70,8 @@ class SemanticCriterion(nn.Module):
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
         super().__init__()
         self.cfg = cfg or SemanticCriterionConfig()
+        if not math.isfinite(self.cfg.refiner_mask_bce_weight) or self.cfg.refiner_mask_bce_weight < 0:
+            raise ValueError("refiner_mask_bce_weight must be finite and non-negative.")
 
         distill_weight = float(self.cfg.sam3_mask_distill_weight)
         if distill_weight < 0.0:
@@ -498,11 +501,35 @@ class SemanticCriterion(nn.Module):
             distill_weight * distill_contribution
         )
 
+        mask_bce = zero
+        mask_weight = float(self.cfg.refiner_mask_bce_weight)
+        if mask_weight > 0 and OUTPUT_KEYS.refiner_mask_logits in outputs:
+            masks = outputs[OUTPUT_KEYS.refiner_mask_logits]
+            if masks.ndim != 5 or masks.shape[1:3] != (B, C_chunk) or masks.shape[0] <= 0:
+                raise ValueError("refiner_mask_logits must be [L, B, P_chunk, H, W].")
+            layers = masks.shape[0]
+            upsampled = F.interpolate(
+                masks.flatten(0, 2).unsqueeze(1).float(),
+                size=target_chunk.shape[-2:], mode="bilinear", align_corners=False,
+            ).reshape(layers, B, C_chunk, *target_chunk.shape[-2:])
+            # Unlike the final semantic BCE, ignore pixels are NEGATIVES here.
+            target = target_chunk.float().unsqueeze(0).expand_as(upsampled)
+            pixel_loss = F.binary_cross_entropy_with_logits(upsampled, target, reduction="none")
+            positives = target.sum(dim=(-2, -1))
+            negatives = target.shape[-2] * target.shape[-1] - positives
+            positive_loss = (pixel_loss * target).sum(dim=(-2, -1)) / positives.clamp_min(1)
+            negative_loss = (pixel_loss * (1 - target)).sum(dim=(-2, -1)) / negatives.clamp_min(1)
+            groups = (positives > 0).float() + (negatives > 0).float()
+            per_pair = (positive_loss + negative_loss) / groups.clamp_min(1)
+            mask_bce = per_pair.sum() / (layers * B * context.num_prompt_channels)
+        weighted_mask_bce = mask_weight * mask_bce
+
         # ---- Total ----
         chunk_total = (
             float(self.cfg.final_balanced_bce_weight) * plain_bce_contribution
             + dice_weight * dice_contribution
             + weighted_distill_contribution
+            + weighted_mask_bce
         )
 
         return {
@@ -510,6 +537,8 @@ class SemanticCriterion(nn.Module):
             "loss_final_dice": dice_contribution,
             "loss_sam3_mask_distill_bce": distill_contribution,
             "loss_sam3_mask_distill_weighted": weighted_distill_contribution,
+            "loss_refiner_mask_bce": mask_bce,
+            "loss_refiner_mask_weighted": weighted_mask_bce,
             "total_loss": chunk_total,
         }
 

@@ -13,6 +13,7 @@ from .encoder_refiner_attention import (
     apply_layer_norm_bcdhw,
 )
 from .decoder_input_fusion import DecoderInputFusion
+from .task_modes import OUTPUT_KEYS
 
 
 class ClassConditionedEncoderRefiner(nn.Module):
@@ -27,8 +28,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
     The Refiner outputs 36×36 features. High-resolution decoding is handled
     by one DecoderInputFusion at 72×72. After one upsampling, independent
-    semantic/detail/query branches fuse the Refiner with cross-attended
-    encoder72, FPN72 and raw encoder72 updated by the original queries.
+    semantic/detail branches fuse the Refiner with cross-attended encoder72
+    and FPN72. Optional masks gate intra-class residual increments only.
     The final fused feature replaces the original Pixel Decoder's last FPN.
 
     After all Refiner layers, the accumulated 36×36 feature stream is
@@ -40,7 +41,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         encoder_features_72:  [B, C, 256, 72, 72]  (full encoder + cross-attention)
         clip_image_feat_map:  [B, D_clip, 36, 36]
         class_names:          list of C class names
-        presence_tokens:      [B, C, 256] frozen decoder presence hidden features
+        presence_probs:       [B, C] frozen decoder presence probabilities
 
     Forward outputs:
         refiner_features_36:  [B, C, 256, 36, 36]
@@ -69,12 +70,22 @@ class ClassConditionedEncoderRefiner(nn.Module):
         score_intra_attn_type: str = "window",
         feature_intra_attn_type: str = "window",
         clip_native_dim: int | None = None,
+        inter_presence_bias_enabled: bool = True,
+        inter_presence_bias_floor: float = 0.05,
+        inter_presence_bias_strength: float = 1.0,
+        intra_mask_gate_enabled: bool = True,
+        intra_mask_gate_floor: float = 0.1,
+        intra_mask_gate_detach: bool = True,
+        intra_mask_gate_warmup_iters: int = 1000,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
         self.score_embed_dim = int(score_embed_dim)
         self.use_checkpoint = bool(use_checkpoint)
         self.num_fusion_layers = int(fusion_layers)
+        self.inter_presence_bias_enabled = inter_presence_bias_enabled
+        self.mask_gate_warmup_iters = intra_mask_gate_warmup_iters
+        self.mask_gate_progress = 0.0 if intra_mask_gate_warmup_iters > 0 else 1.0
         if prompt_templates is None:
             raise ValueError(
                 "prompt_templates must be a list of 64 prompt templates."
@@ -105,6 +116,12 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 score_attention_type="intra" if layer_index % 2 == 0 else "inter",
                 score_intra_attn_type=score_intra_attn_type,
                 feature_intra_attn_type=feature_intra_attn_type,
+                inter_presence_bias_enabled=inter_presence_bias_enabled,
+                inter_presence_bias_floor=inter_presence_bias_floor,
+                inter_presence_bias_strength=inter_presence_bias_strength,
+                intra_mask_gate_enabled=intra_mask_gate_enabled,
+                intra_mask_gate_floor=intra_mask_gate_floor,
+                intra_mask_gate_detach=intra_mask_gate_detach,
             )
             for layer_index in range(self.num_fusion_layers)
         ])
@@ -116,20 +133,23 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
         self.decoder_input_fusion = DecoderInputFusion(
             use_checkpoint=self.use_checkpoint,
-            num_heads=num_heads, dropout=dropout,
         )
         if clip_native_dim is None or clip_native_dim <= 0:
             raise ValueError("clip_native_dim must be positive for CLIP middle guidance")
         self.clip_native_dim = int(clip_native_dim)
         self.clip_mid_proj = nn.Conv2d(self.clip_native_dim * 2, 256, kernel_size=1)
 
+    def set_training_step(self, step: int) -> None:
+        if self.mask_gate_warmup_iters > 0:
+            self.mask_gate_progress = min(max(step / self.mask_gate_warmup_iters, 0.0), 1.0)
+        else:
+            self.mask_gate_progress = 1.0
+
     def fuse_decoder_input_chunk(
         self,
         refiner_feature_36: torch.Tensor,
         original_encoder_feature_72: torch.Tensor,
         sam_fpn_72: torch.Tensor,
-        raw_encoder_feature_72: torch.Tensor,
-        instance_queries: torch.Tensor,
     ) -> torch.Tensor:
         """Return [N, 256, 72, 72] for the original SAM3 Pixel Decoder.
 
@@ -137,15 +157,11 @@ class ClassConditionedEncoderRefiner(nn.Module):
             refiner_feature_36:          [N, 256, 36, 36]
             original_encoder_feature_72: [N, 256, 72, 72]
             sam_fpn_72:                  [B, 256, 72, 72]
-            raw_encoder_feature_72:      [N, 256, 72, 72], before prompt attention
-            instance_queries:            [N, 200, 256], before mask MLP
         """
         return self.decoder_input_fusion(
             refiner_feature_36=refiner_feature_36,
             original_encoder_feature_72=original_encoder_feature_72,
             sam_fpn_72=sam_fpn_72,
-            raw_encoder_feature_72=raw_encoder_feature_72,
-            instance_queries=instance_queries,
         )
 
     def forward(
@@ -153,7 +169,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         encoder_features_72: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
         class_names: List[str],
-        presence_tokens: torch.Tensor,
+        presence_probs: torch.Tensor | None = None,
         clip_mid_features: list[torch.Tensor] | None = None,
         clip_mid_layer_indices: tuple[int, ...] | None = None,
         sam_fpn_72: torch.Tensor | None = None,
@@ -191,8 +207,10 @@ class ClassConditionedEncoderRefiner(nn.Module):
         batch_size, num_classes, hidden_dim, height, width = (
             encoder_features_72.shape
         )
-        if tuple(presence_tokens.shape) != (batch_size, num_classes, 256):
-            raise ValueError("presence_tokens must be [B, P, 256].")
+        if self.inter_presence_bias_enabled and (
+            presence_probs is None or tuple(presence_probs.shape) != (batch_size, num_classes)
+        ):
+            raise ValueError("Presence bias requires probabilities shaped [B, P].")
 
         if hidden_dim != self.hidden_dim:
             raise ValueError(
@@ -275,25 +293,31 @@ class ClassConditionedEncoderRefiner(nn.Module):
         # directly. No SAM3 FPN injection is performed before attention.
         score_embed_36 = clip_score_embed_36
 
+        mask_logits_by_layer = []
+        gate_strength = self.mask_gate_progress if self.training else 1.0
         for layer in self.layers:
             if self.use_checkpoint and self.training:
-                feature_36, score_embed_36 = checkpoint(
+                feature_36, score_embed_36, mask_logits = checkpoint(
                     layer,
                     feature_36,
                     score_embed_36,
-                    presence_tokens,
+                    presence_probs,
                     clip_mid_36,
                     sam_fpn_36,
+                    gate_strength,
                     use_reentrant=False,
                 )
             else:
-                feature_36, score_embed_36 = layer(
+                feature_36, score_embed_36, mask_logits = layer(
                     feature_36=feature_36,
                     score_embed_36=score_embed_36,
-                    presence_tokens=presence_tokens,
+                    presence_probs=presence_probs,
                     clip_mid_36=clip_mid_36,
                     sam_fpn_36=sam_fpn_36,
+                    mask_gate_strength=gate_strength,
                 )
+            if mask_logits is not None:
+                mask_logits_by_layer.append(mask_logits.squeeze(2))
 
         # Normalize the accumulated feature stream once after all Refiner layers.
         feature_36 = apply_layer_norm_bcdhw(
@@ -301,10 +325,13 @@ class ClassConditionedEncoderRefiner(nn.Module):
             self.feature_output_norm,
         )
 
-        return {
+        result = {
             "refiner_features_36": feature_36,
             "score_embed_36": score_embed_36,
             "clip_score_embed_36": clip_score_embed_36,
             "clip_score_maps_36": clip_score_maps_36,
             "template_clip_text": template_clip_text,
         }
+        if mask_logits_by_layer:
+            result[OUTPUT_KEYS.refiner_mask_logits] = torch.stack(mask_logits_by_layer)
+        return result

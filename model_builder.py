@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import math
 from typing import Optional, TypeVar
 
 import torch
@@ -269,6 +270,18 @@ class SAM3ModelBuilder(FrozenModuleMixin):
     @classmethod
     def validate_encoder_refiner_cfg(cls, cfg: EncoderRefinerConfig) -> EncoderRefinerConfig:
         cfg = cls._coerce_encoder_refiner_cfg(cfg)
+        for name in ("inter_presence_bias_enabled", "intra_mask_gate_enabled", "intra_mask_gate_detach"):
+            if not isinstance(getattr(cfg, name), bool):
+                raise TypeError(f"{name} must be bool.")
+        for name in ("inter_presence_bias_floor", "intra_mask_gate_floor"):
+            value = float(getattr(cfg, name))
+            if not math.isfinite(value) or not 0 <= value <= 1 or (name == "inter_presence_bias_floor" and value == 0):
+                raise ValueError(f"Invalid {name}: {value}.")
+        if not math.isfinite(cfg.inter_presence_bias_strength) or cfg.inter_presence_bias_strength < 0:
+            raise ValueError("inter_presence_bias_strength must be finite and non-negative.")
+        warmup = cfg.intra_mask_gate_warmup_iters
+        if isinstance(warmup, bool) or not isinstance(warmup, int) or warmup < 0:
+            raise ValueError("intra_mask_gate_warmup_iters must be a non-negative integer.")
 
         if not cfg.enabled:
             raise ValueError(
@@ -449,11 +462,11 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         return decoder.requires_grad_(False)
 
     @staticmethod
-    def _create_transformer() -> TransformerWrapper:
+    def _create_transformer(inter_presence_bias_enabled: bool = True) -> TransformerWrapper:
         encoder = SAM3ModelBuilder._create_transformer_encoder()
         return TransformerWrapper(
             encoder=encoder,
-            decoder=SAM3ModelBuilder._create_transformer_decoder(),
+            decoder=SAM3ModelBuilder._create_transformer_decoder() if inter_presence_bias_enabled else None,
             d_model=256,
         )
 
@@ -595,7 +608,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         ]
         if missing_decoder_weights:
             raise RuntimeError(
-                "Query guidance requires original SAM3 decoder pretrained weights; missing: "
+                "Presence bias requires original SAM3 decoder pretrained weights; missing: "
                 + ", ".join(missing_decoder_weights)
             )
         if len(missing_keys) > 0 or len(unexpected_keys) > 0:
@@ -799,7 +812,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 cfg.openclip_cfg
             )
 
-        transformer = cls._create_transformer()
+        transformer = cls._create_transformer(refiner_cfg.inter_presence_bias_enabled)
         segmentation_head = cls._create_segmentation_head(compile_mode=compile_mode)
         input_geometry_encoder = cls._create_geometry_encoder()
 
@@ -830,6 +843,13 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             encoder_refiner_window_size=int(refiner_cfg.window_size),
             encoder_refiner_shift_size=int(refiner_cfg.shift_size),
             encoder_refiner_use_checkpoint=bool(refiner_cfg.use_checkpoint),
+            inter_presence_bias_enabled=refiner_cfg.inter_presence_bias_enabled,
+            inter_presence_bias_floor=refiner_cfg.inter_presence_bias_floor,
+            inter_presence_bias_strength=refiner_cfg.inter_presence_bias_strength,
+            intra_mask_gate_enabled=refiner_cfg.intra_mask_gate_enabled,
+            intra_mask_gate_floor=refiner_cfg.intra_mask_gate_floor,
+            intra_mask_gate_detach=refiner_cfg.intra_mask_gate_detach,
+            intra_mask_gate_warmup_iters=refiner_cfg.intra_mask_gate_warmup_iters,
             task_mode=TASK_MODE_SEMANTIC,
         )
 

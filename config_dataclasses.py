@@ -134,6 +134,13 @@ class EncoderRefinerConfig:
     shift_size: int = 6
 
     use_checkpoint: bool = True
+    inter_presence_bias_enabled: bool = True
+    inter_presence_bias_floor: float = 0.05
+    inter_presence_bias_strength: float = 1.0
+    intra_mask_gate_enabled: bool = True
+    intra_mask_gate_floor: float = 0.1
+    intra_mask_gate_detach: bool = True
+    intra_mask_gate_warmup_iters: int = 1000
 
 
 @dataclass
@@ -147,6 +154,7 @@ class SemanticCriterionConfig:
 
     sam3_mask_distill_weight: float = 0.05
     sam3_mask_distill_boundary_width: int = 2
+    refiner_mask_bce_weight: float = 0.1
 
 
 @dataclass

@@ -220,6 +220,7 @@ class Trainer:
         use_amp = self.cfg.use_amp and self.device.type == "cuda"
 
         # ---- Build cache and run low-res Refiner once ----
+        self.model.set_training_step(self.global_iter)
         with autocast(device_type=self.device.type, enabled=use_amp):
             encoder_refiner_cache = self.model.build_encoder_refiner_cache(batch)
 
@@ -232,6 +233,7 @@ class Trainer:
             )
 
         refiner_features_36 = refiner_out["refiner_features_36"]
+        mask_logits = refiner_out.get(OUTPUT_KEYS.refiner_mask_logits)
         del refiner_out
 
         B, C_total = refiner_features_36.shape[:2]
@@ -268,6 +270,8 @@ class Trainer:
 
         # Detached proxy leaf — accumulates gradients from all chunks.
         refiner_proxy = refiner_features_36.detach().requires_grad_(True)
+        use_mask_loss = mask_logits is not None and self.criterion.cfg.refiner_mask_bce_weight > 0
+        mask_proxy = mask_logits.detach().requires_grad_(True) if use_mask_loss else None
 
         # Build streaming loss context once.
         with autocast(device_type=self.device.type, enabled=use_amp):
@@ -312,6 +316,9 @@ class Trainer:
                     )
                 )
 
+                if mask_proxy is not None:
+                    chunk_outputs[OUTPUT_KEYS.refiner_mask_logits] = mask_proxy[:, :, chunk_start:chunk_end]
+
                 chunk_loss_dict = self.criterion.forward_chunk(
                     outputs=chunk_outputs,
                     context=loss_context,
@@ -330,6 +337,8 @@ class Trainer:
                 "loss_final_dice",
                 "loss_sam3_mask_distill_bce",
                 "loss_sam3_mask_distill_weighted",
+                "loss_refiner_mask_bce",
+                "loss_refiner_mask_weighted",
                 "total_loss",
             ):
                 val = chunk_loss_dict.get(key)
@@ -360,10 +369,15 @@ class Trainer:
 
         scaled_refiner_grad = refiner_proxy.grad.detach()
 
-        torch.autograd.backward(
-            tensors=refiner_features_36,
-            grad_tensors=scaled_refiner_grad,
-        )
+        tensors = [refiner_features_36]
+        gradients = [scaled_refiner_grad]
+        if mask_proxy is not None:
+            if mask_proxy.grad is None:
+                raise RuntimeError("No auxiliary mask gradient was accumulated.")
+            tensors.append(mask_logits)
+            gradients.append(mask_proxy.grad.detach())
+        # One shared low-resolution backward; no retained graph across chunks.
+        torch.autograd.backward(tensors=tensors, grad_tensors=gradients)
 
         return accum
 

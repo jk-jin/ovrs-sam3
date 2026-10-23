@@ -66,10 +66,47 @@ def validate_guidance(guidance, feature, guidance_dim):
 # ---------------------------------------------------------------------------
 
 
+def presence_log_bias(presence_probs, floor, strength):
+    """[B,P,P]: target/key-class bias, with an unchanged self diagonal."""
+    probabilities = presence_probs.detach().float()
+    bias = (floor + (1.0 - floor) * probabilities).log() * strength
+    num_classes = probabilities.shape[1]
+    bias = bias[:, None, :].expand(-1, num_classes, -1)
+    diagonal = torch.eye(num_classes, device=bias.device, dtype=torch.bool)
+    return bias.masked_fill(diagonal[None], 0.0)
+
+
+def mask_residual_gate(mask_logits, floor, strength, detach):
+    """At strength 0 preserve the full update; at 1 use floor+(1-floor)*mask."""
+    probability = mask_logits.sigmoid()
+    if detach:
+        probability = probability.detach()
+    return 1.0 - strength * (1.0 - floor) * (1.0 - probability)
+
+
+class RefinerMaskHead(nn.Module):
+    def __init__(self, feature_dim, score_dim):
+        super().__init__()
+        self.feature_norm = nn.LayerNorm(feature_dim)
+        self.score_norm = nn.LayerNorm(score_dim)
+        self.predict = nn.Sequential(
+            nn.Conv2d(feature_dim + score_dim, 128, 1),
+            nn.GroupNorm(8, 128), nn.GELU(), nn.Conv2d(128, 1, 1),
+        )
+
+    def forward(self, feature, score):
+        batch, prompts, _, height, width = feature.shape
+        inputs = torch.cat([
+            apply_layer_norm_bcdhw(feature, self.feature_norm),
+            apply_layer_norm_bcdhw(score, self.score_norm),
+        ], dim=2).flatten(0, 1)
+        return self.predict(inputs).reshape(batch, prompts, 1, height, width)
+
+
 class ClassScoreAttention(nn.Module):
     """Single-value inter-class attention at each spatial position.
 
-    Q/K concatenate pre-normalized score, feature and presence guidance. Only value_stream
+    Q/K concatenate pre-normalized score and feature. Only value_stream
     supplies values; the returned update is added by the outer layer.
     """
 
@@ -81,6 +118,9 @@ class ClassScoreAttention(nn.Module):
         dropout: float = 0.1,
         value_stream: str = "feature",
         guidance_dim: int = 0,
+        presence_bias_enabled: bool = False,
+        presence_bias_floor: float = 0.05,
+        presence_bias_strength: float = 1.0,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -95,6 +135,9 @@ class ClassScoreAttention(nn.Module):
             self.hidden_dim if value_stream == "feature" else self.score_embed_dim
         )
         self.guidance_dim = int(guidance_dim)
+        self.presence_bias_enabled = presence_bias_enabled
+        self.presence_bias_floor = presence_bias_floor
+        self.presence_bias_strength = presence_bias_strength
         qk_in_dim = self.hidden_dim + self.score_embed_dim + self.guidance_dim
         self.q_proj = nn.Linear(qk_in_dim, self.hidden_dim)
         self.k_proj = nn.Linear(qk_in_dim, self.hidden_dim)
@@ -107,6 +150,7 @@ class ClassScoreAttention(nn.Module):
         feature: torch.Tensor,
         score_embed: torch.Tensor,
         guidance: torch.Tensor | None = None,
+        presence_probs: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Return the update for value_stream; inputs are [B, C, D, H, W]."""
         B, C, D, H, W = feature.shape
@@ -127,6 +171,14 @@ class ClassScoreAttention(nn.Module):
         k = self.k_proj(qk_input).reshape(B * N, C, self.num_heads, head_dim).permute(0, 2, 1, 3)
         v = self.v_proj(value).reshape(B * N, C, self.num_heads, head_dim).permute(0, 2, 1, 3)
         attn = torch.matmul(q, k.transpose(-2, -1)) * (head_dim ** -0.5)
+        if self.presence_bias_enabled:
+            if presence_probs is None or tuple(presence_probs.shape) != (B, C):
+                raise ValueError("Presence bias requires probabilities shaped [B, P].")
+            bias = presence_log_bias(
+                presence_probs, self.presence_bias_floor, self.presence_bias_strength,
+            ).to(dtype=attn.dtype)
+            attn = (attn.reshape(B, N, self.num_heads, C, C)
+                    + bias[:, None, None]).reshape(B * N, self.num_heads, C, C)
         attn = self.dropout(F.softmax(attn, dim=-1))
         out = torch.matmul(attn, v).permute(0, 2, 1, 3).reshape(B * N, C, D)
         out = self.dropout(self.out_proj(out))
@@ -488,7 +540,7 @@ class EncoderRefinerLayer(nn.Module):
     then configured intra-class attention updates feature.
     Each stream independently chooses two windows or four local 3×3 steps.
     Intra-class guidance is fixed: CLIP middle features for score, FPN36
-    for feature. Both class attention kinds concatenate presence guidance.
+    for feature. Optional presence log-bias affects inter-class logits only.
     Both finish with independent Feature FFN and Score FFN.
     """
 
@@ -503,11 +555,20 @@ class EncoderRefinerLayer(nn.Module):
         score_attention_type: str = "intra",
         score_intra_attn_type: str = "window",
         feature_intra_attn_type: str = "window",
+        inter_presence_bias_enabled: bool = True,
+        inter_presence_bias_floor: float = 0.05,
+        inter_presence_bias_strength: float = 1.0,
+        intra_mask_gate_enabled: bool = True,
+        intra_mask_gate_floor: float = 0.1,
+        intra_mask_gate_detach: bool = True,
     ):
         super().__init__()
         if score_attention_type not in ("intra", "inter"):
             raise ValueError("score_attention_type must be 'intra' or 'inter'")
         self.score_attention_type = score_attention_type
+        self.mask_gate_floor = intra_mask_gate_floor
+        self.mask_gate_detach = intra_mask_gate_detach
+        self.mask_head = RefinerMaskHead(hidden_dim, score_embed_dim) if intra_mask_gate_enabled else None
         for name, kind in (("score_intra_attn_type", score_intra_attn_type),
                            ("feature_intra_attn_type", feature_intra_attn_type)):
             if kind not in ("window", "local_3x3"):
@@ -523,7 +584,10 @@ class EncoderRefinerLayer(nn.Module):
             num_heads=num_heads,
             dropout=dropout,
             value_stream=class_value_stream,
-            guidance_dim=256,
+            guidance_dim=0,
+            presence_bias_enabled=inter_presence_bias_enabled,
+            presence_bias_floor=inter_presence_bias_floor,
+            presence_bias_strength=inter_presence_bias_strength,
         )
         if self.intra_attn_type == "window":
             self.window_attn_regular = WindowScoreAttention(
@@ -549,7 +613,6 @@ class EncoderRefinerLayer(nn.Module):
             ])
         self.class_norm_feature = nn.LayerNorm(hidden_dim)
         self.class_norm_score = nn.LayerNorm(score_embed_dim)
-        self.class_norm_presence = nn.LayerNorm(256)
         if self.intra_attn_type == "window":
             self.regular_norm_feature = nn.LayerNorm(hidden_dim)
             self.regular_norm_score = nn.LayerNorm(score_embed_dim)
@@ -575,17 +638,12 @@ class EncoderRefinerLayer(nn.Module):
         self,
         feature: torch.Tensor,
         score: torch.Tensor,
-        presence_tokens: torch.Tensor,
+        presence_probs: torch.Tensor | None,
     ) -> torch.Tensor:
-        if tuple(presence_tokens.shape) != (*feature.shape[:2], 256):
-            raise ValueError("presence_tokens must be [B, P, 256].")
-        guidance = self.class_norm_presence(presence_tokens)[..., None, None].expand(
-            -1, -1, -1, *feature.shape[-2:]
-        )
         return self.class_attn(
             feature=apply_layer_norm_bcdhw(feature, self.class_norm_feature),
             score_embed=apply_layer_norm_bcdhw(score, self.class_norm_score),
-            guidance=guidance,
+            presence_probs=presence_probs,
         )
 
     def _update_intra(
@@ -593,6 +651,7 @@ class EncoderRefinerLayer(nn.Module):
         feature: torch.Tensor,
         score: torch.Tensor,
         guidance: torch.Tensor | None = None,
+        residual_gate: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         validate_guidance(guidance, feature, 256)
         steps = (
@@ -607,6 +666,8 @@ class EncoderRefinerLayer(nn.Module):
                 score_embed=apply_layer_norm_bcdhw(score, score_norm),
                 guidance=apply_layer_norm_bcdhw(guidance, self.intra_norm_guidance[index]),
             )
+            if residual_gate is not None:
+                update = update * residual_gate
             if self.score_attention_type == "intra":
                 score = score + update
             else:
@@ -643,18 +704,23 @@ class EncoderRefinerLayer(nn.Module):
         self,
         feature_36: torch.Tensor,
         score_embed_36: torch.Tensor,
-        presence_tokens: torch.Tensor,
+        presence_probs: torch.Tensor | None = None,
         clip_mid_36: torch.Tensor | None = None,
         sam_fpn_36: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        mask_gate_strength: float = 1.0,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """Update [B, C, 256, 36, 36] streams, score first then feature."""
         intra_guidance = clip_mid_36 if self.score_attention_type == "intra" else sam_fpn_36
+        mask_logits = self.mask_head(feature_36, score_embed_36) if self.mask_head is not None else None
+        gate = None if mask_logits is None else mask_residual_gate(
+            mask_logits, self.mask_gate_floor, mask_gate_strength, self.mask_gate_detach,
+        )
         if self.score_attention_type == "intra":
-            feature_36, score_embed_36 = self._update_intra(feature_36, score_embed_36, intra_guidance)
-            feature_36 = feature_36 + self._class_update(feature_36, score_embed_36, presence_tokens)
+            feature_36, score_embed_36 = self._update_intra(feature_36, score_embed_36, intra_guidance, gate)
+            feature_36 = feature_36 + self._class_update(feature_36, score_embed_36, presence_probs)
         else:
-            score_embed_36 = score_embed_36 + self._class_update(feature_36, score_embed_36, presence_tokens)
-            feature_36, score_embed_36 = self._update_intra(feature_36, score_embed_36, intra_guidance)
+            score_embed_36 = score_embed_36 + self._class_update(feature_36, score_embed_36, presence_probs)
+            feature_36, score_embed_36 = self._update_intra(feature_36, score_embed_36, intra_guidance, gate)
 
         feature_36 = feature_36 + self._ffn_feature_update(
             apply_layer_norm_bcdhw(feature_36, self.ffn_norm_feature)
@@ -662,4 +728,4 @@ class EncoderRefinerLayer(nn.Module):
         score_embed_36 = score_embed_36 + self._ffn_score_update(
             apply_layer_norm_bcdhw(score_embed_36, self.ffn_norm_score)
         )
-        return feature_36, score_embed_36
+        return feature_36, score_embed_36, mask_logits

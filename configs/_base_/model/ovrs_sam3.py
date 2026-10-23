@@ -120,6 +120,14 @@ model = dict(
         shift_size=6,
 
         use_checkpoint=True,
+        # Independent ablations: presence log-bias and supervised mask residual gating.
+        inter_presence_bias_enabled=True,
+        inter_presence_bias_floor=0.05,
+        inter_presence_bias_strength=1.0,
+        intra_mask_gate_enabled=True,
+        intra_mask_gate_floor=0.1,
+        intra_mask_gate_detach=True,
+        intra_mask_gate_warmup_iters=1000,
     ),
 
     freeze_cfg=dict(
@@ -144,5 +152,6 @@ model = dict(
         eps=1e-6,
         sam3_mask_distill_weight=0.5,
         sam3_mask_distill_boundary_width=3,
+        refiner_mask_bce_weight=0.1,
     ),
 )

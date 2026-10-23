@@ -57,6 +57,9 @@ class SAM3Segmentor(nn.Module):
 
         return self
 
+    def set_training_step(self, step: int) -> None:
+        self.core.encoder_refiner.set_training_step(step)
+
     def clear_text_cache(self) -> None:
         self.core.clear_text_cache()
 
