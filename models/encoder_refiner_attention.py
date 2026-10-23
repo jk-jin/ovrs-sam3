@@ -76,12 +76,12 @@ def presence_log_bias(presence_probs, floor, strength):
     return bias.masked_fill(diagonal[None], 0.0)
 
 
-def mask_residual_gate(mask_logits, floor, strength, detach):
-    """At strength 0 preserve the full update; at 1 use floor+(1-floor)*mask."""
+def mask_residual_gate(mask_logits, strength, detach):
+    """Use the mask probability directly; optional warmup blends from one."""
     probability = mask_logits.sigmoid()
     if detach:
         probability = probability.detach()
-    return 1.0 - strength * (1.0 - floor) * (1.0 - probability)
+    return (1.0 - strength) + strength * probability
 
 
 class RefinerMaskHead(nn.Module):
@@ -541,6 +541,7 @@ class EncoderRefinerLayer(nn.Module):
     Each stream independently chooses two windows or four local 3×3 steps.
     Intra-class guidance is fixed: CLIP middle features for score, FPN36
     for feature. Optional presence log-bias affects inter-class logits only.
+    One layer-entry mask gates all intra- and inter-class residual updates.
     Both finish with independent Feature FFN and Score FFN.
     """
 
@@ -558,17 +559,15 @@ class EncoderRefinerLayer(nn.Module):
         inter_presence_bias_enabled: bool = True,
         inter_presence_bias_floor: float = 0.05,
         inter_presence_bias_strength: float = 1.0,
-        intra_mask_gate_enabled: bool = True,
-        intra_mask_gate_floor: float = 0.1,
-        intra_mask_gate_detach: bool = True,
+        attention_mask_gate_enabled: bool = True,
+        attention_mask_gate_detach: bool = True,
     ):
         super().__init__()
         if score_attention_type not in ("intra", "inter"):
             raise ValueError("score_attention_type must be 'intra' or 'inter'")
         self.score_attention_type = score_attention_type
-        self.mask_gate_floor = intra_mask_gate_floor
-        self.mask_gate_detach = intra_mask_gate_detach
-        self.mask_head = RefinerMaskHead(hidden_dim, score_embed_dim) if intra_mask_gate_enabled else None
+        self.mask_gate_detach = attention_mask_gate_detach
+        self.mask_head = RefinerMaskHead(hidden_dim, score_embed_dim) if attention_mask_gate_enabled else None
         for name, kind in (("score_intra_attn_type", score_intra_attn_type),
                            ("feature_intra_attn_type", feature_intra_attn_type)):
             if kind not in ("window", "local_3x3"):
@@ -639,12 +638,14 @@ class EncoderRefinerLayer(nn.Module):
         feature: torch.Tensor,
         score: torch.Tensor,
         presence_probs: torch.Tensor | None,
+        residual_gate: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        return self.class_attn(
+        update = self.class_attn(
             feature=apply_layer_norm_bcdhw(feature, self.class_norm_feature),
             score_embed=apply_layer_norm_bcdhw(score, self.class_norm_score),
             presence_probs=presence_probs,
         )
+        return update if residual_gate is None else update * residual_gate
 
     def _update_intra(
         self,
@@ -713,13 +714,13 @@ class EncoderRefinerLayer(nn.Module):
         intra_guidance = clip_mid_36 if self.score_attention_type == "intra" else sam_fpn_36
         mask_logits = self.mask_head(feature_36, score_embed_36) if self.mask_head is not None else None
         gate = None if mask_logits is None else mask_residual_gate(
-            mask_logits, self.mask_gate_floor, mask_gate_strength, self.mask_gate_detach,
+            mask_logits, mask_gate_strength, self.mask_gate_detach,
         )
         if self.score_attention_type == "intra":
             feature_36, score_embed_36 = self._update_intra(feature_36, score_embed_36, intra_guidance, gate)
-            feature_36 = feature_36 + self._class_update(feature_36, score_embed_36, presence_probs)
+            feature_36 = feature_36 + self._class_update(feature_36, score_embed_36, presence_probs, gate)
         else:
-            score_embed_36 = score_embed_36 + self._class_update(feature_36, score_embed_36, presence_probs)
+            score_embed_36 = score_embed_36 + self._class_update(feature_36, score_embed_36, presence_probs, gate)
             feature_36, score_embed_36 = self._update_intra(feature_36, score_embed_36, intra_guidance, gate)
 
         feature_36 = feature_36 + self._ffn_feature_update(

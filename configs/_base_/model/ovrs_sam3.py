@@ -124,10 +124,9 @@ model = dict(
         inter_presence_bias_enabled=True,
         inter_presence_bias_floor=0.05,
         inter_presence_bias_strength=1.0,
-        intra_mask_gate_enabled=True,
-        intra_mask_gate_floor=0.1,
-        intra_mask_gate_detach=True,
-        intra_mask_gate_warmup_iters=1000,
+        attention_mask_gate_enabled=True,
+        attention_mask_gate_detach=True,
+        attention_mask_gate_warmup_iters=0,
     ),
 
     freeze_cfg=dict(

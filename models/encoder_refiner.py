@@ -73,10 +73,9 @@ class ClassConditionedEncoderRefiner(nn.Module):
         inter_presence_bias_enabled: bool = True,
         inter_presence_bias_floor: float = 0.05,
         inter_presence_bias_strength: float = 1.0,
-        intra_mask_gate_enabled: bool = True,
-        intra_mask_gate_floor: float = 0.1,
-        intra_mask_gate_detach: bool = True,
-        intra_mask_gate_warmup_iters: int = 1000,
+        attention_mask_gate_enabled: bool = True,
+        attention_mask_gate_detach: bool = True,
+        attention_mask_gate_warmup_iters: int = 0,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -84,8 +83,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
         self.use_checkpoint = bool(use_checkpoint)
         self.num_fusion_layers = int(fusion_layers)
         self.inter_presence_bias_enabled = inter_presence_bias_enabled
-        self.mask_gate_warmup_iters = intra_mask_gate_warmup_iters
-        self.mask_gate_progress = 0.0 if intra_mask_gate_warmup_iters > 0 else 1.0
+        self.mask_gate_warmup_iters = attention_mask_gate_warmup_iters
+        self.mask_gate_progress = 0.0 if attention_mask_gate_warmup_iters > 0 else 1.0
         if prompt_templates is None:
             raise ValueError(
                 "prompt_templates must be a list of 64 prompt templates."
@@ -119,9 +118,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 inter_presence_bias_enabled=inter_presence_bias_enabled,
                 inter_presence_bias_floor=inter_presence_bias_floor,
                 inter_presence_bias_strength=inter_presence_bias_strength,
-                intra_mask_gate_enabled=intra_mask_gate_enabled,
-                intra_mask_gate_floor=intra_mask_gate_floor,
-                intra_mask_gate_detach=intra_mask_gate_detach,
+                attention_mask_gate_enabled=attention_mask_gate_enabled,
+                attention_mask_gate_detach=attention_mask_gate_detach,
             )
             for layer_index in range(self.num_fusion_layers)
         ])

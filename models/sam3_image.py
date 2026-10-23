@@ -51,10 +51,9 @@ class Sam3Image(torch.nn.Module):
         inter_presence_bias_enabled: bool = True,
         inter_presence_bias_floor: float = 0.05,
         inter_presence_bias_strength: float = 1.0,
-        intra_mask_gate_enabled: bool = True,
-        intra_mask_gate_floor: float = 0.1,
-        intra_mask_gate_detach: bool = True,
-        intra_mask_gate_warmup_iters: int = 1000,
+        attention_mask_gate_enabled: bool = True,
+        attention_mask_gate_detach: bool = True,
+        attention_mask_gate_warmup_iters: int = 0,
         task_mode: str = TASK_MODE_SEMANTIC,
         **kwargs,
     ):
@@ -134,10 +133,9 @@ class Sam3Image(torch.nn.Module):
             inter_presence_bias_enabled=inter_presence_bias_enabled,
             inter_presence_bias_floor=inter_presence_bias_floor,
             inter_presence_bias_strength=inter_presence_bias_strength,
-            intra_mask_gate_enabled=intra_mask_gate_enabled,
-            intra_mask_gate_floor=intra_mask_gate_floor,
-            intra_mask_gate_detach=intra_mask_gate_detach,
-            intra_mask_gate_warmup_iters=intra_mask_gate_warmup_iters,
+            attention_mask_gate_enabled=attention_mask_gate_enabled,
+            attention_mask_gate_detach=attention_mask_gate_detach,
+            attention_mask_gate_warmup_iters=attention_mask_gate_warmup_iters,
         )
 
         self.prompt_chunk_size = None

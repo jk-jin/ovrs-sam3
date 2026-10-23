@@ -48,7 +48,7 @@ def make_layer(kind="intra", mode="window", presence=True, mask=True, dropout=0.
     return EncoderRefinerLayer(
         hidden_dim=16, score_embed_dim=16, num_heads=4, window_size=2, shift_size=1,
         score_attention_type=kind, score_intra_attn_type=mode, feature_intra_attn_type=mode,
-        dropout=dropout, inter_presence_bias_enabled=presence, intra_mask_gate_enabled=mask,
+        dropout=dropout, inter_presence_bias_enabled=presence, attention_mask_gate_enabled=mask,
     )
 
 
@@ -100,15 +100,76 @@ class AttentionModulationTests(unittest.TestCase):
             expected = torch.einsum("bij,bjdhw->bidhw", weights, value)
             torch.testing.assert_close(actual, expected)
 
-    def test_residual_gate_floor_midpoint_warmup_and_detach(self):
-        logits = torch.tensor([-30., 0., 30.], requires_grad=True)
-        gate = attention.mask_residual_gate(logits, 0.1, 1.0, True)
-        torch.testing.assert_close(gate, torch.tensor([0.1, 0.55, 1.0]))
+    def test_residual_gate_zero_midpoint_warmup_and_detach(self):
+        logits = torch.tensor([-torch.inf, 0., torch.inf], requires_grad=True)
+        gate = attention.mask_residual_gate(logits, 1.0, True)
+        torch.testing.assert_close(gate, torch.tensor([0., 0.5, 1.0]), rtol=0, atol=0)
         self.assertFalse(gate.requires_grad)
-        torch.testing.assert_close(attention.mask_residual_gate(logits, 0.1, 0.0, True), torch.ones(3))
-        attached = attention.mask_residual_gate(logits, 0.1, 1.0, False)
+        torch.testing.assert_close(attention.mask_residual_gate(logits, 0.0, True), torch.ones(3))
+        torch.testing.assert_close(attention.mask_residual_gate(logits, 0.5, True), torch.tensor([0.5, 0.75, 1.]))
+        tiny = attention.mask_residual_gate(torch.tensor(-30.), 1.0, True)
+        self.assertGreater(tiny.item(), 0)
+        torch.testing.assert_close(tiny, torch.tensor(-30.).sigmoid(), rtol=0, atol=0)
+        attached = attention.mask_residual_gate(logits, 1.0, False)
         attached.sum().backward()
         self.assertGreater(logits.grad[1].item(), 0)
+
+    def test_shared_layer_mask_gates_both_attention_updates_by_receiving_class(self):
+        class ConstantUpdate(nn.Module):
+            def forward(self, feature, **kwargs):
+                return torch.ones_like(feature)
+
+        class FixedMask(nn.Module):
+            def __init__(self, logits):
+                super().__init__(); self.logits = logits; self.calls = 0
+
+            def forward(self, feature, score):
+                self.calls += 1
+                return self.logits
+
+        logits = torch.tensor([[[[[-torch.inf, 0.], [torch.inf, -torch.inf]]],
+                                [[[torch.inf, -torch.inf], [0., torch.inf]]]]])
+        gate = logits.sigmoid()
+        for kind in ("intra", "inter"):
+            for mode, steps in (("window", 2), ("local_3x3", 4)):
+                for presence in (False, True):
+                    with self.subTest(kind=kind, mode=mode, presence=presence):
+                        layer = make_layer(kind, mode, presence=presence)
+                        layer.mask_head = FixedMask(logits)
+                        layer.class_attn = ConstantUpdate()
+                        if mode == "window":
+                            layer.window_attn_regular = ConstantUpdate()
+                            layer.window_attn_shifted = ConstantUpdate()
+                        else:
+                            layer.local_attn = nn.ModuleList([ConstantUpdate() for _ in range(steps)])
+                        layer._ffn_feature_update = lambda feature: torch.zeros_like(feature)
+                        layer._ffn_score_update = lambda score: torch.zeros_like(score)
+                        args = layer_inputs()
+                        feature, score, masks = layer(*args)
+                        feature_steps = 1 if kind == "intra" else steps
+                        score_steps = steps if kind == "intra" else 1
+                        torch.testing.assert_close(feature, args[0] + feature_steps * gate)
+                        torch.testing.assert_close(score, args[1] + score_steps * gate)
+                        zero_pixels = (gate == 0).expand_as(feature)
+                        torch.testing.assert_close(feature[zero_pixels], args[0][zero_pixels], rtol=0, atol=0)
+                        torch.testing.assert_close(score[zero_pixels], args[1][zero_pixels], rtol=0, atol=0)
+                        self.assertIs(masks, logits)
+                        self.assertEqual(layer.mask_head.calls, 1)
+
+    def test_zero_attention_mask_does_not_gate_ffn_residuals(self):
+        class ZeroMask(nn.Module):
+            def forward(self, feature, score):
+                return torch.full_like(feature[:, :, :1], -torch.inf)
+
+        for kind in ("intra", "inter"):
+            layer = make_layer(kind, presence=False)
+            layer.mask_head = ZeroMask()
+            layer._ffn_feature_update = lambda feature: torch.ones_like(feature)
+            layer._ffn_score_update = lambda score: torch.full_like(score, 2.)
+            args = layer_inputs(); args[2] = None
+            feature, score, _ = layer(*args)
+            torch.testing.assert_close(feature, args[0] + 1)
+            torch.testing.assert_close(score, args[1] + 2)
 
     def test_every_intra_substep_gates_only_its_residual_target(self):
         class ConstantUpdate(nn.Module):
@@ -349,10 +410,12 @@ class AttentionModulationTests(unittest.TestCase):
     def test_builder_flags_defaults_validation_and_decoder_construction(self):
         config = SAM3ModelBuilder.build_config()
         self.assertTrue(config.encoder_refiner_cfg.inter_presence_bias_enabled)
-        self.assertTrue(config.encoder_refiner_cfg.intra_mask_gate_enabled)
-        for fields in ({"inter_presence_bias_floor": 0.0}, {"intra_mask_gate_floor": -0.1},
-                       {"inter_presence_bias_strength": float("nan")}, {"intra_mask_gate_warmup_iters": -1}):
-            with self.assertRaises(ValueError):
+        self.assertTrue(config.encoder_refiner_cfg.attention_mask_gate_enabled)
+        self.assertEqual(config.encoder_refiner_cfg.attention_mask_gate_warmup_iters, 0)
+        self.assertFalse(hasattr(config.encoder_refiner_cfg, "intra_mask_gate_floor"))
+        for fields in ({"inter_presence_bias_floor": 0.0}, {"attention_mask_gate_enabled": 1},
+                       {"inter_presence_bias_strength": float("nan")}, {"attention_mask_gate_warmup_iters": -1}):
+            with self.assertRaises((TypeError, ValueError)):
                 SAM3ModelBuilder.build_config(encoder_refiner_cfg=fields)
         with patch.object(SAM3ModelBuilder, "_create_transformer_encoder", return_value=nn.Linear(2, 2)), \
              patch.object(SAM3ModelBuilder, "_create_transformer_decoder") as decoder:
@@ -379,7 +442,8 @@ class AttentionModulationTests(unittest.TestCase):
         for mask in (False, True):
             module = ClassConditionedEncoderRefiner(
                 clip_text_encoder=None, clip_dim=8, clip_native_dim=4, prompt_templates=["{}"] * 64,
-                inter_presence_bias_enabled=False, intra_mask_gate_enabled=mask, use_checkpoint=True,
+                inter_presence_bias_enabled=False, attention_mask_gate_enabled=mask, use_checkpoint=True,
+                attention_mask_gate_warmup_iters=1000,
             )
             module.clip_score_embed = Scores()
             module.layers = nn.ModuleList([Layer(mask) for _ in range(4)])

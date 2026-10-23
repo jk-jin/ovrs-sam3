@@ -137,10 +137,9 @@ class EncoderRefinerConfig:
     inter_presence_bias_enabled: bool = True
     inter_presence_bias_floor: float = 0.05
     inter_presence_bias_strength: float = 1.0
-    intra_mask_gate_enabled: bool = True
-    intra_mask_gate_floor: float = 0.1
-    intra_mask_gate_detach: bool = True
-    intra_mask_gate_warmup_iters: int = 1000
+    attention_mask_gate_enabled: bool = True
+    attention_mask_gate_detach: bool = True
+    attention_mask_gate_warmup_iters: int = 0
 
 
 @dataclass

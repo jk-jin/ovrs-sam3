@@ -1,12 +1,12 @@
 # OVRS-SAM3 设计说明
 
-适用分支：`tmp/learnable-instance-distill-20261023`（presence 类间偏置 + 类内掩码残差门控）
+适用分支：`tmp/learnable-instance-distill-20261023`（presence 类间偏置 + 类内/类间掩码残差门控）
 项目仓库：`jk-jin/ovrs-sam3`
 当前任务：开放词汇遥感语义分割
 
 > 本文描述项目当前采用的模型与训练设计。代码实现发生结构性变化时，应同步更新本文。
 
-当前两个新增设计分别由 `encoder_refiner_cfg.inter_presence_bias_enabled` 与 `intra_mask_gate_enabled` 独立控制，默认均为 True。Decoder Input Fusion 已恢复原有双路；不再拼接 presence 隐藏向量，不再使用第三路查询融合。
+当前两个新增设计分别由 `encoder_refiner_cfg.inter_presence_bias_enabled` 与 `attention_mask_gate_enabled` 独立控制，默认均为 True。Decoder Input Fusion 已恢复原有双路；不再拼接 presence 隐藏向量，不再使用第三路查询融合。
 
 ## 1. 项目目标
 
@@ -52,7 +52,7 @@ clip_score_embed_36 直接作为初始 score_embed_36，不接收 SAM3 FPN 注�
 
 feature_36 + score_embed_36
   → Refiner layer 1..4（A→B→A→B，全提示同时运行）
-       每层入口可选预测掩码；掩码仅调制类内注意力的残差增量
+       每层入口可选预测掩码；掩码同时调制类内、类间注意力的残差增量，无空间门控下限
        两种类间注意力可选加入 presence 对数偏置，对角线不加偏置
   → refiner_features_36 [B, P, 256, 36, 36]
   → 可选 refiner_mask_logits [L, B, P, 36, 36]，逐 chunk 辅助监督
@@ -144,7 +144,7 @@ SAM3 图像 backbone 在训练中冻结并运行于 `eval()`。图像特征使�
 
 输入必须是分割头 prompt cross-attention 之前的 encoder memory、位置编码、padding mask、spatial_shapes、valid_ratios 和原始提示 token/mask。只缓存最终 presence logits 经 sigmoid 的 `[B,P]` 概率；不缓存查询、presence 隐藏向量或额外 raw encoder 特征，不运行实例头、匹配评分器或查询掩码 MLP。
 
-关闭该开关时不构建、不运行查询 Decoder，不产生 presence 缓存，不影响独立的类内掩码门控。开启时必须从原始 SAM3 权重加载 Decoder，缺少相关权重直接报错。
+关闭该开关时不构建、不运行查询 Decoder，不产生 presence 缓存，不影响独立的注意力掩码门控。开启时必须从原始 SAM3 权重加载 Decoder，缺少相关权重直接报错。
 
 ### 3.4 共享冻结 Pixel Decoder
 
@@ -249,7 +249,7 @@ FPN144 和 FPN288 由原始 Pixel Decoder 内部消费。
 Q/K 按 `[score_embed, feature, guidance]` 拼接后独立线性投影。
 两种类间注意力都只拼接 `[score_embed, feature]`。
 两路均为 256 通道时，类内 Q/K 输入为 768，类间为 512，投影后为 256 通道。
-Value 始终仅来自指定的目标流，输出残差到同一条流；开启类内掩码门控时，仅对类内增量先乘逐像素门控系数（见 5.5）。
+Value 始终仅来自指定的目标流，输出残差到同一条流；开启掩码门控时，对类内和类间增量都先乘逐像素门控系数（见 5.5）。
 后续子步骤使用已经更新的 score 或 feature，重新计算 pre-norm、Q/K/V 和注意力权重。
 
 **固定图像指导：**
@@ -342,19 +342,19 @@ output = fusion_out_proj(fused_out)
 
 概率为 1 时对应偏置为 0；低概率稳定产生负偏置。自身原始评分不变，但 softmax 后的相对权重会随其他类别的抑制变化。偏置概率 detach，不训练冻结 SAM3。关闭开关完全跳过偏置。
 
-### 5.5 可选类内掩码残差门控
+### 5.5 可选类内/类间掩码残差门控
 
-每层入口用该层的 feature 和 score 分别做 LayerNorm，通道拼接后经 `1×1 Conv 512→128 + GN(8,128) + GELU + 1×1 Conv 128→1`，生成当前图像、提示的 36×36 掩码 logits。四层预测头独立。同层所有类内子步骤共用入口掩码，B 层不会在中途重预测。
+每层入口用该层的 feature 和 score 分别做 LayerNorm，通道拼接后经 `1×1 Conv 512→128 + GN(8,128) + GELU + 1×1 Conv 128→1`，生成当前图像、提示的 36×36 掩码 logits。四层预测头独立。同层所有类内子步骤及类间更新共用入口掩码，A/B 层均不会在中途重预测。
 
-掩码经 sigmoid 得到前景概率。训练暖启动完成及推理阶段，残差系数为 `0.1 + 0.9 * mask_probability`：概率 0、0.5、1 分别对应 0.1、0.55、1。0.1 由 `intra_mask_gate_floor` 配置。系数逐像素广播到全部通道，仅乘在注意力输出投影和 dropout 之后的增量上，然后加回原有特征。原有特征不乘掩码。
+掩码经 sigmoid 得到前景概率，默认直接作为残差系数，不设置下限，不做二值化。概率 0、0.5、1 分别保留 0%、50%、100% 的注意力增量；sigmoid 输出接近 0 时，更新接近 0。系数逐像素广播到全部通道，仅乘在注意力输出投影和 dropout 之后的增量上，然后加回原有特征。原有特征不乘掩码。
 
-A 层对 score 类内增量门控，B 层对 feature 类内增量门控；窗口模式的两次残差、局部模式的四次残差均执行门控。注意力评分、相对位置偏置、softmax、图像外/移位窗口屏蔽、类间残差与两个 FFN 残差均不受空间掩码调制。
+A 层对 score 类内增量和 feature 类间增量门控；B 层对 score 类间增量和 feature 类内增量门控。窗口模式的两次残差、局部模式的四次残差均执行门控。类间聚合后使用接收更新的 Query 类别自己的空间掩码，控制该类别哪些像素写回；presence 偏置继续使用被读取的 Key 类别存在概率，两者职责独立。注意力评分、相对位置偏置、softmax、图像外/移位窗口屏蔽与两个 FFN 残差均不受空间掩码调制。因此零掩码仅停止注意力更新，不停止 FFN 更新。
 
-`intra_mask_gate_detach=True` 默认将用于门控的概率 detach，原始 logits 仍用于辅助监督；预测头通过辅助 BCE 训练。设为 False 可让主分割梯度同时训练门控预测头。
+`attention_mask_gate_detach=True` 默认将用于门控的概率 detach，原始 logits 仍用于辅助监督；预测头通过辅助 BCE 训练。设为 False 可让主分割梯度同时训练门控预测头。
 
-`intra_mask_gate_warmup_iters=1000`：Trainer 以已完成的 `global_iter` 设置进度，训练从完整残差系数 1 线性过渡到掩码门控系数，1000 步后完整启用。设为 0 关闭暖启动。推理总是使用完整门控，恢复训练时进度由恢复的 global_iter 决定，不额外保存一个计数器。
+`attention_mask_gate_warmup_iters=0` 默认关闭门控暖启动，训练和推理从第一次前向起都直接使用掩码概率，满足零概率不做注意力更新。若显式设为正整数，Trainer 以已完成的 `global_iter` 设置进度，在指定步数内将残差系数从 1 线性过渡到掩码概率；此时暖启动期间零掩码仍会保留部分更新。推理总是使用完整门控，恢复训练时进度由恢复的 global_iter 决定，不额外保存一个计数器。学习率 warmup 与门控暖启动独立，原学习率调度不变。
 
-关闭 `intra_mask_gate_enabled` 时不创建预测头、不生成掩码、不做门控，也不计算辅助损失。两个开关相互独立，均关闭时恢复原有 Refiner 和双路融合前向。
+关闭 `attention_mask_gate_enabled` 时不创建预测头、不生成掩码、不做门控，也不计算辅助损失。两个开关相互独立，均关闭时恢复原有 Refiner 和双路融合前向。
 
 ## 6. 冻结 SAM3 分割头与梯度边界
 
@@ -553,11 +553,11 @@ Ctrl+C 使用 Python 默认 `KeyboardInterrupt`。训练和验证均立即退出
 
 两个开关位于 `model.encoder_refiner_cfg`，默认均为 True：
 
-| 实验 | inter_presence_bias_enabled | intra_mask_gate_enabled |
+| 实验 | inter_presence_bias_enabled | attention_mask_gate_enabled |
 | --- | --- | --- |
 | 原始基线 | False | False |
 | 仅 presence 类间偏置 | True | False |
-| 仅类内掩码门控与监督 | False | True |
+| 仅注意力掩码门控与监督 | False | True |
 | 两者同时启用 | True | True |
 
 命令行可直接覆盖，例如只测试 presence 偏置：
@@ -566,7 +566,7 @@ Ctrl+C 使用 Python 默认 `KeyboardInterrupt`。训练和验证均立即退出
 python tools/train.py configs/train/isaid_loveda_full.py \
   --work-dir work_dirs/ablation/presence_only \
   --cfg-options model.encoder_refiner_cfg.inter_presence_bias_enabled=True \
-                model.encoder_refiner_cfg.intra_mask_gate_enabled=False
+                model.encoder_refiner_cfg.attention_mask_gate_enabled=False
 ```
 
 按照上表修改两个布尔值，每组使用独立 work-dir。辅助权重由 `model.criterion_cfg.refiner_mask_bce_weight` 控制，关闭门控时无需另外将其设为 0。默认 detach 门控时，请保留正的辅助权重来训练掩码预测头。
@@ -631,7 +631,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 17. teacher 只来自原始 encoder72 解码路径并且必须 detach。teacher 和 student 都为 288×288。
 18. 蒸馏只监督存在类别。每个存在提示均监督全部 GT 有效像素，并额外监督其原始类别 GT 外侧 `sam3_mask_distill_boundary_width` 像素范围内且标签为 255 的边界环。远处 255 区域不参与蒸馏。多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
 19. 最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
-20. Refiner 按 A→B→A→B 交替，每层先更新 score 再更新 feature。score 类内固定拼接 CLIP 中间层融合特征，feature 类内固定拼接 FPN36；两种类间 Q/K 都不拼接文本。所有注意力单 Value、pre-norm、残差相加；类间评分可加 presence 对数偏置，类内增量可先乘逐像素掩码门控。双路 FFN 各处理当前 256 通道特征，256→1024→256 后直接残差到当前流；保留最终 feature LayerNorm。
+20. Refiner 按 A→B→A→B 交替，每层先更新 score 再更新 feature。score 类内固定拼接 CLIP 中间层融合特征，feature 类内固定拼接 FPN36；两种类间 Q/K 都不拼接文本。所有注意力单 Value、pre-norm、残差相加；类间评分可加 presence 对数偏置，类内、类间增量均可先乘逐像素掩码门控。双路 FFN 各处理当前 256 通道特征，256→1024→256 后直接残差到当前流；保留最终 feature LayerNorm。
 21. TTA 必须先平均提示空间分数（`raw_prompt_score_map`），再合并提示到原始类别，最后进行相对阈值过滤。
 22. `reduce_zero_label` 与 `background_cfg` 各自只执行其定义的一次标签空间变换。
 23. 完整恢复必须严格校验 checkpoint schema；模型权重迁移必须走独立入口。
@@ -655,7 +655,14 @@ python tools/train.py configs/train/isaid_loveda_full.py
 
 ## 12. Checkpoint 非兼容变更
 
-本次 presence 对数偏置与掩码残差门控版本：
+本次类内/类间统一门控更新：
+
+* 将门控开关、detach 和暖启动配置统一改名为 `attention_mask_gate_*`，删除旧名称，不添加兼容别名。
+* 删除空间门控下限配置，默认残差系数直接为掩码前景概率；门控暖启动默认由 1000 改为 0。
+* 每层 mask_head 的参数名及形状不变，同层掩码扩展用于两种注意力残差；监督、双路融合及 FFN 行为不变。
+* 配置与前向行为已经改变，消融实验使用新配置与独立 work-dir；checkpoint 容器 schema 仍为 4。
+
+此前 presence 对数偏置与掩码残差门控重构：
 
 * 删除上一版 presence 隐藏向量拼接及各层 class_norm_presence，类间 Q/K 从 768→256 恢复 512→256。
 * 删除第三路融合、原始查询缓存、raw encoder 额外缓存，恢复原有双路 DecoderInputFusion。
@@ -764,7 +771,7 @@ Checkpoint schema 版本为 4。实验追踪状态不再保存在 checkpoint 中
 * `_CHECKPOINT_VERSION` 保持 4，因为 checkpoint 容器格式不变。
 
 CPU 回归验证入口：`python -m unittest discover -s tests -v`。
-当前 `tests/test_attention_modulation.py` 的 18 项 CPU 回归覆盖 presence 的 Key 类别轴、自身对角线、归一化门控等价性、各空间模式和 A/B 层的四种开关组合、门控下限及暖启动、每个类内子步骤的目标残差、detach 与辅助梯度、checkpoint 输出/梯度、忽略像素参与负监督、单一正/负组、分块归一化与 alias、多层 mask/feature proxy 一次回传、冻结 Decoder 概率及关闭时跳过、配置校验和推理门控。无需下载权重或数据集；不替代真实 GPU AMP/显存和训练效果验证。
+当前 `tests/test_attention_modulation.py` 的 20 项 CPU 回归覆盖 presence 的 Key 类别轴、自身对角线、归一化门控等价性、各空间模式和 A/B 层的四种开关组合、无下限软门控及可选暖启动、同层掩码仅预测一次、按接收类别调制两种注意力残差、零掩码不更新注意力但保留 FFN、每个类内子步骤的目标残差、detach 与辅助梯度、checkpoint 输出/梯度、忽略像素参与负监督、单一正/负组、分块归一化与 alias、多层 mask/feature proxy 一次回传、冻结 Decoder 概率及关闭时跳过、配置校验和推理门控。无需下载权重或数据集；不替代真实 GPU AMP/显存和训练效果验证。
 
 本次简化为固定图像指导版本：
 
