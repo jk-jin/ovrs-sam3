@@ -1,6 +1,6 @@
 # OVRS-SAM3 设计说明
 
-适用分支：`master`
+适用分支：`tmp/refiner-class-mean-center-20261024`
 项目仓库：`jk-jin/ovrs-sam3`
 当前任务：开放词汇遥感语义分割
 
@@ -46,6 +46,7 @@ clip_score_embed_36 直接作为初始 score_embed_36，不接收 SAM3 FPN 注�
 
 feature_36 + score_embed_36
   → Refiner layer 1..4（A→B→A→B，全提示同时运行）
+  → 最终 feature LayerNorm → 按原始类别等权计算均值并相减
   → refiner_features_36 [B, P, 256, 36, 36]
 
 随后按 prompt_chunk_size 逐提示块执行：
@@ -263,10 +264,25 @@ Feature FFN 和 Score FFN 分别处理各自当前注意力后的 256 通道特�
 全部层结束后仅对 feature_36 执行一次通道 LayerNorm；最终 score 不加输出 LayerNorm。
 图像子层沿用 non-reentrant checkpoint，显式传入固定 CLIP 中间层和 FPN36 指导。
 
+#### 类别特征减均值
+
+全部 Refiner 层和最终 `feature_output_norm` 完成后，在 36×36 特征上执行类别减均值。
+均值针对同一图像、同一通道和同一空间位置计算；所有前向类别（包含自身以及图中不存在的类别）均参与，不读取 GT。
+每个原始类别先对其所有提示特征求平均，再对原始类别等权平均。实现使用 `prompt_to_class_id`
+给每个提示分配权重：该类别提示数量的倒数，再除以原始类别总数。这个公共均值从每个提示特征中减去。
+每类只有一个提示时，等价于沿提示维直接减均值。
+
+操作位于提示分块和训练 proxy 创建之前，训练与推理共用同一条低分辨率路径，
+不会受 `prompt_chunk_size` 影响。均值保留计算图，梯度经过类别均值回传到所有类别。
+保留负值，不增加截断、门控或可训练参数；半精度输入的均值在 float32 中计算后转回输入类型。
+`refiner_features_36` 和对应 debug 特征均为处理后的特征；score stream 不参与减均值。
+Decoder Input Fusion 的两条支路均接收该特征。encoder72、FPN、教师路径与损失定义保持原样。
+只有一个前向类别且一个提示时，处理后的 Refiner 特征为零；多个提示时保留类内提示差异。
+
 ### 5.3 单尺度 Decoder Input Fusion
 
 Refiner 在全部提示上统一执行后，最终 36×36 feature stream 先经过一次通道 LayerNorm，
-再进入 `DecoderInputFusion`。融合只在 72×72 执行一次，输出 256 通道 72×72 特征，
+再减去同一图像所有前向类别的特征均值，然后进入 `DecoderInputFusion`。融合只在 72×72 执行一次，输出 256 通道 72×72 特征，
 替换原始 SAM3 Pixel Decoder 的最后一层 FPN 输入。
 
 **输入**（`N = B×P_chunk`）：
@@ -548,7 +564,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 9. SAM3 FPN72 用于固定 Refiner Q/K 指导及 72 尺度融合；FPN144 和 FPN288 只在原始 Pixel Decoder 内部使用。
 10. 可训练 RemoteCLIP 文本特征不能跨 optimizer step 缓存。
 11. 验证不得重新开启 RemoteCLIP 图像分支的 autograd。
-12. Refiner 必须先在全部提示上执行，再按 chunk 做高分辨率解码。Refiner 不能放进 chunk 循环。
+12. Refiner 必须先在全部提示上执行，再按 chunk 做高分辨率解码。Refiner 不能放进 chunk 循环。最终 LayerNorm 后须先对全部提示执行原始类别等权减均值，再返回供分块解码的特征。
 13. 学生和教师复用同一个冻结 Pixel Decoder 与 semantic head；教师路径必须在 `torch.no_grad()` 中，学生路径不得使用 `no_grad()`、`detach()` 或 `enable_grad()`。
 14. DecoderInputFusion 只在 72×72 执行一次，不做多层堆叠或支路前额外 encoder 拼接，输出替换原始 Pixel Decoder 的最后一层 FPN 输入。
 15. 教师始终使用缓存中的原始 encoder72，不使用融合输出或被 Refiner 更新后的特征。
@@ -697,3 +713,12 @@ checkpoint 输出和参数/Refiner 输入梯度、输入形状检查。
 * 初始 CLIP score embedding、原始 SAM3 流程、教师、冻结解码头、损失和逐 chunk 梯度设计保留。
 * 旧 checkpoint 的 FFN 形状和融合参数名称不匹配；新实验使用新的 work directory，不提供兼容层。
 * checkpoint 容器 schema 保持 4。
+
+
+本次类别特征减均值变更：
+
+* `models/encoder_refiner.py` 在最终 LayerNorm 后执行类别减均值，保留完整梯度。
+* `models/sam3_image.py` 从 batch metadata 传入 `prompt_to_class_id`，供训练和推理共享。
+* 没有新增参数或配置开关；本分支始终启用。已有参数名称与形状保持不变，但前向行为发生改变。
+* 建议新实验使用新的 work directory；如从旧权重初始化，使用 `--load-model-from`。
+* 验证入口：`python -m unittest discover -s tests -v`；不需要预训练权重。

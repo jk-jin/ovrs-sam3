@@ -15,6 +15,36 @@ from .encoder_refiner_attention import (
 from .decoder_input_fusion import DecoderInputFusion
 
 
+def center_refiner_features(
+    features: torch.Tensor,
+    prompt_to_class_id: torch.Tensor,
+) -> torch.Tensor:
+    """Subtract the per-image, per-pixel mean with equal original-class weight.
+
+    Features are [B, P, D, H, W]. Each original class contributes its
+    mean prompt feature; all forward classes participate, regardless of GT.
+    The mean stays in the autograd graph and is computed before chunking.
+    """
+    class_ids = torch.as_tensor(
+        prompt_to_class_id, device=features.device, dtype=torch.long,
+    )
+    if features.ndim != 5 or features.shape[1] == 0:
+        raise ValueError("features must be nonempty [B, P, D, H, W].")
+    if class_ids.ndim != 1 or class_ids.numel() != features.shape[1]:
+        raise ValueError("prompt_to_class_id must have one entry per prompt.")
+    _, inverse, counts = torch.unique(
+        class_ids, return_inverse=True, return_counts=True,
+    )
+    # Each class has total weight 1 / number of classes, shared by its prompts.
+    # Compute the small 36x36 reduction in float32 under mixed precision.
+    mean_dtype = torch.float32 if features.dtype in (torch.float16, torch.bfloat16) else features.dtype
+    weights = counts[inverse].to(dtype=mean_dtype).reciprocal() / counts.numel()
+    mean = (features * weights[None, :, None, None, None]).sum(
+        dim=1, keepdim=True, dtype=mean_dtype,
+    ).to(dtype=features.dtype)
+    return features - mean
+
+
 class ClassConditionedEncoderRefiner(nn.Module):
     """Encoder feature refiner operating at 36×36.
 
@@ -32,7 +62,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
     The final fused feature replaces the original Pixel Decoder's last FPN.
 
     After all Refiner layers, the accumulated 36×36 feature stream is
-    normalized once with a channel-wise LayerNorm before being returned
+    normalized once with a channel-wise LayerNorm, then centered across
+    original classes with equal class weight before being returned
     and passed to DecoderInputFusion. The final score stream is not
     post-normalized.
 
@@ -145,6 +176,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         encoder_features_72: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
         class_names: List[str],
+        prompt_to_class_id: torch.Tensor,
         clip_mid_features: list[torch.Tensor] | None = None,
         clip_mid_layer_indices: tuple[int, ...] | None = None,
         sam_fpn_72: torch.Tensor | None = None,
@@ -159,11 +191,14 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 [B, D_clip, 36, 36] dense RemoteCLIP feature map.
             class_names:
                 List containing C prompt names.
+            prompt_to_class_id:
+                Original forward class ID for each expanded prompt; used
+                to give each original class equal weight when centering.
 
         Returns:
             refiner_features_36:
                 [B, C, 256, 36, 36] feature stream after all Refiner
-                layers and the final channel-wise LayerNorm.
+                layers, final channel-wise LayerNorm and class centering.
             score_embed_36:
                 [B, C, 256, 36, 36] score stream after all Refiner layers.
             clip_score_embed_36:
@@ -287,6 +322,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
             feature_36,
             self.feature_output_norm,
         )
+        feature_36 = center_refiner_features(feature_36, prompt_to_class_id)
 
         return {
             "refiner_features_36": feature_36,
@@ -295,3 +331,4 @@ class ClassConditionedEncoderRefiner(nn.Module):
             "clip_score_maps_36": clip_score_maps_36,
             "template_clip_text": template_clip_text,
         }
+
