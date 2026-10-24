@@ -145,6 +145,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
         encoder_features_72: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
         class_names: List[str],
+        prompt_to_class_id: torch.Tensor,
         clip_mid_features: list[torch.Tensor] | None = None,
         clip_mid_layer_indices: tuple[int, ...] | None = None,
         sam_fpn_72: torch.Tensor | None = None,
@@ -159,6 +160,9 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 [B, D_clip, 36, 36] dense RemoteCLIP feature map.
             class_names:
                 List containing C prompt names.
+            prompt_to_class_id:
+                Original class ID for each prompt; same-class prompts cannot
+                attend to one another in either inter-class attention stream.
 
         Returns:
             refiner_features_36:
@@ -182,6 +186,15 @@ class ClassConditionedEncoderRefiner(nn.Module):
         batch_size, num_classes, hidden_dim, height, width = (
             encoder_features_72.shape
         )
+        prompt_to_class_id = torch.as_tensor(
+            prompt_to_class_id, dtype=torch.long, device=encoder_features_72.device
+        )
+        if num_classes == 0 or len(class_names) != num_classes:
+            raise ValueError("class_names must match the nonempty prompt axis")
+        if tuple(prompt_to_class_id.shape) != (num_classes,):
+            raise ValueError("prompt_to_class_id must contain one class ID per prompt")
+        # Build once over ALL prompts, before any high-resolution chunking.
+        inter_class_mask = prompt_to_class_id[:, None] == prompt_to_class_id[None, :]
 
         if hidden_dim != self.hidden_dim:
             raise ValueError(
@@ -270,6 +283,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
                     layer,
                     feature_36,
                     score_embed_36,
+                    inter_class_mask,
                     clip_mid_36,
                     sam_fpn_36,
                     use_reentrant=False,
@@ -278,6 +292,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 feature_36, score_embed_36 = layer(
                     feature_36=feature_36,
                     score_embed_36=score_embed_36,
+                    inter_class_mask=inter_class_mask,
                     clip_mid_36=clip_mid_36,
                     sam_fpn_36=sam_fpn_36,
                 )
@@ -295,3 +310,4 @@ class ClassConditionedEncoderRefiner(nn.Module):
             "clip_score_maps_36": clip_score_maps_36,
             "template_clip_text": template_clip_text,
         }
+

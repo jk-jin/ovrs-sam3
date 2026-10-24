@@ -1,6 +1,6 @@
 # OVRS-SAM3 设计说明
 
-适用分支：`master`
+适用分支：`tmp/refiner-exclude-self-20261024`（基于 `master` 的 `63c0cfa`）
 项目仓库：`jk-jin/ovrs-sam3`
 当前任务：开放词汇遥感语义分割
 
@@ -229,6 +229,18 @@ FPN144 和 FPN288 由原始 Pixel Decoder 内部消费。
 类内注意力分别对 score、feature 和图像指导做逐像素通道 LayerNorm，
 Q/K 按 `[score_embed, feature, guidance]` 拼接后独立线性投影。
 两种类间注意力都只拼接 `[score_embed, feature]`。
+两种类间注意力均只聚合同一空间位置的**其它原始类别**：
+
+* 从 `batch.find_metadatas[0].prompt_to_class_id` 读取每个展开提示所属的原始类别，
+  经 `Sam3Image` 传入 Refiner；不根据提示文字猜测类别，也不使用 GT 判断类别是否存在。
+* 在全部展开提示上构建布尔屏蔽矩阵；查询提示与键提示属于同一原始类别时屏蔽。
+  每类只有一个提示时即屏蔽对角线；例如 `ship, vessel` 同属船类，两者之间也屏蔽。
+* 在 softmax 之前把被屏蔽的注意力分数设为负无穷；其它类别正常归一化并聚合。
+  屏蔽矩阵在 Refiner 入口构建一次，由全部四层以及 checkpoint 重计算共同使用。
+* 只有一个原始类别时（即使展开为多个提示），类间注意力直接返回零更新，
+  跳过 Q/K/V 与输出投影，避免全屏蔽 softmax 产生 NaN 或输出投影偏置产生非零更新。
+  外层残差保留当前流；类内注意力与两路 FFN 继续执行。
+
 两路均为 256 通道时，类内 Q/K 输入为 768，类间为 512，投影后为 256 通道。
 Value 始终仅来自指定的目标流，输出直接残差到同一条流。
 后续子步骤使用已经更新的 score 或 feature，重新计算 pre-norm、Q/K/V 和注意力权重。
@@ -697,3 +709,16 @@ checkpoint 输出和参数/Refiner 输入梯度、输入形状检查。
 * 初始 CLIP score embedding、原始 SAM3 流程、教师、冻结解码头、损失和逐 chunk 梯度设计保留。
 * 旧 checkpoint 的 FFN 形状和融合参数名称不匹配；新实验使用新的 work directory，不提供兼容层。
 * checkpoint 容器 schema 保持 4。
+
+本次类间注意力排除自身类别（2026-10-24）：
+
+* A 层的 feature 类间更新与 B 层的 score 类间更新均屏蔽同一原始类别的全部提示。
+* 新增必需的 `prompt_to_class_id` 前向输入，并在普通与 checkpoint 路径传递屏蔽矩阵；
+  训练和推理共用该路径，不增加配置开关。
+* 不增加可训练参数、不改变已有参数名称或形状；注意力行为已变化，建议新实验使用新 work directory。
+* 类内注意力、残差、FFN、最终 feature LayerNorm、Decoder Input Fusion 和损失设计保留。
+* 新增 `tests/test_inter_class_exclusion.py`，使用 CPU 验证显式移除同类键值的参考结果、
+  同类 value 屏蔽及梯度、单类别零更新、双类别互相聚合、两种类内模式的四层 checkpoint
+  输出与梯度一致性，以及实际 36×36/256 通道 Refiner 的类别映射传递与反向传播。
+  运行：`python -m unittest discover -s tests -v`；不需要 SAM3 或 RemoteCLIP 权重。
+

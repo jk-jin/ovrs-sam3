@@ -528,6 +528,7 @@ class Sam3Image(torch.nn.Module):
         cross_attended_encoder_features_72: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
         class_names: List[str],
+        prompt_to_class_id: torch.Tensor,
         clip_mid_features: list[torch.Tensor] | None = None,
         clip_mid_layer_indices: tuple[int, ...] | None = None,
         sam_fpn_72: torch.Tensor | None = None,
@@ -537,6 +538,7 @@ class Sam3Image(torch.nn.Module):
             encoder_features_72=cross_attended_encoder_features_72,
             clip_image_feat_map=clip_image_feat_map,
             class_names=class_names,
+            prompt_to_class_id=prompt_to_class_id,
             clip_mid_features=clip_mid_features,
             clip_mid_layer_indices=clip_mid_layer_indices,
             sam_fpn_72=sam_fpn_72,
@@ -564,6 +566,8 @@ class Sam3Image(torch.nn.Module):
             raise ValueError(
                 "Cached class_names do not match batch.find_text_batch."
             )
+        if len(batch.find_metadatas) != 1:
+            raise ValueError("Refiner expects exactly one prompt metadata entry")
 
         refiner_out = self._run_encoder_refiner_lowres(
             cross_attended_encoder_features_72=(
@@ -571,6 +575,7 @@ class Sam3Image(torch.nn.Module):
             ),
             clip_image_feat_map=clip_image_feat_map,
             class_names=batch_class_names,
+            prompt_to_class_id=batch.find_metadatas[0].prompt_to_class_id,
             clip_mid_features=encoder_refiner_cache[OUTPUT_KEYS.clip_mid_features],
             clip_mid_layer_indices=encoder_refiner_cache["clip_mid_layer_indices"],
             sam_fpn_72=encoder_refiner_cache["backbone_fpn"][2],
@@ -907,3 +912,4 @@ class Sam3Image(torch.nn.Module):
             encoder_refiner_cache=encoder_refiner_cache,
             batch=input,
         )
+

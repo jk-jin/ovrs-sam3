@@ -71,6 +71,7 @@ class ClassScoreAttention(nn.Module):
 
     Q/K concatenate pre-normalized score and feature. Only value_stream
     supplies values; the returned update is added by the outer layer.
+    Prompts of the same original class are excluded, including self.
     """
 
     def __init__(
@@ -106,6 +107,7 @@ class ClassScoreAttention(nn.Module):
         self,
         feature: torch.Tensor,
         score_embed: torch.Tensor,
+        inter_class_mask: torch.Tensor,
         guidance: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Return the update for value_stream; inputs are [B, C, D, H, W]."""
@@ -114,6 +116,12 @@ class ClassScoreAttention(nn.Module):
         D_score = self.score_embed_dim
         if tuple(score_embed.shape) != (B, C, D_score, H, W):
             raise ValueError("score_embed shape must match feature's batch/class/grid")
+        if inter_class_mask.shape != (C, C) or inter_class_mask.dtype != torch.bool:
+            raise ValueError("inter_class_mask must be a boolean [C, C] tensor")
+        if inter_class_mask.all():
+            # No other class exists. Bypass projections (including their biases).
+            target = feature if self.value_stream == "feature" else score_embed
+            return target * 0.0
         N = H * W
         f_flat = feature.permute(0, 3, 4, 1, 2).reshape(B * N, C, D)
         s_flat = score_embed.permute(0, 3, 4, 1, 2).reshape(B * N, C, D_score)
@@ -127,6 +135,7 @@ class ClassScoreAttention(nn.Module):
         k = self.k_proj(qk_input).reshape(B * N, C, self.num_heads, head_dim).permute(0, 2, 1, 3)
         v = self.v_proj(value).reshape(B * N, C, self.num_heads, head_dim).permute(0, 2, 1, 3)
         attn = torch.matmul(q, k.transpose(-2, -1)) * (head_dim ** -0.5)
+        attn = attn.masked_fill(inter_class_mask, float("-inf"))
         attn = self.dropout(F.softmax(attn, dim=-1))
         out = torch.matmul(attn, v).permute(0, 2, 1, 3).reshape(B * N, C, D)
         out = self.dropout(self.out_proj(out))
@@ -574,10 +583,12 @@ class EncoderRefinerLayer(nn.Module):
         self,
         feature: torch.Tensor,
         score: torch.Tensor,
+        inter_class_mask: torch.Tensor,
     ) -> torch.Tensor:
         return self.class_attn(
             feature=apply_layer_norm_bcdhw(feature, self.class_norm_feature),
             score_embed=apply_layer_norm_bcdhw(score, self.class_norm_score),
+            inter_class_mask=inter_class_mask,
         )
 
     def _update_intra(
@@ -635,6 +646,7 @@ class EncoderRefinerLayer(nn.Module):
         self,
         feature_36: torch.Tensor,
         score_embed_36: torch.Tensor,
+        inter_class_mask: torch.Tensor,
         clip_mid_36: torch.Tensor | None = None,
         sam_fpn_36: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -642,9 +654,9 @@ class EncoderRefinerLayer(nn.Module):
         intra_guidance = clip_mid_36 if self.score_attention_type == "intra" else sam_fpn_36
         if self.score_attention_type == "intra":
             feature_36, score_embed_36 = self._update_intra(feature_36, score_embed_36, intra_guidance)
-            feature_36 = feature_36 + self._class_update(feature_36, score_embed_36)
+            feature_36 = feature_36 + self._class_update(feature_36, score_embed_36, inter_class_mask)
         else:
-            score_embed_36 = score_embed_36 + self._class_update(feature_36, score_embed_36)
+            score_embed_36 = score_embed_36 + self._class_update(feature_36, score_embed_36, inter_class_mask)
             feature_36, score_embed_36 = self._update_intra(feature_36, score_embed_36, intra_guidance)
 
         feature_36 = feature_36 + self._ffn_feature_update(
@@ -654,3 +666,4 @@ class EncoderRefinerLayer(nn.Module):
             apply_layer_norm_bcdhw(score_embed_36, self.ffn_norm_score)
         )
         return feature_36, score_embed_36
+
