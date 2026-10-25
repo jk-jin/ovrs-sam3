@@ -1,7 +1,7 @@
 # OVRS-SAM3 设计说明
 
 适用分支：`tmp/sam3-semantic-prior-fusion-20261025`
-设计更新：2026-10-25，原始 SAM3 前置语义先验与推理融合
+设计更新：2026-10-25，原始 SAM3 前置语义先验；最终过滤恢复为仅使用学生掩码
 项目仓库：`jk-jin/ovrs-sam3`
 当前任务：开放词汇遥感语义分割
 
@@ -76,7 +76,7 @@ fused_feature_72
 
 学生和教师共用同一个冻结 segmentation_head 对象，参数不复制。
 每个学生 chunk 立即计算 loss 和 backward，不再拼接全类别学生 logits 的计算图。
-推理：max(学生 sigmoid 概率, 原始语义 sigmoid 概率 × presence sigmoid 概率)
+推理：学生 sigmoid 概率
   → 同义提示最大值合并 → 原有相对阈值过滤 → 类别 argmax。
 ```
 
@@ -171,7 +171,7 @@ CPU 存储避免常驻 GPU，但会增加 CPU 内存占用与设备传输时间�
 内部保留 nearest 上采样、卷积、GN 与激活，最终为 288×288。
 
 原始分支无条件运行，与蒸馏权重或类别是否存在无关。
-原始语义 logits 直接缓存，并供语义先验、教师切片和推理融合复用。
+原始语义 logits 直接缓存，供语义先验和教师切片复用；不再与学生结果融合用于最终过滤。
 学生分支冻结解码器参数但保留对输入的梯度；仅输出学生语义 logits。
 不新增学生实例监督，不执行第二次查询 Decoder，也不因蒸馏执行第三次 Pixel Decoder。
 
@@ -420,7 +420,7 @@ loss_final_bce = (bce_per_pixel * valid_mask).sum() / total_valid_pixels
 
 **SAM3 teacher 掩码蒸馏**（基础配置 `sam3_mask_distill_weight=0.5`）：
 
-蒸馏权重在整个训练过程中保持不变。teacher logits 已由 Refiner 前的原始分支生成；有可蒸馏提示时直接读取缓存。教师概率不乘 presence。主 BCE、Dice 和蒸馏始终监督取最大值/过滤之前的学生 raw logits。
+蒸馏权重在整个训练过程中保持不变。teacher logits 已由 Refiner 前的原始分支生成；有可蒸馏提示时直接读取缓存。教师概率不乘 presence。主 BCE、Dice 和蒸馏始终监督阈值过滤之前的学生 raw logits。
 
 蒸馏监督范围：
 
@@ -467,14 +467,14 @@ total_loss = (
 
 ## 8. 推理与评测
 
-推理时 `prompt_logits` 仍保留未融合的学生 logits [B, P, H, W]。
-Adapter 分别对学生语义 logits、原始 SAM3 语义 logits 和 presence logits 做 sigmoid。
-每个提示先把原始语义概率乘其自身 presence 概率，再与学生概率逐像素取最大值，
-得到新的 `raw_prompt_score_map`。学生概率不乘 presence。
+推理时模型在提示空间输出学生 `prompt_logits` [B, P, H, W]。
+Adapter 只对学生 logits 做 sigmoid，得到 `raw_prompt_score_map`。
+原始 SAM3 语义掩码和 presence 不参与最终分数融合，也不是 Adapter 必需输入；
+它们仍由前置 SAM3 分支产生，供先验初始化、蒸馏与后续设计使用。
 随后把同一原始类别的多个提示逐像素取最大值，得到 `raw_final_score_map` [B, M, H, W]。
-原有相对阈值过滤只在合并后的类别空间执行：归一化用于判断保留位置，
-保留位置仍使用融合后的原始概率分数。最后对类别取 argmax。
-训练 `output_mode="final"` 和训练逐 chunk 返回的 final_logits 都是未融合学生 logits。
+原有相对阈值过滤在类别空间执行：归一化仅用于判断保留位置，
+保留位置使用原始学生概率分数。最后对类别取 argmax。
+训练 `output_mode="final"` 和训练逐 chunk 返回的 final_logits 继续使用学生原始 logits。
 
 标签空间中两个机制职责不同：
 
@@ -485,7 +485,7 @@ Adapter 分别对学生语义 logits、原始 SAM3 语义 logits 和 presence lo
 
 Evaluator 输出整体 mIoU、mAcc、pixel accuracy 和逐类别指标。`metric_groups` 可以按 `class_ids` 或 `class_names` 定义命名类别组，并分别计算组内 mIoU/mAcc。完整 iSAID→LoveDA 配置使用前景类别组作为 checkpoint monitor。
 
-TTA 当前只支持 `scale=1.0` 和空间翻转。每个视图先独立完成 presence 加权与两路最大值融合；多个视图必须先平均融合后的 `raw_prompt_score_map`（提示空间），再合并提示到原始类别，最后统一执行一次非线性相对阈值过滤。
+TTA 当前只支持 `scale=1.0` 和空间翻转。多个视图必须先平均学生 `raw_prompt_score_map`（提示空间），再合并提示到原始类别，最后统一执行一次非线性相对阈值过滤。
 
 ## 9. Checkpoint、恢复与实验追踪
 
@@ -753,9 +753,19 @@ checkpoint 输出和参数/Refiner 输入梯度、输入形状检查。
 - 旧 no_dec 语义模型未使用的 3×3 mask_predictor 被原始 MLP 替代；不提供旧参数兼容层。
 - 原始 encoder、查询、语义/实例解码均在 Refiner 前执行，蒸馏不额外解码。
 - final BCE / Dice / 蒸馏保持既有类别与像素监督范围，只读未融合学生 logits。
-- 推理在提示空间先执行 max(学生概率, 原始语义概率 × presence 概率)，再合并类别和相对阈值过滤。
+- 初版曾将原始语义概率乘 presence 后与学生取最大值；后续更新已移除此融合，恢复仅使用学生概率做类别合并与相对阈值过滤。
 - 旧训练 checkpoint 无法完整恢复；从原始 SAM3 权重与 RemoteCLIP 权重开始新实验，使用新 work directory。
 - checkpoint 容器格式不变，schema 仍为 4。
 - CPU 回归入口：`OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 python -m unittest discover -s tests -v`。
-- 9 项测试覆盖六层/200 查询真实 Decoder、实例与语义共享 Pixel Decoder、原始特征分流、不同 batch/非整块提示缓存与教师复用、先验卷积梯度、提示合并、阈值过滤、TTA 融合顺序与冻结权重完整性。
+- 9 项测试覆盖六层/200 查询真实 Decoder、实例与语义共享 Pixel Decoder、原始特征分流、不同 batch/非整块提示缓存与教师复用、先验卷积梯度、提示合并、阈值过滤、TTA 学生概率平均与冻结权重完整性。
 - 本次没有预训练权重、数据集与 CUDA 实测结果，CPU 测试不能代替真实训练精度和显存验证。
+
+
+### 2026-10-25 恢复学生掩码独立后处理
+
+- 删除 Adapter 末端的原始语义概率 × presence 与学生概率逐像素最大值融合。
+- 保留原有逐类别相对阈值过滤，仅使用 Refiner → DecoderInputFusion → Pixel Decoder → 语义头得到的学生概率。
+- 同义提示合并、TTA 提示空间概率平均、阈值过滤和 argmax 顺序保持不变。
+- 前置原始 SAM3、可训练语义先验卷积、初始特征融合、实例 CPU 缓存和教师复用保持不变。
+- 不改训练损失、配置或模型参数结构；上一提交的新版本 checkpoint 可继续使用。
+- 9 项 CPU 回归测试覆盖此次学生独立后处理与已有先验/冻结/缓存行为。

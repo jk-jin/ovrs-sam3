@@ -126,20 +126,23 @@ class AdapterTests(unittest.TestCase):
             KEYS.sam3_presence_logits: torch.logit(self.presence),
         }
 
-    def test_presence_then_max_then_alias_merge_then_relative_filter(self):
+    def test_student_only_alias_merge_then_relative_filter(self):
         outputs = Adapter(.5)(self.raw, self.batch, output_mode="infer")
-        torch.testing.assert_close(outputs[KEYS.raw_prompt_score_map], torch.tensor([
-            [[[.2, .8]], [[.72, .36]], [[.45, .45]]]
-        ]))
+        torch.testing.assert_close(outputs[KEYS.raw_prompt_score_map], self.student)
         torch.testing.assert_close(outputs[KEYS.raw_final_score_map], torch.tensor([
-            [[[.72, .8]], [[.45, .45]]]
+            [[[.3, .8]], [[.1, .4]]]
         ]))
         torch.testing.assert_close(outputs[KEYS.final_score_map], torch.tensor([
-            [[[0., .8]], [[.45, .45]]]
+            [[[0., .8]], [[0., .4]]]
         ]))
-        self.assertEqual(outputs[KEYS.final_pred].tolist(), [[[1, 0]]])
-        # Loss-facing prompt logits are preserved, never replaced by max scores.
+        self.assertEqual(outputs[KEYS.final_pred].tolist(), [[[0, 0]]])
         torch.testing.assert_close(outputs[KEYS.prompt_logits], self.raw[KEYS.final_logits])
+        # Original SAM3 masks/presence are optional diagnostics, not inference inputs.
+        student_only = Adapter(.5)(
+            {KEYS.final_logits: self.raw[KEYS.final_logits]}, self.batch, output_mode="infer"
+        )
+        for key in (KEYS.raw_prompt_score_map, KEYS.final_score_map, KEYS.final_pred):
+            torch.testing.assert_close(student_only[key], outputs[key])
 
     def test_training_output_is_unfused_and_needs_no_original_outputs(self):
         outputs = Adapter(.5)(
@@ -148,7 +151,7 @@ class AdapterTests(unittest.TestCase):
         )
         self.assertIs(outputs[KEYS.final_logits], self.raw[KEYS.final_logits])
 
-    def test_tta_averages_each_views_fused_probabilities(self):
+    def test_tta_averages_student_probabilities_only(self):
         class Model(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -168,10 +171,9 @@ class AdapterTests(unittest.TestCase):
         output = module("engine.evaluator").inference_with_tta(
             Model(), batch, dict(enabled=True, scales=[1.], flip_modes=["none", "h"], size_divisor=1)
         )
-        # Mean(max(.1, .9*.99), max(.9, .1*.99)); averaging logits
-        # or fusing only after averaging both branches would give a different result.
+        # Mean(.1, .9), unaffected by original SAM3 probabilities and presence.
         torch.testing.assert_close(
-            output[KEYS.raw_prompt_score_map], torch.full((1, 1, 1, 2), .8955)
+            output[KEYS.raw_prompt_score_map], torch.full((1, 1, 1, 2), .5)
         )
 
 
