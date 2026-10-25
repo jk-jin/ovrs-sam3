@@ -1,6 +1,7 @@
 # OVRS-SAM3 设计说明
 
-适用分支：`master`
+适用分支：`tmp/sam3-semantic-prior-fusion-20261025`
+设计更新：2026-10-25，原始 SAM3 前置语义先验与推理融合
 项目仓库：`jk-jin/ovrs-sam3`
 当前任务：开放词汇遥感语义分割
 
@@ -14,7 +15,7 @@ OVRS-SAM3 接收一批遥感图像和当前数据集的类别名称，输出每�
 * RemoteCLIP 提供面向遥感场景的局部图文对齐。
 * Encoder refiner 在低分辨率融合两者，通过单层 72×72 语义—细节双路融合生成掩码。
 
-当前只实现 semantic 模式，不支持实例分割、hybrid 模式或非空几何提示训练。
+最终任务仍为 semantic。恢复冻结 SAM3 查询 decoder 与原始实例掩码生成，实例输出暂存但不参与预测或损失；不支持 hybrid 模式或非空几何提示训练。
 
 整体流程如下：
 
@@ -27,9 +28,15 @@ OVRS-SAM3 接收一批遥感图像和当前数据集的类别名称，输出每�
        ├─ 504×504 图像 → 36×36 dense image feature
        └─ 每类 64 个文本模板 → template text feature
 
-完整 6 层 encoder feature
-  → prompt cross-attention
-  → 72×72 cross-attended encoder feature
+完整 6 层 encoder feature（分割头 prompt cross-attention 之前）
+  ├─ 冻结查询 Decoder（6 层、200 查询）+ 文本提示
+  │    → 查询特征、匹配 logits、presence logits、框
+  └─ prompt cross-attention → 72×72 cross-attended encoder feature
+       → 原始 Pixel Decoder（使用 FPN144/FPN288）
+       ├─ semantic_seg_head → 原始语义 logits 288×288
+       └─ instance_seg_head → 与经过 MLP 的查询内积 → 200 张实例 logits
+以上原始 SAM3 流程全部 no_grad，在 Refiner 之前完成。
+语义 logits / presence 留在设备缓存；全部实例输出按 chunk 转 CPU 保留。
 
 RemoteCLIP 局部相似度图
   → 64 通道模板分数图经 1×1 Conv 投影
@@ -37,10 +44,13 @@ RemoteCLIP 局部相似度图
   → 两次拼接前均做逐像素通道 L2 归一化
   → clip_score_embed_36 [B, P, 256, 36, 36]
 
+原始 SAM3 语义 logits → sigmoid（不乘 presence、不二值化）
+  → 可训练三层 stride=2 的 3×3 Conv + GN + GELU
+  → 288→144→72→36，通道 1→32→64→128
 72×72 cross-attended encoder feature
-  → 双线性下采样
-  → base_feature_36 [B, P, 256, 36, 36]
-  → 直接作为初始 feature_36
+  → 双线性下采样 → base_feature_36 [B, P, 256, 36, 36]
+  → 与 128 通道语义先验拼接 → 384→256 的 1×1 Conv + GN + GELU
+  → 初始 feature_36（新增卷积在 no_grad 之外）
 
 clip_score_embed_36 直接作为初始 score_embed_36，不接收 SAM3 FPN 注入
 
@@ -50,12 +60,7 @@ feature_36 + score_embed_36
 
 随后按 prompt_chunk_size 逐提示块执行：
 
-教师（仅当蒸馏启用时执行，全程 torch.no_grad()）：
-
-original_encoder_feature_72_chunk
-  → 冻结的 SAM3 Pixel Decoder（内部继续使用原始 FPN144/FPN288）
-  → 冻结的 SAM3 semantic_seg_head
-  → sam3_teacher_logits（detached）
+教师：直接切片读取前置原始分支缓存的语义 logits，不再次运行 Pixel Decoder。
 
 学生：
 
@@ -70,7 +75,9 @@ fused_feature_72
   → final_logits_chunk
 
 学生和教师共用同一个冻结 segmentation_head 对象，参数不复制。
-每个 chunk 立即计算 loss 和 backward，不再拼接全类别 logits。
+每个学生 chunk 立即计算 loss 和 backward，不再拼接全类别学生 logits 的计算图。
+推理：max(学生 sigmoid 概率, 原始语义 sigmoid 概率 × presence sigmoid 概率)
+  → 同义提示最大值合并 → 原有相对阈值过滤 → 类别 argmax。
 ```
 
 ## 2. 张量约定
@@ -103,7 +110,10 @@ fused_feature_72
 | `refiner_features_36`         | `[B, P, 256, 36, 36]`              | Refiner 的图像特征流                 |
 | `fused_feature_72`            | `[B×P_chunk, 256, 72, 72]`（逐 chunk） | DecoderInputFusion 输出，替换 Pixel Decoder 的最后一层 FPN 输入 |
 | `final_logits`                | `[B, P_chunk, 288, 288]`（逐 chunk） | 学生路径输出的最终语义分割 logits |
-| `sam3_teacher_logits`         | `[B, P_chunk, 288, 288]`（逐 chunk） | 教师路径输出的 detached teacher logits |
+| `sam3_semantic_logits` | `[B, P, 288, 288]` | 前置原始语义 logits，不乘 presence，detached |
+| `sam3_presence_logits` | `[B, P]` | 查询 Decoder 产生的 presence logits，detached |
+| `sam3_instance_outputs` | 按 chunk 排列的字典列表 | 含 class_start/end、CPU pred_masks/queries/pred_logits/pred_boxes |
+| `sam3_teacher_logits` | `[B, P_chunk, 288, 288]` | 从 sam3_semantic_logits 切片复用 |
 
 训练损失和评测会在必要时用最近邻插值把标签映射到 logits 尺度。
 
@@ -127,21 +137,43 @@ SAM3 图像 backbone 在训练中冻结并运行于 `eval()`。图像特征使�
 
 所有提示块按原始顺序重新拼接。
 
-### 3.3 共享冻结 Pixel Decoder
+### 3.3 原始查询 Decoder 与实例分割
 
-同一套冻结 Pixel Decoder 与 semantic head 同时服务学生和教师两条路径，参数不复制。
+查询 Decoder 与官方构建一致：256 维、8 头、6 层、200 个可学习查询，
+启用文本交叉注意力、参考框逐层修正、log boxRPB 和独立 presence token。
+冻结分支保持 eval，显式 `apply_dac=False`，训练时也只产生 200 个候选。
+读取完整 encoder 的 memory、pos_embed、padding_mask、level_start_index、
+spatial_shapes、valid_ratios 与原始提示 token，不能读取提示交叉注意力之后的缓存。
+不传 resolution/stride 预分配 CUDA 坐标；boxRPB 首次前向在实际输入设备建立缓存。
 
-```text
-类条件 72×72 特征（学生为 fused_feature_72，教师为原始 encoder72；替换 FPN 最后一层）
-  → 上采样到 144×144 + FPN144 → 3×3 Conv + GroupNorm + ReLU
-  → 上采样到 288×288 + FPN288 → 3×3 Conv + GroupNorm + ReLU
-  → pixel_feature_288
-  → 冻结 semantic_seg_head
-```
+最终查询经过原始 DotProductScoring 生成匹配 logits；presence 使用 decoder 自身的 head。
+最终查询经过原始三层 `mask_predictor.mask_embed` MLP，再与
+`instance_seg_head(pixel_embed)` 沿通道内积生成实例 logits。
+同一个原始 Pixel Decoder 输出同时用于 semantic_seg_head 与 instance_seg_head，
+不为两个头分别解码。保留所有实例，不应用匹配阈值、presence 加权或 NMS。
 
-Pixel Decoder 内部继续使用 `interpolation_mode="nearest"`（SAM3 原始设置），FPN 顺序固定为 288、144、72。Pixel Decoder 参数冻结且保持 `eval()`。
+`sam3_instance_outputs` 每个 chunk 包含：
 
-教师路径把原始 encoder72 送入 Pixel Decoder，整个调用位于 `torch.no_grad()` 中，仅当蒸馏启用且存在可蒸馏类别时执行。学生路径把 `fused_feature_72` 送入同一个 Pixel Decoder，梯度开启：冻结参数不更新，但梯度可以穿过冻结卷积回传到 DecoderInputFusion 和 Refiner。
+- `class_start` / `class_end`：提示范围，右端不包含。
+- `pred_masks`：CPU `[B, P_chunk, 200, 288, 288]` 原始 logits。
+- `queries`：CPU `[B, P_chunk, 200, 256]` 最终查询。
+- `pred_logits`：CPU `[B, P_chunk, 200]` 匹配 logits。
+- `pred_boxes`：CPU `[B, P_chunk, 200, 4]` 归一化 xyxy 框。
+
+这些张量全部 detach；本次只保留供后续使用，不参与初始化、损失和最终预测。
+CPU 存储避免常驻 GPU，但会增加 CPU 内存占用与设备传输时间。
+
+### 3.4 共享冻结 Pixel Decoder
+
+每个图像—提示对执行两次同一个 Pixel Decoder：
+原始分支在 Refiner 之前执行一次，学生 fused_feature_72 解码执行一次。
+两次都使用原始 FPN144/FPN288，且用各自的类条件 72×72 特征替换 FPN 最后一层。
+内部保留 nearest 上采样、卷积、GN 与激活，最终为 288×288。
+
+原始分支无条件运行，与蒸馏权重或类别是否存在无关。
+原始语义 logits 直接缓存，并供语义先验、教师切片和推理融合复用。
+学生分支冻结解码器参数但保留对输入的梯度；仅输出学生语义 logits。
+不新增学生实例监督，不执行第二次查询 Decoder，也不因蒸馏执行第三次 Pixel Decoder。
 
 ## 4. RemoteCLIP 分支
 
@@ -204,7 +236,13 @@ Refiner 在 36×36 上同时维护图像 feature 流和 score embedding 流。�
 ### 5.1 Feature stream 与 score stream 初始化
 
 Cross-attended full-encoder feature（72×72）双线性下采样到 36×36，得到
-`base_feature_36`，直接作为 feature stream。
+256 通道 `base_feature_36`。原始 SAM3 语义 logits 先 detach 并 sigmoid，
+不乘 presence、不阈值化，再经过 `semantic_prior_encoder`：三层普通 3×3
+stride=2、padding=1 卷积，分辨率 288→144→72→36，通道 1→32→64→128，
+每层后接 GN(8) 与 GELU。与 base_feature_36 拼接为 384 通道，经过
+`feature_input_fusion`（1×1 Conv 384→256、GN(8)、GELU）成为初始 feature stream。
+新增卷积位于 core.encoder_refiner 内，保持可训练，不在 SAM3 no_grad 范围内。
+训练时初始化模块沿用 non-reentrant checkpoint；后续梯度经 proxy 回传到这些参数。
 
 score_embeddings.py 生成的 clip_score_embed_36 直接作为 score
 stream。进入所有 Refiner Attention 层之前不再融合任何 SAM3 FPN
@@ -321,7 +359,7 @@ Prompt cross-attention 在完整 6 层 encoder 之后、Refiner 之前执行一�
 
 Pixel Decoder 与 semantic head 的参数始终冻结（`requires_grad=False`）并保持 `eval()`。学生和教师复用同一个 `segmentation_head` 对象，参数不复制。
 
-- **教师路径**：原始 encoder72 送入 Pixel Decoder，整个调用位于 `torch.no_grad()` 中，只保留 detached logits。学生计算图此时尚未建立或已释放。
+- **原始/教师路径**：在 Refiner 前运行完整冻结 SAM3 分支并缓存；训练 chunk 直接切片读取 detached 原始语义 logits，不再调用教师解码。
 - **学生路径**：`fused_feature_72` 送入同一个 Pixel Decoder，不使用 `no_grad()`、不 detach，也不主动 `enable_grad()`，完全服从外层的梯度状态。
 
 冻结参数的 `requires_grad=False` 只阻止参数更新，不阻止对输入求梯度。学生路径误加 `no_grad()` 会同时切断主 BCE 和蒸馏对 DecoderInputFusion、Refiner 的监督。
@@ -335,13 +373,14 @@ DecoderInputFusion 消费 Refiner36、原始 encoder72 和 FPN72；Pixel Decoder
 以下 SAM3 模块冻结并保持 `eval()`：
 
 * backbone；
-* transformer encoder（完整 6 层，在 `no_grad()` 中执行）；
+* transformer encoder 和查询 decoder（各 6 层，在 `no_grad()` 中执行）；
+* dot_prod_scoring（查询匹配头）；
 * geometry encoder；
 * segmentation head（Pixel Decoder 参数冻结并保持 `eval()`。教师路径在 `no_grad()` 中执行，学生路径在梯度开启状态下执行。semantic head 在教师路径中产生 detach 的 teacher logits，在学生路径中产生可回传梯度的 student logits）。
 
-完整 SAM3 encoder 和前置 prompt cross-attention 不保留计算图，均在 `torch.no_grad()` 中执行。
+完整 SAM3 encoder、查询 decoder、匹配头、前置 prompt cross-attention 和原始语义/实例解码不保留计算图，均在 `torch.no_grad()` 中执行。
 
-`core.encoder_refiner` 完整训练。其内部的 Refiner 层、`feature_output_norm`、score embedding 和 `DecoderInputFusion` 同属一个参数组，由现有 `trainable_modules=["core.encoder_refiner"]` 自动覆盖，使用基础学习率 `1e-4`。最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
+`core.encoder_refiner` 完整训练。其内部的 `semantic_prior_encoder`、`feature_input_fusion`、Refiner 层、`feature_output_norm`、score embedding 和 `DecoderInputFusion` 同属一个参数组，由现有 `trainable_modules=["core.encoder_refiner"]` 自动覆盖，使用基础学习率 `1e-4`。最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
 
 RemoteCLIP 图像和文本分支默认使用 `attention` 微调模式，仅训练注意力 Q/V 与位置嵌入，同时保持 `eval()` 以关闭 dropout 和 patch dropout。
 
@@ -381,7 +420,7 @@ loss_final_bce = (bce_per_pixel * valid_mask).sum() / total_valid_pixels
 
 **SAM3 teacher 掩码蒸馏**（基础配置 `sam3_mask_distill_weight=0.5`）：
 
-蒸馏权重在整个训练过程中保持不变。只要当前 batch 存在可蒸馏提示，就计算 teacher logits。
+蒸馏权重在整个训练过程中保持不变。teacher logits 已由 Refiner 前的原始分支生成；有可蒸馏提示时直接读取缓存。教师概率不乘 presence。主 BCE、Dice 和蒸馏始终监督取最大值/过滤之前的学生 raw logits。
 
 蒸馏监督范围：
 
@@ -423,12 +462,19 @@ total_loss = (
 * 使用 detached leaf proxy 累积高分辨率梯度。
 * 所有 chunk 完成后把 proxy.grad 一次传回真实 Refiner 图。
 * optimizer/scaler/scheduler 每个 batch 只更新一次。
-* 不保留多个 chunk 的融合特征或 logits。
+* 不保留多个学生 chunk 的融合特征或 logits 计算图；原始语义 logits 无梯度缓存，实例结果按 chunk 保存在 CPU。
 * 不使用 `retain_graph=True`。
 
 ## 8. 推理与评测
 
-推理时模型在提示空间输出 `prompt_logits` [B, P, H, W]。Adapter 先做 sigmoid 得到 `raw_prompt_score_map`，再通过像素级最大值把同一原始类别的所有提示合并为 `raw_final_score_map` [B, M, H, W]。可选的逐类别相对阈值在原始类别空间执行，归一化后只把未通过位置置 0；保留位置继续使用原始 sigmoid 分数。最终对类别维取 argmax。
+推理时 `prompt_logits` 仍保留未融合的学生 logits [B, P, H, W]。
+Adapter 分别对学生语义 logits、原始 SAM3 语义 logits 和 presence logits 做 sigmoid。
+每个提示先把原始语义概率乘其自身 presence 概率，再与学生概率逐像素取最大值，
+得到新的 `raw_prompt_score_map`。学生概率不乘 presence。
+随后把同一原始类别的多个提示逐像素取最大值，得到 `raw_final_score_map` [B, M, H, W]。
+原有相对阈值过滤只在合并后的类别空间执行：归一化用于判断保留位置，
+保留位置仍使用融合后的原始概率分数。最后对类别取 argmax。
+训练 `output_mode="final"` 和训练逐 chunk 返回的 final_logits 都是未融合学生 logits。
 
 标签空间中两个机制职责不同：
 
@@ -439,7 +485,7 @@ total_loss = (
 
 Evaluator 输出整体 mIoU、mAcc、pixel accuracy 和逐类别指标。`metric_groups` 可以按 `class_ids` 或 `class_names` 定义命名类别组，并分别计算组内 mIoU/mAcc。完整 iSAID→LoveDA 配置使用前景类别组作为 checkpoint monitor。
 
-TTA 当前只支持 `scale=1.0` 和空间翻转。多个视图必须先平均 `raw_prompt_score_map`（提示空间），再合并提示到原始类别，最后统一执行一次非线性相对阈值过滤。
+TTA 当前只支持 `scale=1.0` 和空间翻转。每个视图先独立完成 presence 加权与两路最大值融合；多个视图必须先平均融合后的 `raw_prompt_score_map`（提示空间），再合并提示到原始类别，最后统一执行一次非线性相对阈值过滤。
 
 ## 9. Checkpoint、恢复与实验追踪
 
@@ -551,9 +597,9 @@ python tools/train.py configs/train/isaid_loveda_full.py
 12. Refiner 必须先在全部提示上执行，再按 chunk 做高分辨率解码。Refiner 不能放进 chunk 循环。
 13. 学生和教师复用同一个冻结 Pixel Decoder 与 semantic head；教师路径必须在 `torch.no_grad()` 中，学生路径不得使用 `no_grad()`、`detach()` 或 `enable_grad()`。
 14. DecoderInputFusion 只在 72×72 执行一次，不做多层堆叠或支路前额外 encoder 拼接，输出替换原始 Pixel Decoder 的最后一层 FPN 输入。
-15. 教师始终使用缓存中的原始 encoder72，不使用融合输出或被 Refiner 更新后的特征。
+15. 教师来自 Refiner 前运行的原始 SAM3 分支缓存，不使用融合输出，不额外运行解码。
 16. clip_score_embed_36 保持纯 RemoteCLIP 输出，用于 debug。
-17. teacher 只来自原始 encoder72 解码路径并且必须 detach。teacher 和 student 都为 288×288。
+17. teacher 只来自前置原始 SAM3 语义 logits 缓存并且必须 detach，不乘 presence。teacher 和 student 都为 288×288。
 18. 蒸馏只监督存在类别。每个存在提示均监督全部 GT 有效像素，并额外监督其原始类别 GT 外侧 `sam3_mask_distill_boundary_width` 像素范围内且标签为 255 的边界环。远处 255 区域不参与蒸馏。多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
 19. 最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
 20. Refiner 按 A→B→A→B 交替，每层先更新 score 再更新 feature。score 类内固定拼接 CLIP 中间层融合特征，feature 类内固定拼接 FPN36；两种类间 Q/K 都不拼接文本。所有注意力单 Value、pre-norm、直接残差。双路 FFN 各处理当前 256 通道特征，256→1024→256 后直接残差到当前流；保留最终 feature LayerNorm。
@@ -572,7 +618,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 
 当前限制：
 
-* 只支持 semantic 模式；
+* 最终任务只支持 semantic；原始实例输出仅保留供后续设计使用；
 * 不支持非空几何 prompt；
 * 不支持动态 SAM3/refiner 空间尺寸或多尺度 TTA；
 * `clip_mid_features` 固定参与 score 类内 Q/K 指导，debug 输出单独 detach；
@@ -697,3 +743,19 @@ checkpoint 输出和参数/Refiner 输入梯度、输入形状检查。
 * 初始 CLIP score embedding、原始 SAM3 流程、教师、冻结解码头、损失和逐 chunk 梯度设计保留。
 * 旧 checkpoint 的 FFN 形状和融合参数名称不匹配；新实验使用新的 work directory，不提供兼容层。
 * checkpoint 容器 schema 保持 4。
+
+
+### 2026-10-25 原始 SAM3 语义先验与推理融合
+
+- 恢复 `transformer.decoder.*`、`dot_prod_scoring.*` 与 `segmentation_head.mask_predictor.mask_embed.*`，加载官方 SAM3 对应权重。
+- 原始 checkpoint 缺少上述冻结实例权重或 instance_seg_head 权重时直接报错，避免冻结随机初始化模块。
+- 新增 `core.encoder_refiner.semantic_prior_encoder.*` 与 `feature_input_fusion.*`，默认初始化并跟随 Refiner 学习率训练。
+- 旧 no_dec 语义模型未使用的 3×3 mask_predictor 被原始 MLP 替代；不提供旧参数兼容层。
+- 原始 encoder、查询、语义/实例解码均在 Refiner 前执行，蒸馏不额外解码。
+- final BCE / Dice / 蒸馏保持既有类别与像素监督范围，只读未融合学生 logits。
+- 推理在提示空间先执行 max(学生概率, 原始语义概率 × presence 概率)，再合并类别和相对阈值过滤。
+- 旧训练 checkpoint 无法完整恢复；从原始 SAM3 权重与 RemoteCLIP 权重开始新实验，使用新 work directory。
+- checkpoint 容器格式不变，schema 仍为 4。
+- CPU 回归入口：`OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 python -m unittest discover -s tests -v`。
+- 9 项测试覆盖六层/200 查询真实 Decoder、实例与语义共享 Pixel Decoder、原始特征分流、不同 batch/非整块提示缓存与教师复用、先验卷积梯度、提示合并、阈值过滤、TTA 融合顺序与冻结权重完整性。
+- 本次没有预训练权重、数据集与 CUDA 实测结果，CPU 测试不能代替真实训练精度和显存验证。

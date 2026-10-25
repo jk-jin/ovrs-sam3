@@ -320,6 +320,7 @@ class UniversalSegmentationHead(SegmentationHead):
         backbone_feats: List[torch.Tensor],
         image_ids: torch.Tensor,
         encoder_hidden_states: torch.Tensor,
+        obj_queries: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         pixel_embed = self._embed_pixels(
             backbone_feats=backbone_feats,
@@ -327,6 +328,11 @@ class UniversalSegmentationHead(SegmentationHead):
             encoder_hidden_states=encoder_hidden_states,
         )
 
-        return {
+        outputs = {
             "semantic_seg": self.semantic_seg_head(pixel_embed),
         }
+        if obj_queries is not None:
+            outputs["pred_masks"] = self.mask_predictor(
+                obj_queries, self.instance_seg_head(pixel_embed)
+            )
+        return outputs

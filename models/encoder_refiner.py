@@ -19,9 +19,9 @@ class ClassConditionedEncoderRefiner(nn.Module):
     """Encoder feature refiner operating at 36×36.
 
     Takes the full 6-layer SAM3 encoder output after prompt cross-attention
-    as input. The feature stream is the bilinear-downsampled encoder feature
-    without any FPN injection. Fixed CLIP middle/FPN guidance extends
-    intra-class attention Q/K. Each FFN updates only its current stream.
+    as input. The feature stream fuses the bilinear-downsampled encoder feature
+    with a learned 36×36 embedding of frozen SAM3 semantic probabilities.
+    Fixed CLIP middle/FPN guidance extends intra-class attention Q/K. Each FFN updates only its current stream.
     The score stream comes directly from
     ClipScoreEmbedding (score_embeddings.py) without any SAM3 FPN fusion.
 
@@ -38,6 +38,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
     Forward inputs:
         encoder_features_72:  [B, C, 256, 72, 72]  (full encoder + cross-attention)
+        sam3_semantic_logits: [B, C, 288, 288] (frozen, before presence weighting)
         clip_image_feat_map:  [B, D_clip, 36, 36]
         class_names:          list of C class names
 
@@ -120,6 +121,35 @@ class ClassConditionedEncoderRefiner(nn.Module):
             raise ValueError("clip_native_dim must be positive for CLIP middle guidance")
         self.clip_native_dim = int(clip_native_dim)
         self.clip_mid_proj = nn.Conv2d(self.clip_native_dim * 2, 256, kernel_size=1)
+        # Unweighted soft SAM3 masks provide a trainable spatial prior.
+        self.semantic_prior_encoder = nn.Sequential(
+            nn.Conv2d(1, 32, 3, stride=2, padding=1),
+            nn.GroupNorm(8, 32), nn.GELU(),
+            nn.Conv2d(32, 64, 3, stride=2, padding=1),
+            nn.GroupNorm(8, 64), nn.GELU(),
+            nn.Conv2d(64, 128, 3, stride=2, padding=1),
+            nn.GroupNorm(8, 128), nn.GELU(),
+        )
+        self.feature_input_fusion = nn.Sequential(
+            nn.Conv2d(256 + 128, 256, 1),
+            nn.GroupNorm(8, 256), nn.GELU(),
+        )
+
+    def initialize_feature_stream(
+        self, encoder_features_72: torch.Tensor, sam3_semantic_logits: torch.Tensor,
+    ) -> torch.Tensor:
+        batch_size, num_prompts, channels, _, _ = encoder_features_72.shape
+        if tuple(sam3_semantic_logits.shape) != (batch_size, num_prompts, 288, 288):
+            raise ValueError("SAM3 semantic logits must be [B, P, 288, 288]")
+        base = F.interpolate(
+            encoder_features_72.flatten(0, 1), size=(36, 36),
+            mode="bilinear", align_corners=False,
+        )
+        # Detach only SAM3 outputs, never the trainable prior/fusion convolutions.
+        masks = sam3_semantic_logits.detach().sigmoid().reshape(-1, 1, 288, 288)
+        prior = self.semantic_prior_encoder(masks)
+        fused = self.feature_input_fusion(torch.cat([base, prior], dim=1))
+        return fused.reshape(batch_size, num_prompts, channels, 36, 36)
 
     def fuse_decoder_input_chunk(
         self,
@@ -143,6 +173,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
     def forward(
         self,
         encoder_features_72: torch.Tensor,
+        sam3_semantic_logits: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
         class_names: List[str],
         clip_mid_features: list[torch.Tensor] | None = None,
@@ -240,25 +271,15 @@ class ClassConditionedEncoderRefiner(nn.Module):
         downsampled = F.interpolate(sam_fpn_72, size=(36, 36), mode="bilinear", align_corners=False)
         sam_fpn_36 = downsampled[:, None].expand(-1, num_classes, -1, -1, -1)
 
-        base_feature_36 = F.interpolate(
-            encoder_features_72.reshape(
-                batch_size * num_classes,
-                hidden_dim,
-                72,
-                72,
-            ),
-            size=(36, 36),
-            mode="bilinear",
-            align_corners=False,
-        ).reshape(
-            batch_size,
-            num_classes,
-            hidden_dim,
-            36,
-            36,
-        )
-
-        feature_36 = base_feature_36
+        if self.use_checkpoint and self.training:
+            feature_36 = checkpoint(
+                self.initialize_feature_stream, encoder_features_72,
+                sam3_semantic_logits, use_reentrant=False,
+            )
+        else:
+            feature_36 = self.initialize_feature_stream(
+                encoder_features_72, sam3_semantic_logits,
+            )
 
         # The score embedding produced by score_embeddings.py is now used
         # directly. No SAM3 FPN injection is performed before attention.

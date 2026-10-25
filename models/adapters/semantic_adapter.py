@@ -352,6 +352,17 @@ class SemanticSegAdapter(nn.Module):
         )
 
         raw_prompt_score_map = prompt_logits.sigmoid()
+        sam3_logits = self._as_4d_map(
+            self._require(raw_outputs, OUTPUT_KEYS.sam3_semantic_logits),
+            OUTPUT_KEYS.sam3_semantic_logits,
+        )
+        presence_logits = self._require(raw_outputs, OUTPUT_KEYS.sam3_presence_logits)
+        if sam3_logits.shape != prompt_logits.shape:
+            raise ValueError("SAM3 and student semantic logits must have the same shape")
+        if presence_logits.shape != prompt_logits.shape[:2]:
+            raise ValueError("SAM3 presence logits must be [B, P]")
+        sam3_score_map = sam3_logits.sigmoid() * presence_logits.sigmoid()[..., None, None]
+        raw_prompt_score_map = torch.maximum(raw_prompt_score_map, sam3_score_map)
 
         outputs = dict(raw_outputs)
         outputs[OUTPUT_KEYS.prompt_logits] = prompt_logits

@@ -7,6 +7,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .data_misc import BatchedDatapoint, FindStage
+from .box_ops import box_cxcywh_to_xyxy
+from .model_misc import inverse_sigmoid
 from .encoder_refiner import ClassConditionedEncoderRefiner
 from .geometry_encoders import Prompt
 from .task_modes import OUTPUT_KEYS, TASK_MODE_SEMANTIC, normalize_task_mode
@@ -60,7 +62,7 @@ class Sam3Image(torch.nn.Module):
         self.num_feature_levels = num_feature_levels
         self.segmentation_head = segmentation_head
 
-        # Kept for build/config compatibility.
+        # SAM3 detection and segmentation modules.
         self.o2m_mask_predict = o2m_mask_predict
         self.dot_prod_scoring = dot_prod_scoring
         self.use_act_checkpoint_seg_head = use_act_checkpoint_seg_head
@@ -359,6 +361,9 @@ class Sam3Image(torch.nn.Module):
             raise ValueError("CLIP image cache is required.")
 
         encoder_feature_chunks: list[torch.Tensor] = []
+        semantic_chunks: list[torch.Tensor] = []
+        presence_chunks: list[torch.Tensor] = []
+        instance_chunks: list[dict] = []
         chunk_class_counts: list[int] = []
         merged_class_ids: list[int] = []
 
@@ -403,6 +408,12 @@ class Sam3Image(torch.nn.Module):
             )
 
             encoder_feature_chunks.append(chunk_out["encoder_features_72"])
+            semantic_chunks.append(chunk_out[OUTPUT_KEYS.sam3_semantic_logits])
+            presence_chunks.append(chunk_out[OUTPUT_KEYS.sam3_presence_logits])
+            instance_chunks.append({
+                "class_start": start, "class_end": end,
+                **chunk_out[OUTPUT_KEYS.sam3_instance_outputs],
+            })
             merged_class_ids.extend(chunk_class_ids)
             chunk_class_counts.append(num_chunk_classes)
 
@@ -427,6 +438,9 @@ class Sam3Image(torch.nn.Module):
 
         cache = {
             "cross_attended_encoder_features_72": cross_attended_encoder_features_72,
+            OUTPUT_KEYS.sam3_semantic_logits: torch.cat(semantic_chunks, dim=1),
+            OUTPUT_KEYS.sam3_presence_logits: torch.cat(presence_chunks, dim=1),
+            OUTPUT_KEYS.sam3_instance_outputs: instance_chunks,
             "backbone_fpn": backbone_fpn,
             "clip_image_feat_map": clip_image_cache["clip_image_feat_map_native"],
             OUTPUT_KEYS.clip_mid_features: clip_image_cache[OUTPUT_KEYS.clip_mid_features],
@@ -526,6 +540,7 @@ class Sam3Image(torch.nn.Module):
     def _run_encoder_refiner_lowres(
         self,
         cross_attended_encoder_features_72: torch.Tensor,
+        sam3_semantic_logits: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
         class_names: List[str],
         clip_mid_features: list[torch.Tensor] | None = None,
@@ -535,6 +550,7 @@ class Sam3Image(torch.nn.Module):
         """Run the 36×36 Refiner on all classes simultaneously."""
         return self.encoder_refiner(
             encoder_features_72=cross_attended_encoder_features_72,
+            sam3_semantic_logits=sam3_semantic_logits,
             clip_image_feat_map=clip_image_feat_map,
             class_names=class_names,
             clip_mid_features=clip_mid_features,
@@ -566,6 +582,7 @@ class Sam3Image(torch.nn.Module):
             )
 
         refiner_out = self._run_encoder_refiner_lowres(
+            sam3_semantic_logits=encoder_refiner_cache[OUTPUT_KEYS.sam3_semantic_logits],
             cross_attended_encoder_features_72=(
                 cross_attended_encoder_features_72
             ),
@@ -612,8 +629,7 @@ class Sam3Image(torch.nn.Module):
         """Single-scale fusion followed by shared frozen SAM3 decoding.
 
         Steps:
-        1. Optionally run the teacher path (no_grad): original encoder72 →
-           frozen Pixel Decoder → frozen semantic head → detached logits.
+        1. Optionally read detached teacher logits cached before the Refiner.
         2. Fuse Refiner36, original encoder72 and FPN72 into 72×72.
         3. Student path (gradients enabled): fused 72×72 replaces the last
            FPN level of the same frozen Pixel Decoder and semantic head.
@@ -644,22 +660,9 @@ class Sam3Image(torch.nn.Module):
 
         result: Dict[str, torch.Tensor] = {}
         if return_teacher_logits:
-            # Teacher runs first so its high-resolution intermediates do not
-            # stay resident alongside the student graph.
-            with torch.no_grad():
-                teacher_outputs = self.segmentation_head(
-                    backbone_feats=backbone_fpn,
-                    image_ids=image_ids,
-                    encoder_hidden_states=self._feature_72_to_hidden_states(
-                        original_chunk
-                    ),
-                )
-                result[OUTPUT_KEYS.sam3_teacher_logits] = (
-                    teacher_outputs["semantic_seg"]
-                    .reshape(batch_size, num_prompts, 288, 288)
-                    .detach()
-                )
-            del teacher_outputs
+            result[OUTPUT_KEYS.sam3_teacher_logits] = encoder_refiner_cache[
+                OUTPUT_KEYS.sam3_semantic_logits
+            ][:, class_start:class_end].detach()
 
         num_pairs = batch_size * num_prompts
         fused_feature_72_flat = self.encoder_refiner.fuse_decoder_input_chunk(
@@ -757,6 +760,9 @@ class Sam3Image(torch.nn.Module):
 
         result: Dict[str, torch.Tensor] = {
             OUTPUT_KEYS.final_logits: final_logits.contiguous(),
+            OUTPUT_KEYS.sam3_semantic_logits: encoder_refiner_cache[OUTPUT_KEYS.sam3_semantic_logits],
+            OUTPUT_KEYS.sam3_presence_logits: encoder_refiner_cache[OUTPUT_KEYS.sam3_presence_logits],
+            OUTPUT_KEYS.sam3_instance_outputs: encoder_refiner_cache[OUTPUT_KEYS.sam3_instance_outputs],
         }
 
         if return_debug:
@@ -860,7 +866,7 @@ class Sam3Image(torch.nn.Module):
         geometric_prompt: Prompt,
         batch_size: int,
         num_chunk_classes: int,
-    ) -> Dict[str, torch.Tensor]:
+    ) -> Dict[str, Any]:
         with torch.no_grad():
             prompt, prompt_mask, backbone_out = self._encode_prompt(
                 backbone_out,
@@ -874,6 +880,29 @@ class Sam3Image(torch.nn.Module):
                 prompt=prompt,
                 prompt_mask=prompt_mask,
             )
+
+            # Detection reads the untouched encoder memory, before prompt CA.
+            decoder = self.transformer.decoder
+            queries = decoder.query_embed.weight[:, None].expand(
+                -1, batch_size * num_chunk_classes, -1
+            )
+            hs, reference_boxes, presence_logits, _ = decoder(
+                tgt=queries, memory=encoder_out["memory"],
+                memory_key_padding_mask=encoder_out["padding_mask"],
+                pos=encoder_out["pos_embed"],
+                level_start_index=encoder_out["level_start_index"],
+                spatial_shapes=encoder_out["spatial_shapes"],
+                valid_ratios=encoder_out["valid_ratios"],
+                memory_text=prompt, text_attention_mask=prompt_mask,
+                apply_dac=False,
+            )
+            hs = hs.transpose(1, 2)
+            object_queries = hs[-1]
+            matching_logits = self.dot_prod_scoring(hs[-1:], prompt, prompt_mask)[0]
+            boxes = (
+                decoder.bbox_embed(object_queries)
+                + inverse_sigmoid(reference_boxes[-1].transpose(0, 1))
+            ).sigmoid()
 
             cross_attended_hidden_states = (
                 self.segmentation_head.apply_prompt_cross_attention(
@@ -889,8 +918,39 @@ class Sam3Image(torch.nn.Module):
                 num_chunk_classes=num_chunk_classes,
             )
 
+            original_outputs = self.segmentation_head(
+                backbone_feats=backbone_out["backbone_fpn"],
+                image_ids=find_input.img_ids,
+                encoder_hidden_states=cross_attended_hidden_states,
+                obj_queries=object_queries,
+            )
+            # Retain all unfiltered instance outputs on CPU. These large masks
+            # are reserved for future use and must not occupy Refiner GPU memory.
+            num_queries = object_queries.shape[1]
+            instance_outputs = {
+                "pred_masks": original_outputs["pred_masks"].reshape(
+                    batch_size, num_chunk_classes, num_queries, 288, 288
+                ).detach().cpu(),
+                "queries": object_queries.reshape(
+                    batch_size, num_chunk_classes, num_queries, self.hidden_dim
+                ).detach().cpu(),
+                "pred_logits": matching_logits.reshape(
+                    batch_size, num_chunk_classes, num_queries
+                ).detach().cpu(),
+                "pred_boxes": box_cxcywh_to_xyxy(boxes).reshape(
+                    batch_size, num_chunk_classes, num_queries, 4
+                ).detach().cpu(),
+            }
+
         return {
             "encoder_features_72": encoder_features_72,
+            OUTPUT_KEYS.sam3_semantic_logits: original_outputs["semantic_seg"].reshape(
+                batch_size, num_chunk_classes, 288, 288
+            ).detach(),
+            OUTPUT_KEYS.sam3_presence_logits: presence_logits[-1].transpose(0, 1).reshape(
+                batch_size, num_chunk_classes
+            ).detach(),
+            OUTPUT_KEYS.sam3_instance_outputs: instance_outputs,
         }
 
     def forward(self, input: BatchedDatapoint) -> Dict[str, torch.Tensor]:

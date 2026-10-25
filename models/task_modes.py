@@ -35,8 +35,10 @@ class ModelOutputKeys:
     clip_score_embed: str = "clip_score_embed"
     clip_mid_features: str = "clip_mid_features"
 
-    # Frozen SAM3 teacher logits — per-chunk temporary output during training,
-    # no longer a concatenated full-class output that must be saved.
+    # Frozen original SAM3 outputs, cached before the Refiner.
+    sam3_semantic_logits: str = "sam3_semantic_logits"
+    sam3_presence_logits: str = "sam3_presence_logits"
+    sam3_instance_outputs: str = "sam3_instance_outputs"
     sam3_teacher_logits: str = "sam3_teacher_logits"
 
 
