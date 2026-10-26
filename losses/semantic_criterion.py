@@ -40,13 +40,16 @@ class SemanticStreamingContext:
     # Number of present image-prompt pairs.
     num_present_pairs: int
 
-    # Total selected distillation pixels across all present prompts.
+    # Global valid + class-specific ring pixel count for present prompts.
     distill_pixel_denom: int
+    # Global count of the complementary region for present prompts.
+    distill_other_pixel_denom: int
 
     # Number of valid pixels multiplied by P.
     total_valid_pixels: int
 
     sam3_mask_distill_weight: float
+    sam3_mask_distill_region_alpha: float
 
 
 class SemanticCriterion(nn.Module):
@@ -62,13 +65,21 @@ class SemanticCriterion(nn.Module):
         3. SAM3 teacher mask distillation BCE (fixed weight)
            - Frozen SAM3 semantic head logits as soft targets
            - Only present image-prompt pairs
-           - All valid GT pixels plus a configurable class-specific
-             outer boundary restricted to ignore pixels
+           - Full image split into valid GT pixels + class-specific
+             outer ignore boundary, and the complementary region
+           - Separate global region means mixed by region_alpha
     """
 
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
         super().__init__()
         self.cfg = cfg or SemanticCriterionConfig()
+
+        region_alpha = float(self.cfg.sam3_mask_distill_region_alpha)
+        if not 0.0 <= region_alpha <= 1.0:
+            raise ValueError(
+                "sam3_mask_distill_region_alpha must be in [0, 1], "
+                f"got {region_alpha}."
+            )
 
         distill_weight = float(self.cfg.sam3_mask_distill_weight)
         if distill_weight < 0.0:
@@ -336,6 +347,11 @@ class SemanticCriterion(nn.Module):
             .item()
         )
 
+        image_pixel_count = int(label_map.shape[-2] * label_map.shape[-1])
+        distill_other_pixel_denom = (
+            num_present_pairs * image_pixel_count - distill_pixel_denom
+        )
+
         return SemanticStreamingContext(
             label_map=label_map,
             valid_mask=valid_mask,
@@ -348,9 +364,13 @@ class SemanticCriterion(nn.Module):
             num_label_classes=num_label_classes,
             num_present_pairs=num_present_pairs,
             distill_pixel_denom=distill_pixel_denom,
+            distill_other_pixel_denom=distill_other_pixel_denom,
             total_valid_pixels=total_valid_pixels,
             sam3_mask_distill_weight=float(
                 self.cfg.sam3_mask_distill_weight
+            ),
+            sam3_mask_distill_region_alpha=float(
+                self.cfg.sam3_mask_distill_region_alpha
             ),
         )
 
@@ -460,7 +480,7 @@ class SemanticCriterion(nn.Module):
 
         # ---- SAM3 teacher distillation ----
         distill_weight = float(context.sam3_mask_distill_weight)
-        if distill_weight > 0.0 and context.distill_pixel_denom > 0:
+        if distill_weight > 0.0 and context.num_present_pairs > 0:
             if OUTPUT_KEYS.sam3_teacher_logits not in outputs:
                 raise ValueError(
                     "sam3_mask_distill_weight > 0 but "
@@ -475,24 +495,32 @@ class SemanticCriterion(nn.Module):
                 )
             )
 
-            # Fixed design:
-            # all valid pixels + class-specific outer ignore boundary.
+            # The complement is all remaining pixels, including far
+            # ignore pixels. Presence is applied to BOTH regions.
             distill_mask_chunk = (
                 context.valid_mask[:, None, :, :]
                 | outer_boundary_chunk
             )
 
-            distill_contribution = self._distill_contribution_chunk(
+            valid_ring_contribution, other_contribution = self._distill_contribution_chunk(
                 final_logits=final_logits_chunk,
                 teacher_logits=outputs[
                     OUTPUT_KEYS.sam3_teacher_logits
                 ],
                 distill_mask_chunk=distill_mask_chunk,
                 presence_target_chunk=chunk_presence_float,
-                global_denom=context.distill_pixel_denom,
+                valid_ring_denom=context.distill_pixel_denom,
+                other_denom=context.distill_other_pixel_denom,
             )
         else:
-            distill_contribution = zero
+            valid_ring_contribution = zero
+            other_contribution = zero
+
+        alpha = context.sam3_mask_distill_region_alpha
+        distill_contribution = (
+            alpha * valid_ring_contribution
+            + (1.0 - alpha) * other_contribution
+        )
 
         weighted_distill_contribution = (
             distill_weight * distill_contribution
@@ -509,6 +537,8 @@ class SemanticCriterion(nn.Module):
             "loss_final_bce": plain_bce_contribution,
             "loss_final_dice": dice_contribution,
             "loss_sam3_mask_distill_bce": distill_contribution,
+            "loss_sam3_mask_distill_valid_ring_bce": valid_ring_contribution,
+            "loss_sam3_mask_distill_other_bce": other_contribution,
             "loss_sam3_mask_distill_weighted": weighted_distill_contribution,
             "total_loss": chunk_total,
         }
@@ -572,40 +602,37 @@ class SemanticCriterion(nn.Module):
         teacher_logits: torch.Tensor,
         distill_mask_chunk: torch.Tensor,
         presence_target_chunk: torch.Tensor,
-        global_denom: int,
-    ) -> torch.Tensor:
-        """Distill present prompts on valid pixels and outer GT boundaries."""
-        teacher_prob = teacher_logits.detach().sigmoid()
+        valid_ring_denom: int,
+        other_denom: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return two region contributions with separate global denominators.
+
+        Empty regions contribute zero; their weights are not redistributed.
+        """
+        teacher_prob = teacher_logits.detach().float().sigmoid()
 
         pixel_ce = F.binary_cross_entropy_with_logits(
-            final_logits,
+            final_logits.float(),
             teacher_prob,
             reduction="none",
         )
 
-        present = presence_target_chunk > 0.5
-
-        if not bool(present.any().item()):
-            return final_logits.sum() * 0.0
-
-        pair_pixel_mask = (
-            present.to(
-                device=pixel_ce.device,
-                dtype=torch.bool,
-            )[:, :, None, None]
-            & distill_mask_chunk.to(
-                device=pixel_ce.device,
-                dtype=torch.bool,
-            )
+        present = presence_target_chunk.to(
+            device=pixel_ce.device, dtype=torch.bool
+        )[:, :, None, None]
+        valid_ring = distill_mask_chunk.to(
+            device=pixel_ce.device, dtype=torch.bool
         )
-
-        pixel_weight = pair_pixel_mask.to(
-            dtype=pixel_ce.dtype
-        )
-
+        valid_ring_sum = pixel_ce.masked_fill(
+            ~(present & valid_ring), 0.0
+        ).sum()
+        other_sum = pixel_ce.masked_fill(
+            ~(present & ~valid_ring), 0.0
+        ).sum()
         return (
-            pixel_ce * pixel_weight
-        ).sum() / max(int(global_denom), 1)
+            valid_ring_sum / max(int(valid_ring_denom), 1),
+            other_sum / max(int(other_denom), 1),
+        )
 
     # ------------------------------------------------------------------
     # Dice (per-chunk, global denominator)

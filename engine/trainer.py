@@ -285,7 +285,7 @@ class Trainer:
 
         need_teacher_logits = (
             effective_distill_weight > 0.0
-            and loss_context.distill_pixel_denom > 0
+            and loss_context.num_present_pairs > 0
         )
 
         chunk_class_counts = encoder_refiner_cache["chunk_class_counts"]
@@ -329,6 +329,8 @@ class Trainer:
                 "loss_final_bce",
                 "loss_final_dice",
                 "loss_sam3_mask_distill_bce",
+                "loss_sam3_mask_distill_valid_ring_bce",
+                "loss_sam3_mask_distill_other_bce",
                 "loss_sam3_mask_distill_weighted",
                 "total_loss",
             ):

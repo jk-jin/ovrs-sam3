@@ -383,37 +383,38 @@ loss_final_bce = (bce_per_pixel * valid_mask).sum() / total_valid_pixels
 
 蒸馏权重在整个训练过程中保持不变。只要当前 batch 存在可蒸馏提示，就计算 teacher logits。
 
-蒸馏监督范围：
+蒸馏监督范围与区域加权：
 
-1. 冻结的 SAM3 semantic head 产生的 teacher logits 做 sigmoid，得到 soft probability 目标。
-2. student 使用 raw `final_logits`。
-3. 用 `binary_cross_entropy_with_logits` 逐像素计算蒸馏损失。
-4. 只对 GT 中存在的图像—提示对计算。
-5. 所有 `label != 255` 的有效像素参与蒸馏。
-6. 对每个存在原始类别，额外包含 GT 外侧指定宽度的边界环。
-7. 外侧边界环只保留 `label == 255` 的位置。
-8. 外环宽度由 `sam3_mask_distill_boundary_width` 控制，基础配置为 3。
-9. 宽度 0 表示不增加外环，仅蒸馏全部有效像素。
-10. 远离物体的 255 区域不参与蒸馏。
-11. 不存在类别不参与蒸馏。
-12. teacher 和 student 都在 288×288 分辨率，不做尺度变换。
-13. teacher 必须 detach。
-14. 分母是全部存在提示对应的有效像素与类别外环像素总数（全局分母，不按 chunk 单独计算）。
-15. 多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
+1. 冻结的 SAM3 semantic head 产生的 teacher logits 做 sigmoid，得到 detached soft probability 目标。student 使用 raw `final_logits`，逐像素计算 BCE。
+2. 仍然只对 GT 中存在的图像—提示对计算蒸馏；不存在类别不参与。
+3. 第一部分（valid_ring）：全部 `label != 255` 的有效像素，加上当前原始类别 GT 外侧、标签为 `255` 的边界环。有效像素包含其它类别的有效区域。
+4. 边界环宽度由 `sam3_mask_distill_boundary_width` 控制，基础配置为 3，单位为损失分辨率下的像素。宽度 0 时第一部分只包含有效像素。
+5. 第二部分（other）：第一部分在全图内的补集，即边界环以外剩余的 `255` 区域。两部分不重叠，合起来覆盖全图。
+6. 两部分均使用教师软概率监督；第二部分不会因 GT 为 `255` 而被强制设为负标签。
+7. 两部分分别统计跨整个 batch、全部存在提示的像素总数，各自求全局平均，不能先在每个 chunk 内求均值再相加，也不做逐图或逐类别等权平均。
+8. 多个提示映射到同一类别时复用相同边界环，两个区域的像素均按提示独立计数。
+9. teacher 和 student 都在 288×288 分辨率，不做尺度变换。蒸馏 BCE 与区域求和使用 float32，避免半精度大面积求和溢出。
+10. 新增 `sam3_mask_distill_region_alpha`，数据类与基础配置默认均为 0.5，范围为 0 到 1（包含端点）。它是第一部分的比例，第二部分的比例为其补数。
+11. 某个区域没有像素时，该部分损失为 0，不把其权重重新分配给另一区域。没有存在提示时不生成教师，蒸馏损失为 0。
+12. 比例设为 1 时恢复原来的有效区域及边界环蒸馏；设为 0 时仅蒸馏剩余区域。边界环宽度仍然影响区域划分。
 
-总损失：
+损失组合：
 
 ```python
-total_loss = (
-    1.0 * loss_final_bce
-    + 0.0 * loss_final_dice
-    + 0.5 * loss_sam3_mask_distill_bce
-)
+# alpha：有效区域及边界环的比例配置。
+# valid_ring_mean：第一部分跨全部存在提示的平均 BCE。
+# other_mean：第二部分跨全部存在提示的平均 BCE。
+# distill_weight：sam3_mask_distill_weight，蒸馏总权重。
+loss_sam3_mask_distill_bce = alpha * valid_ring_mean + (1 - alpha) * other_mean
+loss_sam3_mask_distill_weighted = distill_weight * loss_sam3_mask_distill_bce
+
+# 当前基础配置的主 BCE 权重为 1，Dice 权重为 0。
+total_loss = loss_final_bce + loss_sam3_mask_distill_weighted
 ```
 
-`loss_sam3_mask_distill_bce` 为未经权重的原始蒸馏 BCE；`loss_sam3_mask_distill_weighted` 为真正加入总损失的加权贡献。蒸馏权重在整个训练期间固定不变。
+基础配置仍使用蒸馏总权重 0.5、边界环宽度 3，新增区域比例 0.5，因此两个区域平均损失各乘 0.25 后加入总损失。数据类的通用蒸馏权重、边界宽度默认值不同，实验实际数值取决于最终合并配置。蒸馏总权重与区域比例在整个训练期间保持固定。
 
-上面的数值取自 `configs/_base_/model/ovrs_sam3.py` 的当前取值（蒸馏权重 0.5、外环宽度 3）。`config_dataclasses.py` 中的通用默认值不同，实验实际使用的数值取决于最终合并配置。
+日志分别记录两个区域的原始均值、区域比例混合后的值，以及乘蒸馏总权重后的值。逐 chunk 返回全局均值的贡献，训练器累加后得到完整 batch 的统计。
 
 **训练显存设计**：
 
@@ -491,7 +492,9 @@ Ctrl+C 使用 Python 默认 `KeyboardInterrupt`。训练和验证均立即退出
 | 键 | 含义 |
 | --- | --- |
 | `loss_final_bce` | 朴素 BCE，所有有效像素等权全局均值（跨 chunk 累加后求均值） |
-| `loss_sam3_mask_distill_bce` | 未经权重的原始蒸馏 BCE（跨 chunk 累加后求均值） |
+| `loss_sam3_mask_distill_valid_ring_bce` | 有效区域及边界环的原始平均蒸馏 BCE（跨 chunk 累加） |
+| `loss_sam3_mask_distill_other_bce` | 剩余区域的原始平均蒸馏 BCE（跨 chunk 累加） |
+| `loss_sam3_mask_distill_bce` | 按区域比例混合后的蒸馏 BCE，尚未乘蒸馏总权重（跨 chunk 累加） |
 | `loss_sam3_mask_distill_weighted` | 真正加入总损失的加权蒸馏贡献（跨 chunk 累加后求均值） |
 
 ## 10. 配置与主要文件
@@ -554,7 +557,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 15. 教师始终使用缓存中的原始 encoder72，不使用融合输出或被 Refiner 更新后的特征。
 16. clip_score_embed_36 保持纯 RemoteCLIP 输出，用于 debug。
 17. teacher 只来自原始 encoder72 解码路径并且必须 detach。teacher 和 student 都为 288×288。
-18. 蒸馏只监督存在类别。每个存在提示均监督全部 GT 有效像素，并额外监督其原始类别 GT 外侧 `sam3_mask_distill_boundary_width` 像素范围内且标签为 255 的边界环。远处 255 区域不参与蒸馏。多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
+18. 蒸馏只监督存在类别，但覆盖全图。第一部分为全部有效像素及当前原始类别的外侧 ignore 边界环，第二部分为其全图补集；两部分各按跨 batch、全部存在提示的全局像素数求均值，分别乘 `sam3_mask_distill_region_alpha` 及其补数，再乘蒸馏总权重。空区域为 0 且不重新分配权重。多个提示复用相同原始类别外环，并按提示独立计数。
 19. 最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
 20. Refiner 按 A→B→A→B 交替，每层先更新 score 再更新 feature。score 类内固定拼接 CLIP 中间层融合特征，feature 类内固定拼接 FPN36；两种类间 Q/K 都不拼接文本。所有注意力单 Value、pre-norm、直接残差。双路 FFN 各处理当前 256 通道特征，256→1024→256 后直接残差到当前流；保留最终 feature LayerNorm。
 21. TTA 必须先平均提示空间分数（`raw_prompt_score_map`），再合并提示到原始类别，最后进行相对阈值过滤。
@@ -697,3 +700,12 @@ checkpoint 输出和参数/Refiner 输入梯度、输入形状检查。
 * 初始 CLIP score embedding、原始 SAM3 流程、教师、冻结解码头、损失和逐 chunk 梯度设计保留。
 * 旧 checkpoint 的 FFN 形状和融合参数名称不匹配；新实验使用新的 work directory，不提供兼容层。
 * checkpoint 容器 schema 保持 4。
+
+本次全图分区域蒸馏修改：
+
+* 新增 `criterion_cfg.sam3_mask_distill_region_alpha=0.5`，分别调节有效区域及边界环、剩余区域的平均蒸馏 BCE。
+* 保持只蒸馏存在提示；所有区域沿用 detached SAM3 教师软概率。
+* 两个区域分别使用全局分母，保证不同提示分块的损失与梯度一致。
+* 训练器同步累加两个区域的原始损失日志。
+* 模型参数结构与 checkpoint 容器格式不变；新训练策略建议使用独立 work directory 便于比较。
+* CPU 回归验证：`python -m unittest discover -s tests -p 'test_distill_regions.py' -v`。无需模型权重或数据集。

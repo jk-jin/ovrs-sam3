@@ -144,5 +144,6 @@ model = dict(
         eps=1e-6,
         sam3_mask_distill_weight=0.5,
         sam3_mask_distill_boundary_width=3,
+        sam3_mask_distill_region_alpha=0.5,
     ),
 )

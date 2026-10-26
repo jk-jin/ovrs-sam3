@@ -147,6 +147,7 @@ class SemanticCriterionConfig:
 
     sam3_mask_distill_weight: float = 0.05
     sam3_mask_distill_boundary_width: int = 2
+    sam3_mask_distill_region_alpha: float = 0.5
 
 
 @dataclass
