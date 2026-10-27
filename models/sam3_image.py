@@ -601,6 +601,48 @@ class Sam3Image(torch.nn.Module):
     # Per-chunk high-resolution decoding
     # ------------------------------------------------------------------
 
+    def fuse_encoder_refiner_chunk_from_cache(
+        self, encoder_refiner_cache, refiner_feature_36_chunk, class_start, class_end,
+    ) -> torch.Tensor:
+        original = encoder_refiner_cache["cross_attended_encoder_features_72"]
+        batch_size, total_prompts = original.shape[:2]
+        if not 0 <= class_start < class_end <= total_prompts:
+            raise ValueError("Chunk indices are out of range")
+        count = class_end - class_start
+        if tuple(refiner_feature_36_chunk.shape) != (batch_size, count, 256, 36, 36):
+            raise ValueError("Invalid Refiner36 chunk shape")
+        fused = self.encoder_refiner.fuse_decoder_input_chunk(
+            refiner_feature_36=refiner_feature_36_chunk.reshape(-1, 256, 36, 36),
+            original_encoder_feature_72=original[:, class_start:class_end].reshape(-1, 256, 72, 72),
+            sam_fpn_72=encoder_refiner_cache["backbone_fpn"][2],
+        )
+        return fused.reshape(batch_size, count, 256, 72, 72)
+
+    def refine_second_stage_from_cache(self, encoder_refiner_cache, fused_feature_72, first_logits):
+        return self.encoder_refiner.mask_feedback_refiner(
+            fused_feature_72,
+            encoder_refiner_cache["cross_attended_encoder_features_72"],
+            first_logits,
+            chunk_size=max(encoder_refiner_cache["chunk_class_counts"]),
+        )
+
+    def decode_fused_feature_chunk_from_cache(
+        self, encoder_refiner_cache, fused_feature_72_chunk, class_start, class_end,
+    ) -> torch.Tensor:
+        batch_size, total_prompts = encoder_refiner_cache["cross_attended_encoder_features_72"].shape[:2]
+        count = class_end - class_start
+        if not 0 <= class_start < class_end <= total_prompts:
+            raise ValueError("Chunk indices are out of range")
+        if tuple(fused_feature_72_chunk.shape) != (batch_size, count, 256, 72, 72):
+            raise ValueError("Invalid fused72 chunk shape")
+        image_ids = torch.arange(batch_size, device=fused_feature_72_chunk.device).repeat_interleave(count)
+        outputs = self.segmentation_head(
+            backbone_feats=encoder_refiner_cache["backbone_fpn"],
+            image_ids=image_ids,
+            encoder_hidden_states=self._feature_72_to_hidden_states(fused_feature_72_chunk),
+        )
+        return outputs["semantic_seg"].reshape(batch_size, count, 288, 288)
+
     def decode_encoder_refiner_chunk_from_cache(
         self,
         encoder_refiner_cache: Dict[str, Any],
@@ -661,26 +703,12 @@ class Sam3Image(torch.nn.Module):
                 )
             del teacher_outputs
 
-        num_pairs = batch_size * num_prompts
-        fused_feature_72_flat = self.encoder_refiner.fuse_decoder_input_chunk(
-            refiner_feature_36=refiner_feature_36_chunk.reshape(
-                num_pairs, 256, 36, 36
-            ),
-            original_encoder_feature_72=original_chunk.reshape(
-                num_pairs, 256, 72, 72
-            ),
-            sam_fpn_72=backbone_fpn[2],
+        fused = self.fuse_encoder_refiner_chunk_from_cache(
+            encoder_refiner_cache, refiner_feature_36_chunk, class_start, class_end,
         )
-        student_hidden_states = self._feature_72_to_hidden_states(
-            fused_feature_72_flat.reshape(batch_size, num_prompts, 256, 72, 72)
-        )
-        student_outputs = self.segmentation_head(
-            backbone_feats=backbone_fpn,
-            image_ids=image_ids,
-            encoder_hidden_states=student_hidden_states,
-        )
-        result[OUTPUT_KEYS.final_logits] = student_outputs["semantic_seg"].reshape(
-            batch_size, num_prompts, 288, 288
+        result["fused_feature_72"] = fused
+        result[OUTPUT_KEYS.final_logits] = self.decode_fused_feature_chunk_from_cache(
+            encoder_refiner_cache, fused, class_start, class_end,
         )
         return result
 
@@ -720,6 +748,7 @@ class Sam3Image(torch.nn.Module):
         refiner_features_36 = refiner_out["refiner_features_36"]
         B, C = refiner_features_36.shape[:2]
         chunk_class_counts = encoder_refiner_cache["chunk_class_counts"]
+        fused_chunks = []
 
         final_logits = torch.empty(
             B, C, 288, 288,
@@ -746,6 +775,7 @@ class Sam3Image(torch.nn.Module):
             final_logits[:, chunk_start:chunk_end].copy_(
                 chunk_outputs[OUTPUT_KEYS.final_logits]
             )
+            fused_chunks.append(chunk_outputs["fused_feature_72"])
 
             chunk_start = chunk_end
 
@@ -755,8 +785,22 @@ class Sam3Image(torch.nn.Module):
                 f"expected C={C}."
             )
 
+        second_features = self.refine_second_stage_from_cache(
+            encoder_refiner_cache, torch.cat(fused_chunks, dim=1), final_logits,
+        )
+        del fused_chunks
+        second_logits = torch.empty_like(final_logits)
+        chunk_start = 0
+        for count in chunk_class_counts:
+            chunk_end = chunk_start + count
+            second_logits[:, chunk_start:chunk_end] = self.decode_fused_feature_chunk_from_cache(
+                encoder_refiner_cache, second_features[:, chunk_start:chunk_end], chunk_start, chunk_end,
+            )
+            chunk_start = chunk_end
+
         result: Dict[str, torch.Tensor] = {
             OUTPUT_KEYS.final_logits: final_logits.contiguous(),
+            OUTPUT_KEYS.second_stage_logits: second_logits.contiguous(),
         }
 
         if return_debug:

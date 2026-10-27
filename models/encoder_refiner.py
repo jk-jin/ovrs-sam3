@@ -13,6 +13,7 @@ from .encoder_refiner_attention import (
     apply_layer_norm_bcdhw,
 )
 from .decoder_input_fusion import DecoderInputFusion
+from .mask_feedback_refiner import MaskFeedbackRefiner
 
 
 class ClassConditionedEncoderRefiner(nn.Module):
@@ -115,6 +116,9 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
         self.decoder_input_fusion = DecoderInputFusion(
             use_checkpoint=self.use_checkpoint,
+        )
+        self.mask_feedback_refiner = MaskFeedbackRefiner(
+            num_heads=num_heads, dropout=dropout, use_checkpoint=self.use_checkpoint,
         )
         if clip_native_dim is None or clip_native_dim <= 0:
             raise ValueError("clip_native_dim must be positive for CLIP middle guidance")

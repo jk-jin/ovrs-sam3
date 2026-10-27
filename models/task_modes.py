@@ -17,6 +17,9 @@ class ModelOutputKeys:
     # Final outputs
     # Original-class inference outputs.
     final_logits: str = "final_logits"
+    second_stage_logits: str = "second_stage_logits"
+    raw_second_stage_prompt_score_map: str = "raw_second_stage_prompt_score_map"
+    first_stage_selected: str = "first_stage_selected"
     raw_final_score_map: str = "raw_final_score_map"
     final_score_map: str = "final_score_map"
     final_pred: str = "final_pred"

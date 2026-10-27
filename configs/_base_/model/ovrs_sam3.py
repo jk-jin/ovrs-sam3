@@ -133,7 +133,8 @@ model = dict(
     ),
 
     adapter_cfg=dict(
-        class_relative_prob_thd=0.5,
+        stage_switch_threshold=0.5,
+        class_relative_prob_thd=None,
         class_relative_eps=1e-6,
     ),
 
@@ -141,6 +142,7 @@ model = dict(
         ignore_index=255,
         final_balanced_bce_weight=1.0,
         final_dice_weight=0.0,
+        second_stage_bce_weight=1.0,
         eps=1e-6,
         sam3_mask_distill_weight=0.5,
         sam3_mask_distill_boundary_width=3,

@@ -427,6 +427,8 @@ def inference_with_tta(
         OUTPUT_KEYS.final_logits,
         OUTPUT_KEYS.raw_final_score_map,
         OUTPUT_KEYS.final_score_map,
+        OUTPUT_KEYS.prompt_logits,
+        OUTPUT_KEYS.second_stage_logits,
     }
 
     for scale in scales:
@@ -458,8 +460,8 @@ def inference_with_tta(
                 if not torch.is_tensor(value):
                     continue
 
-                # 逐类别相对过滤是非线性操作，各视图的过滤结果不能平均；
-                # 只平均原始提示分数，合并后统一过滤一次。
+                # Average each stage's raw prompt probabilities separately;
+                # stage selection and relative filtering are nonlinear.
                 if key in derived_class_space_keys:
                     continue
 
@@ -519,6 +521,9 @@ def inference_with_tta(
                 OUTPUT_KEYS.raw_prompt_score_map
             ],
             metadata=metadata,
+            raw_second_stage_prompt_score_map=merged_outputs[
+                OUTPUT_KEYS.raw_second_stage_prompt_score_map
+            ],
         )
     )
 
@@ -528,11 +533,18 @@ def inference_with_tta(
 
     logit_eps = 1e-6
     merged_outputs[OUTPUT_KEYS.final_logits] = torch.logit(
-        raw_final_score_map.clamp(
+        raw_final_score_map.float().clamp(
             min=logit_eps,
             max=1.0 - logit_eps,
         )
     )
+    for logit_key, score_key in (
+        (OUTPUT_KEYS.prompt_logits, OUTPUT_KEYS.raw_prompt_score_map),
+        (OUTPUT_KEYS.second_stage_logits, OUTPUT_KEYS.raw_second_stage_prompt_score_map),
+    ):
+        merged_outputs[logit_key] = torch.logit(
+            merged_outputs[score_key].float().clamp(logit_eps, 1.0 - logit_eps)
+        )
 
     return merged_outputs
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Dict, Optional
 
 import torch
@@ -59,16 +60,22 @@ class SemanticCriterion(nn.Module):
 
         2. Optional Dice on final_logits (default weight 0.0)
 
-        3. SAM3 teacher mask distillation BCE (fixed weight)
+        3. SAM3 teacher mask distillation BCE on stage one (fixed weight)
            - Frozen SAM3 semantic head logits as soft targets
            - Only present image-prompt pairs
            - All valid GT pixels plus a configurable class-specific
              outer boundary restricted to ignore pixels
+
+        4. Plain GT BCE on second_stage_logits, across all valid pixels
+           and all prompts, including absent classes (default weight 1.0).
     """
 
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
         super().__init__()
         self.cfg = cfg or SemanticCriterionConfig()
+
+        if not math.isfinite(self.cfg.second_stage_bce_weight) or self.cfg.second_stage_bce_weight < 0:
+            raise ValueError("second_stage_bce_weight must be finite and non-negative")
 
         distill_weight = float(self.cfg.sam3_mask_distill_weight)
         if distill_weight < 0.0:
@@ -144,13 +151,48 @@ class SemanticCriterion(nn.Module):
             dtype=final_logits.dtype,
         )
 
-        return self.forward_chunk(
+        result = self.forward_chunk(
             outputs=outputs,
             context=context,
             class_start=0,
             class_end=num_prompt_channels,
             target_full=target_full,
         )
+        second = self.forward_second_stage_chunk(
+            logits=outputs[OUTPUT_KEYS.second_stage_logits],
+            context=context, class_start=0, class_end=num_prompt_channels,
+        )
+        result["total_loss"] = result["total_loss"] + second.pop("total_loss")
+        result.update(second)
+        return result
+
+    def forward_second_stage_chunk(
+        self,
+        logits: torch.Tensor,
+        context: SemanticStreamingContext,
+        class_start: int,
+        class_end: int,
+    ) -> TensorDict:
+        """Full-image GT BCE for every prompt, including absent classes.
+
+        Ignore pixels are excluded. The global denominator is identical to
+        stage one's plain BCE, so summing uneven chunks is exact.
+        """
+        if not 0 <= class_start < class_end <= context.num_prompt_channels:
+            raise ValueError("Second-stage chunk indices are out of range")
+        expected = (context.label_map.shape[0], class_end - class_start,
+                    *context.label_map.shape[-2:])
+        if tuple(logits.shape) != expected:
+            raise ValueError(f"Second-stage logits must have shape {expected}")
+        class_ids = context.prompt_to_class_id[class_start:class_end].to(logits.device)
+        targets = (context.label_map.to(logits.device)[:, None]
+                   == class_ids[None, :, None, None]).to(logits.dtype)
+        pixel_loss = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+        valid = context.valid_mask.to(logits.device)[:, None]
+        raw_loss = pixel_loss.masked_fill(~valid, 0).sum() / max(context.total_valid_pixels, 1)
+        weighted = self.cfg.second_stage_bce_weight * raw_loss
+        return {"loss_second_stage_bce": raw_loss,
+                "loss_second_stage_bce_weighted": weighted, "total_loss": weighted}
 
     def prepare_streaming_context(
         self,

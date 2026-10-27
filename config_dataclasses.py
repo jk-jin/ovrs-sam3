@@ -142,6 +142,7 @@ class SemanticCriterionConfig:
 
     final_balanced_bce_weight: float = 1.0
     final_dice_weight: float = 0.0
+    second_stage_bce_weight: float = 1.0
 
     eps: float = 1e-6
 
@@ -151,6 +152,7 @@ class SemanticCriterionConfig:
 
 @dataclass
 class AdapterConfig:
+    stage_switch_threshold: float = 0.5
     class_relative_prob_thd: Optional[float] = None
     class_relative_eps: float = 1e-6
 

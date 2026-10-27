@@ -822,6 +822,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
     def build_adapter(cls, cfg: SegmentorBuildConfig) -> nn.Module:
         if cfg.task_mode == TASK_MODE_SEMANTIC:
             return SemanticSegAdapter(
+                stage_switch_threshold=cfg.adapter_cfg.stage_switch_threshold,
                 class_relative_prob_thd=cfg.adapter_cfg.class_relative_prob_thd,
                 class_relative_eps=cfg.adapter_cfg.class_relative_eps,
             )

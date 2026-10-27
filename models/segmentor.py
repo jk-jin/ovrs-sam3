@@ -118,6 +118,25 @@ class SAM3Segmentor(nn.Module):
             return_debug=return_debug,
         )
 
+    def fuse_encoder_refiner_chunk_from_cache(
+        self, encoder_refiner_cache, refiner_feature_36_chunk, class_start, class_end,
+    ):
+        return self.core.fuse_encoder_refiner_chunk_from_cache(
+            encoder_refiner_cache, refiner_feature_36_chunk, class_start, class_end,
+        )
+
+    def refine_second_stage_from_cache(self, encoder_refiner_cache, fused_feature_72, first_logits):
+        return self.core.refine_second_stage_from_cache(
+            encoder_refiner_cache, fused_feature_72, first_logits,
+        )
+
+    def decode_fused_feature_chunk_from_cache(
+        self, encoder_refiner_cache, fused_feature_72_chunk, class_start, class_end,
+    ):
+        return self.core.decode_fused_feature_chunk_from_cache(
+            encoder_refiner_cache, fused_feature_72_chunk, class_start, class_end,
+        )
+
     def forward(self, batch: BatchedDatapoint) -> dict[str, torch.Tensor]:
         if self.training:
             raise RuntimeError(

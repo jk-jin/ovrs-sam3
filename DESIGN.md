@@ -12,7 +12,7 @@ OVRS-SAM3 接收一批遥感图像和当前数据集的类别名称，输出每�
 
 * SAM3 提供稳定的多尺度图像特征、文本提示编码、类条件 transformer encoder 和分割解码器。
 * RemoteCLIP 提供面向遥感场景的局部图文对齐。
-* Encoder refiner 在低分辨率融合两者，通过单层 72×72 语义—细节双路融合生成掩码。
+* Encoder refiner 在低分辨率融合两者，通过单层 72×72 语义—细节双路融合生成第一次掩码，再通过掩码反馈与两层类间注意力生成第二次掩码。
 
 当前只实现 semantic 模式，不支持实例分割、hybrid 模式或非空几何提示训练。
 
@@ -70,7 +70,14 @@ fused_feature_72
   → final_logits_chunk
 
 学生和教师共用同一个冻结 segmentation_head 对象，参数不复制。
-每个 chunk 立即计算 loss 和 backward，不再拼接全类别 logits。
+第一阶段每个 chunk 立即计算现有 loss 和 backward。只汇总 detached 的第一次 logits 与 fused_feature_72，进入第二阶段：
+
+fused_feature_72（全部提示）+ original_encoder72 + 第一次概率掩码的卷积嵌入72
+  → 两层独立的类间注意力与 FFN，残差更新 fused_feature_72
+  → 按提示块再次运行同一个冻结 Pixel Decoder 和 semantic head
+  → second_stage_logits，全部有效像素上的 GT BCE
+
+两个阶段的高分辨率计算图均逐 chunk 释放。第二阶段通过 proxy 梯度与逐块重算融合模块，向第一阶段的 Refiner36 和 DecoderInputFusion 回传梯度。
 ```
 
 ## 2. 张量约定
@@ -104,6 +111,10 @@ fused_feature_72
 | `fused_feature_72`            | `[B×P_chunk, 256, 72, 72]`（逐 chunk） | DecoderInputFusion 输出，替换 Pixel Decoder 的最后一层 FPN 输入 |
 | `final_logits`                | `[B, P_chunk, 288, 288]`（逐 chunk） | 学生路径输出的最终语义分割 logits |
 | `sam3_teacher_logits`         | `[B, P_chunk, 288, 288]`（逐 chunk） | 教师路径输出的 detached teacher logits |
+| `second_stage_logits`         | `[B, P_chunk, 288, 288]`（训练逐 chunk） | 第二阶段语义 logits |
+| `second_stage_features_72`    | `[B, P, 256, 72, 72]` | 全部提示经过两层掩码反馈注意力后的特征 |
+
+训练内部 `final_logits` 仍表示第一次掩码；推理 Adapter 输出的 `final_logits` 则表示按阶段选择后的原始类别概率对应的 logits。`prompt_logits` 和 `second_stage_logits` 保留各自阶段的提示空间 logits。
 
 训练损失和评测会在必要时用最近邻插值把标签映射到 logits 尺度。
 
@@ -315,6 +326,16 @@ output = fusion_out_proj(fused_out)
 
 整个模块使用一次 non-reentrant checkpoint（`self.training and self.use_checkpoint` 时开启）。支路通道数固定为 128，SAM3 通道数固定为 256。
 
+### 5.4 第二阶段掩码反馈
+
+第一阶段的 `fused_feature_72` 是第二阶段待更新的 refiner feature。第一次 logits 先 detach 再 sigmoid，每个提示独立经过共享卷积：3×3 stride2 Conv 1→64、GN(8)、GELU；3×3 stride2 Conv 64→256、GN(8)、GELU，得到 72×72 的掩码嵌入。概率不二值化，卷积模块可训练。
+
+随后在全部提示上执行两层参数独立的类间注意力，包含自身提示。在每个空间位置，原始 encoder72、当前 refiner72、固定的第一次掩码嵌入分别做通道 LayerNorm，按 encoder→refiner→mask 拼接成 768 通道，独立投影为 Q/K。V 只由当前归一化的 refiner72 投影产生。注意力输出经投影、dropout 后直接残差更新 refiner，随后执行 pre-norm 256→1024→256 FFN 残差更新。第二层使用已经更新的 refiner，原始 encoder 与第一次掩码嵌入不变。不增加类内注意力、领先差距条件或额外输出归一化。
+
+两层更新结果直接进入同一个冻结 Pixel Decoder 和 semantic head，不再经过 DecoderInputFusion。第二阶段监督可以沿 refiner feature 路径回传至第一阶段可训练模块，但不能通过 detached 的第一次掩码回传。新模块位于 `core.encoder_refiner.mask_feedback_refiner`，由现有训练参数组自动覆盖；checkpoint 由既有 `encoder_refiner_cfg.use_checkpoint` 控制。
+
+这里“两遍分割头”指两个学生阶段；原有蒸馏启用时，仍额外保留冻结教师解码。
+
 ## 6. 冻结 SAM3 分割头与梯度边界
 
 Prompt cross-attention 在完整 6 层 encoder 之后、Refiner 之前执行一次（通过 `apply_prompt_cross_attention()`），位于 `torch.no_grad()` 中。融合之后不再追加 prompt cross-attention。
@@ -408,10 +429,13 @@ total_loss = (
     1.0 * loss_final_bce
     + 0.0 * loss_final_dice
     + 0.5 * loss_sam3_mask_distill_bce
+    + 1.0 * loss_second_stage_bce
 )
 ```
 
 `loss_sam3_mask_distill_bce` 为未经权重的原始蒸馏 BCE；`loss_sam3_mask_distill_weighted` 为真正加入总损失的加权贡献。蒸馏权重在整个训练期间固定不变。
+
+第一阶段监督完全保留。第二阶段仅新增全图 GT BCE：所有有效像素、所有提示（含不存在类别）等权，255 忽略，不做置信度筛选、正负平衡、交叉熵、Dice 或第二阶段蒸馏。每个提示使用所属原始类别的 GT 二值掩码。全局分母与第一阶段朴素 BCE 相同，按有效像素数乘总提示数计算。`criterion_cfg.second_stage_bce_weight` 默认 1.0，允许非负有限值。日志新增原始 `loss_second_stage_bce` 和加权 `loss_second_stage_bce_weighted`。
 
 上面的数值取自 `configs/_base_/model/ovrs_sam3.py` 的当前取值（蒸馏权重 0.5、外环宽度 3）。`config_dataclasses.py` 中的通用默认值不同，实验实际使用的数值取决于最终合并配置。
 
@@ -421,14 +445,19 @@ total_loss = (
 * 高分辨率按 chunk 计算。
 * 每个 chunk 立即计算 loss 和 backward。
 * 使用 detached leaf proxy 累积高分辨率梯度。
-* 所有 chunk 完成后把 proxy.grad 一次传回真实 Refiner 图。
+* 第一阶段只保留 detached 的 logits 和 fused72，汇总全部提示后执行掩码卷积与两层类间注意力。
+* 第二阶段同样通过 detached proxy leaf 逐 chunk 解码、BCE、backward，再将梯度一次传回真实 72×72 掩码反馈图。
+* 逐 chunk 重算确定性的 DecoderInputFusion，将第二阶段 fused72 梯度回传至融合参数和 Refiner36 proxy。融合模块无 dropout、无运行统计，重算不改变前向数值。
+* 两阶段梯度累加后，一次传回真实 Refiner36 图。跨 proxy 传递的梯度已包含 AMP scaling，不能重复缩放。
 * optimizer/scaler/scheduler 每个 batch 只更新一次。
-* 不保留多个 chunk 的融合特征或 logits。
+* 不保留多个 chunk 的高分辨率解码计算图；允许缓存 detached 的全提示 fused72 和第一次 logits。
 * 不使用 `retain_graph=True`。
 
 ## 8. 推理与评测
 
-推理时模型在提示空间输出 `prompt_logits` [B, P, H, W]。Adapter 先做 sigmoid 得到 `raw_prompt_score_map`，再通过像素级最大值把同一原始类别的所有提示合并为 `raw_final_score_map` [B, M, H, W]。可选的逐类别相对阈值在原始类别空间执行，归一化后只把未通过位置置 0；保留位置继续使用原始 sigmoid 分数。最终对类别维取 argmax。
+推理分别对两阶段提示 logits 做 sigmoid，得到第一阶段 `raw_prompt_score_map` 和第二阶段 `raw_second_stage_prompt_score_map`。两阶段分别对同类提示取最大值，合并回原始类别。每个像素取第一阶段的最高类别概率：大于等于 `adapter_cfg.stage_switch_threshold` 使用第一阶段全部类别分数，否则使用第二阶段全部类别分数，随后对类别维 argmax。默认阈值 0.5，不比较领先差距；所有类别通道共用一个像素级分流决定。选择结果保存在 `raw_final_score_map`，布尔区域保存在 `first_stage_selected`。
+
+分流使用原始概率。基础配置将原有 `class_relative_prob_thd` 设为 None，避免另一种过滤干扰阶段选择；如显式启用，该过滤仅在阶段选择之后应用于 `final_score_map`。
 
 标签空间中两个机制职责不同：
 
@@ -439,7 +468,7 @@ total_loss = (
 
 Evaluator 输出整体 mIoU、mAcc、pixel accuracy 和逐类别指标。`metric_groups` 可以按 `class_ids` 或 `class_names` 定义命名类别组，并分别计算组内 mIoU/mAcc。完整 iSAID→LoveDA 配置使用前景类别组作为 checkpoint monitor。
 
-TTA 当前只支持 `scale=1.0` 和空间翻转。多个视图必须先平均 `raw_prompt_score_map`（提示空间），再合并提示到原始类别，最后统一执行一次非线性相对阈值过滤。
+TTA 当前只支持 `scale=1.0` 和空间翻转。必须分别反变换并平均两阶段的原始提示概率，再分别合并同类提示，统一执行一次阶段选择和可选相对过滤。不得平均已经分流的分数。
 
 ## 9. Checkpoint、恢复与实验追踪
 
@@ -520,12 +549,13 @@ python tools/train.py configs/train/isaid_loveda_full.py
 | `models/sam3_image.py`                | 类别 chunk、缓存、SAM3 encoder、低分辨率 refiner、逐 chunk 学生/教师解码 |
 | `models/encoder_refiner.py`           | 全类别 Refiner、最终 feature LayerNorm 与单尺度融合接口 |
 | `models/decoder_input_fusion.py`      | 单尺度语义—细节双路融合，输出替换 Pixel Decoder 最后一层 FPN 输入 |
+| `models/mask_feedback_refiner.py`     | 第一次掩码的卷积嵌入与两层 72×72 全提示类间注意力 |
 | `models/encoder_refiner_attention.py` | 交替单 Value 跨类别注意力、独立可选窗口/局部 3×3 类内注意力、双流 FFN、pre-norm 与直接残差更新 |
 | `models/maskformer_segmentation.py`   | prompt attention、Pixel Decoder 和原始 semantic head |
 | `models/score_embeddings.py`          | 64 模板相似度图、归一化 CLIP 融合和空间卷积增强 |
 | `models/openclip_image_encoder.py`    | 36×36 dense RemoteCLIP 图像特征              |
 | `models/openclip_text_encoder.py`     | 模板文本编码、micro-batch 与梯度控制                 |
-| `losses/semantic_criterion.py`        | Streaming 正负平衡 BCE、Dice 和 SAM3 teacher 蒸馏 |
+| `losses/semantic_criterion.py`        | 两阶段全有效像素 BCE、第一阶段可选 Dice 与 SAM3 teacher 蒸馏 |
 | `engine/trainer.py`                   | 高分辨率逐 chunk loss/backward 与 proxy 梯度回传 |
 | `engine/checkpoint.py`                | 安全、原子、严格的 checkpoint 保存与加载               |
 | `engine/runtime_state.py`             | RNG 捕获与恢复                                |
@@ -557,7 +587,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 18. 蒸馏只监督存在类别。每个存在提示均监督全部 GT 有效像素，并额外监督其原始类别 GT 外侧 `sam3_mask_distill_boundary_width` 像素范围内且标签为 255 的边界环。远处 255 区域不参与蒸馏。多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
 19. 最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
 20. Refiner 按 A→B→A→B 交替，每层先更新 score 再更新 feature。score 类内固定拼接 CLIP 中间层融合特征，feature 类内固定拼接 FPN36；两种类间 Q/K 都不拼接文本。所有注意力单 Value、pre-norm、直接残差。双路 FFN 各处理当前 256 通道特征，256→1024→256 后直接残差到当前流；保留最终 feature LayerNorm。
-21. TTA 必须先平均提示空间分数（`raw_prompt_score_map`），再合并提示到原始类别，最后进行相对阈值过滤。
+21. TTA 分别平均两阶段提示概率，再合并类别、统一分流，最后可选相对阈值过滤。
 22. `reduce_zero_label` 与 `background_cfg` 各自只执行其定义的一次标签空间变换。
 23. 完整恢复必须严格校验 checkpoint schema；模型权重迁移必须走独立入口。
 24. 训练不使用完整 `[B,C,288,288]` 计算图。逐 chunk backward 通过 proxy leaf 隔离。
@@ -569,6 +599,8 @@ python tools/train.py configs/train/isaid_loveda_full.py
 30. 融合支路固定 `branch_dim=128`，3×3 卷积使用普通卷积（无分组）。
 31. 融合输出直接作为 Pixel Decoder 的最后一层输入；模块内无融合系数、门控、零初始化、额外残差或输出归一化。
 32. 最终 logits 由冻结 `semantic_seg_head` 生成。
+33. 第一阶段监督不变；第二阶段只做全有效图 GT BCE，权重默认 1.0。阶段阈值默认 0.5，仅影响推理。
+34. 第二阶段类间注意力必须看到全部提示。第一次掩码反馈 detach，卷积和注意力参数可训练，第二阶段通过 feature 路径回传到第一阶段。
 
 当前限制：
 
@@ -697,3 +729,12 @@ checkpoint 输出和参数/Refiner 输入梯度、输入形状检查。
 * 初始 CLIP score embedding、原始 SAM3 流程、教师、冻结解码头、损失和逐 chunk 梯度设计保留。
 * 旧 checkpoint 的 FFN 形状和融合参数名称不匹配；新实验使用新的 work directory，不提供兼容层。
 * checkpoint 容器 schema 保持 4。
+
+本次两阶段掩码反馈重构：
+
+* 新增 `core.encoder_refiner.mask_feedback_refiner.*`：共享掩码下采样卷积及两层独立类间注意力与 FFN；原有第一阶段参数名称和形状不变。
+* 第一阶段损失保持不变；第二阶段全有效图 GT BCE 默认权重 1.0。推理仅按第一阶段最高概率是否达到 0.5 切换阶段，阈值可配置。
+* 两个学生阶段复用原冻结分割头，原教师仍只监督第一阶段。高分辨率逐块 backward，第二阶段梯度通过逐块重算融合模块回传，不使用 `retain_graph=True`。
+* 原 master 的 checkpoint 可作为模型参数初始化，新增模块使用常规随机初始化；不能用于完整 `--resume-from`，新实验使用新的 work directory。不增加参数兼容或映射层，checkpoint 容器 schema 保持 4。
+* `python -m unittest discover -s tests -v`：本次新增 8 项 CPU 回归测试，覆盖全图 BCE、忽略像素与不存在类别、不等长提示块、别名合并、0.5 等值分流、高分近似类别不额外过滤、TTA 先平均后分流、checkpoint 与掩码 detach、批次图像顺序，以及完整计算图和分块训练的总损失与梯度一致性（含非单位梯度缩放和原蒸馏）。测试使用真实融合与反馈模块、替代的轻量冻结分割头，无需模型权重或数据集。
+* 本次验证不包含实际 GPU 训练或真实数据集精度评测；第二阶段增加一次学生解码、72×72 注意力以及融合模块梯度重算，实际显存和训练时间需在训练环境测量。

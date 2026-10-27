@@ -203,13 +203,12 @@ class Trainer:
         self,
         batch,
     ) -> Dict[str, torch.Tensor]:
-        """Streaming per-chunk loss/backward with proxy leaf gradient isolation.
+        """Two student decodes, with chunked heads and all-prompt feedback.
 
-        Low-resolution Refiner runs once on all classes. High-resolution
-        decoding, loss and backward run per chunk. A detached proxy leaf
-        accumulates gradients from all chunks; after all chunks, the
-        accumulated gradient is handed back to the real Refiner graph in
-        a single backward call.
+        Proxy leaves release each high-resolution graph immediately. After
+        stage two, recompute deterministic DecoderInputFusion per chunk to
+        send its gradient back to Refiner36 without retaining stage-one
+        decoder graphs. Gradients crossing proxies are already AMP-scaled.
         """
         if not hasattr(self.model, "build_encoder_refiner_cache"):
             raise AttributeError(
@@ -292,6 +291,13 @@ class Trainer:
 
         # GPU-side accumulators (detached scalars, .item() deferred).
         accum: Dict[str, torch.Tensor] = {}
+        fused_chunks = []
+        first_logits_chunks = []
+
+        def accumulate(losses):
+            for key, value in losses.items():
+                detached = value.detach()
+                accum[key] = accum.get(key, 0) + detached
 
         chunk_start = 0
         for num_chunk_classes in chunk_class_counts:
@@ -320,25 +326,13 @@ class Trainer:
                 )
 
             chunk_total_loss = chunk_loss_dict["total_loss"]
+            fused_chunks.append(chunk_outputs["fused_feature_72"].detach())
+            first_logits_chunks.append(chunk_outputs[OUTPUT_KEYS.final_logits].detach())
 
             # Backward outside autocast.
             self.scaler.scale(chunk_total_loss).backward()
 
-            # Accumulate detached stats on GPU.
-            for key in (
-                "loss_final_bce",
-                "loss_final_dice",
-                "loss_sam3_mask_distill_bce",
-                "loss_sam3_mask_distill_weighted",
-                "total_loss",
-            ):
-                val = chunk_loss_dict.get(key)
-                if val is not None and torch.is_tensor(val):
-                    detached = val.detach()
-                    if key not in accum:
-                        accum[key] = detached
-                    else:
-                        accum[key] = accum[key] + detached
+            accumulate(chunk_loss_dict)
 
             # Release chunk intermediates.
             del chunk_outputs, chunk_loss_dict, chunk_total_loss, refiner_proxy_chunk
@@ -351,7 +345,51 @@ class Trainer:
                 f"expected C_total={C_total}."
             )
 
-        # ---- Hand proxy gradient back to real Refiner graph ----
+        # ---- All-prompt mask feedback at 72x72 ----
+        fused_proxy = torch.cat(fused_chunks, dim=1).requires_grad_(True)
+        first_logits = torch.cat(first_logits_chunks, dim=1)
+        del fused_chunks, first_logits_chunks
+        with autocast(device_type=self.device.type, enabled=use_amp):
+            second_features = self.model.refine_second_stage_from_cache(
+                encoder_refiner_cache, fused_proxy, first_logits,
+            )
+        second_proxy = second_features.detach().requires_grad_(True)
+        chunk_start = 0
+        for count in chunk_class_counts:
+            chunk_end = chunk_start + count
+            with autocast(device_type=self.device.type, enabled=use_amp):
+                logits = self.model.decode_fused_feature_chunk_from_cache(
+                    encoder_refiner_cache, second_proxy[:, chunk_start:chunk_end],
+                    chunk_start, chunk_end,
+                )
+                losses = self.criterion.forward_second_stage_chunk(
+                    logits, loss_context, chunk_start, chunk_end,
+                )
+            self.scaler.scale(losses["total_loss"]).backward()
+            accumulate(losses)
+            del logits, losses
+            chunk_start = chunk_end
+
+        # Do not scale again: proxy gradients already include the scaler.
+        torch.autograd.backward(second_features, second_proxy.grad)
+        del second_features, second_proxy, first_logits
+
+        # Stage-one head graphs are gone; replay only the deterministic
+        # fusion module to propagate stage-two gradients into Refiner36.
+        chunk_start = 0
+        for count in chunk_class_counts:
+            chunk_end = chunk_start + count
+            with autocast(device_type=self.device.type, enabled=use_amp):
+                fused = self.model.fuse_encoder_refiner_chunk_from_cache(
+                    encoder_refiner_cache, refiner_proxy[:, chunk_start:chunk_end],
+                    chunk_start, chunk_end,
+                )
+            torch.autograd.backward(fused, fused_proxy.grad[:, chunk_start:chunk_end])
+            del fused
+            chunk_start = chunk_end
+        del fused_proxy
+
+        # ---- Hand combined stage-one/two gradient to the real Refiner ----
         if refiner_proxy.grad is None:
             raise RuntimeError(
                 "No gradient was accumulated on refiner_proxy. "

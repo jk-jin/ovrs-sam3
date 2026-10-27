@@ -15,8 +15,14 @@ class SemanticSegAdapter(nn.Module):
         self,
         class_relative_prob_thd: Optional[float] = None,
         class_relative_eps: float = 1e-6,
+        stage_switch_threshold: float = 0.5,
     ):
         super().__init__()
+
+        stage_switch_threshold = float(stage_switch_threshold)
+        if not math.isfinite(stage_switch_threshold) or not 0.0 <= stage_switch_threshold <= 1.0:
+            raise ValueError("stage_switch_threshold must be finite and in [0, 1]")
+        self.stage_switch_threshold = stage_switch_threshold
 
         if class_relative_prob_thd is not None:
             class_relative_prob_thd = float(
@@ -255,11 +261,18 @@ class SemanticSegAdapter(nn.Module):
         self,
         raw_prompt_score_map: torch.Tensor,
         metadata,
+        raw_second_stage_prompt_score_map: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
         raw_prompt_score_map = self._as_4d_map(
             raw_prompt_score_map,
             OUTPUT_KEYS.raw_prompt_score_map,
         )
+        second_scores = self._as_4d_map(
+            raw_second_stage_prompt_score_map,
+            OUTPUT_KEYS.raw_second_stage_prompt_score_map,
+        )
+        if second_scores.shape != raw_prompt_score_map.shape:
+            raise ValueError("First and second prompt score maps must have identical shapes")
 
         (
             num_prompts,
@@ -278,17 +291,28 @@ class SemanticSegAdapter(nn.Module):
                 f"{num_prompts}."
             )
 
-        raw_final_score_map = self._merge_prompt_channels(
+        first_class_scores = self._merge_prompt_channels(
             prompt_map=raw_prompt_score_map,
             prompt_to_class_id=prompt_to_class_id,
             num_classes=num_classes,
         )
+        second_class_scores = self._merge_prompt_channels(
+            prompt_map=second_scores,
+            prompt_to_class_id=prompt_to_class_id,
+            num_classes=num_classes,
+        )
+        # One decision per pixel, shared across ALL class channels. Alias
+        # merging and (for TTA) view averaging happen before this decision.
+        use_first = first_class_scores.amax(dim=1, keepdim=True) >= self.stage_switch_threshold
+        raw_final_score_map = torch.where(use_first, first_class_scores, second_class_scores)
 
         final_score_map = self._apply_class_relative_filter(
             raw_final_score_map
         )
 
         return {
+            OUTPUT_KEYS.raw_second_stage_prompt_score_map: second_scores,
+            OUTPUT_KEYS.first_stage_selected: use_first[:, 0],
             OUTPUT_KEYS.raw_prompt_score_map:
                 raw_prompt_score_map,
             OUTPUT_KEYS.raw_final_score_map:
@@ -343,26 +367,24 @@ class SemanticSegAdapter(nn.Module):
         if output_mode == "final":
             return {
                 OUTPUT_KEYS.final_logits: prompt_logits,
+                OUTPUT_KEYS.second_stage_logits: raw_outputs[OUTPUT_KEYS.second_stage_logits],
             }
-
-        class_logits = self._merge_prompt_channels(
-            prompt_map=prompt_logits,
-            prompt_to_class_id=prompt_to_class_id,
-            num_classes=num_classes,
-        )
 
         raw_prompt_score_map = prompt_logits.sigmoid()
 
         outputs = dict(raw_outputs)
         outputs[OUTPUT_KEYS.prompt_logits] = prompt_logits
-        outputs[OUTPUT_KEYS.final_logits] = class_logits
 
         outputs.update(
             self.build_infer_score_outputs(
                 raw_prompt_score_map=
                     raw_prompt_score_map,
                 metadata=metadata,
+                raw_second_stage_prompt_score_map=raw_outputs[OUTPUT_KEYS.second_stage_logits].sigmoid(),
             )
+        )
+        outputs[OUTPUT_KEYS.final_logits] = torch.logit(
+            outputs[OUTPUT_KEYS.raw_final_score_map].float().clamp(1e-6, 1.0 - 1e-6)
         )
 
         for key in (
