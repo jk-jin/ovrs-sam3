@@ -19,8 +19,9 @@ class ClassConditionedEncoderRefiner(nn.Module):
     """Encoder feature refiner operating at 36×36.
 
     Takes the full 6-layer SAM3 encoder output after prompt cross-attention
-    as input. The feature stream is the bilinear-downsampled encoder feature
-    without any FPN injection. Fixed CLIP middle/FPN guidance extends
+    as input. The feature stream adds image-level FPN72 to each prompt's
+    encoder feature, then uses a trainable stride-2 3×3 conv to reach 36×36.
+    Fixed CLIP middle/FPN guidance extends
     intra-class attention Q/K. Each FFN updates only its current stream.
     The score stream comes directly from
     ClipScoreEmbedding (score_embeddings.py) without any SAM3 FPN fusion.
@@ -91,6 +92,10 @@ class ClassConditionedEncoderRefiner(nn.Module):
             score_embed_dim=int(score_embed_dim),
             text_prompt_batch_size=int(text_prompt_batch_size),
             text_prompt_use_checkpoint=bool(text_prompt_use_checkpoint),
+        )
+
+        self.feature_input_downsample = nn.Conv2d(
+            self.hidden_dim, self.hidden_dim, kernel_size=3, stride=2, padding=1,
         )
 
         self.layers = nn.ModuleList([
@@ -240,16 +245,15 @@ class ClassConditionedEncoderRefiner(nn.Module):
         downsampled = F.interpolate(sam_fpn_72, size=(36, 36), mode="bilinear", align_corners=False)
         sam_fpn_36 = downsampled[:, None].expand(-1, num_classes, -1, -1, -1)
 
-        base_feature_36 = F.interpolate(
-            encoder_features_72.reshape(
+        # Broadcast FPN over prompts and add out of place so the original
+        # encoder/FPN caches remain available for teacher and decoder paths.
+        feature_36 = self.feature_input_downsample(
+            (encoder_features_72 + sam_fpn_72[:, None]).reshape(
                 batch_size * num_classes,
                 hidden_dim,
                 72,
                 72,
             ),
-            size=(36, 36),
-            mode="bilinear",
-            align_corners=False,
         ).reshape(
             batch_size,
             num_classes,
@@ -258,10 +262,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
             36,
         )
 
-        feature_36 = base_feature_36
-
         # The score embedding produced by score_embeddings.py is now used
-        # directly. No SAM3 FPN injection is performed before attention.
+        # directly, without SAM3 FPN injection into the score stream.
         score_embed_36 = clip_score_embed_36
 
         for layer in self.layers:
