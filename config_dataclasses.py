@@ -25,8 +25,6 @@ class OpenCLIPConfig:
     default_output: str = "feat_map"
     image_size: int = 504
 
-    image_intermediate_layers: list[int] = field(default_factory=lambda: [7, 15])
-
     prompt_templates: list[str] = field(default_factory=lambda: [
         # Basic remote-sensing viewpoints.
         "a remote sensing image of {}.",
@@ -118,7 +116,7 @@ class OpenCLIPConfig:
 class EncoderRefinerConfig:
     enabled: bool = True
 
-    fusion_layers: int = 4  # Alternate score-intra/feature-inter and score-inter/feature-intra.
+    fusion_layers: int = 4  # FPN intra/encoder inter, then encoder intra/FPN inter.
     num_heads: int = 8
     dropout: float = 0.1
 
@@ -128,8 +126,6 @@ class EncoderRefinerConfig:
     refiner_hw: int = 36
     encoder_hw: int = 72
 
-    score_intra_attn_type: str = "window"
-    feature_intra_attn_type: str = "window"
     window_size: int = 12
     shift_size: int = 6
 

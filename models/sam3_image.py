@@ -43,8 +43,6 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_dropout: float = 0.1,
         encoder_refiner_hidden_dim: int = 256,
         encoder_refiner_score_embed_dim: int = 256,
-        encoder_refiner_score_intra_attn_type: str = "window",
-        encoder_refiner_feature_intra_attn_type: str = "window",
         encoder_refiner_window_size: int = 12,
         encoder_refiner_shift_size: int = 6,
         encoder_refiner_use_checkpoint: bool = True,
@@ -84,12 +82,6 @@ class Sam3Image(torch.nn.Module):
 
         self.clip_text_dim = self._infer_clip_text_dim() if self.clip_text_encoder is not None else None
         self.clip_image_dim = self._infer_clip_image_dim() if self.clip_image_encoder is not None else None
-        self.clip_image_native_dim = (
-            int(getattr(self.clip_image_encoder, "native_dim", None))
-            if self.clip_image_encoder is not None
-            and hasattr(self.clip_image_encoder, "native_dim")
-            else self.clip_image_dim
-        )
         self.clip_align_dim = None
 
         if self.clip_text_dim is not None and self.clip_image_dim is not None:
@@ -110,9 +102,6 @@ class Sam3Image(torch.nn.Module):
             hidden_dim=int(encoder_refiner_hidden_dim),
             clip_dim=self.clip_align_dim,
             score_embed_dim=int(encoder_refiner_score_embed_dim),
-            score_intra_attn_type=encoder_refiner_score_intra_attn_type,
-            feature_intra_attn_type=encoder_refiner_feature_intra_attn_type,
-            clip_native_dim=self.clip_image_native_dim,
             num_heads=int(encoder_refiner_num_heads),
             window_size=int(encoder_refiner_window_size),
             shift_size=int(encoder_refiner_shift_size),
@@ -249,26 +238,20 @@ class Sam3Image(torch.nn.Module):
         clip_out = self.clip_image_encoder.encode_raw_images(
             raw_images=input.raw_images,
             device=device,
-            keep_intermediate_grad=True,
         )
 
         if not isinstance(clip_out, dict):
             raise TypeError(
                 "clip_image_encoder must return a dict with keys "
-                "'feat_map', 'mid_features', and 'mid_layer_indices'."
+                "'feat_map'."
             )
 
         clip_feat_map = clip_out["feat_map"]
-        clip_mid_features = clip_out["mid_features"]
-        clip_mid_layer_indices = clip_out["mid_layer_indices"]
 
         if not isinstance(clip_feat_map, torch.Tensor) or clip_feat_map.ndim != 4:
             raise ValueError(
                 "clip_out['feat_map'] must be [B, D_clip, Hc, Wc]."
             )
-
-        if not isinstance(clip_mid_features, list):
-            raise TypeError("clip_out['mid_features'] must be a list of tensors.")
 
         image_encoder_trainable = (
             hasattr(self.clip_image_encoder, "has_trainable_params")
@@ -288,33 +271,9 @@ class Sam3Image(torch.nn.Module):
             int(clip_feat_map.shape[-1]),
         )
 
-        clean_mid_features = []
-        for i, feat in enumerate(clip_mid_features):
-            if not isinstance(feat, torch.Tensor) or feat.ndim != 4:
-                raise ValueError(
-                    f"clip_mid_features[{i}] must be [B, D, Hc, Wc], "
-                    f"got {None if not isinstance(feat, torch.Tensor) else tuple(feat.shape)}."
-                )
-            if int(feat.shape[0]) != int(clip_feat_map.shape[0]):
-                raise ValueError(
-                    f"clip_mid_features[{i}] batch mismatch: "
-                    f"{feat.shape[0]} vs {clip_feat_map.shape[0]}."
-                )
-            if tuple(feat.shape[-2:]) != clip_grid_hw:
-                raise ValueError(
-                    f"clip_mid_features[{i}] spatial size mismatch: "
-                    f"{tuple(feat.shape[-2:])} vs {clip_grid_hw}."
-                )
-            clean_mid_features.append(
-                feat.contiguous() if keep_image_graph
-                else feat.detach().contiguous()
-            )
-
         return {
             "clip_image_feat_map_native": clip_feat_map,
             "clip_image_grid_hw": clip_grid_hw,
-            OUTPUT_KEYS.clip_mid_features: clean_mid_features,
-            "clip_mid_layer_indices": tuple(int(x) for x in clip_mid_layer_indices),
         }
 
     def build_encoder_refiner_cache(
@@ -429,8 +388,6 @@ class Sam3Image(torch.nn.Module):
             "cross_attended_encoder_features_72": cross_attended_encoder_features_72,
             "backbone_fpn": backbone_fpn,
             "clip_image_feat_map": clip_image_cache["clip_image_feat_map_native"],
-            OUTPUT_KEYS.clip_mid_features: clip_image_cache[OUTPUT_KEYS.clip_mid_features],
-            "clip_mid_layer_indices": clip_image_cache["clip_mid_layer_indices"],
             "class_names": class_texts,
             "class_ids": merged_class_ids,
             "chunk_class_counts": chunk_class_counts,
@@ -528,17 +485,13 @@ class Sam3Image(torch.nn.Module):
         cross_attended_encoder_features_72: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
         class_names: List[str],
-        clip_mid_features: list[torch.Tensor] | None = None,
-        clip_mid_layer_indices: tuple[int, ...] | None = None,
-        sam_fpn_72: torch.Tensor | None = None,
+        sam_fpn_72: torch.Tensor,
     ) -> Dict[str, torch.Tensor]:
         """Run the 36×36 Refiner on all classes simultaneously."""
         return self.encoder_refiner(
             encoder_features_72=cross_attended_encoder_features_72,
             clip_image_feat_map=clip_image_feat_map,
             class_names=class_names,
-            clip_mid_features=clip_mid_features,
-            clip_mid_layer_indices=clip_mid_layer_indices,
             sam_fpn_72=sam_fpn_72,
         )
 
@@ -550,8 +503,8 @@ class Sam3Image(torch.nn.Module):
     ) -> Dict[str, torch.Tensor]:
         """Run the all-class Encoder Refiner at 36×36 and return its output.
 
-        Does NOT perform any 72/144/288 decoding. Returns refiner features
-        and score embeddings for downstream per-chunk high-res decoding.
+        Does NOT perform any 72/144/288 decoding. Returns both refined streams
+        for downstream per-chunk high-resolution decoding.
         """
         cross_attended_encoder_features_72 = encoder_refiner_cache[
             "cross_attended_encoder_features_72"
@@ -571,28 +524,21 @@ class Sam3Image(torch.nn.Module):
             ),
             clip_image_feat_map=clip_image_feat_map,
             class_names=batch_class_names,
-            clip_mid_features=encoder_refiner_cache[OUTPUT_KEYS.clip_mid_features],
-            clip_mid_layer_indices=encoder_refiner_cache["clip_mid_layer_indices"],
             sam_fpn_72=encoder_refiner_cache["backbone_fpn"][2],
         )
 
         result: Dict[str, torch.Tensor] = {
-            "refiner_features_36": refiner_out["refiner_features_36"],
+            "refined_encoder_36": refiner_out["refined_encoder_36"],
+            "refined_fpn_36": refiner_out["refined_fpn_36"],
         }
 
         if return_debug:
-            clip_mid_features = encoder_refiner_cache[
-                OUTPUT_KEYS.clip_mid_features
-            ]
             result.update({
                 OUTPUT_KEYS.encoder_features: cross_attended_encoder_features_72.detach().contiguous(),
                 "score_embed_36": refiner_out["score_embed_36"].detach().contiguous(),
                 "clip_score_embed_36": refiner_out["clip_score_embed_36"].detach().contiguous(),
                 "clip_score_maps_36": refiner_out["clip_score_maps_36"].detach().contiguous(),
                 "template_clip_text": refiner_out["template_clip_text"].detach().contiguous(),
-                OUTPUT_KEYS.clip_mid_features: [
-                    feat.detach().contiguous() for feat in clip_mid_features
-                ],
             })
 
         return result
@@ -604,7 +550,8 @@ class Sam3Image(torch.nn.Module):
     def decode_encoder_refiner_chunk_from_cache(
         self,
         encoder_refiner_cache: Dict[str, Any],
-        refiner_feature_36_chunk: torch.Tensor,
+        refined_encoder_36_chunk: torch.Tensor,
+        refined_fpn_36_chunk: torch.Tensor,
         class_start: int,
         class_end: int,
         return_teacher_logits: bool = False,
@@ -614,7 +561,7 @@ class Sam3Image(torch.nn.Module):
         Steps:
         1. Optionally run the teacher path (no_grad): original encoder72 →
            frozen Pixel Decoder → frozen semantic head → detached logits.
-        2. Fuse Refiner36, original encoder72 and FPN72 into 72×72.
+        2. Fuse both refined streams with original encoder72/FPN72 at 72×72.
         3. Student path (gradients enabled): fused 72×72 replaces the last
            FPN level of the same frozen Pixel Decoder and semantic head.
         """
@@ -629,10 +576,12 @@ class Sam3Image(torch.nn.Module):
         batch_size = original_features_72.shape[0]
         num_prompts = class_end - class_start
         expected_shape = (batch_size, num_prompts, 256, 36, 36)
-        if tuple(refiner_feature_36_chunk.shape) != expected_shape:
+        if (tuple(refined_encoder_36_chunk.shape) != expected_shape
+                or tuple(refined_fpn_36_chunk.shape) != expected_shape):
             raise ValueError(
-                f"Expected refiner chunk {expected_shape}, "
-                f"got {tuple(refiner_feature_36_chunk.shape)}."
+                f"Expected both refined chunks to have shape {expected_shape}; "
+                f"got encoder={tuple(refined_encoder_36_chunk.shape)}, "
+                f"FPN={tuple(refined_fpn_36_chunk.shape)}."
             )
 
         original_chunk = original_features_72[:, class_start:class_end]
@@ -663,9 +612,10 @@ class Sam3Image(torch.nn.Module):
 
         num_pairs = batch_size * num_prompts
         fused_feature_72_flat = self.encoder_refiner.fuse_decoder_input_chunk(
-            refiner_feature_36=refiner_feature_36_chunk.reshape(
+            refined_encoder_36=refined_encoder_36_chunk.reshape(
                 num_pairs, 256, 36, 36
             ),
+            refined_fpn_36=refined_fpn_36_chunk.reshape(num_pairs, 256, 36, 36),
             original_encoder_feature_72=original_chunk.reshape(
                 num_pairs, 256, 72, 72
             ),
@@ -717,27 +667,29 @@ class Sam3Image(torch.nn.Module):
             return_debug=return_debug,
         )
 
-        refiner_features_36 = refiner_out["refiner_features_36"]
-        B, C = refiner_features_36.shape[:2]
+        refined_encoder_36 = refiner_out["refined_encoder_36"]
+        refined_fpn_36 = refiner_out["refined_fpn_36"]
+        B, C = refined_encoder_36.shape[:2]
         chunk_class_counts = encoder_refiner_cache["chunk_class_counts"]
 
         final_logits = torch.empty(
             B, C, 288, 288,
-            device=refiner_features_36.device,
-            dtype=refiner_features_36.dtype,
+            device=refined_encoder_36.device,
+            dtype=refined_encoder_36.dtype,
         )
 
         chunk_start = 0
         for num_chunk_classes in chunk_class_counts:
             chunk_end = chunk_start + num_chunk_classes
 
-            refiner_feature_36_chunk = refiner_features_36[
+            refined_encoder_36_chunk = refined_encoder_36[
                 :, chunk_start:chunk_end
             ]
 
             chunk_outputs = self.decode_encoder_refiner_chunk_from_cache(
                 encoder_refiner_cache=encoder_refiner_cache,
-                refiner_feature_36_chunk=refiner_feature_36_chunk,
+                refined_encoder_36_chunk=refined_encoder_36_chunk,
+                refined_fpn_36_chunk=refined_fpn_36[:, chunk_start:chunk_end],
                 class_start=chunk_start,
                 class_end=chunk_end,
                 return_teacher_logits=False,
@@ -763,19 +715,14 @@ class Sam3Image(torch.nn.Module):
             cross_attended_encoder_features_72 = encoder_refiner_cache[
                 "cross_attended_encoder_features_72"
             ]
-            clip_mid_features = encoder_refiner_cache[
-                OUTPUT_KEYS.clip_mid_features
-            ]
             result.update({
                 OUTPUT_KEYS.encoder_features: cross_attended_encoder_features_72.detach().contiguous(),
-                OUTPUT_KEYS.refiner_features_36: refiner_features_36.detach().contiguous(),
+                OUTPUT_KEYS.refined_encoder_36: refined_encoder_36.detach().contiguous(),
+                OUTPUT_KEYS.refined_fpn_36: refined_fpn_36.detach().contiguous(),
                 OUTPUT_KEYS.score_embed_36: refiner_out["score_embed_36"].detach().contiguous(),
                 OUTPUT_KEYS.clip_score_embed_36: refiner_out["clip_score_embed_36"].detach().contiguous(),
                 OUTPUT_KEYS.clip_score_maps: refiner_out["clip_score_maps_36"].detach().contiguous(),
                 OUTPUT_KEYS.template_clip_text_features: refiner_out["template_clip_text"].detach().contiguous(),
-                OUTPUT_KEYS.clip_mid_features: [
-                    feat.detach().contiguous() for feat in clip_mid_features
-                ],
             })
 
         return result

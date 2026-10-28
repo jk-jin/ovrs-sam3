@@ -367,13 +367,13 @@ class SemanticSegAdapter(nn.Module):
 
         for key in (
             OUTPUT_KEYS.encoder_features,
-            OUTPUT_KEYS.refiner_features_36,
+            OUTPUT_KEYS.refined_encoder_36,
+            OUTPUT_KEYS.refined_fpn_36,
             OUTPUT_KEYS.score_embed_36,
             OUTPUT_KEYS.clip_score_embed_36,
             OUTPUT_KEYS.template_clip_text_features,
             OUTPUT_KEYS.clip_score_maps,
             OUTPUT_KEYS.clip_score_embed,
-            OUTPUT_KEYS.clip_mid_features,
         ):
             if key in raw_outputs:
                 outputs[key] = raw_outputs[key]

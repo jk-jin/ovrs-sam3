@@ -14,7 +14,6 @@ model = dict(
         pretrained="weights/RemoteCLIP-ViT-L-14.pt",
         default_output="feat_map",
         image_size=504,
-        image_intermediate_layers=[7, 15],
 
         prompt_templates=[
             # Basic remote-sensing viewpoints.
@@ -104,7 +103,7 @@ model = dict(
 
     encoder_refiner_cfg=dict(
         enabled=True,
-        fusion_layers=4,  # A/B/A/B: score intra/inter, then feature inter/intra.
+        fusion_layers=4,  # FPN intra/encoder inter, then encoder intra/FPN inter.
         num_heads=8,
         dropout=0.1,
         hidden_dim=256,
@@ -113,9 +112,7 @@ model = dict(
         refiner_hw=36,
         encoder_hw=72,
 
-        # Independently select "window" or four consecutive "local_3x3" steps.
-        score_intra_attn_type="local_3x3",
-        feature_intra_attn_type="local_3x3",
+        # All intra-class blocks use regular + shifted window attention.
         window_size=12,
         shift_size=6,
 

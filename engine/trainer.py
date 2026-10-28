@@ -206,10 +206,9 @@ class Trainer:
         """Streaming per-chunk loss/backward with proxy leaf gradient isolation.
 
         Low-resolution Refiner runs once on all classes. High-resolution
-        decoding, loss and backward run per chunk. A detached proxy leaf
-        accumulates gradients from all chunks; after all chunks, the
-        accumulated gradient is handed back to the real Refiner graph in
-        a single backward call.
+        decoding, loss and backward run per chunk. Two detached proxy leaves
+        accumulate gradients from all chunks; their gradients are jointly
+        handed back to the real Refiner graph in a single backward call.
         """
         if not hasattr(self.model, "build_encoder_refiner_cache"):
             raise AttributeError(
@@ -231,10 +230,11 @@ class Trainer:
                 )
             )
 
-        refiner_features_36 = refiner_out["refiner_features_36"]
+        refined_encoder_36 = refiner_out["refined_encoder_36"]
+        refined_fpn_36 = refiner_out["refined_fpn_36"]
         del refiner_out
 
-        B, C_total = refiner_features_36.shape[:2]
+        B, C_total = refined_encoder_36.shape[:2]
 
         metadata = batch.find_metadatas[0]
 
@@ -251,7 +251,7 @@ class Trainer:
         prompt_to_class_id = torch.as_tensor(
             metadata.prompt_to_class_id,
             dtype=torch.long,
-            device=refiner_features_36.device,
+            device=refined_encoder_36.device,
         )
 
         if prompt_to_class_id.ndim != 1:
@@ -266,8 +266,9 @@ class Trainer:
                 f"{prompt_to_class_id.numel()} and {C_total}."
             )
 
-        # Detached proxy leaf — accumulates gradients from all chunks.
-        refiner_proxy = refiner_features_36.detach().requires_grad_(True)
+        # One detached proxy leaf for each refined output stream.
+        encoder_proxy = refined_encoder_36.detach().requires_grad_(True)
+        fpn_proxy = refined_fpn_36.detach().requires_grad_(True)
 
         # Build streaming loss context once.
         with autocast(device_type=self.device.type, enabled=use_amp):
@@ -297,15 +298,18 @@ class Trainer:
         for num_chunk_classes in chunk_class_counts:
             chunk_end = chunk_start + num_chunk_classes
 
-            refiner_proxy_chunk = refiner_proxy[
+            encoder_proxy_chunk = encoder_proxy[
                 :, chunk_start:chunk_end
             ]
+
+            fpn_proxy_chunk = fpn_proxy[:, chunk_start:chunk_end]
 
             with autocast(device_type=self.device.type, enabled=use_amp):
                 chunk_outputs = (
                     self.model.decode_encoder_refiner_chunk_from_cache(
                         encoder_refiner_cache=encoder_refiner_cache,
-                        refiner_feature_36_chunk=refiner_proxy_chunk,
+                        refined_encoder_36_chunk=encoder_proxy_chunk,
+                        refined_fpn_36_chunk=fpn_proxy_chunk,
                         class_start=chunk_start,
                         class_end=chunk_end,
                         return_teacher_logits=need_teacher_logits,
@@ -341,7 +345,7 @@ class Trainer:
                         accum[key] = accum[key] + detached
 
             # Release chunk intermediates.
-            del chunk_outputs, chunk_loss_dict, chunk_total_loss, refiner_proxy_chunk
+            del chunk_outputs, chunk_loss_dict, chunk_total_loss, encoder_proxy_chunk, fpn_proxy_chunk
 
             chunk_start = chunk_end
 
@@ -351,18 +355,13 @@ class Trainer:
                 f"expected C_total={C_total}."
             )
 
-        # ---- Hand proxy gradient back to real Refiner graph ----
-        if refiner_proxy.grad is None:
-            raise RuntimeError(
-                "No gradient was accumulated on refiner_proxy. "
-                "Check that chunk losses have non-zero contribution."
-            )
-
-        scaled_refiner_grad = refiner_proxy.grad.detach()
-
+        # Both real outputs share an upstream graph: traverse it only once.
+        if encoder_proxy.grad is None or fpn_proxy.grad is None:
+            raise RuntimeError("Both refined streams must receive gradients from chunk losses")
+        # Chunk backward already applied GradScaler; do not scale a second time.
         torch.autograd.backward(
-            tensors=refiner_features_36,
-            grad_tensors=scaled_refiner_grad,
+            tensors=(refined_encoder_36, refined_fpn_36),
+            grad_tensors=(encoder_proxy.grad.detach(), fpn_proxy.grad.detach()),
         )
 
         return accum

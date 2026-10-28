@@ -285,20 +285,12 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 f"encoder_refiner_cfg.num_heads must be positive, got {cfg.num_heads}."
             )
 
-        for name in ("score_intra_attn_type", "feature_intra_attn_type"):
-            if getattr(cfg, name) not in ("window", "local_3x3"):
-                raise ValueError(
-                    f"encoder_refiner_cfg.{name} must be 'window' or 'local_3x3'."
-                )
-        if "window" in (cfg.score_intra_attn_type, cfg.feature_intra_attn_type):
-            if cfg.window_size <= 0 or cfg.refiner_hw % cfg.window_size != 0:
-                raise ValueError(
-                    "encoder_refiner_cfg.window_size must be positive and divide refiner_hw."
-                )
-            if not 0 <= cfg.shift_size < cfg.window_size:
-                raise ValueError(
-                    "encoder_refiner_cfg.shift_size must satisfy 0 <= shift_size < window_size."
-                )
+        if cfg.window_size <= 0 or cfg.refiner_hw % cfg.window_size != 0:
+            raise ValueError("encoder_refiner_cfg.window_size must be positive and divide refiner_hw")
+        if not 0 <= cfg.shift_size < cfg.window_size:
+            raise ValueError("encoder_refiner_cfg.shift_size must satisfy 0 <= shift_size < window_size")
+        if cfg.hidden_dim % cfg.num_heads:
+            raise ValueError("encoder_refiner_cfg.num_heads must divide hidden_dim")
 
         if cfg.encoder_hw != 72:
             raise ValueError(
@@ -552,7 +544,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         image_encoder = OpenCLIPImageEncoder(
             visual=clip_model.visual,
             default_output=openclip_cfg.default_output,
-            intermediate_layers=list(openclip_cfg.image_intermediate_layers),
             image_size=int(openclip_cfg.image_size),
         )
 
@@ -756,8 +747,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
     @classmethod
     def build_semantic_core_model(cls, cfg: SegmentorBuildConfig) -> nn.Module:
         refiner_cfg = cfg.encoder_refiner_cfg
-        if not {7, 15}.issubset(cfg.openclip_cfg.image_intermediate_layers):
-            raise ValueError("CLIP middle guidance requires image_intermediate_layers to include [7, 15].")
         bpe_path = resolve_bpe_path(cfg.bpe_path)
         compile_mode = "default" if cfg.compile else None
 
@@ -801,8 +790,6 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             encoder_refiner_dropout=float(refiner_cfg.dropout),
             encoder_refiner_hidden_dim=int(refiner_cfg.hidden_dim),
             encoder_refiner_score_embed_dim=int(refiner_cfg.score_embed_dim),
-            encoder_refiner_score_intra_attn_type=refiner_cfg.score_intra_attn_type,
-            encoder_refiner_feature_intra_attn_type=refiner_cfg.feature_intra_attn_type,
             encoder_refiner_window_size=int(refiner_cfg.window_size),
             encoder_refiner_shift_size=int(refiner_cfg.shift_size),
             encoder_refiner_use_checkpoint=bool(refiner_cfg.use_checkpoint),

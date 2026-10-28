@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import List, Sequence, Tuple, Union
 
 import torch
 import torch.nn as nn
@@ -25,14 +25,12 @@ class OpenCLIPImageEncoder(nn.Module):
 
     Output:
         feat_map:      [B, D_clip, 36, 36]
-        mid_features:  List[[B, D_native, 36, 36]]
     """
 
     def __init__(
         self,
         visual: nn.Module,
         default_output: str = "feat_map",
-        intermediate_layers: Optional[Sequence[int]] = None,
         image_size: int = 504,
     ) -> None:
         super().__init__()
@@ -53,20 +51,6 @@ class OpenCLIPImageEncoder(nn.Module):
 
         blocks = self._get_resblocks()
         self.num_visual_blocks = len(blocks)
-
-        if intermediate_layers is None:
-            if self.num_visual_blocks >= 16:
-                intermediate_layers = (7, 15)
-            else:
-                intermediate_layers = (3, 7)
-
-        self.intermediate_layers = tuple(int(i) for i in intermediate_layers)
-        for layer_idx in self.intermediate_layers:
-            if layer_idx < 0 or layer_idx >= self.num_visual_blocks:
-                raise ValueError(
-                    f"Invalid CLIP intermediate layer index {layer_idx}; "
-                    f"visual transformer has {self.num_visual_blocks} blocks."
-                )
 
         self.enable_grad = False
 
@@ -465,19 +449,17 @@ class OpenCLIPImageEncoder(nn.Module):
     def _forward_full_vit_dense_tokens(
         self,
         images: torch.Tensor,
-        return_intermediate: bool = False,
-    ) -> tuple[torch.Tensor, tuple[int, int], list[torch.Tensor]]:
+    ) -> tuple[torch.Tensor, tuple[int, int]]:
         """
         Full ViT forward where the last block uses dense value-branch.
 
-        First L-1 blocks run normally (producing intermediate features).
+        First L-1 blocks run normally.
         The last block uses _forward_dense_last_block.
         Output tokens are ln_post + proj applied, cls token removed.
 
         Returns:
             dense_tokens:  [B, Hc*Wc, output_dim]
             grid_hw:       (Hc, Wc) = (36, 36)
-            mid_features:  List[[B, D_native, Hc, Wc]]
         """
         blocks = self._get_resblocks()
         target_grid_hw = (36, 36)
@@ -488,24 +470,8 @@ class OpenCLIPImageEncoder(nn.Module):
         num_blocks = len(blocks)
         last_idx = num_blocks - 1
 
-        mid_features: list[torch.Tensor] = []
-        target_layers = (
-            set(self.intermediate_layers) if return_intermediate else set()
-        )
-
-        for layer_idx in range(last_idx):
-            block = blocks[layer_idx]
+        for block in blocks[:last_idx]:
             x = self._call_resblock(block, x)
-
-            if layer_idx in target_layers:
-                patch_tokens_mid = x[:, 1:].contiguous()
-                mid_features.append(
-                    self._tokens_to_feature_map(
-                        patch_tokens_mid,
-                        grid_h=grid_h,
-                        grid_w=grid_w,
-                    )
-                )
 
         # Last block: dense value-branch.
         x = self._forward_dense_last_block(blocks[last_idx], x)
@@ -521,57 +487,22 @@ class OpenCLIPImageEncoder(nn.Module):
                 f"expected {expected_num_tokens}, got {patch_tokens.shape[1]}"
             )
 
-        return patch_tokens, (int(grid_h), int(grid_w)), mid_features
+        return patch_tokens, (int(grid_h), int(grid_w))
 
     # ------------------------------------------------------------------
     # Public encode methods
     # ------------------------------------------------------------------
 
-    def encode_image_with_intermediate(
-        self, images: torch.Tensor, keep_intermediate_grad: bool = False,
-    ) -> dict:
-        """
-        keep_intermediate_grad preserves middle-feature gradients only when
-        the image branch is already trainable and autograd is enabled.
-
-        Returns:
-            {
-                "feat_map":          [B, D_clip, 36, 36],
-                "mid_features":      List[[B, D_native, 36, 36]],
-                "mid_layer_indices": tuple[int, ...],
-            }
-        """
+    def encode_image(self, images: torch.Tensor) -> dict:
+        """Return final dense features; preserve gradients only when trainable."""
         self.visual.eval()
-
         grad_enabled = bool(
-            torch.is_grad_enabled()
-            and self.enable_grad
-            and self.has_trainable_params()
+            torch.is_grad_enabled() and self.enable_grad and self.has_trainable_params()
         )
-
         with torch.set_grad_enabled(grad_enabled):
-            dense_tokens, (grid_h, grid_w), mid_features = (
-                self._forward_full_vit_dense_tokens(
-                    images,
-                    return_intermediate=True,
-                )
-            )
-
-        feat_map = self._tokens_to_feature_map(
-            dense_tokens, grid_h=grid_h, grid_w=grid_w
-        )
-
-        mid_features_out = [
-            x.contiguous() if keep_intermediate_grad and grad_enabled else x.detach().contiguous()
-            for x in mid_features
-        ]
-
-        return {
-            "feat_map": feat_map,
-            "mid_features": mid_features_out,
-            # Features are collected in transformer traversal order.
-            "mid_layer_indices": tuple(sorted(set(self.intermediate_layers))),
-        }
+            dense_tokens, (grid_h, grid_w) = self._forward_full_vit_dense_tokens(images)
+            feat_map = self._tokens_to_feature_map(dense_tokens, grid_h, grid_w)
+        return {"feat_map": feat_map}
 
     # ------------------------------------------------------------------
     # Raw image preprocessing
@@ -614,24 +545,10 @@ class OpenCLIPImageEncoder(nn.Module):
         batch = torch.stack(processed, dim=0)
         return (batch - self.image_mean) / self.image_std
 
-    def encode_raw_images(
-        self,
-        raw_images: List[torch.Tensor],
-        device: torch.device,
-        keep_intermediate_grad: bool = False,
-    ) -> dict:
-        """
-        Full raw-image-to-dense-CLIP-features pipeline.
-
-        Returns:
-            {
-                "feat_map":          [B, D_clip, 36, 36],
-                "mid_features":      List[[B, D_native, 36, 36]],
-                "mid_layer_indices": tuple[int, ...],
-            }
-        """
+    def encode_raw_images(self, raw_images: List[torch.Tensor], device: torch.device) -> dict:
+        """Preprocess raw images and return the final 36×36 dense features."""
         images = self.preprocess_raw_images(raw_images=raw_images, device=device)
-        return self.encode_image_with_intermediate(images, keep_intermediate_grad=keep_intermediate_grad)
+        return self.encode_image(images)
 
     def forward(self, images: torch.Tensor) -> dict:
-        return self.encode_image_with_intermediate(images)
+        return self.encode_image(images)

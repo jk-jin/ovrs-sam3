@@ -1,297 +1,139 @@
 from __future__ import annotations
 
-from typing import List
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 from .score_embeddings import ClipScoreEmbedding
-from .encoder_refiner_attention import (
-    EncoderRefinerLayer,
-    apply_layer_norm_bcdhw,
-)
+from .encoder_refiner_attention import EncoderRefinerLayer, apply_layer_norm_bcdhw
 from .decoder_input_fusion import DecoderInputFusion
 
 
 class ClassConditionedEncoderRefiner(nn.Module):
-    """Encoder feature refiner operating at 36×36.
+    """Refine encoder/FPN streams at 36×36 under unchanged CLIP score guidance.
 
-    Takes the full 6-layer SAM3 encoder output after prompt cross-attention
-    as input. The feature stream is the bilinear-downsampled encoder feature
-    without any FPN injection. Fixed CLIP middle/FPN guidance extends
-    intra-class attention Q/K. Each FFN updates only its current stream.
-    The score stream comes directly from
-    ClipScoreEmbedding (score_embeddings.py) without any SAM3 FPN fusion.
-
-    The Refiner outputs 36×36 features. High-resolution decoding is handled
-    by one DecoderInputFusion at 72×72. After one upsampling, independent
-    semantic/detail branches fuse the Refiner with original encoder72/FPN72
-    respectively, without an extra encoder concatenation before the branches.
-    The final fused feature replaces the original Pixel Decoder's last FPN.
-
-    After all Refiner layers, the accumulated 36×36 feature stream is
-    normalized once with a channel-wise LayerNorm before being returned
-    and passed to DecoderInputFusion. The final score stream is not
-    post-normalized.
-
-    Forward inputs:
-        encoder_features_72:  [B, C, 256, 72, 72]  (full encoder + cross-attention)
-        clip_image_feat_map:  [B, D_clip, 36, 36]
-        class_names:          list of C class names
-
-    Forward outputs:
-        refiner_features_36:  [B, C, 256, 36, 36]
-        score_embed_36:       [B, C, 256, 36, 36]
-        clip_score_embed_36:  [B, C, 256, 36, 36]
-        clip_score_maps_36:   [B, C,  64, 36, 36]
-        template_clip_text:   [C, 64, D_clip]
+    Odd layers: FPN intra -> encoder inter. Even layers: encoder intra -> FPN
+    inter. Each layer ends with independent FFNs. Both normalized output streams
+    enter the per-chunk 72×72 DecoderInputFusion.
     """
 
     def __init__(
         self,
         clip_text_encoder,
-        hidden_dim: int = 256,
-        clip_dim: int = 768,
-        score_embed_dim: int = 256,
-        num_heads: int = 8,
-        window_size: int = 12,
-        shift_size: int = 6,
-        fusion_layers: int = 4,
-        dropout: float = 0.1,
-        prompt_templates: list[str] | None = None,
-        normalize_label_for_clip: bool = True,
-        use_checkpoint: bool = True,
-        text_prompt_batch_size: int = 64,
-        text_prompt_use_checkpoint: bool = True,
-        score_intra_attn_type: str = "window",
-        feature_intra_attn_type: str = "window",
-        clip_native_dim: int | None = None,
+        hidden_dim=256,
+        clip_dim=768,
+        score_embed_dim=256,
+        num_heads=8,
+        window_size=12,
+        shift_size=6,
+        fusion_layers=4,
+        dropout=0.1,
+        prompt_templates=None,
+        normalize_label_for_clip=True,
+        use_checkpoint=True,
+        text_prompt_batch_size=64,
+        text_prompt_use_checkpoint=True,
     ):
         super().__init__()
-        self.hidden_dim = int(hidden_dim)
-        self.score_embed_dim = int(score_embed_dim)
+        if hidden_dim != 256:
+            raise ValueError("SAM3 refiner and decoder fusion require hidden_dim=256")
+        if fusion_layers <= 0:
+            raise ValueError("fusion_layers must be positive")
+        self.hidden_dim = hidden_dim
         self.use_checkpoint = bool(use_checkpoint)
-        self.num_fusion_layers = int(fusion_layers)
-        if prompt_templates is None:
-            raise ValueError(
-                "prompt_templates must be a list of 64 prompt templates."
-            )
-        if len(prompt_templates) != 64:
-            raise ValueError(
-                f"Expected 64 prompt templates, got {len(prompt_templates)}."
-            )
-
         self.clip_score_embed = ClipScoreEmbedding(
             clip_text_encoder=clip_text_encoder,
-            prompt_templates=list(prompt_templates),
-            normalize_label=bool(normalize_label_for_clip),
-            clip_output_dim=int(clip_dim),
-            score_embed_dim=int(score_embed_dim),
-            text_prompt_batch_size=int(text_prompt_batch_size),
-            text_prompt_use_checkpoint=bool(text_prompt_use_checkpoint),
+            prompt_templates=list(prompt_templates or []),
+            normalize_label=normalize_label_for_clip,
+            clip_output_dim=clip_dim,
+            score_embed_dim=score_embed_dim,
+            text_prompt_batch_size=text_prompt_batch_size,
+            text_prompt_use_checkpoint=text_prompt_use_checkpoint,
         )
-
-        self.layers = nn.ModuleList([
-            EncoderRefinerLayer(
-                hidden_dim=self.hidden_dim,
-                score_embed_dim=self.score_embed_dim,
-                num_heads=int(num_heads),
-                window_size=int(window_size),
-                shift_size=int(shift_size),
-                dropout=float(dropout),
-                score_attention_type="intra" if layer_index % 2 == 0 else "inter",
-                score_intra_attn_type=score_intra_attn_type,
-                feature_intra_attn_type=feature_intra_attn_type,
-            )
-            for layer_index in range(self.num_fusion_layers)
-        ])
-
-        # Final normalization for the accumulated feature residual stream.
-        # This is applied once after all Refiner layers and before the
-        # 36×36 feature enters the single-scale Decoder Input Fusion.
-        self.feature_output_norm = nn.LayerNorm(self.hidden_dim)
-
+        self.layers = nn.ModuleList(
+            [
+                EncoderRefinerLayer(
+                    hidden_dim=hidden_dim,
+                    score_embed_dim=score_embed_dim,
+                    num_heads=num_heads,
+                    window_size=window_size,
+                    shift_size=shift_size,
+                    dropout=dropout,
+                    intra_target="fpn" if index % 2 == 0 else "encoder",
+                )
+                for index in range(fusion_layers)
+            ]
+        )
+        self.encoder_output_norm = nn.LayerNorm(hidden_dim)
+        self.fpn_output_norm = nn.LayerNorm(hidden_dim)
         self.decoder_input_fusion = DecoderInputFusion(
-            use_checkpoint=self.use_checkpoint,
+            use_checkpoint=self.use_checkpoint
         )
-        if clip_native_dim is None or clip_native_dim <= 0:
-            raise ValueError("clip_native_dim must be positive for CLIP middle guidance")
-        self.clip_native_dim = int(clip_native_dim)
-        self.clip_mid_proj = nn.Conv2d(self.clip_native_dim * 2, 256, kernel_size=1)
 
     def fuse_decoder_input_chunk(
         self,
-        refiner_feature_36: torch.Tensor,
-        original_encoder_feature_72: torch.Tensor,
-        sam_fpn_72: torch.Tensor,
-    ) -> torch.Tensor:
-        """Return [N, 256, 72, 72] for the original SAM3 Pixel Decoder.
-
-        Args:
-            refiner_feature_36:          [N, 256, 36, 36]
-            original_encoder_feature_72: [N, 256, 72, 72]
-            sam_fpn_72:                  [B, 256, 72, 72]
-        """
+        refined_encoder_36,
+        refined_fpn_36,
+        original_encoder_feature_72,
+        sam_fpn_72,
+    ):
         return self.decoder_input_fusion(
-            refiner_feature_36=refiner_feature_36,
+            refined_encoder_36=refined_encoder_36,
+            refined_fpn_36=refined_fpn_36,
             original_encoder_feature_72=original_encoder_feature_72,
             sam_fpn_72=sam_fpn_72,
         )
 
     def forward(
-        self,
-        encoder_features_72: torch.Tensor,
-        clip_image_feat_map: torch.Tensor,
-        class_names: List[str],
-        clip_mid_features: list[torch.Tensor] | None = None,
-        clip_mid_layer_indices: tuple[int, ...] | None = None,
-        sam_fpn_72: torch.Tensor | None = None,
-    ) -> dict[str, torch.Tensor]:
-        """Run the full 36×36 Refiner on all classes simultaneously.
-
-        Args:
-            encoder_features_72:
-                [B, C, 256, 72, 72] full encoder output after
-                prompt cross-attention.
-            clip_image_feat_map:
-                [B, D_clip, 36, 36] dense RemoteCLIP feature map.
-            class_names:
-                List containing C prompt names.
-
-        Returns:
-            refiner_features_36:
-                [B, C, 256, 36, 36] feature stream after all Refiner
-                layers and the final channel-wise LayerNorm.
-            score_embed_36:
-                [B, C, 256, 36, 36] score stream after all Refiner layers.
-            clip_score_embed_36:
-                [B, C, 256, 36, 36] initial pure RemoteCLIP score embedding.
-            clip_score_maps_36:
-                [B, C, 64, 36, 36]
-            template_clip_text:
-                [C, 64, D_clip]
-        """
-        if encoder_features_72.ndim != 5:
+        self, encoder_features_72, clip_image_feat_map, class_names, sam_fpn_72
+    ):
+        if encoder_features_72.ndim != 5 or tuple(encoder_features_72.shape[2:]) != (
+            256,
+            72,
+            72,
+        ):
+            raise ValueError("encoder_features_72 must be [B, P, 256, 72, 72]")
+        batch, prompts = encoder_features_72.shape[:2]
+        if batch <= 0 or prompts <= 0 or len(class_names) != prompts:
             raise ValueError(
-                "encoder_features_72 must be [B, C, D, 72, 72], "
-                f"got {tuple(encoder_features_72.shape)}."
+                "Positive batch/prompt counts and one class name per prompt are required"
             )
-
-        batch_size, num_classes, hidden_dim, height, width = (
-            encoder_features_72.shape
-        )
-
-        if hidden_dim != self.hidden_dim:
-            raise ValueError(
-                "encoder_features_72 hidden_dim mismatch: expected "
-                f"{self.hidden_dim}, got {hidden_dim}."
-            )
-
-        if (height, width) != (72, 72):
-            raise ValueError(
-                "ClassConditionedEncoderRefiner expects 72×72 "
-                f"encoder features, got {(height, width)}."
-            )
-
-        if clip_image_feat_map.ndim != 4:
-            raise ValueError(
-                "clip_image_feat_map must be [B, D_clip, 36, 36], "
-                f"got {tuple(clip_image_feat_map.shape)}."
-            )
-
-        if clip_image_feat_map.shape[0] != batch_size:
-            raise ValueError(
-                "clip_image_feat_map batch mismatch: expected "
-                f"{batch_size}, got {clip_image_feat_map.shape[0]}."
-            )
-
-        if tuple(clip_image_feat_map.shape[-2:]) != (36, 36):
-            raise ValueError(
-                "clip_image_feat_map must be 36×36, "
-                f"got {tuple(clip_image_feat_map.shape[-2:])}."
-            )
-
-        (
-            clip_score_embed_36,
-            clip_score_maps_36,
-            template_clip_text,
-        ) = self.clip_score_embed(
+        if tuple(sam_fpn_72.shape) != (batch, 256, 72, 72):
+            raise ValueError("sam_fpn_72 must be [B, 256, 72, 72]")
+        if (
+            clip_image_feat_map.ndim != 4
+            or clip_image_feat_map.shape[0] != batch
+            or tuple(clip_image_feat_map.shape[-2:]) != (36, 36)
+        ):
+            raise ValueError("clip_image_feat_map must be [B, D_clip, 36, 36]")
+        score, score_maps, template_text = self.clip_score_embed(
             class_names=class_names,
             remoteclip_feat_map=clip_image_feat_map,
         )
-
-        # Project image-level guidance once before broadcasting over classes.
-        if clip_mid_features is None or clip_mid_layer_indices is None:
-            raise ValueError("CLIP middle guidance requires features and layer indices [7, 15]")
-        if len(clip_mid_features) != len(clip_mid_layer_indices) or len(set(clip_mid_layer_indices)) != len(clip_mid_layer_indices):
-            raise ValueError("CLIP middle feature indices must be unique and match the feature count")
-        by_layer = dict(zip(clip_mid_layer_indices, clip_mid_features))
-        if 7 not in by_layer or 15 not in by_layer:
-            raise ValueError("CLIP middle guidance requires indices 7 and 15 (layers 8 and 16)")
-        mids = [by_layer[7], by_layer[15]]
-        if any(tuple(x.shape) != (batch_size, self.clip_native_dim, 36, 36) for x in mids):
-            raise ValueError("CLIP middle features must match native channels and the 36×36 grid")
-        projected = self.clip_mid_proj(torch.cat(mids, dim=1))
-        clip_mid_36 = projected[:, None].expand(-1, num_classes, -1, -1, -1)
-        if sam_fpn_72 is None or tuple(sam_fpn_72.shape) != (batch_size, 256, 72, 72):
-            raise ValueError("SAM FPN guidance requires [B, 256, 72, 72] backbone_fpn[2]")
-        downsampled = F.interpolate(sam_fpn_72, size=(36, 36), mode="bilinear", align_corners=False)
-        sam_fpn_36 = downsampled[:, None].expand(-1, num_classes, -1, -1, -1)
-
-        base_feature_36 = F.interpolate(
-            encoder_features_72.reshape(
-                batch_size * num_classes,
-                hidden_dim,
-                72,
-                72,
-            ),
-            size=(36, 36),
+        encoder = F.interpolate(
+            encoder_features_72.reshape(batch * prompts, 256, 72, 72),
+            (36, 36),
             mode="bilinear",
             align_corners=False,
-        ).reshape(
-            batch_size,
-            num_classes,
-            hidden_dim,
-            36,
-            36,
-        )
-
-        feature_36 = base_feature_36
-
-        # The score embedding produced by score_embeddings.py is now used
-        # directly. No SAM3 FPN injection is performed before attention.
-        score_embed_36 = clip_score_embed_36
-
+        ).reshape(batch, prompts, 256, 36, 36)
+        fpn = F.interpolate(sam_fpn_72, (36, 36), mode="bilinear", align_corners=False)
+        fpn = fpn[:, None].expand(-1, prompts, -1, -1, -1)
+        # Score is reused unchanged, with gradients preserved to its generator.
         for layer in self.layers:
-            if self.use_checkpoint and self.training:
-                feature_36, score_embed_36 = checkpoint(
-                    layer,
-                    feature_36,
-                    score_embed_36,
-                    clip_mid_36,
-                    sam_fpn_36,
-                    use_reentrant=False,
+            if self.use_checkpoint and self.training and torch.is_grad_enabled():
+                encoder, fpn = checkpoint(
+                    layer, encoder, fpn, score, use_reentrant=False
                 )
             else:
-                feature_36, score_embed_36 = layer(
-                    feature_36=feature_36,
-                    score_embed_36=score_embed_36,
-                    clip_mid_36=clip_mid_36,
-                    sam_fpn_36=sam_fpn_36,
-                )
-
-        # Normalize the accumulated feature stream once after all Refiner layers.
-        feature_36 = apply_layer_norm_bcdhw(
-            feature_36,
-            self.feature_output_norm,
-        )
-
+                encoder, fpn = layer(encoder, fpn, score)
         return {
-            "refiner_features_36": feature_36,
-            "score_embed_36": score_embed_36,
-            "clip_score_embed_36": clip_score_embed_36,
-            "clip_score_maps_36": clip_score_maps_36,
-            "template_clip_text": template_clip_text,
+            "refined_encoder_36": apply_layer_norm_bcdhw(
+                encoder, self.encoder_output_norm
+            ),
+            "refined_fpn_36": apply_layer_norm_bcdhw(fpn, self.fpn_output_norm),
+            "score_embed_36": score,
+            "clip_score_embed_36": score,
+            "clip_score_maps_36": score_maps,
+            "template_clip_text": template_text,
         }
