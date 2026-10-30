@@ -1,6 +1,6 @@
 # OVRS-SAM3 设计说明
 
-适用分支：`master`
+适用分支：`tmp/final-bce-present-full-image-20261031`
 项目仓库：`jk-jin/ovrs-sam3`
 当前任务：开放词汇遥感语义分割
 
@@ -367,15 +367,19 @@ OpenCLIP 常把 Q/K/V 存在同一个融合参数中。项目对该参数注册�
 
 **主损失：朴素 BCE**（监督 `final_logits`）：
 
-所有有效像素（label ≠ 255）等权参与全局均值。不做正负像素分离、不按类别是否出现分组加权。每个 `[B, P, H, W]` 位置只要 label ≠ 255 就对损失有相同贡献。多提示类别的所有提示使用同一原始标签作为监督，每个提示通道等权。
+仅对当前图像 GT 中存在的类别计算；存在性沿用损失分辨率标签上的逐图判断，不按整个 batch 统一判断。每个存在的图像—提示对均监督整张图，包含标签为 255 的位置。当前类别像素监督为 1，其余所有像素（包括 255）监督为 0。不做正负像素平衡，全部参与像素等权求全局均值。多提示类别的所有提示继承同一原始类别的存在性和二值目标，每个提示通道等权。
 
 ```python
-# 全局分母 = Σ valid_pixels × P
+# presence_target: 每张图的每个提示对应类别是否在 GT 中出现
+# target: 当前类别位置为 1，其余位置（包括 255）为 0
+# 全局分母 = 存在的图像—提示对数量 × logits 高度 × logits 宽度
 bce_per_pixel = BCEWithLogits(final_logits, target)
-loss_final_bce = (bce_per_pixel * valid_mask).sum() / total_valid_pixels
+loss_final_bce = (
+    bce_per_pixel * presence_target[:, :, None, None]
+).sum() / max(final_bce_pixel_denom, 1)
 ```
 
-标签 255 被排除（不参与 BCE），对所有提示统一处理。
+不存在的图像—提示对不贡献 final BCE，也不计入分母。整个 batch 没有存在类别时，该项为可反向传播的零损失。逐 chunk 使用同一个 batch 全局分母，各 chunk 贡献直接相加，等价于一次性计算全部提示。标签 255 仅在 final BCE 中作为负样本参与全图监督；蒸馏范围、Dice、各损失权重和评测忽略规则不变。
 
 **Dice 损失**（`final_dice_weight=0.0`）：只对图像中存在的提示计算，默认关闭。开启时按全局 `N_present` 做逐 chunk 贡献归一化。
 
@@ -490,7 +494,7 @@ Ctrl+C 使用 Python 默认 `KeyboardInterrupt`。训练和验证均立即退出
 
 | 键 | 含义 |
 | --- | --- |
-| `loss_final_bce` | 朴素 BCE，所有有效像素等权全局均值（跨 chunk 累加后求均值） |
+| `loss_final_bce` | 仅存在的图像—提示对，全图像素（含 255 负样本）等权全局均值；各 chunk 使用统一分母后累加 |
 | `loss_sam3_mask_distill_bce` | 未经权重的原始蒸馏 BCE（跨 chunk 累加后求均值） |
 | `loss_sam3_mask_distill_weighted` | 真正加入总损失的加权蒸馏贡献（跨 chunk 累加后求均值） |
 
@@ -525,7 +529,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 | `models/score_embeddings.py`          | 64 模板相似度图、归一化 CLIP 融合和空间卷积增强 |
 | `models/openclip_image_encoder.py`    | 36×36 dense RemoteCLIP 图像特征              |
 | `models/openclip_text_encoder.py`     | 模板文本编码、micro-batch 与梯度控制                 |
-| `losses/semantic_criterion.py`        | Streaming 正负平衡 BCE、Dice 和 SAM3 teacher 蒸馏 |
+| `losses/semantic_criterion.py`        | Streaming 存在类别全图 BCE、Dice 和 SAM3 teacher 蒸馏 |
 | `engine/trainer.py`                   | 高分辨率逐 chunk loss/backward 与 proxy 梯度回传 |
 | `engine/checkpoint.py`                | 安全、原子、严格的 checkpoint 保存与加载               |
 | `engine/runtime_state.py`             | RNG 捕获与恢复                                |
@@ -569,6 +573,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 30. 融合支路固定 `branch_dim=128`，3×3 卷积使用普通卷积（无分组）。
 31. 融合输出直接作为 Pixel Decoder 的最后一层输入；模块内无融合系数、门控、零初始化、额外残差或输出归一化。
 32. 最终 logits 由冻结 `semantic_seg_head` 生成。
+33. final BCE 仅监督逐图存在的类别提示，包含整张图的 255 像素（目标为 0）；全局分母为存在图像—提示对数量乘空间像素数，不按 chunk 单独求均值。
 
 当前限制：
 

@@ -43,8 +43,8 @@ class SemanticStreamingContext:
     # Total selected distillation pixels across all present prompts.
     distill_pixel_denom: int
 
-    # Number of valid pixels multiplied by P.
-    total_valid_pixels: int
+    # All spatial pixels across present image-prompt pairs, including ignore.
+    final_bce_pixel_denom: int
 
     sam3_mask_distill_weight: float
 
@@ -53,9 +53,9 @@ class SemanticCriterion(nn.Module):
     """Semantic segmentation criterion with streaming per-chunk support.
 
     Losses:
-        1. Plain BCE on final_logits — every valid pixel (label ≠ 255)
-           contributes equally regardless of class presence or pixel sign.
-           Global mean over all B × P × H × W valid pixel positions.
+        1. Plain BCE on final_logits — only present image-prompt pairs.
+           All spatial pixels contribute equally, including label 255
+           as negative targets. Global mean across all selected pixels.
 
         2. Optional Dice on final_logits (default weight 0.0)
 
@@ -243,11 +243,6 @@ class SemanticCriterion(nn.Module):
                     f"max={max_label}."
                 )
 
-        total_valid_pixels = (
-            int(valid_mask.sum().item())
-            * num_prompt_channels
-        )
-
         class_ids = torch.arange(
             num_label_classes,
             device=label_map.device,
@@ -275,6 +270,9 @@ class SemanticCriterion(nn.Module):
 
         num_present_pairs = int(
             presence_target.sum().item()
+        )
+        final_bce_pixel_denom = (
+            num_present_pairs * label_map.shape[-2] * label_map.shape[-1]
         )
 
         boundary_width = int(
@@ -348,7 +346,7 @@ class SemanticCriterion(nn.Module):
             num_label_classes=num_label_classes,
             num_present_pairs=num_present_pairs,
             distill_pixel_denom=distill_pixel_denom,
-            total_valid_pixels=total_valid_pixels,
+            final_bce_pixel_denom=final_bce_pixel_denom,
             sam3_mask_distill_weight=float(
                 self.cfg.sam3_mask_distill_weight
             ),
@@ -404,7 +402,6 @@ class SemanticCriterion(nn.Module):
             )
 
         label_map = context.label_map
-        valid_mask = context.valid_mask
         device = final_logits_chunk.device
         dtype = final_logits_chunk.dtype
 
@@ -422,26 +419,22 @@ class SemanticCriterion(nn.Module):
 
         zero = self._zero_loss(final_logits_chunk)
 
-        # ---- Plain BCE (every valid pixel equal, global mean) ----
+        present_mask = context.presence_target[
+            :, class_start:class_end
+        ].to(device=device)
+
+        # ---- Present-only full-image BCE (ignore pixels are negatives) ----
         bce_per_pixel = F.binary_cross_entropy_with_logits(
             final_logits_chunk,
             target_chunk,
             reduction="none",
         )  # [B, C_chunk, H, W]
 
-        valid_float = valid_mask.to(
-            device=device, dtype=bce_per_pixel.dtype
-        )[:, None, :, :]  # [B, 1, H, W]
-
         plain_bce_contribution = (
-            bce_per_pixel * valid_float
-        ).sum() / max(context.total_valid_pixels, 1)
+            bce_per_pixel * present_mask[:, :, None, None]
+        ).sum() / max(context.final_bce_pixel_denom, 1)
 
         # ---- Dice (optional) ----
-        present_mask = context.presence_target[
-            :, class_start:class_end
-        ].to(device=device)
-
         dice_weight = float(self.cfg.final_dice_weight)
         if dice_weight > 0.0 and context.num_present_pairs > 0:
             if target_full is not None:
