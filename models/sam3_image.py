@@ -43,8 +43,6 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_dropout: float = 0.1,
         encoder_refiner_hidden_dim: int = 256,
         encoder_refiner_score_embed_dim: int = 256,
-        encoder_refiner_score_intra_attn_type: str = "window",
-        encoder_refiner_feature_intra_attn_type: str = "window",
         encoder_refiner_window_size: int = 12,
         encoder_refiner_shift_size: int = 6,
         encoder_refiner_use_checkpoint: bool = True,
@@ -84,12 +82,6 @@ class Sam3Image(torch.nn.Module):
 
         self.clip_text_dim = self._infer_clip_text_dim() if self.clip_text_encoder is not None else None
         self.clip_image_dim = self._infer_clip_image_dim() if self.clip_image_encoder is not None else None
-        self.clip_image_native_dim = (
-            int(getattr(self.clip_image_encoder, "native_dim", None))
-            if self.clip_image_encoder is not None
-            and hasattr(self.clip_image_encoder, "native_dim")
-            else self.clip_image_dim
-        )
         self.clip_align_dim = None
 
         if self.clip_text_dim is not None and self.clip_image_dim is not None:
@@ -110,9 +102,6 @@ class Sam3Image(torch.nn.Module):
             hidden_dim=int(encoder_refiner_hidden_dim),
             clip_dim=self.clip_align_dim,
             score_embed_dim=int(encoder_refiner_score_embed_dim),
-            score_intra_attn_type=encoder_refiner_score_intra_attn_type,
-            feature_intra_attn_type=encoder_refiner_feature_intra_attn_type,
-            clip_native_dim=self.clip_image_native_dim,
             num_heads=int(encoder_refiner_num_heads),
             window_size=int(encoder_refiner_window_size),
             shift_size=int(encoder_refiner_shift_size),
@@ -249,7 +238,7 @@ class Sam3Image(torch.nn.Module):
         clip_out = self.clip_image_encoder.encode_raw_images(
             raw_images=input.raw_images,
             device=device,
-            keep_intermediate_grad=True,
+            keep_intermediate_grad=False,
         )
 
         if not isinstance(clip_out, dict):
@@ -260,7 +249,6 @@ class Sam3Image(torch.nn.Module):
 
         clip_feat_map = clip_out["feat_map"]
         clip_mid_features = clip_out["mid_features"]
-        clip_mid_layer_indices = clip_out["mid_layer_indices"]
 
         if not isinstance(clip_feat_map, torch.Tensor) or clip_feat_map.ndim != 4:
             raise ValueError(
@@ -306,15 +294,13 @@ class Sam3Image(torch.nn.Module):
                     f"{tuple(feat.shape[-2:])} vs {clip_grid_hw}."
                 )
             clean_mid_features.append(
-                feat.contiguous() if keep_image_graph
-                else feat.detach().contiguous()
+                feat.detach().contiguous()
             )
 
         return {
             "clip_image_feat_map_native": clip_feat_map,
             "clip_image_grid_hw": clip_grid_hw,
             OUTPUT_KEYS.clip_mid_features: clean_mid_features,
-            "clip_mid_layer_indices": tuple(int(x) for x in clip_mid_layer_indices),
         }
 
     def build_encoder_refiner_cache(
@@ -430,7 +416,6 @@ class Sam3Image(torch.nn.Module):
             "backbone_fpn": backbone_fpn,
             "clip_image_feat_map": clip_image_cache["clip_image_feat_map_native"],
             OUTPUT_KEYS.clip_mid_features: clip_image_cache[OUTPUT_KEYS.clip_mid_features],
-            "clip_mid_layer_indices": clip_image_cache["clip_mid_layer_indices"],
             "class_names": class_texts,
             "class_ids": merged_class_ids,
             "chunk_class_counts": chunk_class_counts,
@@ -528,8 +513,6 @@ class Sam3Image(torch.nn.Module):
         cross_attended_encoder_features_72: torch.Tensor,
         clip_image_feat_map: torch.Tensor,
         class_names: List[str],
-        clip_mid_features: list[torch.Tensor] | None = None,
-        clip_mid_layer_indices: tuple[int, ...] | None = None,
         sam_fpn_72: torch.Tensor | None = None,
     ) -> Dict[str, torch.Tensor]:
         """Run the 36×36 Refiner on all classes simultaneously."""
@@ -537,8 +520,6 @@ class Sam3Image(torch.nn.Module):
             encoder_features_72=cross_attended_encoder_features_72,
             clip_image_feat_map=clip_image_feat_map,
             class_names=class_names,
-            clip_mid_features=clip_mid_features,
-            clip_mid_layer_indices=clip_mid_layer_indices,
             sam_fpn_72=sam_fpn_72,
         )
 
@@ -571,8 +552,6 @@ class Sam3Image(torch.nn.Module):
             ),
             clip_image_feat_map=clip_image_feat_map,
             class_names=batch_class_names,
-            clip_mid_features=encoder_refiner_cache[OUTPUT_KEYS.clip_mid_features],
-            clip_mid_layer_indices=encoder_refiner_cache["clip_mid_layer_indices"],
             sam_fpn_72=encoder_refiner_cache["backbone_fpn"][2],
         )
 
