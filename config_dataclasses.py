@@ -141,6 +141,7 @@ class SemanticCriterionConfig:
     ignore_index: int = 255
 
     final_balanced_bce_weight: float = 1.0
+    final_bce_positive_weight: float = 0.5
     final_dice_weight: float = 0.0
 
     eps: float = 1e-6

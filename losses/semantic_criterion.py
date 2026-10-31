@@ -43,9 +43,6 @@ class SemanticStreamingContext:
     # Total selected distillation pixels across all present prompts.
     distill_pixel_denom: int
 
-    # All spatial pixels across present image-prompt pairs, including ignore.
-    final_bce_pixel_denom: int
-
     sam3_mask_distill_weight: float
 
 
@@ -53,9 +50,11 @@ class SemanticCriterion(nn.Module):
     """Semantic segmentation criterion with streaming per-chunk support.
 
     Losses:
-        1. Plain BCE on final_logits — only present image-prompt pairs.
-           All spatial pixels contribute equally, including label 255
-           as negative targets. Global mean across all selected pixels.
+        1. Class-wise BCE on final_logits.
+           - Present pairs: weighted positive/negative full-image means;
+             ignore pixels belong to the negative region.
+           - Absent pairs: negative supervision averaged over valid pixels.
+           - Equal mean over all image-prompt pairs, including absent ones.
 
         2. Optional Dice on final_logits (default weight 0.0)
 
@@ -69,6 +68,13 @@ class SemanticCriterion(nn.Module):
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
         super().__init__()
         self.cfg = cfg or SemanticCriterionConfig()
+
+        positive_weight = float(self.cfg.final_bce_positive_weight)
+        if not 0.0 <= positive_weight <= 1.0:
+            raise ValueError(
+                "final_bce_positive_weight must be in [0, 1], "
+                f"got {positive_weight}."
+            )
 
         distill_weight = float(self.cfg.sam3_mask_distill_weight)
         if distill_weight < 0.0:
@@ -271,9 +277,6 @@ class SemanticCriterion(nn.Module):
         num_present_pairs = int(
             presence_target.sum().item()
         )
-        final_bce_pixel_denom = (
-            num_present_pairs * label_map.shape[-2] * label_map.shape[-1]
-        )
 
         boundary_width = int(
             self.cfg.sam3_mask_distill_boundary_width
@@ -346,7 +349,6 @@ class SemanticCriterion(nn.Module):
             num_label_classes=num_label_classes,
             num_present_pairs=num_present_pairs,
             distill_pixel_denom=distill_pixel_denom,
-            final_bce_pixel_denom=final_bce_pixel_denom,
             sam3_mask_distill_weight=float(
                 self.cfg.sam3_mask_distill_weight
             ),
@@ -423,16 +425,37 @@ class SemanticCriterion(nn.Module):
             :, class_start:class_end
         ].to(device=device)
 
-        # ---- Present-only full-image BCE (ignore pixels are negatives) ----
+        # ---- Per-class BCE, then a global mean over all image-prompt pairs ----
         bce_per_pixel = F.binary_cross_entropy_with_logits(
             final_logits_chunk,
             target_chunk,
             reduction="none",
         )  # [B, C_chunk, H, W]
 
-        plain_bce_contribution = (
-            bce_per_pixel * present_mask[:, :, None, None]
-        ).sum() / max(context.final_bce_pixel_denom, 1)
+        positive_count = target_bool.sum(dim=(-2, -1))
+        negative_mask = ~target_bool  # Includes ignore pixels for present pairs.
+        negative_count = negative_mask.sum(dim=(-2, -1))
+        positive_mean = (
+            bce_per_pixel * target_bool
+        ).sum(dim=(-2, -1)) / positive_count.clamp_min(1)
+        negative_mean = (
+            bce_per_pixel * negative_mask
+        ).sum(dim=(-2, -1)) / negative_count.clamp_min(1)
+
+        valid_mask = context.valid_mask.to(device=device)[:, None]
+        absent_mean = (
+            bce_per_pixel * valid_mask
+        ).sum(dim=(-2, -1)) / valid_mask.sum(dim=(-2, -1)).clamp_min(1)
+
+        positive_weight = float(self.cfg.final_bce_positive_weight)
+        pair_loss = torch.where(
+            present_mask,
+            positive_weight * positive_mean + (1.0 - positive_weight) * negative_mean,
+            absent_mean,
+        )
+        # Empty regions contribute zero without redistributing their weight.
+        # Include absent/empty pairs in the fixed class and batch denominator.
+        final_bce_contribution = pair_loss.sum() / (B * num_prompt_channels)
 
         # ---- Dice (optional) ----
         dice_weight = float(self.cfg.final_dice_weight)
@@ -493,13 +516,13 @@ class SemanticCriterion(nn.Module):
 
         # ---- Total ----
         chunk_total = (
-            float(self.cfg.final_balanced_bce_weight) * plain_bce_contribution
+            float(self.cfg.final_balanced_bce_weight) * final_bce_contribution
             + dice_weight * dice_contribution
             + weighted_distill_contribution
         )
 
         return {
-            "loss_final_bce": plain_bce_contribution,
+            "loss_final_bce": final_bce_contribution,
             "loss_final_dice": dice_contribution,
             "loss_sam3_mask_distill_bce": distill_contribution,
             "loss_sam3_mask_distill_weighted": weighted_distill_contribution,

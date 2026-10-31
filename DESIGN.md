@@ -365,21 +365,21 @@ OpenCLIP 常把 Q/K/V 存在同一个融合参数中。项目对该参数注册�
 
 每个类别通道独立使用 binary mask 监督，不使用跨类别 softmax。
 
-**主损失：朴素 BCE**（监督 `final_logits`）：
+**主损失：逐类别区域 BCE**（监督 `final_logits`）：
 
-仅对当前图像 GT 中存在的类别计算；存在性沿用损失分辨率标签上的逐图判断，不按整个 batch 统一判断。每个存在的图像—提示对均监督整张图，包含标签为 255 的位置。当前类别像素监督为 1，其余所有像素（包括 255）监督为 0。不做正负像素平衡，全部参与像素等权求全局均值。多提示类别的所有提示继承同一原始类别的存在性和二值目标，每个提示通道等权。
+先计算每张图每个类别提示的损失，再对全部提示等权平均，最后对 batch 中各张图平均。存在性沿用损失分辨率标签上的逐图判断，不按整个 batch 统一判断。当前类别像素的二值目标为 1，其余像素为 0。
 
-```python
-# presence_target: 每张图的每个提示对应类别是否在 GT 中出现
-# target: 当前类别位置为 1，其余位置（包括 255）为 0
-# 全局分母 = 存在的图像—提示对数量 × logits 高度 × logits 宽度
-bce_per_pixel = BCEWithLogits(final_logits, target)
-loss_final_bce = (
-    bce_per_pixel * presence_target[:, :, None, None]
-).sum() / max(final_bce_pixel_denom, 1)
-```
+| 图像—提示对 | 监督范围 | 平均和加权方式 |
+| --- | --- | --- |
+| 存在类别的正区域 | GT 属于当前类别的位置 | 在该区域内求 BCE 平均，乘 `a` |
+| 存在类别的负区域 | 全图其余位置，包括标签 255 | 在该区域内求 BCE 平均，乘 `1-a` |
+| 不存在类别 | 仅标签不等于 255 的有效像素，全部监督为 0 | 在有效区域内求 BCE 平均，不乘区域权重 |
 
-不存在的图像—提示对不贡献 final BCE，也不计入分母。整个 batch 没有存在类别时，该项为可反向传播的零损失。逐 chunk 使用同一个 batch 全局分母，各 chunk 贡献直接相加，等价于一次性计算全部提示。标签 255 仅在 final BCE 中作为负样本参与全图监督；蒸馏范围、Dice、各损失权重和评测忽略规则不变。
+`a` 是存在类别正区域的权重，由 `criterion_cfg.final_bce_positive_weight` 配置，默认 `0.5`，取值范围为 0 到 1；`1-a` 是存在类别负区域的权重。存在类别的损失是两部分加权结果相加；不存在类别的损失就是有效区域内的抑制损失。每个区域按自己的像素数求平均，最后的类别平均不按区域面积或有效像素数加权。
+
+多提示类别沿用现有提示空间计算：各提示继承原始类别的存在性和二值目标，每个提示通道等权计入最终平均，包括不存在类别的提示。逐 chunk 的每对损失相加后统一除以“batch 图像数 × 全部提示数”；各 chunk 贡献直接相加，等价于一次性完整计算，不能分别对 chunk 求均值。
+
+空区域按零损失处理，不把其权重转移给另一部分。无有效像素的图像没有存在类别，各类别损失为可反向传播的零，但仍保留在固定的 batch 与提示平均分母中。主损失总权重继续使用 `final_balanced_bce_weight`；蒸馏范围、Dice 和评测忽略规则不变。
 
 **Dice 损失**（`final_dice_weight=0.0`）：只对图像中存在的提示计算，默认关闭。开启时按全局 `N_present` 做逐 chunk 贡献归一化。
 
@@ -494,7 +494,7 @@ Ctrl+C 使用 Python 默认 `KeyboardInterrupt`。训练和验证均立即退出
 
 | 键 | 含义 |
 | --- | --- |
-| `loss_final_bce` | 仅存在的图像—提示对，全图像素（含 255 负样本）等权全局均值；各 chunk 使用统一分母后累加 |
+| `loss_final_bce` | 存在类别正负区域加权、缺席类别有效区域抑制；全部图像—提示对等权平均，各 chunk 使用统一分母后累加 |
 | `loss_sam3_mask_distill_bce` | 未经权重的原始蒸馏 BCE（跨 chunk 累加后求均值） |
 | `loss_sam3_mask_distill_weighted` | 真正加入总损失的加权蒸馏贡献（跨 chunk 累加后求均值） |
 
@@ -529,7 +529,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 | `models/score_embeddings.py`          | 64 模板相似度图、归一化 CLIP 融合和空间卷积增强 |
 | `models/openclip_image_encoder.py`    | 36×36 dense RemoteCLIP 图像特征              |
 | `models/openclip_text_encoder.py`     | 模板文本编码、micro-batch 与梯度控制                 |
-| `losses/semantic_criterion.py`        | Streaming 存在类别全图 BCE、Dice 和 SAM3 teacher 蒸馏 |
+| `losses/semantic_criterion.py`        | Streaming 逐类别区域 BCE、Dice 和 SAM3 teacher 蒸馏 |
 | `engine/trainer.py`                   | 高分辨率逐 chunk loss/backward 与 proxy 梯度回传 |
 | `engine/checkpoint.py`                | 安全、原子、严格的 checkpoint 保存与加载               |
 | `engine/runtime_state.py`             | RNG 捕获与恢复                                |
@@ -573,7 +573,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 30. 融合支路固定 `branch_dim=128`，3×3 卷积使用普通卷积（无分组）。
 31. 融合输出直接作为 Pixel Decoder 的最后一层输入；模块内无融合系数、门控、零初始化、额外残差或输出归一化。
 32. 最终 logits 由冻结 `semantic_seg_head` 生成。
-33. final BCE 仅监督逐图存在的类别提示，包含整张图的 255 像素（目标为 0）；全局分母为存在图像—提示对数量乘空间像素数，不按 chunk 单独求均值。
+33. final BCE 对存在类别分别计算全图正负区域均值，再按 `final_bce_positive_weight` 和其补数加权；不存在类别只在有效像素上平均抑制。最后对全部图像—提示对等权平均，不按像素总数或 chunk 单独归一化。
 
 当前限制：
 
