@@ -119,6 +119,15 @@ model = dict(
         window_size=12,
         shift_size=6,
 
+        intra_position_encoding="learned_relative",  # or "sam3_sine"
+        post_fusion_attn_layers=2,  # 0 disables the new attention.
+        post_fusion_qk_dim=64,      # Total over all heads.
+        post_fusion_value_dim=256, # Independent of Q/K width.
+        post_fusion_num_heads=4,
+        post_fusion_dropout=0.1,
+        post_fusion_query_chunk_size=256,  # Each block sees ALL 5184 keys.
+        post_fusion_use_checkpoint=True,
+
         use_checkpoint=True,
     ),
 
@@ -140,6 +149,8 @@ model = dict(
     criterion_cfg=dict(
         ignore_index=255,
         final_balanced_bce_weight=1.0,
+        final_bce_valid_weight=0.5,    # a: valid vs ignore for present classes.
+        final_bce_present_weight=0.5,  # b: present vs absent class groups.
         final_dice_weight=0.0,
         eps=1e-6,
         sam3_mask_distill_weight=0.5,

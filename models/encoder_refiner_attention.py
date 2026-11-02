@@ -4,6 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .position_encoding import PositionEmbeddingSine
+
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -155,6 +157,7 @@ class WindowScoreAttention(nn.Module):
         dropout: float = 0.1,
         value_stream: str = "feature",
         guidance_dim: int = 0,
+        position_encoding: str = "learned_relative",
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -190,12 +193,21 @@ class WindowScoreAttention(nn.Module):
 
         self.dropout = nn.Dropout(float(dropout))
 
+        if position_encoding not in ("learned_relative", "sam3_sine"):
+            raise ValueError("Unknown intra position encoding.")
+        self.position_encoding = (
+            PositionEmbeddingSine(num_pos_feats=qk_in_dim)
+            if position_encoding == "sam3_sine" else None
+        )
+
         # Relative position bias (GSNet / Swin style).
         ws = self.window_size
-        self.relative_position_bias_table = nn.Parameter(
-            torch.zeros((2 * ws - 1) * (2 * ws - 1), num_heads)
-        )
-        nn.init.trunc_normal_(self.relative_position_bias_table, std=0.02)
+        self.relative_position_bias_table = None
+        if position_encoding == "learned_relative":
+            self.relative_position_bias_table = nn.Parameter(
+                torch.zeros((2 * ws - 1) * (2 * ws - 1), num_heads)
+            )
+            nn.init.trunc_normal_(self.relative_position_bias_table, std=0.02)
 
         coords_h = torch.arange(ws)
         coords_w = torch.arange(ws)
@@ -358,6 +370,15 @@ class WindowScoreAttention(nn.Module):
         if g_windows is not None:
             qk_input = torch.cat([qk_input, g_windows], dim=-1)
 
+        if self.position_encoding is not None:
+            # Global coordinates are generated BEFORE rolling/partitioning.
+            pos = self.position_encoding(f_flat[:1]).to(device=feature.device, dtype=qk_input.dtype)
+            if shift > 0:
+                pos = torch.roll(pos, shifts=(-shift, -shift), dims=(-2, -1))
+            pos = self._window_partition(pos)
+            pos = pos[None].expand(bc, -1, -1, -1).reshape_as(qk_input)
+            qk_input = qk_input + pos
+
         q = self.q_proj(qk_input)
         k = self.k_proj(qk_input)
         value = f_windows if self.value_stream == "feature" else s_windows
@@ -373,10 +394,11 @@ class WindowScoreAttention(nn.Module):
         attn = torch.matmul(q, k.transpose(-2, -1)) * (head_dim ** -0.5)
 
         # Add relative position bias.
-        rel_pos_bias = self._get_relative_position_bias().to(
-            device=attn.device, dtype=attn.dtype
-        )
-        attn = attn + rel_pos_bias.unsqueeze(0)
+        if self.relative_position_bias_table is not None:
+            rel_pos_bias = self._get_relative_position_bias().to(
+                device=attn.device, dtype=attn.dtype
+            )
+            attn = attn + rel_pos_bias.unsqueeze(0)
 
         if attn_mask is not None:
             attn = attn + attn_mask.unsqueeze(1)
@@ -414,6 +436,7 @@ class LocalScoreAttention(nn.Module):
         dropout: float = 0.1,
         value_stream: str = "feature",
         guidance_dim: int = 0,
+        position_encoding: str = "learned_relative",
     ):
         super().__init__()
         if hidden_dim <= 0 or num_heads <= 0 or hidden_dim % num_heads != 0:
@@ -432,8 +455,16 @@ class LocalScoreAttention(nn.Module):
         self.v_proj = nn.Linear(self.value_dim, hidden_dim)
         self.out_proj = nn.Linear(hidden_dim, self.value_dim)
         # Row-major offsets: top-left, top, ..., center, ..., bottom-right.
-        self.relative_position_bias_table = nn.Parameter(torch.empty(9, num_heads))
-        nn.init.trunc_normal_(self.relative_position_bias_table, std=0.02)
+        if position_encoding not in ("learned_relative", "sam3_sine"):
+            raise ValueError("Unknown intra position encoding.")
+        self.position_encoding = (
+            PositionEmbeddingSine(num_pos_feats=qk_dim)
+            if position_encoding == "sam3_sine" else None
+        )
+        self.relative_position_bias_table = None
+        if position_encoding == "learned_relative":
+            self.relative_position_bias_table = nn.Parameter(torch.empty(9, num_heads))
+            nn.init.trunc_normal_(self.relative_position_bias_table, std=0.02)
         self.dropout = nn.Dropout(float(dropout))
 
     def forward(
@@ -452,6 +483,9 @@ class LocalScoreAttention(nn.Module):
         if guidance is not None:
             g = guidance.permute(0, 1, 3, 4, 2).reshape(bc, n, self.guidance_dim)
             qk_input = torch.cat([qk_input, g], dim=-1)
+        if self.position_encoding is not None:
+            pos = self.position_encoding(feature[0, :1]).to(device=feature.device, dtype=qk_input.dtype)
+            qk_input = qk_input + pos.flatten(2).transpose(1, 2)
         q = self.q_proj(qk_input).transpose(1, 2).reshape(bc, self.num_heads, head_dim, n)
 
         def neighbors(x):
@@ -463,8 +497,9 @@ class LocalScoreAttention(nn.Module):
         k = neighbors(self.k_proj(qk_input))
         v = neighbors(self.v_proj(f if self.value_stream == "feature" else s))
         logits = (q.unsqueeze(3) * k).sum(dim=2) * (head_dim ** -0.5)
-        bias = self.relative_position_bias_table.T.to(dtype=logits.dtype)
-        logits = logits + bias[None, :, :, None]
+        if self.relative_position_bias_table is not None:
+            bias = self.relative_position_bias_table.T.to(dtype=logits.dtype)
+            logits = logits + bias[None, :, :, None]
         valid = F.unfold(feature.new_ones(1, 1, H, W), kernel_size=3, padding=1)
         logits = logits.masked_fill(~valid.bool().unsqueeze(1), float("-inf"))
         attention = self.dropout(F.softmax(logits, dim=2))
@@ -503,6 +538,7 @@ class EncoderRefinerLayer(nn.Module):
         score_attention_type: str = "intra",
         score_intra_attn_type: str = "window",
         feature_intra_attn_type: str = "window",
+        intra_position_encoding: str = "learned_relative",
     ):
         super().__init__()
         if score_attention_type not in ("intra", "inter"):
@@ -530,20 +566,20 @@ class EncoderRefinerLayer(nn.Module):
                 hidden_dim=hidden_dim, score_embed_dim=score_embed_dim,
                 num_heads=num_heads, window_size=window_size, shift_size=0,
                 dropout=dropout, value_stream=intra_value_stream,
-                guidance_dim=256,
+                guidance_dim=256, position_encoding=intra_position_encoding,
             )
             self.window_attn_shifted = WindowScoreAttention(
                 hidden_dim=hidden_dim, score_embed_dim=score_embed_dim,
                 num_heads=num_heads, window_size=window_size, shift_size=shift_size,
                 dropout=dropout, value_stream=intra_value_stream,
-                guidance_dim=256,
+                guidance_dim=256, position_encoding=intra_position_encoding,
             )
         else:
             self.local_attn = nn.ModuleList([
                 LocalScoreAttention(
                     hidden_dim=hidden_dim, score_embed_dim=score_embed_dim,
                     num_heads=num_heads, dropout=dropout, value_stream=intra_value_stream,
-                    guidance_dim=256,
+                    guidance_dim=256, position_encoding=intra_position_encoding,
                 )
                 for _ in range(4)
             ])

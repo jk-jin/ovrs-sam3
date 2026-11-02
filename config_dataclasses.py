@@ -133,6 +133,15 @@ class EncoderRefinerConfig:
     window_size: int = 12
     shift_size: int = 6
 
+    intra_position_encoding: str = "learned_relative"
+    post_fusion_attn_layers: int = 2  # 0 disables the new attention.
+    post_fusion_qk_dim: int = 64
+    post_fusion_value_dim: int = 256
+    post_fusion_num_heads: int = 4
+    post_fusion_dropout: float = 0.1
+    post_fusion_query_chunk_size: int = 256
+    post_fusion_use_checkpoint: bool = True
+
     use_checkpoint: bool = True
 
 
@@ -141,6 +150,8 @@ class SemanticCriterionConfig:
     ignore_index: int = 255
 
     final_balanced_bce_weight: float = 1.0
+    final_bce_valid_weight: float = 0.5  # a: present-class valid region.
+    final_bce_present_weight: float = 0.5  # b: present-class group.
     final_dice_weight: float = 0.0
 
     eps: float = 1e-6

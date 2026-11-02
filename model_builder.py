@@ -285,6 +285,20 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 f"encoder_refiner_cfg.num_heads must be positive, got {cfg.num_heads}."
             )
 
+        if cfg.intra_position_encoding not in ("learned_relative", "sam3_sine"):
+            raise ValueError("intra_position_encoding must be 'learned_relative' or 'sam3_sine'.")
+        for name in ("post_fusion_attn_layers", "post_fusion_qk_dim", "post_fusion_value_dim",
+                     "post_fusion_num_heads", "post_fusion_query_chunk_size"):
+            value = getattr(cfg, name)
+            minimum = 0 if name == "post_fusion_attn_layers" else 1
+            if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+                raise ValueError(f"encoder_refiner_cfg.{name} must be an integer >= {minimum}.")
+        if (cfg.post_fusion_qk_dim % cfg.post_fusion_num_heads
+                or cfg.post_fusion_value_dim % cfg.post_fusion_num_heads):
+            raise ValueError("post_fusion QK/value dimensions must be divisible by its head count.")
+        if not 0.0 <= cfg.post_fusion_dropout < 1.0:
+            raise ValueError("post_fusion_dropout must be in [0, 1).")
+
         for name in ("score_intra_attn_type", "feature_intra_attn_type"):
             if getattr(cfg, name) not in ("window", "local_3x3"):
                 raise ValueError(
@@ -806,6 +820,16 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             encoder_refiner_window_size=int(refiner_cfg.window_size),
             encoder_refiner_shift_size=int(refiner_cfg.shift_size),
             encoder_refiner_use_checkpoint=bool(refiner_cfg.use_checkpoint),
+            encoder_refiner_intra_position_encoding=refiner_cfg.intra_position_encoding,
+            encoder_refiner_post_fusion_attn_cfg=dict(
+                layers=refiner_cfg.post_fusion_attn_layers,
+                qk_dim=refiner_cfg.post_fusion_qk_dim,
+                value_dim=refiner_cfg.post_fusion_value_dim,
+                num_heads=refiner_cfg.post_fusion_num_heads,
+                dropout=refiner_cfg.post_fusion_dropout,
+                query_chunk_size=refiner_cfg.post_fusion_query_chunk_size,
+                use_checkpoint=refiner_cfg.post_fusion_use_checkpoint,
+            ),
             task_mode=TASK_MODE_SEMANTIC,
         )
 

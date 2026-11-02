@@ -13,6 +13,7 @@ from .encoder_refiner_attention import (
     apply_layer_norm_bcdhw,
 )
 from .decoder_input_fusion import DecoderInputFusion
+from .post_fusion_attention import PostFusionAttention
 
 
 class ClassConditionedEncoderRefiner(nn.Module):
@@ -68,6 +69,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
         score_intra_attn_type: str = "window",
         feature_intra_attn_type: str = "window",
         clip_native_dim: int | None = None,
+        intra_position_encoding: str = "learned_relative",
+        post_fusion_attn_cfg: dict | None = None,
     ):
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -104,6 +107,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 score_attention_type="intra" if layer_index % 2 == 0 else "inter",
                 score_intra_attn_type=score_intra_attn_type,
                 feature_intra_attn_type=feature_intra_attn_type,
+                intra_position_encoding=intra_position_encoding,
             )
             for layer_index in range(self.num_fusion_layers)
         ])
@@ -116,6 +120,13 @@ class ClassConditionedEncoderRefiner(nn.Module):
         self.decoder_input_fusion = DecoderInputFusion(
             use_checkpoint=self.use_checkpoint,
         )
+        post_cfg = dict(post_fusion_attn_cfg or {})
+        post_layers = post_cfg.pop("layers", 2)
+        if isinstance(post_layers, bool) or not isinstance(post_layers, int) or post_layers < 0:
+            raise ValueError("post_fusion_attn_layers must be a non-negative integer.")
+        self.post_fusion_attention = nn.ModuleList([
+            PostFusionAttention(**post_cfg) for _ in range(post_layers)
+        ])
         if clip_native_dim is None or clip_native_dim <= 0:
             raise ValueError("clip_native_dim must be positive for CLIP middle guidance")
         self.clip_native_dim = int(clip_native_dim)
@@ -134,11 +145,15 @@ class ClassConditionedEncoderRefiner(nn.Module):
             original_encoder_feature_72: [N, 256, 72, 72]
             sam_fpn_72:                  [B, 256, 72, 72]
         """
-        return self.decoder_input_fusion(
+        feature = self.decoder_input_fusion(
             refiner_feature_36=refiner_feature_36,
             original_encoder_feature_72=original_encoder_feature_72,
             sam_fpn_72=sam_fpn_72,
         )
+        # This method is called only inside the existing prompt chunk loop.
+        for attention in self.post_fusion_attention:
+            feature = attention(feature, original_encoder_feature_72, sam_fpn_72)
+        return feature
 
     def forward(
         self,

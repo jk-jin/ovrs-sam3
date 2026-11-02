@@ -48,6 +48,8 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_window_size: int = 12,
         encoder_refiner_shift_size: int = 6,
         encoder_refiner_use_checkpoint: bool = True,
+        encoder_refiner_intra_position_encoding: str = "learned_relative",
+        encoder_refiner_post_fusion_attn_cfg: dict | None = None,
         task_mode: str = TASK_MODE_SEMANTIC,
         **kwargs,
     ):
@@ -123,6 +125,8 @@ class Sam3Image(torch.nn.Module):
             use_checkpoint=bool(encoder_refiner_use_checkpoint),
             text_prompt_batch_size=int(text_prompt_batch_size),
             text_prompt_use_checkpoint=bool(text_prompt_use_checkpoint),
+            intra_position_encoding=encoder_refiner_intra_position_encoding,
+            post_fusion_attn_cfg=encoder_refiner_post_fusion_attn_cfg,
         )
 
         self.prompt_chunk_size = None
@@ -615,7 +619,8 @@ class Sam3Image(torch.nn.Module):
         1. Optionally run the teacher path (no_grad): original encoder72 →
            frozen Pixel Decoder → frozen semantic head → detached logits.
         2. Fuse Refiner36, original encoder72 and FPN72 into 72×72.
-        3. Student path (gradients enabled): fused 72×72 replaces the last
+        3. Refine the current chunk with global 72×72 intra-class attention.
+        4. Student path (gradients enabled): refined 72×72 replaces the last
            FPN level of the same frozen Pixel Decoder and semantic head.
         """
         original_features_72 = encoder_refiner_cache[

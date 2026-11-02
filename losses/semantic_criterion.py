@@ -43,8 +43,10 @@ class SemanticStreamingContext:
     # Total selected distillation pixels across all present prompts.
     distill_pixel_denom: int
 
-    # Number of valid pixels multiplied by P.
-    total_valid_pixels: int
+    # Reciprocal prompt multiplicity, so original classes have equal weight.
+    prompt_class_weight: torch.Tensor
+    num_present_classes: int
+    num_absent_classes: int
 
     sam3_mask_distill_weight: float
 
@@ -53,9 +55,9 @@ class SemanticCriterion(nn.Module):
     """Semantic segmentation criterion with streaming per-chunk support.
 
     Losses:
-        1. Plain BCE on final_logits — every valid pixel (label ≠ 255)
-           contributes equally regardless of class presence or pixel sign.
-           Global mean over all B × P × H × W valid pixel positions.
+        1. Final BCE: region means per image/class, then separate means over
+           present/absent image-class pairs. Duplicate prompts first average
+           within their original class. All denominators span all chunks.
 
         2. Optional Dice on final_logits (default weight 0.0)
 
@@ -69,6 +71,9 @@ class SemanticCriterion(nn.Module):
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
         super().__init__()
         self.cfg = cfg or SemanticCriterionConfig()
+        for name in ("final_bce_valid_weight", "final_bce_present_weight"):
+            if not 0.0 <= float(getattr(self.cfg, name)) <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1].")
 
         distill_weight = float(self.cfg.sam3_mask_distill_weight)
         if distill_weight < 0.0:
@@ -243,11 +248,6 @@ class SemanticCriterion(nn.Module):
                     f"max={max_label}."
                 )
 
-        total_valid_pixels = (
-            int(valid_mask.sum().item())
-            * num_prompt_channels
-        )
-
         class_ids = torch.arange(
             num_label_classes,
             device=label_map.device,
@@ -348,7 +348,11 @@ class SemanticCriterion(nn.Module):
             num_label_classes=num_label_classes,
             num_present_pairs=num_present_pairs,
             distill_pixel_denom=distill_pixel_denom,
-            total_valid_pixels=total_valid_pixels,
+            prompt_class_weight=prompt_counts.index_select(
+                0, prompt_to_class_id
+            ).float().reciprocal(),
+            num_present_classes=int(original_presence.sum().item()),
+            num_absent_classes=int((~original_presence).sum().item()),
             sam3_mask_distill_weight=float(
                 self.cfg.sam3_mask_distill_weight
             ),
@@ -422,10 +426,10 @@ class SemanticCriterion(nn.Module):
 
         zero = self._zero_loss(final_logits_chunk)
 
-        # ---- Plain BCE (every valid pixel equal, global mean) ----
+        # ---- Region/class balanced BCE; ignore targets are already zero. ----
         bce_per_pixel = F.binary_cross_entropy_with_logits(
-            final_logits_chunk,
-            target_chunk,
+            final_logits_chunk.float(),
+            target_chunk.float(),
             reduction="none",
         )  # [B, C_chunk, H, W]
 
@@ -433,9 +437,25 @@ class SemanticCriterion(nn.Module):
             device=device, dtype=bce_per_pixel.dtype
         )[:, None, :, :]  # [B, 1, H, W]
 
-        plain_bce_contribution = (
-            bce_per_pixel * valid_float
-        ).sum() / max(context.total_valid_pixels, 1)
+        ignore_float = 1.0 - valid_float
+        valid_mean = (bce_per_pixel * valid_float).sum((-2, -1)) / (
+            valid_float.sum((-2, -1)).clamp_min(1)
+        )
+        ignore_mean = (bce_per_pixel * ignore_float).sum((-2, -1)) / (
+            ignore_float.sum((-2, -1)).clamp_min(1)
+        )
+        present_mask = context.presence_target[:, class_start:class_end].to(device)
+        class_weight = context.prompt_class_weight[class_start:class_end].to(device)
+        a = float(self.cfg.final_bce_valid_weight)
+        b = float(self.cfg.final_bce_present_weight)
+        present_contribution = (
+            (a * valid_mean + (1.0 - a) * ignore_mean)
+            * present_mask * class_weight
+        ).sum() / max(context.num_present_classes, 1)
+        absent_contribution = (
+            valid_mean * (~present_mask) * class_weight
+        ).sum() / max(context.num_absent_classes, 1)
+        grouped_bce_contribution = b * present_contribution + (1.0 - b) * absent_contribution
 
         # ---- Dice (optional) ----
         present_mask = context.presence_target[
@@ -500,13 +520,13 @@ class SemanticCriterion(nn.Module):
 
         # ---- Total ----
         chunk_total = (
-            float(self.cfg.final_balanced_bce_weight) * plain_bce_contribution
+            float(self.cfg.final_balanced_bce_weight) * grouped_bce_contribution
             + dice_weight * dice_contribution
             + weighted_distill_contribution
         )
 
         return {
-            "loss_final_bce": plain_bce_contribution,
+            "loss_final_bce": grouped_bce_contribution,
             "loss_final_dice": dice_contribution,
             "loss_sam3_mask_distill_bce": distill_contribution,
             "loss_sam3_mask_distill_weighted": weighted_distill_contribution,
@@ -586,7 +606,7 @@ class SemanticCriterion(nn.Module):
         present = presence_target_chunk > 0.5
 
         if not bool(present.any().item()):
-            return final_logits.sum() * 0.0
+            return self._zero_loss(final_logits)
 
         pair_pixel_mask = (
             present.to(
@@ -635,7 +655,7 @@ class SemanticCriterion(nn.Module):
 
         weight_sum = pair_weight.sum()
         if bool(weight_sum.detach().le(0).item()):
-            return logits.sum() * 0.0
+            return self._zero_loss(logits)
 
         pair_mean = (dice_loss * pair_weight).sum() / weight_sum.clamp_min(
             float(self.cfg.eps)
@@ -648,7 +668,7 @@ class SemanticCriterion(nn.Module):
 
     @staticmethod
     def _zero_loss(reference: torch.Tensor) -> torch.Tensor:
-        return reference.sum() * 0.0
+        return reference.float().sum() * 0.0
 
     @staticmethod
     def _extract_4d_tensor(
