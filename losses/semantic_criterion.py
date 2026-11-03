@@ -16,59 +16,49 @@ TensorDict = Dict[str, torch.Tensor]
 
 @dataclass
 class SemanticStreamingContext:
-    """Global statistics shared by all prompt chunks."""
+    """Global image/class statistics shared by every prompt chunk."""
 
     label_map: torch.Tensor
-
-    # label != ignore_index
     valid_mask: torch.Tensor
-
-    # [P], each prompt channel maps to one original forward class id.
     prompt_to_class_id: torch.Tensor
-
-    # [B, P], prompt-level presence inherited from original classes.
-    presence_target: torch.Tensor
-
-    # [B, M, H, W] bool.
-    # M is the number of original label classes.
-    # Only contains class-specific outer boundaries in ignore pixels.
-    distill_outer_boundary_by_class: torch.Tensor
-
+    presence_target: torch.Tensor  # [B, P], inherited from original classes
+    prompt_weights: torch.Tensor  # [P], reciprocal prompts per original class
+    distill_outer_boundary_by_class: torch.Tensor  # [B, M, H, W]
+    distill_active_prompts: list[bool]  # [P], CPU flags avoid per-chunk GPU sync
     num_prompt_channels: int
     num_label_classes: int
-
-    # Number of present image-prompt pairs.
-    num_present_pairs: int
-
-    # Total selected distillation pixels across all present prompts.
-    distill_pixel_denom: int
-
-    # Number of valid pixels multiplied by P.
-    total_valid_pixels: int
-
+    num_present_pairs: int  # prompt pairs, used only by optional Dice
+    num_present_classes: int  # image/original-class pairs across the full batch
+    num_absent_classes: int
     sam3_mask_distill_weight: float
+
+    def needs_teacher_logits(self, class_start: int, class_end: int) -> bool:
+        return self.sam3_mask_distill_weight > 0.0 and any(
+            self.distill_active_prompts[class_start:class_end]
+        )
 
 
 class SemanticCriterion(nn.Module):
-    """Semantic segmentation criterion with streaming per-chunk support.
+    """Region means, then original-class means, then presence-group weights.
 
-    Losses:
-        1. Plain BCE on final_logits — every valid pixel (label ≠ 255)
-           contributes equally regardless of class presence or pixel sign.
-           Global mean over all B × P × H × W valid pixel positions.
-
-        2. Optional Dice on final_logits (default weight 0.0)
-
-        3. SAM3 teacher mask distillation BCE (fixed weight)
-           - Frozen SAM3 semantic head logits as soft targets
-           - Only present image-prompt pairs
-           - All valid GT pixels plus a configurable class-specific
-             outer boundary restricted to ignore pixels
+    Main BCE uses GT binary targets (ignore pixels are zero targets for
+    present classes). Distillation always uses detached teacher probabilities.
+    Chunk contributions sum to the full-batch loss without retaining logits.
     """
 
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
         super().__init__()
         self.cfg = cfg or SemanticCriterionConfig()
+
+        for name in (
+            "final_bce_present_valid_weight",
+            "final_bce_present_class_weight",
+            "sam3_mask_distill_present_region_weight",
+            "sam3_mask_distill_present_class_weight",
+        ):
+            value = float(getattr(self.cfg, name))
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1], got {value}.")
 
         distill_weight = float(self.cfg.sam3_mask_distill_weight)
         if distill_weight < 0.0:
@@ -243,11 +233,6 @@ class SemanticCriterion(nn.Module):
                     f"max={max_label}."
                 )
 
-        total_valid_pixels = (
-            int(valid_mask.sum().item())
-            * num_prompt_channels
-        )
-
         class_ids = torch.arange(
             num_label_classes,
             device=label_map.device,
@@ -290,50 +275,26 @@ class SemanticCriterion(nn.Module):
             )
         )
 
-        # Every present prompt distills all valid pixels.
-        # [B]
-        valid_pixel_count = (
-            valid_mask
-            .to(dtype=torch.long)
-            .flatten(1)
-            .sum(dim=1)
+        # Group denominators count original classes, never expanded prompts.
+        num_present_classes = int(original_presence.sum().item())
+        num_absent_classes = original_presence.numel() - num_present_classes
+        prompt_weights = (
+            prompt_counts.index_select(0, prompt_to_class_id).float().reciprocal()
         )
 
-        # Each original class additionally owns its own outer boundary.
-        # [B, M]
-        outer_boundary_pixel_count_by_class = (
-            distill_outer_boundary_by_class
-            .to(dtype=torch.long)
-            .flatten(2)
-            .sum(dim=2)
+        primary_region = valid_mask[:, None] | distill_outer_boundary_by_class
+        region_weight = float(self.cfg.sam3_mask_distill_present_region_weight)
+        class_weight = float(self.cfg.sam3_mask_distill_present_class_weight)
+        present_active = (
+            (region_weight > 0.0) & primary_region.flatten(2).any(2)
+        ) | (
+            (region_weight < 1.0) & (~primary_region).flatten(2).any(2)
         )
-
-        # Valid pixels and outer boundaries are disjoint because the
-        # outer boundary is restricted to ignore_mask.
-        # [B, M]
-        distill_pixel_count_by_class = (
-            valid_pixel_count[:, None]
-            + outer_boundary_pixel_count_by_class
-        )
-
-        # Multiple prompts belonging to the same original class reuse
-        # and independently count the same class boundary.
-        # [B, P]
-        distill_pixel_count_by_prompt = (
-            distill_pixel_count_by_class.index_select(
-                dim=1,
-                index=prompt_to_class_id,
-            )
-        )
-
-        # Global denominator across the complete prompt space.
-        distill_pixel_denom = int(
-            (
-                distill_pixel_count_by_prompt
-                * presence_target.to(dtype=torch.long)
-            )
-            .sum()
-            .item()
+        absent_active = valid_mask.flatten(1).any(1)[:, None]
+        active_by_class = (
+            original_presence & present_active & (class_weight > 0.0)
+        ) | (
+            ~original_presence & absent_active & (class_weight < 1.0)
         )
 
         return SemanticStreamingContext(
@@ -341,17 +302,17 @@ class SemanticCriterion(nn.Module):
             valid_mask=valid_mask,
             prompt_to_class_id=prompt_to_class_id,
             presence_target=presence_target,
-            distill_outer_boundary_by_class=(
-                distill_outer_boundary_by_class
+            prompt_weights=prompt_weights,
+            distill_outer_boundary_by_class=distill_outer_boundary_by_class,
+            distill_active_prompts=(
+                active_by_class.index_select(1, prompt_to_class_id).any(dim=0).tolist()
             ),
             num_prompt_channels=num_prompt_channels,
             num_label_classes=num_label_classes,
             num_present_pairs=num_present_pairs,
-            distill_pixel_denom=distill_pixel_denom,
-            total_valid_pixels=total_valid_pixels,
-            sam3_mask_distill_weight=float(
-                self.cfg.sam3_mask_distill_weight
-            ),
+            num_present_classes=num_present_classes,
+            num_absent_classes=num_absent_classes,
+            sam3_mask_distill_weight=float(self.cfg.sam3_mask_distill_weight),
         )
 
     def forward_chunk(
@@ -376,6 +337,10 @@ class SemanticCriterion(nn.Module):
             )
 
         B, C_chunk = final_logits_chunk.shape[:2]
+        if (B, *final_logits_chunk.shape[-2:]) != tuple(context.label_map.shape):
+            raise ValueError(
+                "Chunk logits must match the streaming label batch and spatial shape."
+            )
         num_prompt_channels = context.num_prompt_channels
 
         if not (
@@ -422,26 +387,24 @@ class SemanticCriterion(nn.Module):
 
         zero = self._zero_loss(final_logits_chunk)
 
-        # ---- Plain BCE (every valid pixel equal, global mean) ----
+        present_mask = context.presence_target[:, class_start:class_end].to(device)
+        prompt_weights = context.prompt_weights[class_start:class_end].to(device)
+        valid_region = valid_mask.to(device)[:, None]
+
         bce_per_pixel = F.binary_cross_entropy_with_logits(
-            final_logits_chunk,
-            target_chunk,
-            reduction="none",
-        )  # [B, C_chunk, H, W]
+            final_logits_chunk, target_chunk, reduction="none",
+        )
+        valid_bce = self._region_mean(bce_per_pixel, valid_region)
+        ignore_bce = self._region_mean(bce_per_pixel, ~valid_region)
+        valid_weight = float(self.cfg.final_bce_present_valid_weight)
+        present_bce = valid_weight * valid_bce + (1.0 - valid_weight) * ignore_bce
+        pair_bce = torch.where(present_mask, present_bce, valid_bce)
+        grouped_bce_contribution = self._grouped_contribution(
+            pair_bce, present_mask, prompt_weights, context,
+            float(self.cfg.final_bce_present_class_weight),
+        )
 
-        valid_float = valid_mask.to(
-            device=device, dtype=bce_per_pixel.dtype
-        )[:, None, :, :]  # [B, 1, H, W]
-
-        plain_bce_contribution = (
-            bce_per_pixel * valid_float
-        ).sum() / max(context.total_valid_pixels, 1)
-
-        # ---- Dice (optional) ----
-        present_mask = context.presence_target[
-            :, class_start:class_end
-        ].to(device=device)
-
+        # ---- Dice (optional, unchanged prompt-level reduction) ----
         dice_weight = float(self.cfg.final_dice_weight)
         if dice_weight > 0.0 and context.num_present_pairs > 0:
             if target_full is not None:
@@ -460,36 +423,30 @@ class SemanticCriterion(nn.Module):
 
         # ---- SAM3 teacher distillation ----
         distill_weight = float(context.sam3_mask_distill_weight)
-        if distill_weight > 0.0 and context.distill_pixel_denom > 0:
-            if OUTPUT_KEYS.sam3_teacher_logits not in outputs:
-                raise ValueError(
-                    "sam3_mask_distill_weight > 0 but "
-                    f"{OUTPUT_KEYS.sam3_teacher_logits!r} is missing."
-                )
-            chunk_presence_float = present_mask.to(dtype=torch.float32)
-
-            outer_boundary_chunk = (
-                context.distill_outer_boundary_by_class.index_select(
-                    dim=1,
-                    index=prompt_class_ids,
-                )
+        if context.needs_teacher_logits(class_start, class_end):
+            teacher_logits = self._extract_4d_tensor(
+                outputs, OUTPUT_KEYS.sam3_teacher_logits, "[B, P_chunk, H, W]",
             )
-
-            # Fixed design:
-            # all valid pixels + class-specific outer ignore boundary.
-            distill_mask_chunk = (
-                context.valid_mask[:, None, :, :]
-                | outer_boundary_chunk
+            if teacher_logits.shape != final_logits_chunk.shape:
+                raise ValueError("Teacher and student logits must have identical shapes.")
+            pixel_distill = F.binary_cross_entropy_with_logits(
+                final_logits_chunk, teacher_logits.detach().sigmoid(), reduction="none",
             )
-
-            distill_contribution = self._distill_contribution_chunk(
-                final_logits=final_logits_chunk,
-                teacher_logits=outputs[
-                    OUTPUT_KEYS.sam3_teacher_logits
-                ],
-                distill_mask_chunk=distill_mask_chunk,
-                presence_target_chunk=chunk_presence_float,
-                global_denom=context.distill_pixel_denom,
+            outer_boundary = context.distill_outer_boundary_by_class.index_select(
+                1, prompt_class_ids,
+            ).to(device)
+            primary_region = valid_region | outer_boundary
+            primary_mean = self._region_mean(pixel_distill, primary_region)
+            other_mean = self._region_mean(pixel_distill, ~primary_region)
+            region_weight = float(self.cfg.sam3_mask_distill_present_region_weight)
+            present_distill = (
+                region_weight * primary_mean + (1.0 - region_weight) * other_mean
+            )
+            absent_distill = self._region_mean(pixel_distill, valid_region)
+            pair_distill = torch.where(present_mask, present_distill, absent_distill)
+            distill_contribution = self._grouped_contribution(
+                pair_distill, present_mask, prompt_weights, context,
+                float(self.cfg.sam3_mask_distill_present_class_weight),
             )
         else:
             distill_contribution = zero
@@ -500,13 +457,13 @@ class SemanticCriterion(nn.Module):
 
         # ---- Total ----
         chunk_total = (
-            float(self.cfg.final_balanced_bce_weight) * plain_bce_contribution
+            float(self.cfg.final_balanced_bce_weight) * grouped_bce_contribution
             + dice_weight * dice_contribution
             + weighted_distill_contribution
         )
 
         return {
-            "loss_final_bce": plain_bce_contribution,
+            "loss_final_bce": grouped_bce_contribution,
             "loss_final_dice": dice_contribution,
             "loss_sam3_mask_distill_bce": distill_contribution,
             "loss_sam3_mask_distill_weighted": weighted_distill_contribution,
@@ -514,7 +471,7 @@ class SemanticCriterion(nn.Module):
         }
 
     # ------------------------------------------------------------------
-    # Distillation (per-chunk, global denominator)
+    # Region construction and grouped reduction
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -566,46 +523,35 @@ class SemanticCriterion(nn.Module):
 
         return outer_boundary.contiguous()
 
-    def _distill_contribution_chunk(
-        self,
-        final_logits: torch.Tensor,
-        teacher_logits: torch.Tensor,
-        distill_mask_chunk: torch.Tensor,
-        presence_target_chunk: torch.Tensor,
-        global_denom: int,
+    @staticmethod
+    def _region_mean(pixel_loss: torch.Tensor, region: torch.Tensor) -> torch.Tensor:
+        """Per-image/prompt means; an empty region contributes zero.
+
+        Accumulate in FP32 for AMP: a 288x288 pixel sum can overflow FP16.
+        Region may broadcast across prompts, so no full-size float mask is kept.
+        """
+        numerator = pixel_loss.masked_fill(~region, 0).sum(
+            dim=(-2, -1), dtype=torch.float32,
+        )
+        denominator = region.sum(dim=(-2, -1)).clamp_min(1)
+        return numerator / denominator
+
+    @staticmethod
+    def _grouped_contribution(
+        pair_loss: torch.Tensor,
+        present: torch.Tensor,
+        prompt_weights: torch.Tensor,
+        context: SemanticStreamingContext,
+        present_weight: float,
     ) -> torch.Tensor:
-        """Distill present prompts on valid pixels and outer GT boundaries."""
-        teacher_prob = teacher_logits.detach().sigmoid()
-
-        pixel_ce = F.binary_cross_entropy_with_logits(
-            final_logits,
-            teacher_prob,
-            reduction="none",
+        # Dividing each prompt by its class prompt count first ensures that
+        # synonyms count as one original class, even across chunk boundaries.
+        group_weights = torch.where(
+            present,
+            present_weight / max(context.num_present_classes, 1),
+            (1.0 - present_weight) / max(context.num_absent_classes, 1),
         )
-
-        present = presence_target_chunk > 0.5
-
-        if not bool(present.any().item()):
-            return final_logits.sum() * 0.0
-
-        pair_pixel_mask = (
-            present.to(
-                device=pixel_ce.device,
-                dtype=torch.bool,
-            )[:, :, None, None]
-            & distill_mask_chunk.to(
-                device=pixel_ce.device,
-                dtype=torch.bool,
-            )
-        )
-
-        pixel_weight = pair_pixel_mask.to(
-            dtype=pixel_ce.dtype
-        )
-
-        return (
-            pixel_ce * pixel_weight
-        ).sum() / max(int(global_denom), 1)
+        return (pair_loss * prompt_weights[None] * group_weights).sum()
 
     # ------------------------------------------------------------------
     # Dice (per-chunk, global denominator)
@@ -648,7 +594,7 @@ class SemanticCriterion(nn.Module):
 
     @staticmethod
     def _zero_loss(reference: torch.Tensor) -> torch.Tensor:
-        return reference.sum() * 0.0
+        return reference.sum(dtype=torch.float32) * 0.0
 
     @staticmethod
     def _extract_4d_tensor(

@@ -140,9 +140,13 @@ model = dict(
     criterion_cfg=dict(
         ignore_index=255,
         final_balanced_bce_weight=1.0,
+        final_bce_present_valid_weight=0.9,  # a: valid vs ignore pixels
+        final_bce_present_class_weight=0.5,  # b: present vs absent classes
         final_dice_weight=0.0,
         eps=1e-6,
         sam3_mask_distill_weight=0.5,
         sam3_mask_distill_boundary_width=3,
+        sam3_mask_distill_present_region_weight=0.9,  # valid + ring vs rest
+        sam3_mask_distill_present_class_weight=0.5,  # present vs absent
     ),
 )

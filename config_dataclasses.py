@@ -141,12 +141,16 @@ class SemanticCriterionConfig:
     ignore_index: int = 255
 
     final_balanced_bce_weight: float = 1.0
+    final_bce_present_valid_weight: float = 0.9
+    final_bce_present_class_weight: float = 0.5
     final_dice_weight: float = 0.0
 
     eps: float = 1e-6
 
     sam3_mask_distill_weight: float = 0.05
     sam3_mask_distill_boundary_width: int = 2
+    sam3_mask_distill_present_region_weight: float = 0.9
+    sam3_mask_distill_present_class_weight: float = 0.5
 
 
 @dataclass

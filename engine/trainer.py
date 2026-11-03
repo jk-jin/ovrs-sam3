@@ -279,15 +279,6 @@ class Trainer:
                 target_hw=(288, 288),
             )
 
-        effective_distill_weight = float(
-            loss_context.sam3_mask_distill_weight
-        )
-
-        need_teacher_logits = (
-            effective_distill_weight > 0.0
-            and loss_context.distill_pixel_denom > 0
-        )
-
         chunk_class_counts = encoder_refiner_cache["chunk_class_counts"]
 
         # GPU-side accumulators (detached scalars, .item() deferred).
@@ -308,7 +299,9 @@ class Trainer:
                         refiner_feature_36_chunk=refiner_proxy_chunk,
                         class_start=chunk_start,
                         class_end=chunk_end,
-                        return_teacher_logits=need_teacher_logits,
+                        return_teacher_logits=loss_context.needs_teacher_logits(
+                            chunk_start, chunk_end,
+                        ),
                     )
                 )
 
