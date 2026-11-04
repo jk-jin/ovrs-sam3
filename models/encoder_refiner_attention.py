@@ -139,7 +139,7 @@ class ClassScoreAttention(nn.Module):
 
 
 class WindowScoreAttention(nn.Module):
-    """Single-value intra-class window attention with relative position bias.
+    """Single-value intra-class window attention without positional bias.
 
     Q/K concatenate pre-normalized score and feature. Only value_stream
     supplies values. Regular/shifted windows follow the original implementation.
@@ -190,32 +190,6 @@ class WindowScoreAttention(nn.Module):
 
         self.dropout = nn.Dropout(float(dropout))
 
-        # Relative position bias (GSNet / Swin style).
-        ws = self.window_size
-        self.relative_position_bias_table = nn.Parameter(
-            torch.zeros((2 * ws - 1) * (2 * ws - 1), num_heads)
-        )
-        nn.init.trunc_normal_(self.relative_position_bias_table, std=0.02)
-
-        coords_h = torch.arange(ws)
-        coords_w = torch.arange(ws)
-        coords = torch.stack(
-            torch.meshgrid(coords_h, coords_w, indexing="ij")
-        )  # [2, ws, ws]
-        coords_flatten = torch.flatten(coords, 1)          # [2, ws*ws]
-
-        relative_coords = (
-            coords_flatten[:, :, None] - coords_flatten[:, None, :]
-        )  # [2, ws*ws, ws*ws]
-        relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # [N, N, 2]
-
-        relative_coords[:, :, 0] += ws - 1
-        relative_coords[:, :, 1] += ws - 1
-        relative_coords[:, :, 0] *= 2 * ws - 1
-
-        relative_position_index = relative_coords.sum(-1)  # [N, N]
-        self.register_buffer("relative_position_index", relative_position_index)
-
     @staticmethod
     def _pad_to_window(x: torch.Tensor, window_size: int):
         H, W = x.shape[-2], x.shape[-1]
@@ -238,21 +212,6 @@ class WindowScoreAttention(nn.Module):
         x = x.reshape(B, H // ws, W // ws, ws, ws, D)
         x = x.permute(0, 5, 1, 3, 2, 4).reshape(B, D, H, W)
         return x
-
-    def _get_relative_position_bias(self) -> torch.Tensor:
-        """
-        Returns:
-            relative_position_bias: [num_heads, N, N] where N = window_size * window_size
-        """
-        ws = self.window_size
-        N = ws * ws
-
-        relative_position_bias = self.relative_position_bias_table[
-            self.relative_position_index.reshape(-1)
-        ]
-        relative_position_bias = relative_position_bias.view(N, N, self.num_heads)
-        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()
-        return relative_position_bias  # [num_heads, N, N]
 
     def _build_shift_attn_mask(
         self,
@@ -372,12 +331,6 @@ class WindowScoreAttention(nn.Module):
 
         attn = torch.matmul(q, k.transpose(-2, -1)) * (head_dim ** -0.5)
 
-        # Add relative position bias.
-        rel_pos_bias = self._get_relative_position_bias().to(
-            device=attn.device, dtype=attn.dtype
-        )
-        attn = attn + rel_pos_bias.unsqueeze(0)
-
         if attn_mask is not None:
             attn = attn + attn_mask.unsqueeze(1)
 
@@ -403,7 +356,8 @@ class LocalScoreAttention(nn.Module):
     """Single-value intra-class attention over each pixel's contiguous 3×3 grid.
 
     Inputs are pre-normalized. Q/K concatenate score and feature; V and
-    the output come only from value_stream. Out-of-image keys are masked.
+    the output come only from value_stream. No positional bias is added;
+    out-of-image keys are masked.
     """
 
     def __init__(
@@ -431,9 +385,6 @@ class LocalScoreAttention(nn.Module):
         self.k_proj = nn.Linear(qk_dim, hidden_dim)
         self.v_proj = nn.Linear(self.value_dim, hidden_dim)
         self.out_proj = nn.Linear(hidden_dim, self.value_dim)
-        # Row-major offsets: top-left, top, ..., center, ..., bottom-right.
-        self.relative_position_bias_table = nn.Parameter(torch.empty(9, num_heads))
-        nn.init.trunc_normal_(self.relative_position_bias_table, std=0.02)
         self.dropout = nn.Dropout(float(dropout))
 
     def forward(
@@ -463,8 +414,6 @@ class LocalScoreAttention(nn.Module):
         k = neighbors(self.k_proj(qk_input))
         v = neighbors(self.v_proj(f if self.value_stream == "feature" else s))
         logits = (q.unsqueeze(3) * k).sum(dim=2) * (head_dim ** -0.5)
-        bias = self.relative_position_bias_table.T.to(dtype=logits.dtype)
-        logits = logits + bias[None, :, :, None]
         valid = F.unfold(feature.new_ones(1, 1, H, W), kernel_size=3, padding=1)
         logits = logits.masked_fill(~valid.bool().unsqueeze(1), float("-inf"))
         attention = self.dropout(F.softmax(logits, dim=2))

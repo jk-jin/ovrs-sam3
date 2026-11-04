@@ -249,10 +249,12 @@ Value 始终仅来自指定的目标流，输出直接残差到同一条流。
 | `score_intra_attn_type` | `window` / `local_3x3` | 更新 score 的类内实现 |
 | `feature_intra_attn_type` | `window` / `local_3x3` | 更新 feature 的类内实现 |
 
-默认均为 `window`，执行一次普通窗口与一次移位窗口，沿用窗口相对位置偏置和 shift mask。
+默认均为 `window`，执行一次普通窗口与一次移位窗口，保留 shift mask；不加入相对位置偏置。
 `local_3x3` 执行四次连续普通逐像素 3×3 注意力：步长 1，无空洞或采样间隔，
-含中心及八个相邻位置，每头九个独立相对位置偏置，图像外的 key 在 softmax 前屏蔽。
-每个空间子步骤的投影、LayerNorm、相对位置偏置独立，图像指导在所有子步骤中固定使用。
+含中心及八个相邻位置，不加入相对位置偏置；图像外的 key 在 softmax 前屏蔽。
+每个空间子步骤的投影、LayerNorm 独立，图像指导在所有子步骤中固定使用。
+所有 Refiner 类内注意力统一删除相对位置偏置参数、窗口相对位置索引及对应评分加法，
+不保留开关或零值占位；普通/移位窗口和局部注意力均只由 Q/K 内容相似度及有效性 mask 决定注意力权重。
 四次局部子步骤属于一层内部，不增加 Refiner 总层数。
 
 **标准双流 FFN：**
@@ -687,7 +689,7 @@ Checkpoint schema 版本为 4。实验追踪状态不再保存在 checkpoint 中
 * 每个注意力仅新增单路 `v_proj` 和 `out_proj`，目标流由所在层的类型决定。
 * 删除 `class_norm_text`、SAM 文本均值计算与缓存以及 Refiner 参数传递链路。
 * 保留原始 SAM3 文本编码、encoder 与 prompt cross-attention。
-* 保留窗口相对位置偏置、shift mask、双流 FFN、pre-norm、直接残差及最终 feature LayerNorm。
+* 当时保留窗口相对位置偏置、shift mask、双流 FFN、pre-norm、直接残差及最终 feature LayerNorm；相对位置偏置已在后续修改中删除，见本节末尾。
 * Score embedding、DecoderInputFusion、原始 SAM3 分割流程、损失和逐 chunk 梯度回传设计不变。
 * 旧 checkpoint 不能通过 `--resume-from` 严格恢复；新实验使用新的 work directory。
 * 旧 checkpoint 也不能直接使用 `--load-model-from`：当前加载器即使 `strict=False`，仍会拒绝类间 Q/K 的同名 shape 不匹配。若另行准备仅包含名称和 shape 均匹配参数的权重文件，可以加载其中的未变化参数；本次不添加旧参数映射、自动过滤或兼容层。
@@ -727,3 +729,19 @@ checkpoint 输出和参数/Refiner 输入梯度、输入形状检查。
   12 项 CPU 测试覆盖独立逐类参考值和梯度、不同 chunk 即时 backward、多提示等权、
   不存在类软目标、两区互补、零宽边界、空区域/空组、教师开关、FP16 输出尺度累加、
   配置校验，以及实际 Trainer streaming 方法的教师路由和 proxy 梯度回传。
+
+
+本次 Refiner 类内注意力删除相对位置偏置：
+
+* `WindowScoreAttention` 删除 `relative_position_bias_table`、`relative_position_index`、
+  `_get_relative_position_bias()` 和注意力评分中的位置偏置加法；覆盖普通窗口和移位窗口。
+* `LocalScoreAttention` 删除九邻域的 `relative_position_bias_table` 和对应评分加法。
+* score 与 feature 两路的全部类内子步骤统一生效，不新增配置开关或其它位置编码。
+* 保留移位窗口 mask 和局部图像边界 mask；这些 mask 限定可访问位置，不是可学习位置偏置。
+* 类间注意力、Q/K/V 投影、固定图像指导、FFN 和现有损失设计保持不变。
+* 旧模型 state_dict 含已删除的偏置参数及窗口索引，不能严格完整恢复旧训练。
+  若迁移旧权重，可使用现有 `--load-model-from` 非严格入口忽略这些多余键；不添加兼容参数或映射。
+  新实验使用新的 work directory。checkpoint 容器 schema 仍为 4。
+* 新增 `tests/test_refiner_attention.py`，与已有损失测试一起通过
+  `python -m unittest discover -s tests -v` 运行；覆盖无位置偏置的独立逐像素参考输出和梯度、
+  移位/局部边界、两种 value stream，以及四种类内模式组合的交替层 checkpoint 输出与梯度。
