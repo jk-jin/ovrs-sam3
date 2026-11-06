@@ -20,7 +20,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
     Takes the full 6-layer SAM3 encoder output after prompt cross-attention
     as input. The feature stream is the bilinear-downsampled encoder feature
-    without any FPN injection. Fixed CLIP middle/FPN guidance extends
+    without any FPN injection. Optional CLIP middle/FPN guidance extends
     intra-class attention Q/K. Each FFN updates only its current stream.
     The score stream comes directly from
     ClipScoreEmbedding (score_embeddings.py) without any SAM3 FPN fusion.
@@ -67,6 +67,8 @@ class ClassConditionedEncoderRefiner(nn.Module):
         text_prompt_use_checkpoint: bool = True,
         score_intra_attn_type: str = "window",
         feature_intra_attn_type: str = "window",
+        intra_score_use_clip_mid: bool = True,
+        intra_feature_use_sam_fpn: bool = True,
         clip_native_dim: int | None = None,
     ):
         super().__init__()
@@ -101,9 +103,11 @@ class ClassConditionedEncoderRefiner(nn.Module):
                 window_size=int(window_size),
                 shift_size=int(shift_size),
                 dropout=float(dropout),
-                score_attention_type="intra" if layer_index % 2 == 0 else "inter",
+                attention_type="inter" if layer_index % 2 == 0 else "intra",
                 score_intra_attn_type=score_intra_attn_type,
                 feature_intra_attn_type=feature_intra_attn_type,
+                intra_score_use_clip_mid=intra_score_use_clip_mid,
+                intra_feature_use_sam_fpn=intra_feature_use_sam_fpn,
             )
             for layer_index in range(self.num_fusion_layers)
         ])
@@ -116,10 +120,15 @@ class ClassConditionedEncoderRefiner(nn.Module):
         self.decoder_input_fusion = DecoderInputFusion(
             use_checkpoint=self.use_checkpoint,
         )
-        if clip_native_dim is None or clip_native_dim <= 0:
-            raise ValueError("clip_native_dim must be positive for CLIP middle guidance")
-        self.clip_native_dim = int(clip_native_dim)
-        self.clip_mid_proj = nn.Conv2d(self.clip_native_dim * 2, 256, kernel_size=1)
+        self.intra_score_use_clip_mid = bool(intra_score_use_clip_mid) and self.num_fusion_layers > 1
+        self.intra_feature_use_sam_fpn = bool(intra_feature_use_sam_fpn) and self.num_fusion_layers > 1
+        self.clip_native_dim = clip_native_dim
+        self.clip_mid_proj = None
+        if self.intra_score_use_clip_mid:
+            if clip_native_dim is None or clip_native_dim <= 0:
+                raise ValueError("clip_native_dim must be positive for CLIP middle guidance")
+            self.clip_native_dim = int(clip_native_dim)
+            self.clip_mid_proj = nn.Conv2d(self.clip_native_dim * 2, 256, kernel_size=1)
 
     def fuse_decoder_input_chunk(
         self,
@@ -222,23 +231,27 @@ class ClassConditionedEncoderRefiner(nn.Module):
             remoteclip_feat_map=clip_image_feat_map,
         )
 
-        # Project image-level guidance once before broadcasting over classes.
-        if clip_mid_features is None or clip_mid_layer_indices is None:
-            raise ValueError("CLIP middle guidance requires features and layer indices [7, 15]")
-        if len(clip_mid_features) != len(clip_mid_layer_indices) or len(set(clip_mid_layer_indices)) != len(clip_mid_layer_indices):
-            raise ValueError("CLIP middle feature indices must be unique and match the feature count")
-        by_layer = dict(zip(clip_mid_layer_indices, clip_mid_features))
-        if 7 not in by_layer or 15 not in by_layer:
-            raise ValueError("CLIP middle guidance requires indices 7 and 15 (layers 8 and 16)")
-        mids = [by_layer[7], by_layer[15]]
-        if any(tuple(x.shape) != (batch_size, self.clip_native_dim, 36, 36) for x in mids):
-            raise ValueError("CLIP middle features must match native channels and the 36×36 grid")
-        projected = self.clip_mid_proj(torch.cat(mids, dim=1))
-        clip_mid_36 = projected[:, None].expand(-1, num_classes, -1, -1, -1)
-        if sam_fpn_72 is None or tuple(sam_fpn_72.shape) != (batch_size, 256, 72, 72):
-            raise ValueError("SAM FPN guidance requires [B, 256, 72, 72] backbone_fpn[2]")
-        downsampled = F.interpolate(sam_fpn_72, size=(36, 36), mode="bilinear", align_corners=False)
-        sam_fpn_36 = downsampled[:, None].expand(-1, num_classes, -1, -1, -1)
+        # Prepare enabled image-level guidance once, then broadcast over prompts.
+        clip_mid_36 = None
+        if self.intra_score_use_clip_mid:
+            if clip_mid_features is None or clip_mid_layer_indices is None:
+                raise ValueError("CLIP middle guidance requires features and layer indices [7, 15]")
+            if len(clip_mid_features) != len(clip_mid_layer_indices) or len(set(clip_mid_layer_indices)) != len(clip_mid_layer_indices):
+                raise ValueError("CLIP middle feature indices must be unique and match the feature count")
+            by_layer = dict(zip(clip_mid_layer_indices, clip_mid_features))
+            if 7 not in by_layer or 15 not in by_layer:
+                raise ValueError("CLIP middle guidance requires indices 7 and 15 (layers 8 and 16)")
+            mids = [by_layer[7], by_layer[15]]
+            if any(tuple(x.shape) != (batch_size, self.clip_native_dim, 36, 36) for x in mids):
+                raise ValueError("CLIP middle features must match native channels and the 36×36 grid")
+            projected = self.clip_mid_proj(torch.cat(mids, dim=1))
+            clip_mid_36 = projected[:, None].expand(-1, num_classes, -1, -1, -1)
+        sam_fpn_36 = None
+        if self.intra_feature_use_sam_fpn:
+            if sam_fpn_72 is None or tuple(sam_fpn_72.shape) != (batch_size, 256, 72, 72):
+                raise ValueError("SAM FPN guidance requires [B, 256, 72, 72] backbone_fpn[2]")
+            downsampled = F.interpolate(sam_fpn_72, size=(36, 36), mode="bilinear", align_corners=False)
+            sam_fpn_36 = downsampled[:, None].expand(-1, num_classes, -1, -1, -1)
 
         base_feature_36 = F.interpolate(
             encoder_features_72.reshape(

@@ -118,7 +118,7 @@ class OpenCLIPConfig:
 class EncoderRefinerConfig:
     enabled: bool = True
 
-    fusion_layers: int = 4  # Alternate score-intra/feature-inter and score-inter/feature-intra.
+    fusion_layers: int = 4  # Alternate pure inter-class and intra-class blocks, starting with inter.
     num_heads: int = 8
     dropout: float = 0.1
 
@@ -130,6 +130,8 @@ class EncoderRefinerConfig:
 
     score_intra_attn_type: str = "window"
     feature_intra_attn_type: str = "window"
+    intra_score_use_clip_mid: bool = True
+    intra_feature_use_sam_fpn: bool = True
     window_size: int = 12
     shift_size: int = 6
 

@@ -1,6 +1,6 @@
 # OVRS-SAM3 设计说明
 
-适用分支：`master`
+适用分支：`tmp/refiner-inter-intra-guidance-20261107`
 项目仓库：`jk-jin/ovrs-sam3`
 当前任务：开放词汇遥感语义分割
 
@@ -45,7 +45,7 @@ RemoteCLIP 局部相似度图
 clip_score_embed_36 直接作为初始 score_embed_36，不接收 SAM3 FPN 注入
 
 feature_36 + score_embed_36
-  → Refiner layer 1..4（A→B→A→B，全提示同时运行）
+  → Refiner block 1..4（类间→类内→类间→类内，全提示同时运行）
   → refiner_features_36 [B, P, 256, 36, 36]
 
 随后按 prompt_chunk_size 逐提示块执行：
@@ -160,7 +160,7 @@ RemoteCLIP 使用 ViT-L/14。原始图像单独缩放到 504×504，并使用 CL
 
 最终输出 `[B, 768, 36, 36]`。配置 `image_intermediate_layers=[7, 15]` 使用零基索引，
 对应第 8、16 层；中间特征保留原生通道，ViT-L/14 为 1024，不能按最终投影的 768 通道处理。
-第 8、16 层中间特征固定参与 score 类内注意力的 Q/K 指导。
+第 8、16 层中间特征在 `intra_score_use_clip_mid=True` 时参与 score 类内注意力的 Q/K 指导。
 训练且 RemoteCLIP 图像分支允许微调时，在提取与缓存处保留计算图；debug 输出仍 detach。
 验证或冻结图像编码时不启用梯度。不额外运行 RemoteCLIP。
 
@@ -210,37 +210,50 @@ score_embeddings.py 生成的 clip_score_embed_36 直接作为 score
 stream。进入所有 Refiner Attention 层之前不再融合任何 SAM3 FPN
 特征，也不再设置额外残差系数。
 
-SAM3 FPN72 用于后续单尺度 DecoderInputFusion 的细节支路，并固定下采样到 36×36，
+SAM3 FPN72 用于后续单尺度 DecoderInputFusion 的细节支路；当
+`intra_feature_use_sam_fpn=True` 时，另将其下采样到 36×36，
 为更新 feature 的类内注意力提供 Q/K 指导，仍不注入初始 score embedding。
+该开关仅控制 Refiner 类内指导，不影响后续融合模块使用 FPN72。
 FPN144 和 FPN288 由原始 Pixel Decoder 内部消费。
 
-### 5.2 固定图像指导与标准 FFN
+### 5.2 纯类间块与纯类内块交替
 
-四层按 A→B→A→B 执行，每层始终先更新 score stream，再更新 feature stream，
-最后执行 Feature FFN 和 Score FFN。各层注意力参数独立。
-不保留四个可选指导开关，注意力不使用 CLIP 或 SAM3 文本 token 指导。
-原始 CLIP 文本模板编码仍用于生成初始 score embedding。
+默认四个块按“类间→类内→类间→类内”执行。每个块先完成 score stream 的注意力更新，
+再完成 feature stream 的注意力更新，最后执行 Feature FFN 和 Score FFN。
+每个块、每条目标流、每个空间子步骤的注意力投影与归一化参数独立。
 
-| 层 | score 更新 | feature 更新 | 最后 |
+| 块 | 更新目标 | Q/K 通道拼接 | Value |
 | --- | --- | --- | --- |
-| 1、3（A） | 类内注意力，固定 CLIP 中间层指导 | 类间注意力 | Feature FFN→Score FFN |
-| 2、4（B） | 类间注意力 | 类内注意力，固定 FPN36 指导 | Feature FFN→Score FFN |
+| 1、3：类间块 | 先 score | 当前 score + 当前 feature | 当前 score |
+| 1、3：类间块 | 再 feature | 更新后的 score + 当前 feature | 当前 feature |
+| 2、4：类内块 | 先 score | 当前 score + 当前 feature + 可选 CLIP 中间层指导 | 当前 score |
+| 2、4：类内块 | 再 feature | 更新后的 score + 当前 feature + 可选 SAM3 FPN36 指导 | 当前 feature |
 
-类内注意力分别对 score、feature 和图像指导做逐像素通道 LayerNorm，
-Q/K 按 `[score_embed, feature, guidance]` 拼接后独立线性投影。
-两种类间注意力都只拼接 `[score_embed, feature]`。
-两路均为 256 通道时，类内 Q/K 输入为 768，类间为 512，投影后为 256 通道。
-Value 始终仅来自指定的目标流，输出直接残差到同一条流。
-后续子步骤使用已经更新的 score 或 feature，重新计算 pre-norm、Q/K/V 和注意力权重。
+Q/K 是生成注意力权重的查询和键；Value 是被聚合并残差更新到目标流的内容。
+所有输入流在拼接前分别做逐像素通道 LayerNorm。两路均为 256 通道时，
+类间 Q/K 输入为 512 通道；类内关闭对应指导时为 512 通道，开启时为 768 通道，
+随后分别投影为 256 通道。Value 始终只来自被更新的流，输出直接残差到该流。
+后续子步骤使用已更新的特征，重新计算 pre-norm、Q/K/V 和注意力权重。
+类间注意力仍在同一空间位置跨全部提示聚合，包含自身提示。
+不增加 CLIP 模板均值或 SAM3 文本 token 均值指导；CLIP 模板仍用于初始 score embedding。
 
-**固定图像指导：**
+**两个独立图像指导开关（位于 `model.encoder_refiner_cfg`）：**
 
-* score 类内：配置 `image_intermediate_layers=[7, 15]` 对应 CLIP 第 8、16 层原生特征。
-  两层沿通道拼接，经一个共享 1×1 Conv 到 256 通道，每次 Refiner 前向只计算一次，
-  再从图像维广播到全部类别提示。ViT-L/14 中间特征为 1024 通道，卷积输入为 2048。
-* feature 类内：取冻结的 `backbone_fpn[2]`，从 72×72 双线性下采样到 36×36
-  （align_corners=False），保留 256 通道，不增加通道投影，再广播到全部类别提示。
-* 两种指导都是必需输入，缺失特征、原生通道错误或缺少中间层索引 7/15 时直接报错。
+| 配置 | 默认值 | 控制范围 |
+| --- | --- | --- |
+| `intra_score_use_clip_mid` | `True` | 类内块更新 score 时是否拼接 CLIP 中间层特征 |
+| `intra_feature_use_sam_fpn` | `True` | 类内块更新 feature 时是否拼接从 FPN72 下采样的 FPN36 |
+
+* CLIP 指导沿用 `image_intermediate_layers=[7, 15]`，即第 8、16 层原生图像特征。
+  两层沿通道拼接，经共享 1×1 Conv 投影到 256 通道，每次 Refiner 前向计算一次，
+  再广播到全部提示。ViT-L/14 中间特征为 1024 通道，因此投影输入为 2048 通道。
+* FPN 指导沿用冻结的 `backbone_fpn[2]`，从 72×72 双线性下采样到 36×36
+  （`align_corners=False`），保留 256 通道，再广播到全部提示。
+* 关闭开关时移除相应拼接通道和指导 LayerNorm，不用零张量占位；关闭 CLIP 指导时
+  不创建 `clip_mid_proj`。Refiner 不再要求关闭分支的指导输入，也不执行对应指导预处理。
+  开启时继续检查指导形状，CLIP 还检查中间层索引 7/15。
+* 只配置一个 Refiner 块时，该块为纯类间块，因此不创建或准备任何图像指导。
+* 这两个开关只作用于类内注意力，互不影响，也不改变类间 Q/K 或后续 DecoderInputFusion。
 
 **类内空间实现继续可配置：**
 
@@ -249,19 +262,28 @@ Value 始终仅来自指定的目标流，输出直接残差到同一条流。
 | `score_intra_attn_type` | `window` / `local_3x3` | 更新 score 的类内实现 |
 | `feature_intra_attn_type` | `window` / `local_3x3` | 更新 feature 的类内实现 |
 
-默认均为 `window`，执行一次普通窗口与一次移位窗口，沿用窗口相对位置偏置和 shift mask。
-`local_3x3` 执行四次连续普通逐像素 3×3 注意力：步长 1，无空洞或采样间隔，
+默认均为 `window`，每条流执行一次普通窗口与一次移位窗口，
+沿用窗口相对位置偏置和 shift mask，默认窗口 12、移位 6。
+`local_3x3` 每条流执行四次连续普通逐像素 3×3 注意力：步长 1，无空洞或采样间隔，
 含中心及八个相邻位置，每头九个独立相对位置偏置，图像外的 key 在 softmax 前屏蔽。
-每个空间子步骤的投影、LayerNorm、相对位置偏置独立，图像指导在所有子步骤中固定使用。
-四次局部子步骤属于一层内部，不增加 Refiner 总层数。
+先完成 score 的整组空间子步骤，再开始 feature 的整组空间子步骤。
+图像指导在各子步骤中固定，目标流则逐步更新。子步骤不增加 Refiner 总块数。
 
 **标准双流 FFN：**
 
-Feature FFN 和 Score FFN 分别处理各自当前注意力后的 256 通道特征。
+Feature FFN 和 Score FFN 各处理当前注意力后的 256 通道特征。
 每路执行通道 LayerNorm(256)、独立逐 token `256→1024→256` FFN（GELU 和 dropout），
-输出直接残差到对应当前流。不拼接模块入口初始特征或本层入口特征。
-全部层结束后仅对 feature_36 执行一次通道 LayerNorm；最终 score 不加输出 LayerNorm。
-图像子层沿用 non-reentrant checkpoint，显式传入固定 CLIP 中间层和 FPN36 指导。
+输出直接残差到对应当前流。全部块结束后仅对 feature_36 执行一次通道 LayerNorm；
+最终 score 不加输出 LayerNorm。块级 non-reentrant checkpoint 显式传入启用的图像指导，
+关闭的指导传 `None`。
+
+例如同时关闭两路类内指导：
+
+```bash
+python tools/train.py configs/train/isaid_loveda_full.py --cfg-options \
+  model.encoder_refiner_cfg.intra_score_use_clip_mid=False \
+  model.encoder_refiner_cfg.intra_feature_use_sam_fpn=False
+```
 
 ### 5.3 单尺度 Decoder Input Fusion
 
@@ -560,8 +582,8 @@ python tools/train.py configs/train/isaid_loveda_full.py
 5. clip_score_embed_36 完全由 RemoteCLIP 模板分数图和 dense RemoteCLIP feature map 生成。
 6. 模板分数中间特征与 dense CLIP 特征在拼接前必须分别沿通道维执行逐像素 L2 归一化。
 7. 两路 256 通道中间特征在第二次拼接前也必须分别执行逐像素 L2 归一化。
-8. 初始 score embedding 不注入 SAM3 FPN；固定将 FPN72 下采样到 36×36 用作更新 feature 的类内 Q/K 指导。
-9. SAM3 FPN72 用于固定 Refiner Q/K 指导及 72 尺度融合；FPN144 和 FPN288 只在原始 Pixel Decoder 内部使用。
+8. 初始 score embedding 不注入 SAM3 FPN；启用 FPN 指导时将 FPN72 下采样到 36×36，用作更新 feature 的类内 Q/K 指导。
+9. SAM3 FPN72 用于可选的 Refiner 类内 Q/K 指导及必需的 72 尺度融合；FPN144 和 FPN288 只在原始 Pixel Decoder 内部使用。
 10. 可训练 RemoteCLIP 文本特征不能跨 optimizer step 缓存。
 11. 验证不得重新开启 RemoteCLIP 图像分支的 autograd。
 12. Refiner 必须先在全部提示上执行，再按 chunk 做高分辨率解码。Refiner 不能放进 chunk 循环。
@@ -572,7 +594,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 17. teacher 只来自原始 encoder72 解码路径并且必须 detach。teacher 和 student 都为 288×288。
 18. 蒸馏只监督存在类别。每个存在提示均监督全部 GT 有效像素，并额外监督其原始类别 GT 外侧 `sam3_mask_distill_boundary_width` 像素范围内且标签为 255 的边界环。远处 255 区域不参与蒸馏。多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
 19. 最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
-20. Refiner 按 A→B→A→B 交替，每层先更新 score 再更新 feature。score 类内固定拼接 CLIP 中间层融合特征，feature 类内固定拼接 FPN36；两种类间 Q/K 都不拼接文本。所有注意力单 Value、pre-norm、直接残差。双路 FFN 各处理当前 256 通道特征，256→1024→256 后直接残差到当前流；保留最终 feature LayerNorm。
+20. Refiner 按纯类间→纯类内→纯类间→纯类内交替，每块先更新 score 再更新 feature。score 类内可配置拼接 CLIP 中间层融合特征，feature 类内可配置拼接 FPN36，两个开关默认开启；两种类间 Q/K 都只拼接 score 和 feature。所有注意力单 Value、pre-norm、直接残差。双路 FFN 各处理当前 256 通道特征，256→1024→256 后直接残差到当前流；保留最终 feature LayerNorm。
 21. TTA 必须先平均提示空间分数（`raw_prompt_score_map`），再合并提示到原始类别，最后进行相对阈值过滤。
 22. `reduce_zero_label` 与 `background_cfg` 各自只执行其定义的一次标签空间变换。
 23. 完整恢复必须严格校验 checkpoint schema；模型权重迁移必须走独立入口。
@@ -592,7 +614,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 * 只支持 semantic 模式；
 * 不支持非空几何 prompt；
 * 不支持动态 SAM3/refiner 空间尺寸或多尺度 TTA；
-* `clip_mid_features` 固定参与 score 类内 Q/K 指导，debug 输出单独 detach；
+* `clip_mid_features` 在 CLIP 指导开关开启时参与 score 类内 Q/K 指导，debug 输出单独 detach；
 * 当前默认训练集为 iSAID，验证集为 LoveDA。
 
 ## 12. Checkpoint 非兼容变更
@@ -695,14 +717,6 @@ Checkpoint schema 版本为 4。实验追踪状态不再保存在 checkpoint 中
 * 类内 Q/K 拼接顺序也发生变化，即使旧权重 shape 匹配，直接加载亦不保证数值等价；建议本次新实验从默认初始化开始。
 * `_CHECKPOINT_VERSION` 保持 4，因为 checkpoint 容器格式不变。
 
-CPU 回归验证入口：`python -m unittest discover -s tests -v`。
-18 项 CPU 测试覆盖单 Value、类间聚合轴、窗口/局部边界、更新顺序和残差目标，
-四种类内配置的实际 36×36/256 通道四层 checkpoint 输出与梯度一致性，
-固定图像指导、两种类间注意力均不拼接文本、标准 FFN 通道、完整配置构建，
-以及单层融合只上采样一次、原始 encoder/FPN 输入复用、逐提示广播、
-checkpoint 输出和参数/Refiner 输入梯度、输入形状检查。
-测试不需要下载 SAM3 或 RemoteCLIP 权重。
-
 本次简化为固定图像指导版本：
 
 * 固定保留 score 类内的 CLIP 第 8、16 层融合指导和 feature 类内的 FPN36 指导。
@@ -714,3 +728,22 @@ checkpoint 输出和参数/Refiner 输入梯度、输入形状检查。
 * 初始 CLIP score embedding、原始 SAM3 流程、教师、冻结解码头、损失和逐 chunk 梯度设计保留。
 * 旧 checkpoint 的 FFN 形状和融合参数名称不匹配；新实验使用新的 work directory，不提供兼容层。
 * checkpoint 容器 schema 保持 4。
+
+
+本次纯类间/纯类内块重构：
+
+* 块序列改为纯类间→纯类内交替，始终先更新 score、再更新 feature，保留双路 FFN。
+* 删除旧 `score_attention_type` 的混合类型语义；每块使用 `attention_type` 定义统一的注意力类型。
+* 块内新增独立 `score_attention.*` 和 `feature_attention.*` 参数组，原来的单个
+  `class_attn.*`、`window_attn_regular.*`、`window_attn_shifted.*`、`local_attn.*` 及对应注意力归一化参数结构被替换。
+* 新增两个独立布尔配置 `intra_score_use_clip_mid`、`intra_feature_use_sam_fpn`，默认均为 True。
+  切换指导开关会改变类内 Q/K 输入形状；CLIP 开关还决定是否创建 `clip_mid_proj`。
+* 类间拼接、类内指导来源与生成方法、相对位置偏置、空间模式、score embedding、
+  DecoderInputFusion、SAM3 分割流程、损失与逐 chunk 反传设计保持不变。
+* 结构变化后的新实验使用新的 work directory，不能用旧 checkpoint 完整 resume；
+  不添加旧权重映射或兼容层。checkpoint 容器 schema 仍为 4。
+
+CPU 回归验证入口：`python -m unittest discover -s tests -v`。
+测试覆盖纯块类型、score→feature 串行更新、残差目标、两个指导开关四种组合、
+两条流四种空间模式组合，以及实际 36×36/256 通道四块 Refiner 的 checkpoint
+前向输出、输入梯度和参数梯度一致性。测试使用模拟文本编码器，无需预训练权重。

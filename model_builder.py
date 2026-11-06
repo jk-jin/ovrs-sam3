@@ -756,7 +756,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
     @classmethod
     def build_semantic_core_model(cls, cfg: SegmentorBuildConfig) -> nn.Module:
         refiner_cfg = cfg.encoder_refiner_cfg
-        if not {7, 15}.issubset(cfg.openclip_cfg.image_intermediate_layers):
+        if (refiner_cfg.intra_score_use_clip_mid and refiner_cfg.fusion_layers > 1
+                and not {7, 15}.issubset(cfg.openclip_cfg.image_intermediate_layers)):
             raise ValueError("CLIP middle guidance requires image_intermediate_layers to include [7, 15].")
         bpe_path = resolve_bpe_path(cfg.bpe_path)
         compile_mode = "default" if cfg.compile else None
@@ -803,6 +804,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             encoder_refiner_score_embed_dim=int(refiner_cfg.score_embed_dim),
             encoder_refiner_score_intra_attn_type=refiner_cfg.score_intra_attn_type,
             encoder_refiner_feature_intra_attn_type=refiner_cfg.feature_intra_attn_type,
+            encoder_refiner_intra_score_use_clip_mid=refiner_cfg.intra_score_use_clip_mid,
+            encoder_refiner_intra_feature_use_sam_fpn=refiner_cfg.intra_feature_use_sam_fpn,
             encoder_refiner_window_size=int(refiner_cfg.window_size),
             encoder_refiner_shift_size=int(refiner_cfg.shift_size),
             encoder_refiner_use_checkpoint=bool(refiner_cfg.use_checkpoint),
