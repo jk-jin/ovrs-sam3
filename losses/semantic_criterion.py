@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Dict, Optional
 
@@ -46,7 +47,20 @@ class SemanticStreamingContext:
     # Number of valid pixels multiplied by P.
     total_valid_pixels: int
 
+    # [B], number of ignore-index pixels in each image.
+    ignore_pixel_count_by_image: torch.Tensor
+
+    # [B, M], original class presence per image.
+    class_presence: torch.Tensor
+
+    # [M], number of prompt channels per original class.
+    prompt_count_by_class: torch.Tensor
+
+    # Present image-class pairs with a non-empty ignore region.
+    ignore_region_pair_denom: int
+
     sam3_mask_distill_weight: float
+    ignore_region_bce_weight: float
 
 
 class SemanticCriterion(nn.Module):
@@ -64,6 +78,12 @@ class SemanticCriterion(nn.Module):
            - Only present image-prompt pairs
            - All valid GT pixels plus a configurable class-specific
              outer boundary restricted to ignore pixels
+
+        4. Optional ignore-region BCE (default weight 0.0)
+           - Only ignore-index pixels, supervised with target 0
+           - Only original classes present in each image
+           - Per-class mean across prompts and ignore pixels, then
+             mean over present image-class pairs with non-empty regions
     """
 
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
@@ -96,6 +116,25 @@ class SemanticCriterion(nn.Module):
                 "sam3_mask_distill_boundary_width must be >= 0, "
                 f"got {boundary_width}."
             )
+
+        ignore_region_weight = self.cfg.ignore_region_bce_weight
+        if isinstance(ignore_region_weight, bool) or not isinstance(
+            ignore_region_weight, (int, float)
+        ):
+            raise TypeError(
+                "ignore_region_bce_weight must be a non-negative number, "
+                f"got {ignore_region_weight!r}."
+            )
+        ignore_region_weight = float(ignore_region_weight)
+        if (
+            not math.isfinite(ignore_region_weight)
+            or ignore_region_weight < 0.0
+        ):
+            raise ValueError(
+                "ignore_region_bce_weight must be finite and >= 0, "
+                f"got {ignore_region_weight}."
+            )
+        self.ignore_region_bce_weight = ignore_region_weight
 
     # ------------------------------------------------------------------
     # Public API
@@ -277,6 +316,22 @@ class SemanticCriterion(nn.Module):
             presence_target.sum().item()
         )
 
+        # [B], all present classes in one image share the same ignore region.
+        ignore_pixel_count_by_image = (
+            ignore_mask
+            .to(dtype=torch.long)
+            .flatten(1)
+            .sum(dim=1)
+        )
+
+        # Empty-region present classes are skipped from the global mean.
+        ignore_region_pair_denom = int(
+            (
+                original_presence
+                & (ignore_pixel_count_by_image[:, None] > 0)
+            ).sum().item()
+        )
+
         boundary_width = int(
             self.cfg.sam3_mask_distill_boundary_width
         )
@@ -349,8 +404,17 @@ class SemanticCriterion(nn.Module):
             num_present_pairs=num_present_pairs,
             distill_pixel_denom=distill_pixel_denom,
             total_valid_pixels=total_valid_pixels,
+            ignore_pixel_count_by_image=(
+                ignore_pixel_count_by_image
+            ),
+            class_presence=original_presence,
+            prompt_count_by_class=prompt_counts,
+            ignore_region_pair_denom=ignore_region_pair_denom,
             sam3_mask_distill_weight=float(
                 self.cfg.sam3_mask_distill_weight
+            ),
+            ignore_region_bce_weight=float(
+                self.ignore_region_bce_weight
             ),
         )
 
@@ -458,6 +522,26 @@ class SemanticCriterion(nn.Module):
         else:
             dice_contribution = zero
 
+        # ---- Ignore-region BCE (target 0 on label == ignore_index) ----
+        ignore_region_weight = float(context.ignore_region_bce_weight)
+        if (
+            ignore_region_weight > 0.0
+            and context.ignore_region_pair_denom > 0
+        ):
+            ignore_region_contribution = (
+                self._ignore_region_contribution_chunk(
+                    final_logits=final_logits_chunk,
+                    context=context,
+                    prompt_class_ids=prompt_class_ids,
+                )
+            )
+        else:
+            ignore_region_contribution = zero
+
+        weighted_ignore_region_contribution = (
+            ignore_region_weight * ignore_region_contribution
+        )
+
         # ---- SAM3 teacher distillation ----
         distill_weight = float(context.sam3_mask_distill_weight)
         if distill_weight > 0.0 and context.distill_pixel_denom > 0:
@@ -502,12 +586,17 @@ class SemanticCriterion(nn.Module):
         chunk_total = (
             float(self.cfg.final_balanced_bce_weight) * plain_bce_contribution
             + dice_weight * dice_contribution
+            + weighted_ignore_region_contribution
             + weighted_distill_contribution
         )
 
         return {
             "loss_final_bce": plain_bce_contribution,
             "loss_final_dice": dice_contribution,
+            "loss_ignore_region_bce": ignore_region_contribution,
+            "loss_ignore_region_weighted": (
+                weighted_ignore_region_contribution
+            ),
             "loss_sam3_mask_distill_bce": distill_contribution,
             "loss_sam3_mask_distill_weighted": weighted_distill_contribution,
             "total_loss": chunk_total,
@@ -606,6 +695,67 @@ class SemanticCriterion(nn.Module):
         return (
             pixel_ce * pixel_weight
         ).sum() / max(int(global_denom), 1)
+
+    def _ignore_region_contribution_chunk(
+        self,
+        final_logits: torch.Tensor,
+        context: SemanticStreamingContext,
+        prompt_class_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        """Per-class mean BCE target 0 on ignore pixels, then pair mean."""
+        device = final_logits.device
+
+        ignore_bce = F.binary_cross_entropy_with_logits(
+            final_logits,
+            torch.zeros_like(final_logits),
+            reduction="none",
+        )
+
+        ignore_float = (~context.valid_mask).to(
+            device=device,
+            dtype=ignore_bce.dtype,
+        )[:, None, :, :]
+
+        # [B, C_chunk], sum over ignore pixels for each prompt.
+        prompt_pixel_sum = (
+            ignore_bce * ignore_float
+        ).flatten(2).sum(dim=2)
+
+        ignore_count = context.ignore_pixel_count_by_image.to(
+            device=device,
+            dtype=ignore_bce.dtype,
+        )
+        prompt_count = context.prompt_count_by_class.to(
+            device=device,
+            dtype=ignore_bce.dtype,
+        )
+
+        # Pixel mean per prompt, then prompt mean per original class.
+        prompt_mean = (
+            prompt_pixel_sum
+            / ignore_count.clamp_min(1.0)[:, None]
+        )
+        prompt_mean = (
+            prompt_mean
+            / prompt_count.index_select(
+                0, prompt_class_ids
+            )[None, :].clamp_min(1.0)
+        )
+
+        pair_present = context.class_presence.to(
+            device=device
+        ).index_select(
+            1, prompt_class_ids
+        ).to(dtype=ignore_bce.dtype)
+        has_ignore = (
+            context.ignore_pixel_count_by_image.to(device=device) > 0
+        ).to(dtype=ignore_bce.dtype)
+
+        pair_weight = pair_present * has_ignore[:, None]
+
+        return (
+            prompt_mean * pair_weight
+        ).sum() / max(int(context.ignore_region_pair_denom), 1)
 
     # ------------------------------------------------------------------
     # Dice (per-chunk, global denominator)

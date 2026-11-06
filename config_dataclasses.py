@@ -142,6 +142,7 @@ class SemanticCriterionConfig:
 
     final_balanced_bce_weight: float = 1.0
     final_dice_weight: float = 0.0
+    ignore_region_bce_weight: float = 0.0
 
     eps: float = 1e-6
 

@@ -375,9 +375,20 @@ bce_per_pixel = BCEWithLogits(final_logits, target)
 loss_final_bce = (bce_per_pixel * valid_mask).sum() / total_valid_pixels
 ```
 
-标签 255 被排除（不参与 BCE），对所有提示统一处理。
+标签 255 不参与主 BCE 和 Dice；只有开启类别忽略区域 BCE 时，才会对存在类别的 255 像素使用目标 0。
 
 **Dice 损失**（`final_dice_weight=0.0`）：只对图像中存在的提示计算，默认关闭。开启时按全局 `N_present` 做逐 chunk 贡献归一化。
+
+**类别忽略区域 BCE**（`ignore_region_bce_weight`，基础配置为 `0.0`，默认关闭）：
+
+只使用 `label == 255` 的忽略像素，监督目标固定为 0，即对 logits 计算 `BCEWithLogits(logit, 0)`，等价于 `softplus(logit)`。
+
+* 只监督在该图像中存在的原始类别，不存在类别不参与。
+* 同一图像内所有存在类别共享整幅图的 255 区域；每个类别分别在这些像素上求平均。
+* 一个类别有多个提示时，先对每个提示在忽略像素上求均值，再对该类别的全部提示求均值，保证每类等权而不是每提示等权。
+* 每个图像—类别对得到一个平均损失后，在全部“类别存在且忽略区域非空”的图像—类别对上等权平均。
+* 忽略区域为空的类别直接跳过，不进入分母。
+* 全局分母在 `prepare_streaming_context()` 中一次算好，逐 chunk 只累加贡献，与整批一次计算等价。
 
 **SAM3 teacher 掩码蒸馏**（基础配置 `sam3_mask_distill_weight=0.5`）：
 
@@ -407,13 +418,16 @@ loss_final_bce = (bce_per_pixel * valid_mask).sum() / total_valid_pixels
 total_loss = (
     1.0 * loss_final_bce
     + 0.0 * loss_final_dice
+    + 0.0 * loss_ignore_region_bce
     + 0.5 * loss_sam3_mask_distill_bce
 )
 ```
 
 `loss_sam3_mask_distill_bce` 为未经权重的原始蒸馏 BCE；`loss_sam3_mask_distill_weighted` 为真正加入总损失的加权贡献。蒸馏权重在整个训练期间固定不变。
 
-上面的数值取自 `configs/_base_/model/ovrs_sam3.py` 的当前取值（蒸馏权重 0.5、外环宽度 3）。`config_dataclasses.py` 中的通用默认值不同，实验实际使用的数值取决于最终合并配置。
+`loss_ignore_region_bce` 为未经权重的类别忽略区域 BCE；`loss_ignore_region_weighted` 为加权贡献。基础配置权重为 0.0，默认不影响总损失。
+
+上面的数值取自 `configs/_base_/model/ovrs_sam3.py` 的当前取值（蒸馏权重 0.5、外环宽度 3、忽略区域权重 0.0）。`config_dataclasses.py` 中的通用默认值不同，实验实际使用的数值取决于最终合并配置。
 
 **训练显存设计**：
 
@@ -486,11 +500,13 @@ Ctrl+C 使用 Python 默认 `KeyboardInterrupt`。训练和验证均立即退出
 
 旧格式或缺少完整运行状态的权重不能用于 `--resume-from`，但可以通过 `--load-model-from` 只加载模型参数。
 
-训练日志中记录以下蒸馏相关项：
+训练日志中记录以下损失相关项：
 
 | 键 | 含义 |
 | --- | --- |
 | `loss_final_bce` | 朴素 BCE，所有有效像素等权全局均值（跨 chunk 累加后求均值） |
+| `loss_ignore_region_bce` | 未加权的类别忽略区域 BCE（跨 chunk 累加后求均值） |
+| `loss_ignore_region_weighted` | 真正加入总损失的加权忽略区域贡献（跨 chunk 累加后求均值） |
 | `loss_sam3_mask_distill_bce` | 未经权重的原始蒸馏 BCE（跨 chunk 累加后求均值） |
 | `loss_sam3_mask_distill_weighted` | 真正加入总损失的加权蒸馏贡献（跨 chunk 累加后求均值） |
 
@@ -525,7 +541,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 | `models/score_embeddings.py`          | 64 模板相似度图、归一化 CLIP 融合和空间卷积增强 |
 | `models/openclip_image_encoder.py`    | 36×36 dense RemoteCLIP 图像特征              |
 | `models/openclip_text_encoder.py`     | 模板文本编码、micro-batch 与梯度控制                 |
-| `losses/semantic_criterion.py`        | Streaming 正负平衡 BCE、Dice 和 SAM3 teacher 蒸馏 |
+| `losses/semantic_criterion.py`        | Streaming 主 BCE、Dice、类别忽略区域 BCE 和 SAM3 teacher 蒸馏 |
 | `engine/trainer.py`                   | 高分辨率逐 chunk loss/backward 与 proxy 梯度回传 |
 | `engine/checkpoint.py`                | 安全、原子、严格的 checkpoint 保存与加载               |
 | `engine/runtime_state.py`             | RNG 捕获与恢复                                |
@@ -569,6 +585,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 30. 融合支路固定 `branch_dim=128`，3×3 卷积使用普通卷积（无分组）。
 31. 融合输出直接作为 Pixel Decoder 的最后一层输入；模块内无融合系数、门控、零初始化、额外残差或输出归一化。
 32. 最终 logits 由冻结 `semantic_seg_head` 生成。
+33. 类别忽略区域 BCE 只使用 `label == ignore_index` 的像素，目标为 0；只监督图像中存在的原始类别。先对每个提示的忽略像素求均值，再对该类别全部提示求均值，最后在“类别存在且忽略区域非空”的图像—类别对上等权平均；空区域类别跳过。全局分母必须跨 chunk 保持一致。
 
 当前限制：
 

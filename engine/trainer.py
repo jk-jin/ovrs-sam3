@@ -328,6 +328,8 @@ class Trainer:
             for key in (
                 "loss_final_bce",
                 "loss_final_dice",
+                "loss_ignore_region_bce",
+                "loss_ignore_region_weighted",
                 "loss_sam3_mask_distill_bce",
                 "loss_sam3_mask_distill_weighted",
                 "total_loss",
