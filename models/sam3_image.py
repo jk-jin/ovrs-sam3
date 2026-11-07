@@ -697,8 +697,9 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_cache: Dict[str, Any],
         batch: BatchedDatapoint,
         return_debug: bool = False,
+        return_sam3_scores: bool = False,
     ) -> Dict[str, torch.Tensor]:
-        """Full inference forward pass.
+        """Full inference, optionally decoding frozen SAM3 probabilities per chunk.
 
         For training this MUST NOT be called directly — use the Trainer's
         streaming chunk path instead (run_encoder_refiner_lowres_from_cache +
@@ -730,6 +731,7 @@ class Sam3Image(torch.nn.Module):
             device=refiner_features_36.device,
             dtype=refiner_features_36.dtype,
         )
+        sam3_scores = torch.empty_like(final_logits) if return_sam3_scores else None
 
         chunk_start = 0
         for num_chunk_classes in chunk_class_counts:
@@ -744,12 +746,16 @@ class Sam3Image(torch.nn.Module):
                 refiner_feature_36_chunk=refiner_feature_36_chunk,
                 class_start=chunk_start,
                 class_end=chunk_end,
-                return_teacher_logits=False,
+                return_teacher_logits=return_sam3_scores,
             )
 
             final_logits[:, chunk_start:chunk_end].copy_(
                 chunk_outputs[OUTPUT_KEYS.final_logits]
             )
+            if sam3_scores is not None:
+                sam3_scores[:, chunk_start:chunk_end].copy_(
+                    chunk_outputs[OUTPUT_KEYS.sam3_teacher_logits].sigmoid()
+                )
 
             chunk_start = chunk_end
 
@@ -762,6 +768,8 @@ class Sam3Image(torch.nn.Module):
         result: Dict[str, torch.Tensor] = {
             OUTPUT_KEYS.final_logits: final_logits.contiguous(),
         }
+        if sam3_scores is not None:
+            result[OUTPUT_KEYS.sam3_prompt_score_map] = sam3_scores.detach().contiguous()
 
         if return_debug:
             cross_attended_encoder_features_72 = encoder_refiner_cache[

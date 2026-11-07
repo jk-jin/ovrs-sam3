@@ -116,6 +116,7 @@ class SAM3Segmentor(nn.Module):
             encoder_refiner_cache=encoder_refiner_cache,
             batch=batch,
             return_debug=return_debug,
+            return_sam3_scores=self.adapter.sam3_semantic_filter_threshold is not None,
         )
 
     def forward(self, batch: BatchedDatapoint) -> dict[str, torch.Tensor]:
@@ -135,7 +136,7 @@ class SAM3Segmentor(nn.Module):
             batch=batch,
         )
 
-        # Inference: go through adapter for sigmoid, relative threshold, argmax.
+        # Adapter applies sigmoid, optional relative/SAM3 filtering, then argmax.
         return self.adapter(
             raw_outputs=final_raw_outputs,
             batch=batch,

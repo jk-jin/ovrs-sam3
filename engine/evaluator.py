@@ -458,8 +458,7 @@ def inference_with_tta(
                 if not torch.is_tensor(value):
                     continue
 
-                # 逐类别相对过滤是非线性操作，各视图的过滤结果不能平均；
-                # 只平均原始提示分数，合并后统一过滤一次。
+                # 非线性过滤不能逐视图平均；平均两路原始提示概率后统一过滤。
                 if key in derived_class_space_keys:
                     continue
 
@@ -519,6 +518,7 @@ def inference_with_tta(
                 OUTPUT_KEYS.raw_prompt_score_map
             ],
             metadata=metadata,
+            sam3_prompt_score_map=merged_outputs.get(OUTPUT_KEYS.sam3_prompt_score_map),
         )
     )
 

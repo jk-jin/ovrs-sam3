@@ -24,6 +24,8 @@ class ModelOutputKeys:
     # Expanded prompt-space outputs used for alias-aware inference and TTA.
     prompt_logits: str = "prompt_logits"
     raw_prompt_score_map: str = "raw_prompt_score_map"
+    # Unfiltered frozen-SAM3 prompt probabilities, also averaged before TTA filtering.
+    sam3_prompt_score_map: str = "sam3_prompt_score_map"
 
     # Encoder feature refiner outputs
     encoder_features: str = "encoder_features"
@@ -35,8 +37,7 @@ class ModelOutputKeys:
     clip_score_embed: str = "clip_score_embed"
     clip_mid_features: str = "clip_mid_features"
 
-    # Frozen SAM3 teacher logits — per-chunk temporary output during training,
-    # no longer a concatenated full-class output that must be saved.
+    # Frozen SAM3 logits, temporary per chunk for training distillation or inference filtering.
     sam3_teacher_logits: str = "sam3_teacher_logits"
 
 

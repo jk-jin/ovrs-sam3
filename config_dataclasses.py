@@ -156,6 +156,7 @@ class SemanticCriterionConfig:
 class AdapterConfig:
     class_relative_prob_thd: Optional[float] = None
     class_relative_eps: float = 1e-6
+    sam3_semantic_filter_threshold: Optional[float] = None
 
 
 @dataclass

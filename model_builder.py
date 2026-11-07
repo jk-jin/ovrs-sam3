@@ -827,6 +827,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             return SemanticSegAdapter(
                 class_relative_prob_thd=cfg.adapter_cfg.class_relative_prob_thd,
                 class_relative_eps=cfg.adapter_cfg.class_relative_eps,
+                sam3_semantic_filter_threshold=cfg.adapter_cfg.sam3_semantic_filter_threshold,
             )
 
         if cfg.task_mode == TASK_MODE_HYBRID:

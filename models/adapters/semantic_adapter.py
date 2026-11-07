@@ -15,8 +15,16 @@ class SemanticSegAdapter(nn.Module):
         self,
         class_relative_prob_thd: Optional[float] = None,
         class_relative_eps: float = 1e-6,
+        sam3_semantic_filter_threshold: Optional[float] = None,
     ):
         super().__init__()
+
+        if sam3_semantic_filter_threshold is not None:
+            sam3_semantic_filter_threshold = float(sam3_semantic_filter_threshold)
+            if (not math.isfinite(sam3_semantic_filter_threshold)
+                    or not 0.0 <= sam3_semantic_filter_threshold <= 1.0):
+                raise ValueError("sam3_semantic_filter_threshold must be None or finite in [0, 1].")
+        self.sam3_semantic_filter_threshold = sam3_semantic_filter_threshold
 
         if class_relative_prob_thd is not None:
             class_relative_prob_thd = float(
@@ -255,6 +263,7 @@ class SemanticSegAdapter(nn.Module):
         self,
         raw_prompt_score_map: torch.Tensor,
         metadata,
+        sam3_prompt_score_map: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         raw_prompt_score_map = self._as_4d_map(
             raw_prompt_score_map,
@@ -287,6 +296,21 @@ class SemanticSegAdapter(nn.Module):
         final_score_map = self._apply_class_relative_filter(
             raw_final_score_map
         )
+        if self.sam3_semantic_filter_threshold is not None:
+            if sam3_prompt_score_map is None:
+                raise ValueError("SAM3 semantic filtering requires sam3_prompt_score_map.")
+            sam3_prompt_score_map = self._as_4d_map(
+                sam3_prompt_score_map, OUTPUT_KEYS.sam3_prompt_score_map,
+            )
+            if sam3_prompt_score_map.shape != raw_prompt_score_map.shape:
+                raise ValueError("SAM3 and student prompt score maps must have the same shape.")
+            sam3_class_scores = self._merge_prompt_channels(
+                sam3_prompt_score_map.detach(), prompt_to_class_id, num_classes,
+            )
+            # Apply last so relative normalization cannot be affected by inserted zeros.
+            final_score_map = final_score_map.masked_fill(
+                sam3_class_scores < self.sam3_semantic_filter_threshold, 0.0,
+            )
 
         return {
             OUTPUT_KEYS.raw_prompt_score_map:
@@ -362,6 +386,7 @@ class SemanticSegAdapter(nn.Module):
                 raw_prompt_score_map=
                     raw_prompt_score_map,
                 metadata=metadata,
+                sam3_prompt_score_map=raw_outputs.get(OUTPUT_KEYS.sam3_prompt_score_map),
             )
         )
 

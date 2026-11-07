@@ -137,6 +137,7 @@ model = dict(
     adapter_cfg=dict(
         class_relative_prob_thd=0.5,
         class_relative_eps=1e-6,
+        sam3_semantic_filter_threshold=None,  # Set a probability in [0, 1] to enable.
     ),
 
     criterion_cfg=dict(

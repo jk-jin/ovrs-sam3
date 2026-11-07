@@ -50,7 +50,7 @@ feature_36 + score_embed_36
 
 随后按 prompt_chunk_size 逐提示块执行：
 
-教师（仅当蒸馏启用时执行，全程 torch.no_grad()）：
+原始 SAM3 解码（训练蒸馏或推理过滤需要时执行，全程 torch.no_grad()）：
 
 original_encoder_feature_72_chunk
   → 冻结的 SAM3 Pixel Decoder（内部继续使用原始 FPN144/FPN288）
@@ -103,6 +103,7 @@ fused_feature_72
 | `refiner_features_36`         | `[B, P, 256, 36, 36]`              | Refiner 的图像特征流                 |
 | `fused_feature_72`            | `[B×P_chunk, 256, 72, 72]`（逐 chunk） | DecoderInputFusion 输出，替换 Pixel Decoder 的最后一层 FPN 输入 |
 | `final_logits`                | `[B, P_chunk, 288, 288]`（逐 chunk） | 学生路径输出的最终语义分割 logits |
+| `sam3_prompt_score_map`       | `[B, P, 288, 288]`（推理过滤开启时） | 冻结 SAM3 的原始 sigmoid 概率，提示空间，TTA 前不做硬过滤 |
 | `sam3_teacher_logits`         | `[B, P_chunk, 288, 288]`（逐 chunk） | 教师路径输出的 detached teacher logits |
 
 训练损失和评测会在必要时用最近邻插值把标签映射到 logits 尺度。
@@ -141,7 +142,7 @@ SAM3 图像 backbone 在训练中冻结并运行于 `eval()`。图像特征使�
 
 Pixel Decoder 内部继续使用 `interpolation_mode="nearest"`（SAM3 原始设置），FPN 顺序固定为 288、144、72。Pixel Decoder 参数冻结且保持 `eval()`。
 
-教师路径把原始 encoder72 送入 Pixel Decoder，整个调用位于 `torch.no_grad()` 中，仅当蒸馏启用且存在可蒸馏类别时执行。学生路径把 `fused_feature_72` 送入同一个 Pixel Decoder，梯度开启：冻结参数不更新，但梯度可以穿过冻结卷积回传到 DecoderInputFusion 和 Refiner。
+原始 SAM3 路径把原始 encoder72 送入 Pixel Decoder，整个调用位于 `torch.no_grad()` 中。训练时仅当蒸馏启用且存在可蒸馏类别时执行；推理/验证时仅当 SAM3 语义过滤启用时执行，与蒸馏权重独立。学生路径把 `fused_feature_72` 送入同一个 Pixel Decoder，梯度开启：冻结参数不更新，但梯度可以穿过冻结卷积回传到 DecoderInputFusion 和 Refiner。
 
 ## 4. RemoteCLIP 分支
 
@@ -464,7 +465,7 @@ total_loss = (
 
 ## 8. 推理与评测
 
-推理时模型在提示空间输出 `prompt_logits` [B, P, H, W]。Adapter 先做 sigmoid 得到 `raw_prompt_score_map`，再通过像素级最大值把同一原始类别的所有提示合并为 `raw_final_score_map` [B, M, H, W]。可选的逐类别相对阈值在原始类别空间执行，归一化后只把未通过位置置 0；保留位置继续使用原始 sigmoid 分数。最终对类别维取 argmax。
+推理时模型在提示空间输出 `prompt_logits` [B, P, H, W]。Adapter 先做 sigmoid 得到 `raw_prompt_score_map`，再通过像素级最大值把同一原始类别的所有提示合并为 `raw_final_score_map` [B, M, H, W]。可选的逐类别相对阈值在原始类别空间执行，归一化后只把未通过位置置 0；保留位置继续使用原始 sigmoid 分数。随后可选地用原始 SAM3 掩码过滤最终分数，再对类别维取 argmax。
 
 标签空间中两个机制职责不同：
 
@@ -475,7 +476,48 @@ total_loss = (
 
 Evaluator 输出整体 mIoU、mAcc、pixel accuracy 和逐类别指标。`metric_groups` 可以按 `class_ids` 或 `class_names` 定义命名类别组，并分别计算组内 mIoU/mAcc。完整 iSAID→LoveDA 配置使用前景类别组作为 checkpoint monitor。
 
-TTA 当前只支持 `scale=1.0` 和空间翻转。多个视图必须先平均 `raw_prompt_score_map`（提示空间），再合并提示到原始类别，最后统一执行一次非线性相对阈值过滤。
+TTA 当前只支持 `scale=1.0` 和空间翻转。多个视图先对齐回原方向和尺寸，分别平均
+`raw_prompt_score_map` 与（启用 SAM3 过滤时的）`sam3_prompt_score_map`。
+两路各自合并提示到原始类别后，统一执行相对阈值过滤及 SAM3 语义过滤。
+不能平均各视图已经被硬过滤的最终分数。
+
+### 8.1 原始 SAM3 语义掩码过滤
+
+配置：`model.adapter_cfg.sam3_semantic_filter_threshold`，默认 `None`，保持上一版推理行为。
+设为 [0, 1] 内的有限数值时启用，例如 0.2；此处阈值针对原始 SAM3 的 sigmoid 概率。
+
+* 启用时逐提示 chunk 复用原始 SAM3 教师解码路径：已有的 cross-attended encoder72
+  → 原始冻结 Pixel Decoder → 原始语义头 → sigmoid 概率。无须重新运行 encoder，
+  不创建第二个解码器或新的模型参数，不依赖训练蒸馏是否启用。
+* 两路在相同提示顺序和 288×288 网格上对齐。一个原始类别有多个提示时，
+  先分别对学生概率与 SAM3 概率取提示维最大值，得到两张类别空间得分图。
+* 沿用原有学生相对阈值过滤，然后对最终分数执行硬过滤：SAM3 概率低于阈值的
+  类别—像素位置置 0；等于或高于阈值时保留学生原得分。原始 SAM3 概率只决定保留范围，
+  不乘入得分，不替换学生掩码。不将 logits 置零（零 logits 对应概率 0.5）。
+* `raw_prompt_score_map` 和 `raw_final_score_map` 继续保存未做 SAM3 过滤的学生概率，
+  用于正确的 TTA 聚合；`final_score_map` 和 `final_pred` 使用过滤结果。
+* 训练流式 chunk 路径、原始学生 logits、损失、反传及 checkpoint schema 均不改变。
+  关闭时不额外执行原始 SAM3 解码，不返回 `sam3_prompt_score_map`。
+* 若所有类别都被过滤为零，仍沿用原有背景映射和 argmax 规则，不新增背景类别或拒识规则。
+
+使用同一份上一版权重进行测试，例如评测 iSAID（将 `/path/to/previous.pth` 换成实际权重）：
+
+```bash
+# 基线：不启用过滤。
+python tools/train.py configs/test/isaid.py --eval-only \
+  --load-model-from /path/to/previous.pth \
+  --work-dir ./work_dirs/test/isaid_sam3_filter_off \
+  --cfg-options model.adapter_cfg.sam3_semantic_filter_threshold=None
+
+# 仅开启过滤，0.2 为示例阈值，可自行调整。
+python tools/train.py configs/test/isaid.py --eval-only \
+  --load-model-from /path/to/previous.pth \
+  --work-dir ./work_dirs/test/isaid_sam3_filter_02 \
+  --cfg-options model.adapter_cfg.sam3_semantic_filter_threshold=0.2
+```
+
+使用与旧权重一致的 Refiner 层数、空间模式和两路指导开关，无需重新训练或转换权重。
+LoveDA 评测只需将配置路径改为 `configs/test/loveda.py`。
 
 ## 9. Checkpoint、恢复与实验追踪
 
@@ -595,7 +637,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 18. 蒸馏只监督存在类别。每个存在提示均监督全部 GT 有效像素，并额外监督其原始类别 GT 外侧 `sam3_mask_distill_boundary_width` 像素范围内且标签为 255 的边界环。远处 255 区域不参与蒸馏。多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
 19. 最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
 20. Refiner 按纯类间→纯类内→纯类间→纯类内交替，每块先更新 score 再更新 feature。score 类内可配置拼接 CLIP 中间层融合特征，feature 类内可配置拼接 FPN36，两个开关默认开启；两种类间 Q/K 都只拼接 score 和 feature。所有注意力单 Value、pre-norm、直接残差。双路 FFN 各处理当前 256 通道特征，256→1024→256 后直接残差到当前流；保留最终 feature LayerNorm。
-21. TTA 必须先平均提示空间分数（`raw_prompt_score_map`），再合并提示到原始类别，最后进行相对阈值过滤。
+21. TTA 必须先平均提示空间的学生概率和（启用时的）原始 SAM3 概率，再分别合并到类别空间，最后执行相对阈值过滤和 SAM3 硬过滤。
 22. `reduce_zero_label` 与 `background_cfg` 各自只执行其定义的一次标签空间变换。
 23. 完整恢复必须严格校验 checkpoint schema；模型权重迁移必须走独立入口。
 24. 训练不使用完整 `[B,C,288,288]` 计算图。逐 chunk backward 通过 proxy leaf 隔离。
@@ -747,3 +789,18 @@ CPU 回归验证入口：`python -m unittest discover -s tests -v`。
 测试覆盖纯块类型、score→feature 串行更新、残差目标、两个指导开关四种组合、
 两条流四种空间模式组合，以及实际 36×36/256 通道四块 Refiner 的 checkpoint
 前向输出、输入梯度和参数梯度一致性。测试使用模拟文本编码器，无需预训练权重。
+
+
+本次原始 SAM3 语义过滤（兼容上一提交 `7b55d32`）：
+
+* 只增加 Adapter 阈值配置、推理概率输出与最终后处理；不增加/删除/重命名模型参数或 persistent buffer，
+  所有 state_dict 键名和 tensor shape 保持上一提交结构。
+* 上一版本训练权重可以直接加载，在同一权重下通过设置阈值进行评测对比；不需要权重迁移、转换或重新训练。
+* 默认 `sam3_semantic_filter_threshold=None`，关闭时保持上一版本输出及解码次数。
+* 训练损失及 checkpoint 容器 schema 仍保持原样，版本为 4。
+* `tests/test_sam3_semantic_filter.py` 从 Git 历史读取上一提交的 core、adapter、segmentor 源码，
+  使用真实 Refiner 与轻量 SAM 接口测试模型比较 state_dict 键名和形状，序列化上一版本权重，
+  再以 strict=True 加载到新版本，并验证关闭时完整推理输出逐项一致。
+  该测试不需要下载预训练权重，但需要 Git 历史包含 `7b55d32`。
+* 新增测试还覆盖阈值边界、精确置零、同类多提示合并、相对过滤顺序、训练 logits 不变、
+  原始解码按 chunk 执行且无梯度，以及 TTA 两路概率先平均再过滤。
