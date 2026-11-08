@@ -13,40 +13,38 @@ from ..task_modes import OUTPUT_KEYS
 class SemanticSegAdapter(nn.Module):
     def __init__(
         self,
-        class_relative_prob_thd: Optional[float] = None,
-        class_relative_eps: float = 1e-6,
+        sam3_mask_prob_thd: Optional[float] = None,
+        final_mask_prob_thd: Optional[float] = None,
     ):
         super().__init__()
 
-        if class_relative_prob_thd is not None:
-            class_relative_prob_thd = float(
-                class_relative_prob_thd
-            )
-            if not math.isfinite(
-                class_relative_prob_thd
-            ) or not (
-                0.0 <= class_relative_prob_thd <= 1.0
-            ):
-                raise ValueError(
-                    "class_relative_prob_thd must be None or "
-                    "a finite value in [0.0, 1.0], got "
-                    f"{class_relative_prob_thd}."
-                )
+        self.sam3_mask_prob_thd = self._validate_threshold(
+            sam3_mask_prob_thd,
+            "sam3_mask_prob_thd",
+        )
+        self.final_mask_prob_thd = self._validate_threshold(
+            final_mask_prob_thd,
+            "final_mask_prob_thd",
+        )
 
-        class_relative_eps = float(class_relative_eps)
+    @staticmethod
+    def _validate_threshold(
+        value: Optional[float],
+        name: str,
+    ) -> Optional[float]:
+        if value is None:
+            return None
+
+        value = float(value)
         if (
-            not math.isfinite(class_relative_eps)
-            or class_relative_eps <= 0.0
+            not math.isfinite(value)
+            or not 0.0 <= value <= 1.0
         ):
             raise ValueError(
-                "class_relative_eps must be a finite positive "
-                f"value, got {class_relative_eps}."
+                f"{name} must be None or a finite value "
+                f"in [0.0, 1.0], got {value}."
             )
-
-        self.class_relative_prob_thd = (
-            class_relative_prob_thd
-        )
-        self.class_relative_eps = class_relative_eps
+        return value
 
     @staticmethod
     def _require(
@@ -210,51 +208,33 @@ class SemanticSegAdapter(nn.Module):
             dim=1,
         )
 
-    def _apply_class_relative_filter(
+    def _apply_prob_filters(
         self,
-        raw_score_map: torch.Tensor,
+        student_score: torch.Tensor,
+        sam3_score: Optional[torch.Tensor],
     ) -> torch.Tensor:
-        raw_score_map = self._as_4d_map(
-            raw_score_map,
-            OUTPUT_KEYS.raw_final_score_map,
-        )
+        keep = torch.ones_like(student_score, dtype=torch.bool)
 
-        if self.class_relative_prob_thd is None:
-            return raw_score_map
+        if self.final_mask_prob_thd is not None:
+            keep &= student_score >= self.final_mask_prob_thd
 
-        spatial_min = raw_score_map.amin(
-            dim=(-2, -1),
-            keepdim=True,
-        )
-        spatial_max = raw_score_map.amax(
-            dim=(-2, -1),
-            keepdim=True,
-        )
-        span = spatial_max - spatial_min
+        if self.sam3_mask_prob_thd is not None:
+            if sam3_score is None:
+                raise ValueError(
+                    "sam3_mask_prob_thd is enabled but the raw "
+                    "SAM3 score map is missing."
+                )
+            keep &= sam3_score >= self.sam3_mask_prob_thd
 
-        relative_score = (
-            raw_score_map - spatial_min
-        ) / span.clamp_min(
-            self.class_relative_eps
-        )
-
-        keep = (
-            relative_score
-            >= self.class_relative_prob_thd
-        )
-        keep = keep | (
-            span <= self.class_relative_eps
-        )
-
-        return raw_score_map.masked_fill(
-            ~keep,
-            0.0,
-        )
+        return student_score.masked_fill(~keep, 0.0)
 
     def build_infer_score_outputs(
         self,
         raw_prompt_score_map: torch.Tensor,
         metadata,
+        raw_sam3_prompt_score_map: Optional[
+            torch.Tensor
+        ] = None,
     ) -> Dict[str, torch.Tensor]:
         raw_prompt_score_map = self._as_4d_map(
             raw_prompt_score_map,
@@ -284,11 +264,40 @@ class SemanticSegAdapter(nn.Module):
             num_classes=num_classes,
         )
 
-        final_score_map = self._apply_class_relative_filter(
-            raw_final_score_map
+        raw_sam3_score_map = None
+        if raw_sam3_prompt_score_map is not None:
+            raw_sam3_prompt_score_map = self._as_4d_map(
+                raw_sam3_prompt_score_map,
+                OUTPUT_KEYS.raw_sam3_prompt_score_map,
+            )
+            if tuple(raw_sam3_prompt_score_map.shape) != tuple(
+                raw_prompt_score_map.shape
+            ):
+                raise ValueError(
+                    "raw_sam3_prompt_score_map must match "
+                    "raw_prompt_score_map in batch, prompt count "
+                    "and spatial size, got "
+                    f"{tuple(raw_sam3_prompt_score_map.shape)} vs "
+                    f"{tuple(raw_prompt_score_map.shape)}."
+                )
+            if raw_sam3_prompt_score_map.device != raw_prompt_score_map.device:
+                raise ValueError(
+                    "raw_sam3_prompt_score_map and "
+                    "raw_prompt_score_map must be on the same device."
+                )
+
+            raw_sam3_score_map = self._merge_prompt_channels(
+                prompt_map=raw_sam3_prompt_score_map,
+                prompt_to_class_id=prompt_to_class_id,
+                num_classes=num_classes,
+            )
+
+        final_score_map = self._apply_prob_filters(
+            raw_final_score_map,
+            raw_sam3_score_map,
         )
 
-        return {
+        outputs = {
             OUTPUT_KEYS.raw_prompt_score_map:
                 raw_prompt_score_map,
             OUTPUT_KEYS.raw_final_score_map:
@@ -298,6 +307,14 @@ class SemanticSegAdapter(nn.Module):
             OUTPUT_KEYS.final_pred:
                 final_score_map.argmax(dim=1),
         }
+        if raw_sam3_score_map is not None:
+            outputs[OUTPUT_KEYS.raw_sam3_prompt_score_map] = (
+                raw_sam3_prompt_score_map
+            )
+            outputs[OUTPUT_KEYS.raw_sam3_score_map] = (
+                raw_sam3_score_map
+            )
+        return outputs
 
     def forward(
         self,
@@ -353,6 +370,23 @@ class SemanticSegAdapter(nn.Module):
 
         raw_prompt_score_map = prompt_logits.sigmoid()
 
+        raw_sam3_prompt_score_map = None
+        if self.sam3_mask_prob_thd is not None:
+            sam3_direct_logits = raw_outputs.get(
+                OUTPUT_KEYS.sam3_direct_logits,
+                None,
+            )
+            if sam3_direct_logits is None:
+                raise ValueError(
+                    "sam3_mask_prob_thd is enabled but "
+                    f"{OUTPUT_KEYS.sam3_direct_logits!r} is "
+                    "missing from the raw outputs."
+                )
+            raw_sam3_prompt_score_map = self._as_4d_map(
+                sam3_direct_logits,
+                OUTPUT_KEYS.sam3_direct_logits,
+            ).sigmoid()
+
         outputs = dict(raw_outputs)
         outputs[OUTPUT_KEYS.prompt_logits] = prompt_logits
         outputs[OUTPUT_KEYS.final_logits] = class_logits
@@ -362,6 +396,8 @@ class SemanticSegAdapter(nn.Module):
                 raw_prompt_score_map=
                     raw_prompt_score_map,
                 metadata=metadata,
+                raw_sam3_prompt_score_map=
+                    raw_sam3_prompt_score_map,
             )
         )
 

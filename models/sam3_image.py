@@ -43,8 +43,6 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_dropout: float = 0.1,
         encoder_refiner_hidden_dim: int = 256,
         encoder_refiner_score_embed_dim: int = 256,
-        encoder_refiner_score_intra_attn_type: str = "window",
-        encoder_refiner_feature_intra_attn_type: str = "window",
         encoder_refiner_window_size: int = 12,
         encoder_refiner_shift_size: int = 6,
         encoder_refiner_use_checkpoint: bool = True,
@@ -110,8 +108,6 @@ class Sam3Image(torch.nn.Module):
             hidden_dim=int(encoder_refiner_hidden_dim),
             clip_dim=self.clip_align_dim,
             score_embed_dim=int(encoder_refiner_score_embed_dim),
-            score_intra_attn_type=encoder_refiner_score_intra_attn_type,
-            feature_intra_attn_type=encoder_refiner_feature_intra_attn_type,
             clip_native_dim=self.clip_image_native_dim,
             num_heads=int(encoder_refiner_num_heads),
             window_size=int(encoder_refiner_window_size),
@@ -612,8 +608,10 @@ class Sam3Image(torch.nn.Module):
         """Single-scale fusion followed by shared frozen SAM3 decoding.
 
         Steps:
-        1. Optionally run the teacher path (no_grad): original encoder72 →
-           frozen Pixel Decoder → frozen semantic head → detached logits.
+        1. Optionally decode the original SAM3 path (no_grad): original
+           encoder72 → frozen Pixel Decoder → frozen semantic head →
+           detached logits. Training uses this for distillation; inference
+           reuses it unchanged for the SAM3 rejection gate.
         2. Fuse Refiner36, original encoder72 and FPN72 into 72×72.
         3. Student path (gradients enabled): fused 72×72 replaces the last
            FPN level of the same frozen Pixel Decoder and semantic head.
@@ -693,12 +691,17 @@ class Sam3Image(torch.nn.Module):
         encoder_refiner_cache: Dict[str, Any],
         batch: BatchedDatapoint,
         return_debug: bool = False,
+        return_sam3_logits: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """Full inference forward pass.
 
         For training this MUST NOT be called directly — use the Trainer's
         streaming chunk path instead (run_encoder_refiner_lowres_from_cache +
         decode_encoder_refiner_chunk_from_cache per chunk).
+
+        return_sam3_logits requests one original SAM3 decode per prompt chunk
+        and returns the concatenated detached logits. It is independent of
+        the distillation weight used during training.
         """
         if self.training:
             raise RuntimeError(
@@ -726,6 +729,9 @@ class Sam3Image(torch.nn.Module):
             device=refiner_features_36.device,
             dtype=refiner_features_36.dtype,
         )
+        sam3_direct_logits = None
+        if return_sam3_logits:
+            sam3_direct_logits = torch.empty_like(final_logits)
 
         chunk_start = 0
         for num_chunk_classes in chunk_class_counts:
@@ -740,12 +746,16 @@ class Sam3Image(torch.nn.Module):
                 refiner_feature_36_chunk=refiner_feature_36_chunk,
                 class_start=chunk_start,
                 class_end=chunk_end,
-                return_teacher_logits=False,
+                return_teacher_logits=return_sam3_logits,
             )
 
             final_logits[:, chunk_start:chunk_end].copy_(
                 chunk_outputs[OUTPUT_KEYS.final_logits]
             )
+            if sam3_direct_logits is not None:
+                sam3_direct_logits[:, chunk_start:chunk_end].copy_(
+                    chunk_outputs[OUTPUT_KEYS.sam3_teacher_logits]
+                )
 
             chunk_start = chunk_end
 
@@ -758,6 +768,10 @@ class Sam3Image(torch.nn.Module):
         result: Dict[str, torch.Tensor] = {
             OUTPUT_KEYS.final_logits: final_logits.contiguous(),
         }
+        if sam3_direct_logits is not None:
+            result[OUTPUT_KEYS.sam3_direct_logits] = (
+                sam3_direct_logits.contiguous()
+            )
 
         if return_debug:
             cross_attended_encoder_features_72 = encoder_refiner_cache[

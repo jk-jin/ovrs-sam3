@@ -427,6 +427,8 @@ def inference_with_tta(
         OUTPUT_KEYS.final_logits,
         OUTPUT_KEYS.raw_final_score_map,
         OUTPUT_KEYS.final_score_map,
+        OUTPUT_KEYS.raw_sam3_score_map,
+        OUTPUT_KEYS.sam3_direct_logits,
     }
 
     for scale in scales:
@@ -458,8 +460,8 @@ def inference_with_tta(
                 if not torch.is_tensor(value):
                     continue
 
-                # 逐类别相对过滤是非线性操作，各视图的过滤结果不能平均；
-                # 只平均原始提示分数，合并后统一过滤一次。
+                # 绝对概率门是非线性操作，各视图的过滤结果不能平均；
+                # 只平均两路原始提示概率，合并后统一过滤一次。
                 if key in derived_class_space_keys:
                     continue
 
@@ -513,12 +515,19 @@ def inference_with_tta(
 
     metadata = batch.find_metadatas[0]
 
+    merged_sam3_prompt_score_map = merged_outputs.get(
+        OUTPUT_KEYS.raw_sam3_prompt_score_map,
+        None,
+    )
+
     merged_outputs.update(
         adapter.build_infer_score_outputs(
             raw_prompt_score_map=merged_outputs[
                 OUTPUT_KEYS.raw_prompt_score_map
             ],
             metadata=metadata,
+            raw_sam3_prompt_score_map=
+                merged_sam3_prompt_score_map,
         )
     )
 
@@ -533,6 +542,16 @@ def inference_with_tta(
             max=1.0 - logit_eps,
         )
     )
+
+    # Per-view direct logits are meaningless after averaging; rebuild them
+    # from the merged SAM3 prompt probabilities instead.
+    if merged_sam3_prompt_score_map is not None:
+        merged_outputs[OUTPUT_KEYS.sam3_direct_logits] = torch.logit(
+            merged_sam3_prompt_score_map.clamp(
+                min=logit_eps,
+                max=1.0 - logit_eps,
+            )
+        )
 
     return merged_outputs
 

@@ -111,11 +111,13 @@ class SAM3Segmentor(nn.Module):
         encoder_refiner_cache: Dict[str, Any],
         batch: BatchedDatapoint,
         return_debug: bool = False,
+        return_sam3_logits: bool = False,
     ) -> Dict[str, torch.Tensor]:
         return self.core.run_encoder_refiner_from_cache(
             encoder_refiner_cache=encoder_refiner_cache,
             batch=batch,
             return_debug=return_debug,
+            return_sam3_logits=return_sam3_logits,
         )
 
     def forward(self, batch: BatchedDatapoint) -> dict[str, torch.Tensor]:
@@ -130,14 +132,19 @@ class SAM3Segmentor(nn.Module):
 
         encoder_refiner_cache = self.build_encoder_refiner_cache(batch)
 
-        final_raw_outputs = self.run_encoder_refiner_from_cache(
+        # The SAM3 rejection gate alone decides whether the original path is
+        # decoded; training distillation is irrelevant here.
+        raw_outputs = self.run_encoder_refiner_from_cache(
             encoder_refiner_cache=encoder_refiner_cache,
             batch=batch,
+            return_sam3_logits=(
+                getattr(self.adapter, "sam3_mask_prob_thd", None) is not None
+            ),
         )
 
-        # Inference: go through adapter for sigmoid, relative threshold, argmax.
+        # Inference: go through adapter for sigmoid, absolute gates, argmax.
         return self.adapter(
-            raw_outputs=final_raw_outputs,
+            raw_outputs=raw_outputs,
             batch=batch,
             output_mode="infer",
         )

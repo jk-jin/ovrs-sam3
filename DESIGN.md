@@ -45,17 +45,18 @@ RemoteCLIP 局部相似度图
 clip_score_embed_36 直接作为初始 score_embed_36，不接收 SAM3 FPN 注入
 
 feature_36 + score_embed_36
-  → Refiner layer 1..4（A→B→A→B，全提示同时运行）
+  → Refiner 块 1..4（类间→类内→类间→类内，全提示同时运行）
   → refiner_features_36 [B, P, 256, 36, 36]
 
 随后按 prompt_chunk_size 逐提示块执行：
 
-教师（仅当蒸馏启用时执行，全程 torch.no_grad()）：
+原始 SAM3 路径（训练蒸馏启用或推理 SAM3 否决门启用时执行，全程 torch.no_grad()）：
 
 original_encoder_feature_72_chunk
   → 冻结的 SAM3 Pixel Decoder（内部继续使用原始 FPN144/FPN288）
   → 冻结的 SAM3 semantic_seg_head
-  → sam3_teacher_logits（detached）
+  → 训练：sam3_teacher_logits（detached，逐 chunk）
+  → 推理：sam3_direct_logits（detached，全提示 buffer）
 
 学生：
 
@@ -84,7 +85,7 @@ fused_feature_72
 | `K`      | 每类 RemoteCLIP 文本模板数，固定为 64     |
 | `D`      | SAM3 hidden dimension，固定为 256  |
 | `D_clip` | RemoteCLIP 投影维度，ViT-L/14 为 768 |
-| `L`      | Refiner 层数，当前固定为 4              |
+| `L`      | Refiner 块数，当前固定为 4              |
 
 当前固定输入下的主要张量为：
 
@@ -103,7 +104,10 @@ fused_feature_72
 | `refiner_features_36`         | `[B, P, 256, 36, 36]`              | Refiner 的图像特征流                 |
 | `fused_feature_72`            | `[B×P_chunk, 256, 72, 72]`（逐 chunk） | DecoderInputFusion 输出，替换 Pixel Decoder 的最后一层 FPN 输入 |
 | `final_logits`                | `[B, P_chunk, 288, 288]`（逐 chunk） | 学生路径输出的最终语义分割 logits |
-| `sam3_teacher_logits`         | `[B, P_chunk, 288, 288]`（逐 chunk） | 教师路径输出的 detached teacher logits |
+| `sam3_teacher_logits`         | `[B, P_chunk, 288, 288]`（逐 chunk） | 训练蒸馏用的 detached teacher logits |
+| `sam3_direct_logits`          | `[B, P, 288, 288]`（仅推理请求时） | 原始 SAM3 语义路径的全提示 logits |
+| `raw_sam3_prompt_score_map`   | `[B, P, H, W]`                     | 原始 SAM3 logits 的 sigmoid 概率 |
+| `raw_sam3_score_map`          | `[B, M, H, W]`                     | 同类提示按像素取最大值后的原始 SAM3 概率 |
 
 训练损失和评测会在必要时用最近邻插值把标签映射到 logits 尺度。
 
@@ -199,7 +203,7 @@ GELU 得到中间特征 2。
 
 ## 5. Class-conditioned encoder refiner
 
-Refiner 在 36×36 上同时维护图像 feature 流和 score embedding 流。默认使用 4 层、8 个 attention heads、12×12 窗口和 6 像素 shift。
+Refiner 在 36×36 上同时维护图像 feature 流和 score embedding 流。默认使用 4 个块、8 个 attention heads、12×12 窗口和 6 像素 shift。
 
 ### 5.1 Feature stream 与 score stream 初始化
 
@@ -214,24 +218,24 @@ SAM3 FPN72 用于后续单尺度 DecoderInputFusion 的细节支路，并固定�
 为更新 feature 的类内注意力提供 Q/K 指导，仍不注入初始 score embedding。
 FPN144 和 FPN288 由原始 Pixel Decoder 内部消费。
 
-### 5.2 固定图像指导与标准 FFN
+### 5.2 交替纯注意力块
 
-四层按 A→B→A→B 执行，每层始终先更新 score stream，再更新 feature stream，
-最后执行 Feature FFN 和 Score FFN。各层注意力参数独立。
-不保留四个可选指导开关，注意力不使用 CLIP 或 SAM3 文本 token 指导。
-原始 CLIP 文本模板编码仍用于生成初始 score embedding。
+`fusion_layers` 表示块的总数，当前为 4。块按类间、类内交替，从类间开始；
+奇数块数按该顺序截断，不要求偶数。不同块不共享参数。
 
-| 层 | score 更新 | feature 更新 | 最后 |
-| --- | --- | --- | --- |
-| 1、3（A） | 类内注意力，固定 CLIP 中间层指导 | 类间注意力 | Feature FFN→Score FFN |
-| 2、4（B） | 类间注意力 | 类内注意力，固定 FPN36 指导 | Feature FFN→Score FFN |
+| 块 | 类型 | 完整执行顺序 |
+| --- | --- | --- |
+| 1、3 | 类间块 | score 类间 → feature 类间 |
+| 2、4 | 类内块 | score 普通窗口 → score 移位窗口 → feature 普通窗口 → feature 移位窗口 |
 
-类内注意力分别对 score、feature 和图像指导做逐像素通道 LayerNorm，
-Q/K 按 `[score_embed, feature, guidance]` 拼接后独立线性投影。
-两种类间注意力都只拼接 `[score_embed, feature]`。
-两路均为 256 通道时，类内 Q/K 输入为 768，类间为 512，投影后为 256 通道。
-Value 始终仅来自指定的目标流，输出直接残差到同一条流。
-后续子步骤使用已经更新的 score 或 feature，重新计算 pre-norm、Q/K/V 和注意力权重。
+每个块内的每一步都独立做 pre-norm、Q/K/V 投影、注意力权重计算和直接残差。
+类内块必须先完成 score 的两次更新，再更新 feature，不能交叉执行。
+
+类间块包含两个独立注意力：先更新 score，再用更新后的 score 与当前 feature
+更新 feature。两次 Q/K 都只拼接 `[score_embed, feature]`，即 512 通道；
+类内块包含四个独立注意力，Q/K 拼接 `[score_embed, feature, guidance]`，即 768 通道。
+Value 始终仅来自目标流，图像指导不进入 Value，也不作为残差注入。
+单提示时类间注意力自然退化为长度为 1 的注意力；不跨 batch，不混入空间轴。
 
 **固定图像指导：**
 
@@ -242,26 +246,15 @@ Value 始终仅来自指定的目标流，输出直接残差到同一条流。
   （align_corners=False），保留 256 通道，不增加通道投影，再广播到全部类别提示。
 * 两种指导都是必需输入，缺失特征、原生通道错误或缺少中间层索引 7/15 时直接报错。
 
-**类内空间实现继续可配置：**
+类内空间实现固定为窗口方式，不再提供模式选择：默认 12×12 窗口、6 像素移位，
+沿用窗口相对位置偏置、shift mask、移位及逆移位。窗口整除和移位范围无条件校验，
+`window_size` 与 `shift_size` 数值配置保留。
 
-| 配置 | 取值 | 含义 |
-| --- | --- | --- |
-| `score_intra_attn_type` | `window` / `local_3x3` | 更新 score 的类内实现 |
-| `feature_intra_attn_type` | `window` / `local_3x3` | 更新 feature 的类内实现 |
-
-默认均为 `window`，执行一次普通窗口与一次移位窗口，沿用窗口相对位置偏置和 shift mask。
-`local_3x3` 执行四次连续普通逐像素 3×3 注意力：步长 1，无空洞或采样间隔，
-含中心及八个相邻位置，每头九个独立相对位置偏置，图像外的 key 在 softmax 前屏蔽。
-每个空间子步骤的投影、LayerNorm、相对位置偏置独立，图像指导在所有子步骤中固定使用。
-四次局部子步骤属于一层内部，不增加 Refiner 总层数。
-
-**标准双流 FFN：**
-
-Feature FFN 和 Score FFN 分别处理各自当前注意力后的 256 通道特征。
-每路执行通道 LayerNorm(256)、独立逐 token `256→1024→256` FFN（GELU 和 dropout），
-输出直接残差到对应当前流。不拼接模块入口初始特征或本层入口特征。
-全部层结束后仅对 feature_36 执行一次通道 LayerNorm；最终 score 不加输出 LayerNorm。
-图像子层沿用 non-reentrant checkpoint，显式传入固定 CLIP 中间层和 FPN36 指导。
+**无 FFN：**
+块末尾不执行 Feature FFN 或 Score FFN，也不保留未调用的 FFN 参数或开关。
+全部块结束后仅对 feature_36 执行一次通道 LayerNorm；最终 score 不加输出 LayerNorm。
+每个块沿用 non-reentrant checkpoint；类间块传 feature/score，类内块额外显式传入
+固定的 CLIP 中间层和 FPN36 指导。
 
 ### 5.3 单尺度 Decoder Input Fusion
 
@@ -321,7 +314,7 @@ Prompt cross-attention 在完整 6 层 encoder 之后、Refiner 之前执行一�
 
 Pixel Decoder 与 semantic head 的参数始终冻结（`requires_grad=False`）并保持 `eval()`。学生和教师复用同一个 `segmentation_head` 对象，参数不复制。
 
-- **教师路径**：原始 encoder72 送入 Pixel Decoder，整个调用位于 `torch.no_grad()` 中，只保留 detached logits。学生计算图此时尚未建立或已释放。
+- **原始路径**：原始 encoder72 送入 Pixel Decoder，整个调用位于 `torch.no_grad()` 中，只保留 detached logits。训练时它服务蒸馏；推理在 SAM3 否决门启用时逐 chunk 复用同一段解码，并写入全提示 `sam3_direct_logits`。学生计算图此时尚未建立或已释放。
 - **学生路径**：`fused_feature_72` 送入同一个 Pixel Decoder，不使用 `no_grad()`、不 detach，也不主动 `enable_grad()`，完全服从外层的梯度状态。
 
 冻结参数的 `requires_grad=False` 只阻止参数更新，不阻止对输入求梯度。学生路径误加 `no_grad()` 会同时切断主 BCE 和蒸馏对 DecoderInputFusion、Refiner 的监督。
@@ -401,6 +394,18 @@ loss_final_bce = (bce_per_pixel * valid_mask).sum() / total_valid_pixels
 14. 分母是全部存在提示对应的有效像素与类别外环像素总数（全局分母，不按 chunk 单独计算）。
 15. 多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
 
+**存在类别忽略区域抑制**（基础配置 `present_ignore_suppress_weight=0.01`）：
+
+1. 只用学生未过滤的 `final_logits`，目标为 0，即逐像素 `softplus(logits)`。
+2. 标签先最近邻映射到 288×288，并在该尺度用 `label != 255` 判断原始类别是否存在。
+3. 对每张图的每个存在原始类别，在该图全部 `label == 255` 区域计算零目标 BCE。
+4. 先在该图像—类别忽略区域求均值，再对同类别的多个提示求均值，
+   使同义提示不因数量增加而获得更大权重。
+5. 最后对全 batch 所有可计算的“图像—存在原始类别”组合求平均，面积不参与跨图加权。
+6. 不存在类别、无忽略像素的图像不进入分母；整图全 255 不算任何类别存在。
+7. 不筛选最高分类别，不使用教师置信度，不依赖推理阈值。
+8. 新增损失的权重为有限非负数，0 表示关闭；关闭后不影响其它损失项。
+
 总损失：
 
 ```python
@@ -408,10 +413,13 @@ total_loss = (
     1.0 * loss_final_bce
     + 0.0 * loss_final_dice
     + 0.5 * loss_sam3_mask_distill_bce
+    + 0.01 * loss_present_ignore_suppress_bce
 )
 ```
 
-`loss_sam3_mask_distill_bce` 为未经权重的原始蒸馏 BCE；`loss_sam3_mask_distill_weighted` 为真正加入总损失的加权贡献。蒸馏权重在整个训练期间固定不变。
+`loss_sam3_mask_distill_bce` 和 `loss_present_ignore_suppress_bce` 为未经权重的原始损失；
+对应的 `*_weighted` 为真正加入总损失的加权贡献。蒸馏与抑制权重在整个训练期间固定不变。
+上述阈值和权重只是实验起点，未经过性能验证。
 
 上面的数值取自 `configs/_base_/model/ovrs_sam3.py` 的当前取值（蒸馏权重 0.5、外环宽度 3）。`config_dataclasses.py` 中的通用默认值不同，实验实际使用的数值取决于最终合并配置。
 
@@ -428,7 +436,32 @@ total_loss = (
 
 ## 8. 推理与评测
 
-推理时模型在提示空间输出 `prompt_logits` [B, P, H, W]。Adapter 先做 sigmoid 得到 `raw_prompt_score_map`，再通过像素级最大值把同一原始类别的所有提示合并为 `raw_final_score_map` [B, M, H, W]。可选的逐类别相对阈值在原始类别空间执行，归一化后只把未通过位置置 0；保留位置继续使用原始 sigmoid 分数。最终对类别维取 argmax。
+推理时模型在提示空间输出 `prompt_logits` [B, P, H, W]。Adapter 先做 sigmoid 得到 `raw_prompt_score_map`，再通过像素级最大值把同一原始类别的所有提示合并为 `raw_final_score_map` [B, M, H, W]。
+
+当 `sam3_mask_prob_thd` 不为 `None` 时，segmentor 请求 core 额外解码原始 SAM3 语义路径，得到 `sam3_direct_logits`，经 sigmoid 与同类提示合并后得到 `raw_sam3_score_map`。原始路径复用同一冻结 Pixel Decoder 和 semantic head，不读取融合或 Refiner 特征。
+
+两个独立的绝对 sigmoid 概率门在原始类别空间执行：
+
+| 参数 | 判定数据 | 低于阈值时 | 关闭方式 |
+| --- | --- | --- | --- |
+| `sam3_mask_prob_thd` | 原始 SAM3 概率 | 学生最终分数置 0 | `None` |
+| `final_mask_prob_thd` | 学生原始 sigmoid 概率 | 学生最终分数置 0 | `None` |
+
+保留条件是两道已启用的门都通过；等于阈值保留。保留位置继续使用学生原始概率，
+不乘 SAM3 概率、不以 SAM3 数值替换学生、不把保留分数设为 1，也不做 min-max 缩放。
+所有提示先分别合并到原始类别，再统一过滤；不能逐提示先否决后合并。
+启用 SAM3 门但缺少原始结果时直接报错。
+
+输出语义：
+
+* `raw_prompt_score_map`：未过滤的学生提示概率；
+* `raw_final_score_map`：未过滤的学生原始类别概率；
+* `final_score_map`：双门过滤后的学生原始类别概率；
+* `final_pred`：`final_score_map.argmax(dim=1)`；
+* `final_logits`：未过滤的模型 logits，不能用 0 logits 表示概率置 0。
+
+评测优先使用 `final_score_map`，并沿用 `build_eval_semantic_pred()` 的背景映射与
+`prob_thd` 机制。若所有类别分数均为 0，argmax 仍按现有规则产生首通道。
 
 标签空间中两个机制职责不同：
 
@@ -439,7 +472,11 @@ total_loss = (
 
 Evaluator 输出整体 mIoU、mAcc、pixel accuracy 和逐类别指标。`metric_groups` 可以按 `class_ids` 或 `class_names` 定义命名类别组，并分别计算组内 mIoU/mAcc。完整 iSAID→LoveDA 配置使用前景类别组作为 checkpoint monitor。
 
-TTA 当前只支持 `scale=1.0` 和空间翻转。多个视图必须先平均 `raw_prompt_score_map`（提示空间），再合并提示到原始类别，最后统一执行一次非线性相对阈值过滤。
+TTA 当前只支持 `scale=1.0` 和空间翻转。多个视图分别生成学生与所需的原始 SAM3 提示概率，
+逆翻转并对齐空间后分别平均 `raw_prompt_score_map` 与 `raw_sam3_prompt_score_map`。
+两路平均概率各自合并到原始类别，再统一执行一次双门过滤。禁止平均已过滤结果、
+只取最后一个视图的 SAM3 图或用平均 logits 的 sigmoid 代替平均概率。
+若保留 TTA 输出的 `sam3_direct_logits`，由平均后的 SAM3 提示概率经裁剪 `logit()` 重建。
 
 ## 9. Checkpoint、恢复与实验追踪
 
@@ -493,6 +530,8 @@ Ctrl+C 使用 Python 默认 `KeyboardInterrupt`。训练和验证均立即退出
 | `loss_final_bce` | 朴素 BCE，所有有效像素等权全局均值（跨 chunk 累加后求均值） |
 | `loss_sam3_mask_distill_bce` | 未经权重的原始蒸馏 BCE（跨 chunk 累加后求均值） |
 | `loss_sam3_mask_distill_weighted` | 真正加入总损失的加权蒸馏贡献（跨 chunk 累加后求均值） |
+| `loss_present_ignore_suppress_bce` | 未经权重的忽略区域抑制 BCE（跨 chunk 累加后求均值） |
+| `loss_present_ignore_suppress_weighted` | 真正加入总损失的加权抑制贡献（跨 chunk 累加后求均值） |
 
 ## 10. 配置与主要文件
 
@@ -517,15 +556,15 @@ python tools/train.py configs/train/isaid_loveda_full.py
 
 | 文件                                    | 职责                                       |
 | ------------------------------------- | ---------------------------------------- |
-| `models/sam3_image.py`                | 类别 chunk、缓存、SAM3 encoder、低分辨率 refiner、逐 chunk 学生/教师解码 |
+| `models/sam3_image.py`                | 类别 chunk、缓存、SAM3 encoder、低分辨率 refiner、逐 chunk 学生解码与按需原始 SAM3 解码 |
 | `models/encoder_refiner.py`           | 全类别 Refiner、最终 feature LayerNorm 与单尺度融合接口 |
 | `models/decoder_input_fusion.py`      | 单尺度语义—细节双路融合，输出替换 Pixel Decoder 最后一层 FPN 输入 |
-| `models/encoder_refiner_attention.py` | 交替单 Value 跨类别注意力、独立可选窗口/局部 3×3 类内注意力、双流 FFN、pre-norm 与直接残差更新 |
+| `models/encoder_refiner_attention.py` | 类间/类内纯注意力块、单 Value、pre-norm 与直接残差更新 |
 | `models/maskformer_segmentation.py`   | prompt attention、Pixel Decoder 和原始 semantic head |
 | `models/score_embeddings.py`          | 64 模板相似度图、归一化 CLIP 融合和空间卷积增强 |
 | `models/openclip_image_encoder.py`    | 36×36 dense RemoteCLIP 图像特征              |
 | `models/openclip_text_encoder.py`     | 模板文本编码、micro-batch 与梯度控制                 |
-| `losses/semantic_criterion.py`        | Streaming 正负平衡 BCE、Dice 和 SAM3 teacher 蒸馏 |
+| `losses/semantic_criterion.py`        | Streaming 朴素 BCE、Dice、SAM3 蒸馏和忽略区域抑制 |
 | `engine/trainer.py`                   | 高分辨率逐 chunk loss/backward 与 proxy 梯度回传 |
 | `engine/checkpoint.py`                | 安全、原子、严格的 checkpoint 保存与加载               |
 | `engine/runtime_state.py`             | RNG 捕获与恢复                                |
@@ -556,8 +595,8 @@ python tools/train.py configs/train/isaid_loveda_full.py
 17. teacher 只来自原始 encoder72 解码路径并且必须 detach。teacher 和 student 都为 288×288。
 18. 蒸馏只监督存在类别。每个存在提示均监督全部 GT 有效像素，并额外监督其原始类别 GT 外侧 `sam3_mask_distill_boundary_width` 像素范围内且标签为 255 的边界环。远处 255 区域不参与蒸馏。多个提示映射到同一类别时复用相同外环，并在全局分母中按提示独立计数。
 19. 最终掩码 logits 由冻结的 SAM3 `semantic_seg_head` 产生。
-20. Refiner 按 A→B→A→B 交替，每层先更新 score 再更新 feature。score 类内固定拼接 CLIP 中间层融合特征，feature 类内固定拼接 FPN36；两种类间 Q/K 都不拼接文本。所有注意力单 Value、pre-norm、直接残差。双路 FFN 各处理当前 256 通道特征，256→1024→256 后直接残差到当前流；保留最终 feature LayerNorm。
-21. TTA 必须先平均提示空间分数（`raw_prompt_score_map`），再合并提示到原始类别，最后进行相对阈值过滤。
+20. Refiner 块按类间→类内交替：类间块先 score 后 feature；类内块严格按 score 普通、score 移位、feature 普通、feature 移位。score 类内固定拼接 CLIP 中间层融合特征，feature 类内固定拼接 FPN36；类间 Q/K 都不拼接文本。所有注意力单 Value、pre-norm、直接残差，块末尾无 FFN；保留最终 feature LayerNorm。
+21. TTA 必须先分别平均两路提示空间概率（`raw_prompt_score_map` 和 `raw_sam3_prompt_score_map`），再合并提示到原始类别，最后统一执行双门过滤。推理原始 SAM3 路径只由 SAM3 否决门触发，与训练蒸馏权重无关；未启用时不额外解码。
 22. `reduce_zero_label` 与 `background_cfg` 各自只执行其定义的一次标签空间变换。
 23. 完整恢复必须严格校验 checkpoint schema；模型权重迁移必须走独立入口。
 24. 训练不使用完整 `[B,C,288,288]` 计算图。逐 chunk backward 通过 proxy leaf 隔离。
@@ -679,12 +718,9 @@ Checkpoint schema 版本为 4。实验追踪状态不再保存在 checkpoint 中
 * `_CHECKPOINT_VERSION` 保持 4，因为 checkpoint 容器格式不变。
 
 CPU 回归验证入口：`python -m unittest discover -s tests -v`。
-18 项 CPU 测试覆盖单 Value、类间聚合轴、窗口/局部边界、更新顺序和残差目标，
-四种类内配置的实际 36×36/256 通道四层 checkpoint 输出与梯度一致性，
-固定图像指导、两种类间注意力均不拼接文本、标准 FFN 通道、完整配置构建，
-以及单层融合只上采样一次、原始 encoder/FPN 输入复用、逐提示广播、
-checkpoint 输出和参数/Refiner 输入梯度、输入形状检查。
-测试不需要下载 SAM3 或 RemoteCLIP 权重。
+当前测试覆盖类间/类内块顺序与流更新、独立参数、窗口指导路由、块交替与无 FFN、
+checkpoint 一致性、梯度边界、双门合并与过滤，以及忽略区域抑制的全局归一化。
+本节记录的历史测试数量不代表当前已通过的测试；本次实施未运行模型测试。
 
 本次简化为固定图像指导版本：
 
@@ -697,3 +733,21 @@ checkpoint 输出和参数/Refiner 输入梯度、输入形状检查。
 * 初始 CLIP score embedding、原始 SAM3 流程、教师、冻结解码头、损失和逐 chunk 梯度设计保留。
 * 旧 checkpoint 的 FFN 形状和融合参数名称不匹配；新实验使用新的 work directory，不提供兼容层。
 * checkpoint 容器 schema 保持 4。
+
+本次类间/类内交替纯注意力重构与推理双门：
+
+* Refiner 由 A/B 混合层改为 `inter → intra → inter → intra` 四个独立块；每块只做一种注意力，
+  类间块先 score 后 feature，类内块先完成两次 score 窗口更新再完成两次 feature 窗口更新。
+* 删除 `core.encoder_refiner.layers.*.ffn_*` 全部参数与调用；删除 `LocalScoreAttention`。
+* 删除配置字段 `score_intra_attn_type`、`feature_intra_attn_type` 及其完整构建链路；
+  类内固定为普通窗口加移位窗口，保留 `window_size` 与 `shift_size`。
+* 新增推理输出 `sam3_direct_logits`、`raw_sam3_prompt_score_map`、`raw_sam3_score_map`；
+  原始 SAM3 解码仅在 SAM3 否决门启用时按 chunk 执行。
+* 删除 `class_relative_prob_thd`、`class_relative_eps`、相对过滤和恒定图放行；
+  新增 `sam3_mask_prob_thd`、`final_mask_prob_thd` 两道绝对 sigmoid 概率门。
+* 新增 `present_ignore_suppress_weight` 及存在类别忽略区域零目标 BCE。
+* TTA 改为分别汇总两路提示概率后再合并和过滤。
+* 旧 checkpoint 不能通过 `--resume-from` 严格恢复，也不能直接 `--load-model-from`：
+  类间注意力数量、参数路径与 FFN 参数均已变化。新实验必须使用新的 work directory。
+* 不添加旧参数映射、占位或兼容层。
+* `_CHECKPOINT_VERSION` 保持 4，因为 checkpoint 容器格式未变。

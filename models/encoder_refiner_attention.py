@@ -395,15 +395,17 @@ class WindowScoreAttention(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# LocalScoreAttention
+# RefinerInterBlock
 # ---------------------------------------------------------------------------
 
 
-class LocalScoreAttention(nn.Module):
-    """Single-value intra-class attention over each pixel's contiguous 3×3 grid.
+class RefinerInterBlock(nn.Module):
+    """Inter-class block with one score update followed by one feature update.
 
-    Inputs are pre-normalized. Q/K concatenate score and feature; V and
-    the output come only from value_stream. Out-of-image keys are masked.
+    Each step has its own pre-norm, projections and dropout. Q/K concatenate
+    [score, feature] at each spatial position; the value and the residual
+    target are the stream being updated. Prompts attend to each other
+    independently per image and spatial position.
     """
 
     def __init__(
@@ -412,84 +414,104 @@ class LocalScoreAttention(nn.Module):
         score_embed_dim: int = 256,
         num_heads: int = 8,
         dropout: float = 0.1,
-        value_stream: str = "feature",
-        guidance_dim: int = 0,
     ):
         super().__init__()
-        if hidden_dim <= 0 or num_heads <= 0 or hidden_dim % num_heads != 0:
-            raise ValueError("hidden_dim must be positive and divisible by num_heads")
-        if value_stream not in ("feature", "score"):
-            raise ValueError("value_stream must be 'feature' or 'score'")
-        self.hidden_dim = hidden_dim
-        self.score_embed_dim = score_embed_dim
-        self.num_heads = num_heads
-        self.value_stream = value_stream
-        self.value_dim = hidden_dim if value_stream == "feature" else score_embed_dim
-        self.guidance_dim = int(guidance_dim)
-        qk_dim = hidden_dim + score_embed_dim + self.guidance_dim
-        self.q_proj = nn.Linear(qk_dim, hidden_dim)
-        self.k_proj = nn.Linear(qk_dim, hidden_dim)
-        self.v_proj = nn.Linear(self.value_dim, hidden_dim)
-        self.out_proj = nn.Linear(hidden_dim, self.value_dim)
-        # Row-major offsets: top-left, top, ..., center, ..., bottom-right.
-        self.relative_position_bias_table = nn.Parameter(torch.empty(9, num_heads))
-        nn.init.trunc_normal_(self.relative_position_bias_table, std=0.02)
-        self.dropout = nn.Dropout(float(dropout))
+        self.score_attn = ClassScoreAttention(
+            hidden_dim=hidden_dim,
+            score_embed_dim=score_embed_dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            value_stream="score",
+        )
+        self.feature_attn = ClassScoreAttention(
+            hidden_dim=hidden_dim,
+            score_embed_dim=score_embed_dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            value_stream="feature",
+        )
+        self.score_attn_norm_feature = nn.LayerNorm(hidden_dim)
+        self.score_attn_norm_score = nn.LayerNorm(score_embed_dim)
+        self.feature_attn_norm_feature = nn.LayerNorm(hidden_dim)
+        self.feature_attn_norm_score = nn.LayerNorm(score_embed_dim)
 
     def forward(
-        self, feature: torch.Tensor, score_embed: torch.Tensor,
-        guidance: torch.Tensor | None = None,
+        self,
+        feature_36: torch.Tensor,
+        score_embed_36: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        score_embed_36 = score_embed_36 + self.score_attn(
+            feature=apply_layer_norm_bcdhw(
+                feature_36, self.score_attn_norm_feature
+            ),
+            score_embed=apply_layer_norm_bcdhw(
+                score_embed_36, self.score_attn_norm_score
+            ),
+        )
+        feature_36 = feature_36 + self.feature_attn(
+            feature=apply_layer_norm_bcdhw(
+                feature_36, self.feature_attn_norm_feature
+            ),
+            score_embed=apply_layer_norm_bcdhw(
+                score_embed_36, self.feature_attn_norm_score
+            ),
+        )
+        return feature_36, score_embed_36
+
+
+# ---------------------------------------------------------------------------
+# RefinerIntraBlock
+# ---------------------------------------------------------------------------
+
+
+class WindowUpdate(nn.Module):
+    """One pre-normalized window attention update for a single stream."""
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        score_embed_dim: int,
+        num_heads: int,
+        window_size: int,
+        shift_size: int,
+        dropout: float,
+        value_stream: str,
+        guidance_dim: int,
+    ):
+        super().__init__()
+        self.attn = WindowScoreAttention(
+            hidden_dim=hidden_dim,
+            score_embed_dim=score_embed_dim,
+            num_heads=num_heads,
+            window_size=window_size,
+            shift_size=shift_size,
+            dropout=dropout,
+            value_stream=value_stream,
+            guidance_dim=guidance_dim,
+        )
+        self.norm_feature = nn.LayerNorm(hidden_dim)
+        self.norm_score = nn.LayerNorm(score_embed_dim)
+        self.norm_guidance = nn.LayerNorm(guidance_dim)
+
+    def forward(
+        self,
+        feature_36: torch.Tensor,
+        score_embed_36: torch.Tensor,
+        guidance: torch.Tensor,
     ) -> torch.Tensor:
-        B, C, D, H, W = feature.shape
-        validate_guidance(guidance, feature, self.guidance_dim)
-        if D != self.hidden_dim or tuple(score_embed.shape) != (B, C, self.score_embed_dim, H, W):
-            raise ValueError("feature/score_embed channels and batch/class/grid must match")
-        bc, n = B * C, H * W
-        head_dim = D // self.num_heads
-        f = feature.permute(0, 1, 3, 4, 2).reshape(bc, n, D)
-        s = score_embed.permute(0, 1, 3, 4, 2).reshape(bc, n, self.score_embed_dim)
-        qk_input = torch.cat([s, f], dim=-1)
-        if guidance is not None:
-            g = guidance.permute(0, 1, 3, 4, 2).reshape(bc, n, self.guidance_dim)
-            qk_input = torch.cat([qk_input, g], dim=-1)
-        q = self.q_proj(qk_input).transpose(1, 2).reshape(bc, self.num_heads, head_dim, n)
-
-        def neighbors(x):
-            x = x.transpose(1, 2).reshape(bc, D, H, W)
-            return F.unfold(x, kernel_size=3, padding=1).reshape(
-                bc, self.num_heads, head_dim, 9, n
-            )
-
-        k = neighbors(self.k_proj(qk_input))
-        v = neighbors(self.v_proj(f if self.value_stream == "feature" else s))
-        logits = (q.unsqueeze(3) * k).sum(dim=2) * (head_dim ** -0.5)
-        bias = self.relative_position_bias_table.T.to(dtype=logits.dtype)
-        logits = logits + bias[None, :, :, None]
-        valid = F.unfold(feature.new_ones(1, 1, H, W), kernel_size=3, padding=1)
-        logits = logits.masked_fill(~valid.bool().unsqueeze(1), float("-inf"))
-        attention = self.dropout(F.softmax(logits, dim=2))
-        out = (attention.unsqueeze(2) * v).sum(dim=3)
-        out = out.reshape(bc, D, n).transpose(1, 2)
-        out = self.dropout(self.out_proj(out))
-        return out.reshape(B, C, H, W, self.value_dim).permute(0, 1, 4, 2, 3).contiguous()
+        return self.attn(
+            feature=apply_layer_norm_bcdhw(feature_36, self.norm_feature),
+            score_embed=apply_layer_norm_bcdhw(score_embed_36, self.norm_score),
+            guidance=apply_layer_norm_bcdhw(guidance, self.norm_guidance),
+        )
 
 
-# ---------------------------------------------------------------------------
-# EncoderRefinerLayer
-# ---------------------------------------------------------------------------
+class RefinerIntraBlock(nn.Module):
+    """Intra-class block: two score window steps, then two feature steps.
 
-
-class EncoderRefinerLayer(nn.Module):
-    """Alternating single-value Refiner layer with pre-norm/direct residuals.
-
-    score_attention_type="intra": configured intra-class attention updates score,
-    then inter-class attention updates feature.
-    score_attention_type="inter": inter-class attention updates score,
-    then configured intra-class attention updates feature.
-    Each stream independently chooses two windows or four local 3×3 steps.
-    Intra-class guidance is fixed: CLIP middle features for score, FPN36
-    for feature. Both class attention kinds use score/feature only.
-    Both finish with independent Feature FFN and Score FFN.
+    Score steps use CLIP middle guidance; feature steps use FPN36 guidance.
+    Regular and shifted windows each own independent parameters, and every
+    step re-normalizes and re-projects its current inputs.
     """
 
     def __init__(
@@ -500,157 +522,47 @@ class EncoderRefinerLayer(nn.Module):
         window_size: int = 12,
         shift_size: int = 6,
         dropout: float = 0.1,
-        score_attention_type: str = "intra",
-        score_intra_attn_type: str = "window",
-        feature_intra_attn_type: str = "window",
+        guidance_dim: int = 256,
     ):
         super().__init__()
-        if score_attention_type not in ("intra", "inter"):
-            raise ValueError("score_attention_type must be 'intra' or 'inter'")
-        self.score_attention_type = score_attention_type
-        for name, kind in (("score_intra_attn_type", score_intra_attn_type),
-                           ("feature_intra_attn_type", feature_intra_attn_type)):
-            if kind not in ("window", "local_3x3"):
-                raise ValueError(f"{name} must be 'window' or 'local_3x3'")
-        self.intra_attn_type = (
-            score_intra_attn_type if score_attention_type == "intra" else feature_intra_attn_type
-        )
-        class_value_stream = "feature" if score_attention_type == "intra" else "score"
-        intra_value_stream = "score" if score_attention_type == "intra" else "feature"
-        self.class_attn = ClassScoreAttention(
+        step_kwargs = dict(
             hidden_dim=hidden_dim,
             score_embed_dim=score_embed_dim,
             num_heads=num_heads,
+            window_size=window_size,
             dropout=dropout,
-            value_stream=class_value_stream,
-            guidance_dim=0,
+            guidance_dim=guidance_dim,
         )
-        if self.intra_attn_type == "window":
-            self.window_attn_regular = WindowScoreAttention(
-                hidden_dim=hidden_dim, score_embed_dim=score_embed_dim,
-                num_heads=num_heads, window_size=window_size, shift_size=0,
-                dropout=dropout, value_stream=intra_value_stream,
-                guidance_dim=256,
-            )
-            self.window_attn_shifted = WindowScoreAttention(
-                hidden_dim=hidden_dim, score_embed_dim=score_embed_dim,
-                num_heads=num_heads, window_size=window_size, shift_size=shift_size,
-                dropout=dropout, value_stream=intra_value_stream,
-                guidance_dim=256,
-            )
-        else:
-            self.local_attn = nn.ModuleList([
-                LocalScoreAttention(
-                    hidden_dim=hidden_dim, score_embed_dim=score_embed_dim,
-                    num_heads=num_heads, dropout=dropout, value_stream=intra_value_stream,
-                    guidance_dim=256,
-                )
-                for _ in range(4)
-            ])
-        self.class_norm_feature = nn.LayerNorm(hidden_dim)
-        self.class_norm_score = nn.LayerNorm(score_embed_dim)
-        if self.intra_attn_type == "window":
-            self.regular_norm_feature = nn.LayerNorm(hidden_dim)
-            self.regular_norm_score = nn.LayerNorm(score_embed_dim)
-            self.shifted_norm_feature = nn.LayerNorm(hidden_dim)
-            self.shifted_norm_score = nn.LayerNorm(score_embed_dim)
-        else:
-            self.local_norm_feature = nn.ModuleList([nn.LayerNorm(hidden_dim) for _ in range(4)])
-            self.local_norm_score = nn.ModuleList([nn.LayerNorm(score_embed_dim) for _ in range(4)])
-        self.ffn_norm_feature = nn.LayerNorm(hidden_dim)
-        self.ffn_norm_score = nn.LayerNorm(score_embed_dim)
-
-        self.ffn_fc1_feature = nn.Linear(hidden_dim, hidden_dim * 4)
-        self.ffn_fc2_feature = nn.Linear(hidden_dim * 4, hidden_dim)
-        self.ffn_dropout_feature = nn.Dropout(float(dropout))
-        self.ffn_fc1_score = nn.Linear(score_embed_dim, score_embed_dim * 4)
-        self.ffn_fc2_score = nn.Linear(score_embed_dim * 4, score_embed_dim)
-        self.ffn_dropout_score = nn.Dropout(float(dropout))
-        self.intra_norm_guidance = nn.ModuleList([
-            nn.LayerNorm(256) for _ in range(2 if self.intra_attn_type == "window" else 4)
-        ])
-
-    def _class_update(
-        self,
-        feature: torch.Tensor,
-        score: torch.Tensor,
-    ) -> torch.Tensor:
-        return self.class_attn(
-            feature=apply_layer_norm_bcdhw(feature, self.class_norm_feature),
-            score_embed=apply_layer_norm_bcdhw(score, self.class_norm_score),
+        self.score_regular = WindowUpdate(
+            shift_size=0, value_stream="score", **step_kwargs
         )
-
-    def _update_intra(
-        self,
-        feature: torch.Tensor,
-        score: torch.Tensor,
-        guidance: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        validate_guidance(guidance, feature, 256)
-        steps = (
-            ((self.window_attn_regular, self.regular_norm_feature, self.regular_norm_score),
-             (self.window_attn_shifted, self.shifted_norm_feature, self.shifted_norm_score))
-            if self.intra_attn_type == "window"
-            else zip(self.local_attn, self.local_norm_feature, self.local_norm_score)
+        self.score_shifted = WindowUpdate(
+            shift_size=shift_size, value_stream="score", **step_kwargs
         )
-        for index, (attention, feature_norm, score_norm) in enumerate(steps):
-            update = attention(
-                feature=apply_layer_norm_bcdhw(feature, feature_norm),
-                score_embed=apply_layer_norm_bcdhw(score, score_norm),
-                guidance=apply_layer_norm_bcdhw(guidance, self.intra_norm_guidance[index]),
-            )
-            if self.score_attention_type == "intra":
-                score = score + update
-            else:
-                feature = feature + update
-        return feature, score
-
-    def _ffn_feature_update(
-        self,
-        feature: torch.Tensor,
-    ) -> torch.Tensor:
-        """Per-token FFN for pre-normalized feature. Returns update only."""
-        B, C, D, H, W = feature.shape
-        x = feature.permute(0, 1, 3, 4, 2)
-        x = self.ffn_fc2_feature(
-            self.ffn_dropout_feature(F.gelu(self.ffn_fc1_feature(x)))
+        self.feature_regular = WindowUpdate(
+            shift_size=0, value_stream="feature", **step_kwargs
         )
-        x = self.ffn_dropout_feature(x)
-        return x.permute(0, 1, 4, 2, 3).contiguous()
-
-    def _ffn_score_update(
-        self,
-        score: torch.Tensor,
-    ) -> torch.Tensor:
-        """Per-token FFN for pre-normalized score. Returns update only."""
-        B, C, Ds, H, W = score.shape
-        x = score.permute(0, 1, 3, 4, 2)
-        x = self.ffn_fc2_score(
-            self.ffn_dropout_score(F.gelu(self.ffn_fc1_score(x)))
+        self.feature_shifted = WindowUpdate(
+            shift_size=shift_size, value_stream="feature", **step_kwargs
         )
-        x = self.ffn_dropout_score(x)
-        return x.permute(0, 1, 4, 2, 3).contiguous()
 
     def forward(
         self,
         feature_36: torch.Tensor,
         score_embed_36: torch.Tensor,
-        clip_mid_36: torch.Tensor | None = None,
-        sam_fpn_36: torch.Tensor | None = None,
+        clip_mid_36: torch.Tensor,
+        sam_fpn_36: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Update [B, C, 256, 36, 36] streams, score first then feature."""
-        intra_guidance = clip_mid_36 if self.score_attention_type == "intra" else sam_fpn_36
-        if self.score_attention_type == "intra":
-            feature_36, score_embed_36 = self._update_intra(feature_36, score_embed_36, intra_guidance)
-            feature_36 = feature_36 + self._class_update(feature_36, score_embed_36)
-        else:
-            score_embed_36 = score_embed_36 + self._class_update(feature_36, score_embed_36)
-            feature_36, score_embed_36 = self._update_intra(feature_36, score_embed_36, intra_guidance)
-
-        feature_36 = feature_36 + self._ffn_feature_update(
-            apply_layer_norm_bcdhw(feature_36, self.ffn_norm_feature)
+        score_embed_36 = score_embed_36 + self.score_regular(
+            feature_36, score_embed_36, clip_mid_36
         )
-        score_embed_36 = score_embed_36 + self._ffn_score_update(
-            apply_layer_norm_bcdhw(score_embed_36, self.ffn_norm_score)
+        score_embed_36 = score_embed_36 + self.score_shifted(
+            feature_36, score_embed_36, clip_mid_36
+        )
+        feature_36 = feature_36 + self.feature_regular(
+            feature_36, score_embed_36, sam_fpn_36
+        )
+        feature_36 = feature_36 + self.feature_shifted(
+            feature_36, score_embed_36, sam_fpn_36
         )
         return feature_36, score_embed_36

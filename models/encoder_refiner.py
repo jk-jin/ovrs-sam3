@@ -9,7 +9,8 @@ from torch.utils.checkpoint import checkpoint
 
 from .score_embeddings import ClipScoreEmbedding
 from .encoder_refiner_attention import (
-    EncoderRefinerLayer,
+    RefinerInterBlock,
+    RefinerIntraBlock,
     apply_layer_norm_bcdhw,
 )
 from .decoder_input_fusion import DecoderInputFusion
@@ -20,9 +21,9 @@ class ClassConditionedEncoderRefiner(nn.Module):
 
     Takes the full 6-layer SAM3 encoder output after prompt cross-attention
     as input. The feature stream is the bilinear-downsampled encoder feature
-    without any FPN injection. Fixed CLIP middle/FPN guidance extends
-    intra-class attention Q/K. Each FFN updates only its current stream.
-    The score stream comes directly from
+    without any FPN injection. Blocks alternate inter-class and intra-class
+    attention, starting with inter-class. Fixed CLIP middle/FPN guidance
+    extends intra-class attention Q/K. The score stream comes directly from
     ClipScoreEmbedding (score_embeddings.py) without any SAM3 FPN fusion.
 
     The Refiner outputs 36×36 features. High-resolution decoding is handled
@@ -31,7 +32,7 @@ class ClassConditionedEncoderRefiner(nn.Module):
     respectively, without an extra encoder concatenation before the branches.
     The final fused feature replaces the original Pixel Decoder's last FPN.
 
-    After all Refiner layers, the accumulated 36×36 feature stream is
+    After all Refiner blocks, the accumulated 36×36 feature stream is
     normalized once with a channel-wise LayerNorm before being returned
     and passed to DecoderInputFusion. The final score stream is not
     post-normalized.
@@ -65,8 +66,6 @@ class ClassConditionedEncoderRefiner(nn.Module):
         use_checkpoint: bool = True,
         text_prompt_batch_size: int = 64,
         text_prompt_use_checkpoint: bool = True,
-        score_intra_attn_type: str = "window",
-        feature_intra_attn_type: str = "window",
         clip_native_dim: int | None = None,
     ):
         super().__init__()
@@ -93,20 +92,30 @@ class ClassConditionedEncoderRefiner(nn.Module):
             text_prompt_use_checkpoint=bool(text_prompt_use_checkpoint),
         )
 
-        self.layers = nn.ModuleList([
-            EncoderRefinerLayer(
-                hidden_dim=self.hidden_dim,
-                score_embed_dim=self.score_embed_dim,
-                num_heads=int(num_heads),
-                window_size=int(window_size),
-                shift_size=int(shift_size),
-                dropout=float(dropout),
-                score_attention_type="intra" if layer_index % 2 == 0 else "inter",
-                score_intra_attn_type=score_intra_attn_type,
-                feature_intra_attn_type=feature_intra_attn_type,
-            )
-            for layer_index in range(self.num_fusion_layers)
-        ])
+        # Alternate inter → intra → inter → intra without sharing parameters.
+        layers = []
+        for block_index in range(self.num_fusion_layers):
+            if block_index % 2 == 0:
+                layers.append(
+                    RefinerInterBlock(
+                        hidden_dim=self.hidden_dim,
+                        score_embed_dim=self.score_embed_dim,
+                        num_heads=int(num_heads),
+                        dropout=float(dropout),
+                    )
+                )
+            else:
+                layers.append(
+                    RefinerIntraBlock(
+                        hidden_dim=self.hidden_dim,
+                        score_embed_dim=self.score_embed_dim,
+                        num_heads=int(num_heads),
+                        window_size=int(window_size),
+                        shift_size=int(shift_size),
+                        dropout=float(dropout),
+                    )
+                )
+        self.layers = nn.ModuleList(layers)
 
         # Final normalization for the accumulated feature residual stream.
         # This is applied once after all Refiner layers and before the
@@ -163,9 +172,9 @@ class ClassConditionedEncoderRefiner(nn.Module):
         Returns:
             refiner_features_36:
                 [B, C, 256, 36, 36] feature stream after all Refiner
-                layers and the final channel-wise LayerNorm.
+                blocks and the final channel-wise LayerNorm.
             score_embed_36:
-                [B, C, 256, 36, 36] score stream after all Refiner layers.
+                [B, C, 256, 36, 36] score stream after all Refiner blocks.
             clip_score_embed_36:
                 [B, C, 256, 36, 36] initial pure RemoteCLIP score embedding.
             clip_score_maps_36:
@@ -264,25 +273,27 @@ class ClassConditionedEncoderRefiner(nn.Module):
         # directly. No SAM3 FPN injection is performed before attention.
         score_embed_36 = clip_score_embed_36
 
-        for layer in self.layers:
-            if self.use_checkpoint and self.training:
-                feature_36, score_embed_36 = checkpoint(
-                    layer,
+        for block in self.layers:
+            if isinstance(block, RefinerIntraBlock):
+                block_args = (
+                    block,
                     feature_36,
                     score_embed_36,
                     clip_mid_36,
                     sam_fpn_36,
+                )
+            else:
+                block_args = (block, feature_36, score_embed_36)
+
+            if self.use_checkpoint and self.training:
+                feature_36, score_embed_36 = checkpoint(
+                    *block_args,
                     use_reentrant=False,
                 )
             else:
-                feature_36, score_embed_36 = layer(
-                    feature_36=feature_36,
-                    score_embed_36=score_embed_36,
-                    clip_mid_36=clip_mid_36,
-                    sam_fpn_36=sam_fpn_36,
-                )
+                feature_36, score_embed_36 = block_args[0](*block_args[1:])
 
-        # Normalize the accumulated feature stream once after all Refiner layers.
+        # Normalize the accumulated feature stream once after all Refiner blocks.
         feature_36 = apply_layer_norm_bcdhw(
             feature_36,
             self.feature_output_norm,

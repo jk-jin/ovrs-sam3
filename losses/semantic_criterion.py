@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Dict, Optional
 
@@ -48,6 +49,17 @@ class SemanticStreamingContext:
 
     sam3_mask_distill_weight: float
 
+    # [B] number of ignore pixels per image.
+    ignore_pixel_count: torch.Tensor
+
+    # Number of present image–original-class pairs whose image has
+    # at least one ignore pixel. This is the global denominator of the
+    # present-class ignore suppression loss.
+    present_ignore_pair_count: int
+
+    # [P] reciprocal of the number of prompts sharing each prompt's class.
+    inv_prompt_count: torch.Tensor
+
 
 class SemanticCriterion(nn.Module):
     """Semantic segmentation criterion with streaming per-chunk support.
@@ -64,6 +76,12 @@ class SemanticCriterion(nn.Module):
            - Only present image-prompt pairs
            - All valid GT pixels plus a configurable class-specific
              outer boundary restricted to ignore pixels
+
+        4. Present-class ignore suppression BCE (independent small weight,
+           zero disables it)
+           - Zero target on ignore pixels of present original classes
+           - Mean per image–class ignore region, then mean over the
+             global present image–class pair count
     """
 
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
@@ -95,6 +113,15 @@ class SemanticCriterion(nn.Module):
             raise ValueError(
                 "sam3_mask_distill_boundary_width must be >= 0, "
                 f"got {boundary_width}."
+            )
+
+        suppress_weight = float(
+            self.cfg.present_ignore_suppress_weight
+        )
+        if not math.isfinite(suppress_weight) or suppress_weight < 0.0:
+            raise ValueError(
+                "present_ignore_suppress_weight must be a finite "
+                f"non-negative value, got {suppress_weight}."
             )
 
     # ------------------------------------------------------------------
@@ -336,6 +363,33 @@ class SemanticCriterion(nn.Module):
             .item()
         )
 
+        # [B] ignore pixels per image and the global image–class pair
+        # count used by the present-class ignore suppression loss.
+        ignore_pixel_count = (
+            ignore_mask
+            .to(dtype=torch.long)
+            .flatten(1)
+            .sum(dim=1)
+        )
+        present_ignore_pair_count = int(
+            (
+                original_presence
+                & ignore_pixel_count.gt(0)[:, None]
+            )
+            .sum()
+            .item()
+        )
+
+        # [P] Each original class shares its per-class loss equally among
+        # its prompts; this only affects the new suppression term.
+        inv_prompt_count = (
+            1.0
+            / prompt_counts.index_select(
+                dim=0,
+                index=prompt_to_class_id,
+            ).to(dtype=torch.float32)
+        )
+
         return SemanticStreamingContext(
             label_map=label_map,
             valid_mask=valid_mask,
@@ -352,6 +406,9 @@ class SemanticCriterion(nn.Module):
             sam3_mask_distill_weight=float(
                 self.cfg.sam3_mask_distill_weight
             ),
+            ignore_pixel_count=ignore_pixel_count,
+            present_ignore_pair_count=present_ignore_pair_count,
+            inv_prompt_count=inv_prompt_count,
         )
 
     def forward_chunk(
@@ -498,11 +555,60 @@ class SemanticCriterion(nn.Module):
             distill_weight * distill_contribution
         )
 
+        # ---- Present-class ignore suppression ----
+        # Zero-target BCE on ignore pixels. Each image–original-class region
+        # is averaged first, same-class prompts share the class weight, and
+        # the global denominator is the image–present-class pair count.
+        suppress_weight = float(
+            self.cfg.present_ignore_suppress_weight
+        )
+        if suppress_weight > 0.0 and context.present_ignore_pair_count > 0:
+            ignore_mask = label_map.eq(int(self.cfg.ignore_index)).to(
+                device=device
+            )
+            pixel_bce = F.softplus(final_logits_chunk.float())
+            pixel_sum = pixel_bce.masked_fill(
+                ~ignore_mask[:, None],
+                0.0,
+            ).sum(dim=(-2, -1))
+
+            per_prompt_mean = pixel_sum / (
+                context.ignore_pixel_count.to(device=device)
+                .clamp_min(1)[:, None]
+            )
+            present = context.presence_target[
+                :, class_start:class_end
+            ].to(device=device)
+            eligible = (
+                present
+                & context.ignore_pixel_count.to(device=device)
+                .gt(0)[:, None]
+            )
+            alias_weight = context.inv_prompt_count[
+                class_start:class_end
+            ].to(
+                device=device,
+                dtype=per_prompt_mean.dtype,
+            )
+
+            suppress_contribution = (
+                per_prompt_mean
+                * eligible.to(dtype=per_prompt_mean.dtype)
+                * alias_weight[None]
+            ).sum() / context.present_ignore_pair_count
+        else:
+            suppress_contribution = zero
+
+        weighted_suppress_contribution = (
+            suppress_weight * suppress_contribution
+        )
+
         # ---- Total ----
         chunk_total = (
             float(self.cfg.final_balanced_bce_weight) * plain_bce_contribution
             + dice_weight * dice_contribution
             + weighted_distill_contribution
+            + weighted_suppress_contribution
         )
 
         return {
@@ -510,6 +616,10 @@ class SemanticCriterion(nn.Module):
             "loss_final_dice": dice_contribution,
             "loss_sam3_mask_distill_bce": distill_contribution,
             "loss_sam3_mask_distill_weighted": weighted_distill_contribution,
+            "loss_present_ignore_suppress_bce": suppress_contribution,
+            "loss_present_ignore_suppress_weighted": (
+                weighted_suppress_contribution
+            ),
             "total_loss": chunk_total,
         }
 

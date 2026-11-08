@@ -25,6 +25,13 @@ class ModelOutputKeys:
     prompt_logits: str = "prompt_logits"
     raw_prompt_score_map: str = "raw_prompt_score_map"
 
+    # Original SAM3 semantic path, decoded only when inference requests it.
+    # sam3_direct_logits is [B, P, H, W]; the score maps merge prompts to
+    # original classes by pixel-wise maximum.
+    sam3_direct_logits: str = "sam3_direct_logits"
+    raw_sam3_prompt_score_map: str = "raw_sam3_prompt_score_map"
+    raw_sam3_score_map: str = "raw_sam3_score_map"
+
     # Encoder feature refiner outputs
     encoder_features: str = "encoder_features"
     refiner_features_36: str = "refiner_features_36"
@@ -35,8 +42,9 @@ class ModelOutputKeys:
     clip_score_embed: str = "clip_score_embed"
     clip_mid_features: str = "clip_mid_features"
 
-    # Frozen SAM3 teacher logits — per-chunk temporary output during training,
-    # no longer a concatenated full-class output that must be saved.
+    # Frozen SAM3 teacher logits — per-chunk temporary output during training
+    # for distillation only. Inference writes its optional full-prompt result
+    # to sam3_direct_logits instead.
     sam3_teacher_logits: str = "sam3_teacher_logits"
 
 

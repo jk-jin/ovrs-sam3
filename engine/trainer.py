@@ -330,6 +330,8 @@ class Trainer:
                 "loss_final_dice",
                 "loss_sam3_mask_distill_bce",
                 "loss_sam3_mask_distill_weighted",
+                "loss_present_ignore_suppress_bce",
+                "loss_present_ignore_suppress_weighted",
                 "total_loss",
             ):
                 val = chunk_loss_dict.get(key)
