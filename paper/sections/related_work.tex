@@ -1,7 +1,13 @@
 \section{相关工作}
-\subsection{文本概念驱动的分割与 SAM 3}
-\TODO{核实原始文献，区分概念掩码生成、逐类语义分割与本文适配路径；不从模型名称推断机制。}
+
+\subsection{SAM 3 与遥感提示适配}
+
+SAM 3 支持以短名词短语或视觉示例描述待分割概念，并可返回与该概念匹配的多个实例掩码。其语义分割头还可给出当前概念的像素级响应，为逐类构建语义分割图提供基础~\cite{carionSAM3Segment2026}。SegEarth-OV3 将 SAM 3 用于遥感图像，逐类聚合实例掩码，再与语义概率图按像素取最大值，并用概念存在分数降低可能缺席类别的响应~\cite{liSegEarthOV3ExploringSAM2026}。ProC-SAM3 构建离线类别提示池，缓存文本嵌入，并结合概念存在分数与实例置信度融合解码输出~\cite{songPromptCalibratedSAM32026}。这两种方法均无需针对遥感分割更新模型参数。ConceptBank 同样保持 SAM 3 冻结，但利用目标数据集训练划分中的标注掩码构建类别视觉原型，据此校准提示嵌入~\cite{peiTamingSAM3Wild2026}。
+
 \subsection{遥感图文预训练与开放词汇分割}
-\TODO{核实 RemoteCLIP 和 SegEarth-OV3 的原始文献、训练数据与评测口径。厘清预训练遥感数据和本轮额外遥感分割训练的区别。}
-\subsection{类别交互与参数高效适配}
-\TODO{围绕类别提示交互、提示内部空间建模和冻结基础模型适配组织比较；核实引用后再写差异与创新性。}
+
+CLIP 通过图文对比学习建立图像与文本的对应关系，为使用文本指定分割类别提供表征基础~\cite{radfordLearningTransferableVisual2021}。RemoteCLIP 将遥感检测框和分割掩码转换为图文样本，在 CLIP 的基础上继续预训练，得到面向遥感场景的图文表征~\cite{liuRemoteCLIPVisionLanguage2024}。SegEarth-OV 利用无标注遥感图像训练特征上采样器，并在分割时削弱局部特征中的全局偏置~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025}。在使用遥感分割标注的方法中，GSNet 以类别查询引导通用 CLIP 与遥感专用视觉编码器的特征融合，并在 LandDiscover50K 上训练分割模型~\cite{yeOpenVocabularyRemoteSensing2025}。RSKT-Seg 聚合多方向图像的图文相似度，并在上采样时引入 RemoteCLIP 等编码器的中间特征~\cite{liExploringEfficientOpenVocabulary2026}。
+
+\subsection{空间与类别聚合}
+
+CAT-Seg 将局部图像特征与类别文本特征的余弦相似度组织为代价体，交替进行空间聚合和类别聚合，分别建模类别内部的空间联系与同一位置的类别关系~\cite{choCATSegCostAggregation2024}。PCA-Seg 将两种聚合并行处理，再融合两路结果~\cite{yinPCASegRevisitingCost2026}。在遥感场景中，RSKT-Seg 和 ROSS 也在代价图上进行空间和类别聚合~\cite{liExploringEfficientOpenVocabulary2026,zhangOpenvocabularySemanticSegmentation2026}。本文将交互引入 SAM 3 的解码前特征。ReCA-SAM3 将 RemoteCLIP 的局部图文相似度编码为分数嵌入，以此引导不同提示的 SAM 3 类别条件特征交换信息，并在单个提示内部建模空间关系。更新后的特征随后送入冻结的 SAM 3 解码路径。
