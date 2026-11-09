@@ -7,15 +7,16 @@ from torch.utils.checkpoint import checkpoint
 
 
 class DecoderInputFusion(nn.Module):
-    """Fuse Refiner36, original encoder72 and image-level FPN72.
+    """Fuse Refiner36, original encoder72 and image-level FPN72 in four orientations.
 
     The output replaces the last FPN level consumed by the original SAM3
     Pixel Decoder. Semantic branch pairs the Refiner feature with the
     original encoder72 feature; detail branch pairs the Refiner feature with
-    the image-level FPN72 feature. Both branches operate in 128-channel
-    compact space with independent standard 3×3 conv blocks and independent
-    Refiner projections, are summed with equal weight after projecting back
-    to 256 channels, and pass through a final 1×1 Conv.
+    the image-level FPN72 feature. Each branch keeps independent 256-channel
+    projections and one 256-channel conv block shared across 0°/90°/180°/270°
+    orientations. Inverse-rotated conv deltas are averaged back into the
+    branch input, then both branches are projected, summed with equal weight
+    and pass through a final 1×1 Conv.
     """
 
     def __init__(self, use_checkpoint: bool = True):
@@ -27,26 +28,39 @@ class DecoderInputFusion(nn.Module):
         self.fpn_proj = self._projection()
         self.semantic_block = self._branch_block()
         self.detail_block = self._branch_block()
-        self.semantic_out_proj = nn.Conv2d(128, 256, 1, bias=False)
-        self.detail_out_proj = nn.Conv2d(128, 256, 1, bias=False)
+        self.semantic_out_proj = nn.Conv2d(256, 256, 1, bias=False)
+        self.detail_out_proj = nn.Conv2d(256, 256, 1, bias=False)
         self.fusion_out_proj = nn.Conv2d(256, 256, 1, bias=False)
 
     @staticmethod
     def _projection() -> nn.Sequential:
         return nn.Sequential(
-            nn.Conv2d(256, 128, 1, bias=False),
-            nn.GroupNorm(8, 128),
+            nn.Conv2d(256, 256, 1, bias=False),
+            nn.GroupNorm(8, 256),
         )
 
     @staticmethod
     def _branch_block() -> nn.Sequential:
         return nn.Sequential(
-            nn.Conv2d(128, 128, 3, padding=1, bias=False),
-            nn.GroupNorm(8, 128),
+            nn.Conv2d(256, 256, 3, padding=1, bias=False),
+            nn.GroupNorm(8, 256),
             nn.GELU(),
-            nn.Conv2d(128, 128, 1, bias=False),
-            nn.GroupNorm(8, 128),
+            nn.Conv2d(256, 256, 1, bias=False),
+            nn.GroupNorm(8, 256),
         )
+
+    @staticmethod
+    def _directional_residual(
+        feature: torch.Tensor, block: nn.Module
+    ) -> torch.Tensor:
+        spatial_dims = (-2, -1)
+        delta = block(feature)
+        for quarter_turns in (1, 2, 3):
+            rotated_feature = torch.rot90(feature, quarter_turns, spatial_dims)
+            rotated_delta = block(rotated_feature)
+            # Accumulate every delta in the input coordinate system.
+            delta = delta + torch.rot90(rotated_delta, -quarter_turns, spatial_dims)
+        return feature + delta * 0.25
 
     def _forward_impl(
         self,
@@ -69,15 +83,17 @@ class DecoderInputFusion(nn.Module):
             + self.encoder_proj(original_encoder_feature_72)
         )
         detail_refiner = self.detail_refiner_proj(refiner_72).reshape(
-            batch_size, num_prompts, 128, 72, 72
+            batch_size, num_prompts, 256, 72, 72
         )
         # FPN is projected per image and broadcast over the prompt dimension.
         detail_input = (
             detail_refiner + self.fpn_proj(sam_fpn_72)[:, None]
-        ).reshape(num_pairs, 128, 72, 72)
+        ).reshape(num_pairs, 256, 72, 72)
 
-        semantic_feature = semantic_input + self.semantic_block(semantic_input)
-        detail_feature = detail_input + self.detail_block(detail_input)
+        semantic_feature = self._directional_residual(
+            semantic_input, self.semantic_block
+        )
+        detail_feature = self._directional_residual(detail_input, self.detail_block)
         return self.fusion_out_proj(
             self.semantic_out_proj(semantic_feature)
             + self.detail_out_proj(detail_feature)

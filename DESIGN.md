@@ -12,7 +12,7 @@ OVRS-SAM3 接收一批遥感图像和当前数据集的类别名称，输出每�
 
 * SAM3 提供稳定的多尺度图像特征、文本提示编码、类条件 transformer encoder 和分割解码器。
 * RemoteCLIP 提供面向遥感场景的局部图文对齐。
-* Encoder refiner 在低分辨率融合两者，通过单层 72×72 语义—细节双路融合生成掩码。
+* Encoder refiner 在低分辨率融合两者，通过一次 72×72 调用的语义—细节双路四方向融合生成掩码。
 
 当前只实现 semantic 模式，不支持实例分割、hybrid 模式或非空几何提示训练。
 
@@ -62,7 +62,8 @@ original_encoder_feature_72_chunk
 
 refiner_feature_36_chunk + original_encoder_feature_72_chunk + sam_fpn_72
   → 双线性插值 36→72
-  → 单层 DecoderInputFusion：语义支路（Refiner + 原始 encoder72），细节支路（Refiner + FPN72）
+  → DecoderInputFusion：语义支路（Refiner + 原始 encoder72），细节支路（Refiner + FPN72）
+    每条支路在 0°/90°/180°/270° 下共享同一个卷积块，逆旋转后等权平均残差增量
   → fused_feature_72 [B×P_chunk, 256, 72, 72]
 
 fused_feature_72
@@ -259,8 +260,9 @@ Value 始终仅来自目标流，图像指导不进入 Value，也不作为残�
 ### 5.3 单尺度 Decoder Input Fusion
 
 Refiner 在全部提示上统一执行后，最终 36×36 feature stream 先经过一次通道 LayerNorm，
-再进入 `DecoderInputFusion`。融合只在 72×72 执行一次，输出 256 通道 72×72 特征，
-替换原始 SAM3 Pixel Decoder 的最后一层 FPN 输入。
+再进入 `DecoderInputFusion`。每个提示块调用一次 DIF，在 72×72 上完成语义—细节双路融合；
+这一次调用内部包含四个方向的支路卷积计算，学生分割头的解码次数仍按提示块计。
+输出 256 通道 72×72 特征，替换原始 SAM3 Pixel Decoder 的最后一层 FPN 输入。
 
 **输入**（`N = B×P_chunk`）：
 
@@ -268,36 +270,58 @@ Refiner 在全部提示上统一执行后，最终 36×36 feature stream 先经�
 - original_encoder_feature_72 `[N, 256, 72, 72]`
 - sam_fpn_72 `[B, 256, 72, 72]`
 
-Refiner 特征先双线性插值到 72×72（`align_corners=False`）。这里使用缓存中的
-`cross_attended_encoder_features_72` 作为原始 encoder72，它已经过完整 6 层 encoder 和一次
-前置 prompt cross-attention，且未被 Refiner 更新。
+Refiner 特征先双线性插值到 72×72（`align_corners=False`），每个块只执行一次。
+这里使用缓存中的 `cross_attended_encoder_features_72` 作为原始 encoder72，它已经过
+完整 6 层 encoder 和一次前置 prompt cross-attention，且未被 Refiner 更新。
 
-四路独立的 256→128 投影（`1×1 Conv + GroupNorm`，无激活）：
+四路独立的 256→256 投影（`1×1 Conv + GroupNorm(8,256)`，无激活），每条输入只投影一次：
 
 ```text
-semantic_refiner_proj: refiner_72  [N, 256, 72, 72] → [N, 128, 72, 72]
-detail_refiner_proj:   refiner_72  [N, 256, 72, 72] → [N, 128, 72, 72]
-encoder_proj:          encoder_72  [N, 256, 72, 72] → [N, 128, 72, 72]
-fpn_proj:              sam_fpn_72  [B, 256, 72, 72] → [B, 128, 72, 72]
+semantic_refiner_proj: refiner_72  [N, 256, 72, 72] → [N, 256, 72, 72]
+detail_refiner_proj:   refiner_72  [N, 256, 72, 72] → [N, 256, 72, 72]
+encoder_proj:          encoder_72  [N, 256, 72, 72] → [N, 256, 72, 72]
+fpn_proj:              sam_fpn_72  [B, 256, 72, 72] → [B, 256, 72, 72]
 ```
 
 语义和细节分支各自使用独立的 Refiner 投影（`semantic_refiner_proj` 和 `detail_refiner_proj`），参数不共享。
 
-FPN 先按图像投影到 128 通道，再通过广播与 Refiner 逐提示相加。不使用 `repeat` 或 `repeat_interleave` 复制 256 通道 FPN。
+FPN 先按图像投影到 256 通道，再通过广播与 Refiner 逐提示相加。不使用 `repeat` 或 `repeat_interleave` 复制 256 通道 FPN。
 
-两条独立支路（不能共享参数），结构相同：
+支路输入为逐位置相加后的 256 通道特征：
 
 ```text
-block: 普通 3×3 Conv (128→128) → GN(8,128) → GELU
-     → 1×1 Conv (128→128) → GN(8,128)
-output = input + block(input)   # block 内部残差
+semantic_input = semantic_refiner_proj(refiner_72) + encoder_proj(encoder_72)
+detail_input   = detail_refiner_proj(refiner_72) + broadcast(fpn_proj(sam_fpn_72))
 ```
 
-语义支路融合独立 Refiner 语义投影与原始 encoder72；细节支路融合独立 Refiner 细节投影与原始 FPN72。
+先相加再整体旋转，等价于把两份已投影特征按同一角度旋转后相加，因此上游空间位置始终对齐，
+四个方向共享同一份支路输入。
 
-两条支路分别使用独立的 128→256 `1×1 Conv`（无 norm、无激活）恢复到 256 通道。
+两条独立支路（不能共享参数），结构相同，均为 256 通道：
 
-两路直接相加，再经过一个 256→256 的 `1×1 Conv`（`fusion_out_proj`）输出：
+```text
+block: 普通 3×3 Conv (256→256) → GN(8,256) → GELU
+     → 1×1 Conv (256→256) → GN(8,256)
+```
+
+每条支路依次在 0°、90°、180°、270° 下调用同一个 `block`。旋转只作用于最后两个空间轴
+（`torch.rot90` 逆时针直角旋转），batch、提示和通道轴保持原顺序。每个方向的卷积输出
+逆旋转回输入坐标，四份已对齐的增量等权求和后乘 0.25，一次性加回该支路输入：
+
+```text
+delta = block(input)                              # 0°
+delta += rot90(block(rot90(input,  90°)), -90°)   # 90°
+delta += rot90(block(rot90(input, 180°)), -180°)  # 180°
+delta += rot90(block(rot90(input, 270°)), -270°)  # 270°
+output = input + 0.25 * delta
+```
+
+方向聚合发生在完整卷积块之后，GroupNorm 和 GELU 在每个方向内部照常生效。四个方向共用
+同一份块参数（同宽度下额外参数量为零），不建立独立方向模块或权重，不引入方向门控，
+也不把四个方向拼接到 batch 或通道轴。语义和细节两支路的块与后续投影各自独立。
+
+两条支路分别使用独立的 256→256 `1×1 Conv`（无 norm、无激活），两路等权直接相加，
+再经过一个 256→256 的 `1×1 Conv`（`fusion_out_proj`）输出：
 
 ```python
 fused_out = semantic_out + detail_out
@@ -306,7 +330,13 @@ output = fusion_out_proj(fused_out)
 
 模块不包含融合系数、门控或零初始化，输出端不加 GroupNorm、GELU、ReLU，也不加原始 encoder 残差。融合模块只有这一层，不存在多尺度堆叠。
 
-整个模块使用一次 non-reentrant checkpoint（`self.training and self.use_checkpoint` 时开启）。支路通道数固定为 128，SAM3 通道数固定为 256。
+整个模块使用一次 non-reentrant checkpoint（`self.training and self.use_checkpoint` 时开启），
+覆盖包括四个方向在内的完整 `_forward_impl`。支路和 SAM3 通道数均固定为 256。
+DIF 可训练参数共 1,773,568；提示块为 4 个提示时，DIF 内部卷积乘加量约为旧 128 通道单方向版本的
+10 倍（约 29.30 GMAC，基线约 2.93 GMAC），这是模块局部的计算量，不是整个模型的耗时或显存倍率。
+实际训练与推理显存应按 `prompt_chunk_size` 调整，比较实验时固定块大小、AMP 和峰值显存口径。
+DIF 内部四方向与推理阶段的外部 TTA 是两个层次：前者在卷积块内共享参数，随每次学生解码执行；
+后者仍按第 8 节独立处理，比较实验时应使用同一套 TTA 设置。
 
 ## 6. 冻结 SAM3 分割头与梯度边界
 
@@ -558,7 +588,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 | ------------------------------------- | ---------------------------------------- |
 | `models/sam3_image.py`                | 类别 chunk、缓存、SAM3 encoder、低分辨率 refiner、逐 chunk 学生解码与按需原始 SAM3 解码 |
 | `models/encoder_refiner.py`           | 全类别 Refiner、最终 feature LayerNorm 与单尺度融合接口 |
-| `models/decoder_input_fusion.py`      | 单尺度语义—细节双路融合，输出替换 Pixel Decoder 最后一层 FPN 输入 |
+| `models/decoder_input_fusion.py`      | 单尺度 256 通道语义—细节双路四方向融合，输出替换 Pixel Decoder 最后一层 FPN 输入 |
 | `models/encoder_refiner_attention.py` | 类间/类内纯注意力块、单 Value、pre-norm 与直接残差更新 |
 | `models/maskformer_segmentation.py`   | prompt attention、Pixel Decoder 和原始 semantic head |
 | `models/score_embeddings.py`          | 64 模板相似度图、归一化 CLIP 融合和空间卷积增强 |
@@ -589,7 +619,7 @@ python tools/train.py configs/train/isaid_loveda_full.py
 11. 验证不得重新开启 RemoteCLIP 图像分支的 autograd。
 12. Refiner 必须先在全部提示上执行，再按 chunk 做高分辨率解码。Refiner 不能放进 chunk 循环。
 13. 学生和教师复用同一个冻结 Pixel Decoder 与 semantic head；教师路径必须在 `torch.no_grad()` 中，学生路径不得使用 `no_grad()`、`detach()` 或 `enable_grad()`。
-14. DecoderInputFusion 只在 72×72 执行一次，不做多层堆叠或支路前额外 encoder 拼接，输出替换原始 Pixel Decoder 的最后一层 FPN 输入。
+14. DecoderInputFusion 只在 72×72 执行一次，不做多层堆叠或支路前额外 encoder 拼接，输出替换原始 Pixel Decoder 的最后一层 FPN 输入。这一次调用内每条支路在四个方向共享同一个卷积块；学生解码次数仍按提示块计。
 15. 教师始终使用缓存中的原始 encoder72，不使用融合输出或被 Refiner 更新后的特征。
 16. clip_score_embed_36 保持纯 RemoteCLIP 输出，用于 debug。
 17. teacher 只来自原始 encoder72 解码路径并且必须 detach。teacher 和 student 都为 288×288。
@@ -603,9 +633,9 @@ python tools/train.py configs/train/isaid_loveda_full.py
 25. optimizer.zero_grad / scaler.step / scaler.update / scheduler.step 每 batch 只执行一次。
 26. 不使用 `retain_graph=True`。
 27. backbone_fpn 顺序固定为 `[288, 144, 72]`，即 `backbone_fpn[0]` 为 288、`[1]` 为 144、`[2]` 为 72。
-28. 原始 FPN 在 256 通道时不按提示复制；FPN 先按图像投影到 128 通道，再按提示广播。
+28. 原始 FPN 在 256 通道时不按提示复制；FPN 先按图像投影到 256 通道，再按提示广播。
 29. FPN 投影模块可训练，每个 chunk 重新计算，不跨 chunk 缓存计算图。
-30. 融合支路固定 `branch_dim=128`，3×3 卷积使用普通卷积（无分组）。
+30. 融合支路固定 256 通道，3×3 卷积使用普通卷积（无分组）。四个方向只旋转最后两个空间轴，共用同一份块参数；输出逆旋转回输入坐标后等权平均，并且每条支路只加一次输入残差。
 31. 融合输出直接作为 Pixel Decoder 的最后一层输入；模块内无融合系数、门控、零初始化、额外残差或输出归一化。
 32. 最终 logits 由冻结 `semantic_seg_head` 生成。
 
@@ -750,4 +780,18 @@ checkpoint 一致性、梯度边界、双门合并与过滤，以及忽略区域
 * 旧 checkpoint 不能通过 `--resume-from` 严格恢复，也不能直接 `--load-model-from`：
   类间注意力数量、参数路径与 FFN 参数均已变化。新实验必须使用新的 work directory。
 * 不添加旧参数映射、占位或兼容层。
+* `_CHECKPOINT_VERSION` 保持 4，因为 checkpoint 容器格式未变。
+
+本次 Decoder Input Fusion 四方向重构：
+
+* `DecoderInputFusion` 的四路输入投影、两条支路卷积块和支路输出投影由 128 通道改为 256 通道。
+* 每条支路在 0°、90°、180°、270° 下共用同一个卷积块；卷积输出逆旋转回输入坐标后等权平均，
+  每条支路只加一次输入残差。语义和细节支路之间仍各自独立。
+* 方向聚合位于完整卷积块之后，保留了每个方向内部的 GroupNorm 和 GELU；不新增方向模块、方向门控或拼接。
+* 两支路等权相加后经过 256→256 最终融合投影。模块输入、输出契约、调用链、教师路径和逐 chunk 梯度设计不变。
+* DIF 可训练参数从 591,872 增至 1,773,568；提示块为 4 时 DIF 局部卷积乘加量约为原来的 10 倍，
+  这是模块局部计算量，不是整个模型的耗时或显存倍率。
+* 同名参数形状变化（128→256），旧 checkpoint 不能通过 `--resume-from` 严格恢复，
+  `--load-model-from` 也会拒绝同名但形状不同的参数。新实验必须使用新的 work directory。
+* 不添加旧参数映射、填充、自动迁移或兼容层。
 * `_CHECKPOINT_VERSION` 保持 4，因为 checkpoint 容器格式未变。
