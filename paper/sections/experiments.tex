@@ -1,0 +1,70 @@
+\section{实验}
+\subsection{数据划分、选择协议与评价指标}
+当前训练配置使用 iSAID 训练划分，并用 LoveDA 验证划分的六类前景平均交并比（mIoU）选择 checkpoint。这是当前开发与选择协议，不能将同一划分再作为独立正式评测的证据。\TODO{在运行主实验前确认正式评测划分及标签获取方式，并冻结 checkpoint、超参数和后处理；若仍使用选择划分报告，则明确其为开发结果。}
+
+LoveDA 主结果统一报告包含背景的七类 mIoU，另存六类前景 mIoU 和背景交并比（IoU）。七类依次为背景、建筑、道路、水体、裸地、森林和农业用地。当前评测器全类指标可用于七类口径，但会排除并集为零的类别，须同时核查类别有效数和逐类 IoU。原始标签的零值忽略、标签减一与背景排除分别属于不同处理步骤，不得重复变换。表中空白均表示待跑或待核实，不能解释为零。
+
+\TODO{补齐所有评测数据集、样本清单、类别映射、训练与评测类别重叠、图像变换及忽略标签。以独立指标文件记录逐类 IoU、七类 mIoU、六类前景 mIoU、背景 IoU 和选择依据，见配套协议记录。}
+
+\subsection{实现细节与比较公平性}
+\TODO{从最终合并配置和运行日志填写训练预算、批量、优化器、学习率、损失、冻结参数范围、checkpoint 标识和随机种子。当前配置快照在 README 中，不代表定稿。所有对照统一提示、输入、后处理和 TTA，或清楚列出不能统一的差异。}
+
+主表按本轮是否额外使用遥感分割训练区分比较组。“无额外遥感训练”不表示预训练阶段未接触遥感数据，RemoteCLIP 等预训练数据来源仍需核实。SAM 3、SegEarth-OV3 的具体版本、官方权重与复现方式均待核实；同样用 iSAID 训练的对照需匹配训练预算及选择协议。
+
+\begin{table}[t]
+\centering
+\caption{LoveDA 主结果占位。正式评测划分待确认；主指标为七类 mIoU，单位为百分比。空白表示无可报告结果。}
+\label{tab:main}
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{0.47\columnwidth}ccc}
+\toprule
+方法 & 七类 & 前景六类 & 背景 IoU\\
+\midrule
+\multicolumn{4}{l}{无额外遥感训练（本轮分割适配）}\\
+SAM 3 & \blankresult & & \\
+SegEarth-OV3 & & & \\
+\midrule
+\multicolumn{4}{l}{同样使用 iSAID 训练}\\
+简单 SAM 3 adapter & & & \\
+其他同预算对照（待确认） & & & \\
+ReCA-SAM3 & & & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{消融实验}
+\TODO{先锁定完整模型，再逐项修改，并匹配训练、选择与评测设置。关闭跨类交互的具体实现、通用 CLIP 的架构及预训练权重、简单 adapter 的结构和参数预算都需先定义。DIF 消融需覆盖替代融合和四方向聚合的必要性，并报告参数、时间与显存成本。}
+\begin{table}[t]
+\centering
+\caption{消融实验占位。所有行采用相同 iSAID 训练及独立正式评测协议；变体实现和比较预算待确认。}
+\label{tab:ablation}
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{0.66\columnwidth}c}
+\toprule
+变体 & 七类 mIoU（\%）\\
+\midrule
+完整 ReCA-SAM3 & \blankresult\\
+简单 SAM 3 adapter & \\
+关闭跨类交互 & \\
+通用 CLIP 替换 RemoteCLIP & \\
+DIF 替代融合（待定义） & \\
+DIF 关闭四方向聚合 & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{定性比较与待验证主张}
+\begin{figure}[t]
+\centering
+\fbox{\begin{minipage}[c][2.5cm][c]{0.93\columnwidth}
+\centering 定性比较图占位\\[0.5em]
+图像／真值／SAM 3／简单 adapter／ReCA-SAM3\\
+道路与裸地误响应、边界及跨数据集失败案例\\
+样本编号、相同色表和局部放大区域待补
+\end{minipage}}
+\caption{定性比较占位。样本来自最终指定的评测划分，同时展示成功与失败案例。当前未载入预测或真值图。}
+\label{fig:qualitative}
+\end{figure}
+\TODO{减少类别误响应：预先定义类别混淆与假阳性分析；改善边界：预先定义边界指标和容差；增强迁移：在独立目标划分上比较且不使用其标签调参。仅凭主表 mIoU 或精选图像不能分别证明这些主张。}

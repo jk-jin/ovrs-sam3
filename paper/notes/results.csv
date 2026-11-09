@@ -1,0 +1,5 @@
+run_id,method,training_group,train_dataset,train_split,checkpoint,selection_dataset,selection_split,selection_metric,formal_eval_dataset,formal_eval_split,miou_7_pct,miou_foreground_6_pct,background_iou_pct,raw_metrics_path
+,SAM 3,no_extra_rs_training,,,,,,,LoveDA,,,,,
+,SegEarth-OV3,no_extra_rs_training,,,,,,,LoveDA,,,,,
+,simple SAM 3 adapter,isaid_training,iSAID,train,,,,,LoveDA,,,,,
+,ReCA-SAM3,isaid_training,iSAID,train,,,,,LoveDA,,,,,
