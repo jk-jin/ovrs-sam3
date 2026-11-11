@@ -5,32 +5,27 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-# ---------------------------------------------------------------------------
-# helpers
-# ---------------------------------------------------------------------------
-
-
 def flatten_batch_class(
     features: torch.Tensor,
 ) -> tuple[torch.Tensor, int, int]:
-    """[B, C, D, H, W] → [B*C, D, H, W]"""
-    batch_size, num_classes, channels, height, width = features.shape
+    """[B, P, D, H, W] → [B*P, D, H, W]"""
+    batch_size, num_prompts, channels, height, width = features.shape
     return (
-        features.reshape(batch_size * num_classes, channels, height, width),
+        features.reshape(batch_size * num_prompts, channels, height, width),
         batch_size,
-        num_classes,
+        num_prompts,
     )
 
 
 def unflatten_batch_class(
     features: torch.Tensor,
     batch_size: int,
-    num_classes: int,
+    num_prompts: int,
 ) -> torch.Tensor:
-    """[B*C, D, H, W] → [B, C, D, H, W]"""
+    """[B*P, D, H, W] → [B, P, D, H, W]"""
     _, channels, height, width = features.shape
     return features.reshape(
-        batch_size, num_classes, channels, height, width
+        batch_size, num_prompts, channels, height, width
     ).contiguous()
 
 
@@ -38,117 +33,119 @@ def apply_layer_norm_bcdhw(
     x: torch.Tensor,
     norm: nn.LayerNorm,
 ) -> torch.Tensor:
-    """Apply LayerNorm on the channel dim of [B, C, D, H, W]."""
+    """Apply LayerNorm on the channel dim of [B, P, D, H, W]."""
     return norm(
         x.permute(0, 1, 3, 4, 2)
     ).permute(0, 1, 4, 2, 3).contiguous()
 
 
-def _safe_group_norm(num_channels: int) -> nn.GroupNorm:
-    num_groups = min(8, num_channels)
-    if num_channels % num_groups != 0:
-        num_groups = 1
-    return nn.GroupNorm(num_groups, num_channels)
-
-
-def validate_guidance(guidance, feature, guidance_dim):
+def validate_guidance(guidance, feature_state, guidance_dim):
     if guidance_dim == 0:
         if guidance is not None:
             raise ValueError("This attention has no guidance input")
         return
-    B, C, _, H, W = feature.shape
-    if guidance is None or tuple(guidance.shape) != (B, C, guidance_dim, H, W):
-        raise ValueError(f"guidance must have shape {(B, C, guidance_dim, H, W)}")
+    B, P, _, H, W = feature_state.shape
+    if guidance is None or tuple(guidance.shape) != (B, P, guidance_dim, H, W):
+        raise ValueError(f"guidance must have shape {(B, P, guidance_dim, H, W)}")
 
 
-# ---------------------------------------------------------------------------
-# ClassScoreAttention
-# ---------------------------------------------------------------------------
+class CrossClassAttention(nn.Module):
+    """Single-value cross-class attention at each spatial position.
 
-
-class ClassScoreAttention(nn.Module):
-    """Single-value inter-class attention at each spatial position.
-
-    Q/K concatenate pre-normalized score and feature. Only value_stream
-    supplies values; the returned update is added by the outer layer.
+    Q/K concatenate pre-normalized semantic state and feature state. Only the
+    selected value stream supplies values; the returned update is added by
+    the outer block.
     """
 
     def __init__(
         self,
-        hidden_dim: int = 256,
-        score_embed_dim: int = 256,
+        feature_dim: int = 256,
+        semantic_dim: int = 256,
         num_heads: int = 8,
         dropout: float = 0.1,
         value_stream: str = "feature",
         guidance_dim: int = 0,
     ):
         super().__init__()
-        self.hidden_dim = int(hidden_dim)
-        self.score_embed_dim = int(score_embed_dim)
+        self.feature_dim = int(feature_dim)
+        self.semantic_dim = int(semantic_dim)
         self.num_heads = int(num_heads)
-        if self.hidden_dim % self.num_heads != 0:
-            raise ValueError("hidden_dim must be divisible by num_heads")
-        if value_stream not in ("feature", "score"):
-            raise ValueError("value_stream must be 'feature' or 'score'")
+        if self.feature_dim % self.num_heads != 0:
+            raise ValueError("feature_dim must be divisible by num_heads")
+        if value_stream not in ("feature", "semantic"):
+            raise ValueError("value_stream must be 'feature' or 'semantic'")
         self.value_stream = value_stream
         self.value_dim = (
-            self.hidden_dim if value_stream == "feature" else self.score_embed_dim
+            self.feature_dim
+            if value_stream == "feature"
+            else self.semantic_dim
         )
         self.guidance_dim = int(guidance_dim)
-        qk_in_dim = self.hidden_dim + self.score_embed_dim + self.guidance_dim
-        self.q_proj = nn.Linear(qk_in_dim, self.hidden_dim)
-        self.k_proj = nn.Linear(qk_in_dim, self.hidden_dim)
-        self.v_proj = nn.Linear(self.value_dim, self.hidden_dim)
-        self.out_proj = nn.Linear(self.hidden_dim, self.value_dim)
+        qk_in_dim = self.feature_dim + self.semantic_dim + self.guidance_dim
+        self.q_proj = nn.Linear(qk_in_dim, self.feature_dim)
+        self.k_proj = nn.Linear(qk_in_dim, self.feature_dim)
+        self.v_proj = nn.Linear(self.value_dim, self.feature_dim)
+        self.out_proj = nn.Linear(self.feature_dim, self.value_dim)
         self.dropout = nn.Dropout(float(dropout))
 
     def forward(
         self,
-        feature: torch.Tensor,
-        score_embed: torch.Tensor,
+        feature_state: torch.Tensor,
+        semantic_state: torch.Tensor,
         guidance: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Return the update for value_stream; inputs are [B, C, D, H, W]."""
-        B, C, D, H, W = feature.shape
-        validate_guidance(guidance, feature, self.guidance_dim)
-        D_score = self.score_embed_dim
-        if tuple(score_embed.shape) != (B, C, D_score, H, W):
-            raise ValueError("score_embed shape must match feature's batch/class/grid")
+        """Return the update for the value stream; inputs are [B, P, D, H, W]."""
+        B, P, D, H, W = feature_state.shape
+        validate_guidance(guidance, feature_state, self.guidance_dim)
+        D_semantic = self.semantic_dim
+        if tuple(semantic_state.shape) != (B, P, D_semantic, H, W):
+            raise ValueError(
+                "semantic_state shape must match feature_state's "
+                "batch/prompt/grid"
+            )
         N = H * W
-        f_flat = feature.permute(0, 3, 4, 1, 2).reshape(B * N, C, D)
-        s_flat = score_embed.permute(0, 3, 4, 1, 2).reshape(B * N, C, D_score)
+        f_flat = feature_state.permute(0, 3, 4, 1, 2).reshape(B * N, P, D)
+        s_flat = semantic_state.permute(0, 3, 4, 1, 2).reshape(
+            B * N, P, D_semantic
+        )
         qk_input = torch.cat([s_flat, f_flat], dim=-1)
         if guidance is not None:
-            g_flat = guidance.permute(0, 3, 4, 1, 2).reshape(B * N, C, self.guidance_dim)
+            g_flat = guidance.permute(0, 3, 4, 1, 2).reshape(
+                B * N, P, self.guidance_dim
+            )
             qk_input = torch.cat([qk_input, g_flat], dim=-1)
         value = f_flat if self.value_stream == "feature" else s_flat
         head_dim = D // self.num_heads
-        q = self.q_proj(qk_input).reshape(B * N, C, self.num_heads, head_dim).permute(0, 2, 1, 3)
-        k = self.k_proj(qk_input).reshape(B * N, C, self.num_heads, head_dim).permute(0, 2, 1, 3)
-        v = self.v_proj(value).reshape(B * N, C, self.num_heads, head_dim).permute(0, 2, 1, 3)
+        q = self.q_proj(qk_input).reshape(
+            B * N, P, self.num_heads, head_dim
+        ).permute(0, 2, 1, 3)
+        k = self.k_proj(qk_input).reshape(
+            B * N, P, self.num_heads, head_dim
+        ).permute(0, 2, 1, 3)
+        v = self.v_proj(value).reshape(
+            B * N, P, self.num_heads, head_dim
+        ).permute(0, 2, 1, 3)
         attn = torch.matmul(q, k.transpose(-2, -1)) * (head_dim ** -0.5)
         attn = self.dropout(F.softmax(attn, dim=-1))
-        out = torch.matmul(attn, v).permute(0, 2, 1, 3).reshape(B * N, C, D)
+        out = torch.matmul(attn, v).permute(0, 2, 1, 3).reshape(B * N, P, D)
         out = self.dropout(self.out_proj(out))
-        return out.reshape(B, H, W, C, self.value_dim).permute(0, 3, 4, 1, 2).contiguous()
+        return out.reshape(B, H, W, P, self.value_dim).permute(
+            0, 3, 4, 1, 2
+        ).contiguous()
 
 
-# ---------------------------------------------------------------------------
-# WindowScoreAttention
-# ---------------------------------------------------------------------------
-
-
-class WindowScoreAttention(nn.Module):
+class WindowSpatialAttention(nn.Module):
     """Single-value intra-class window attention with relative position bias.
 
-    Q/K concatenate pre-normalized score and feature. Only value_stream
-    supplies values. Regular/shifted windows follow the original implementation.
+    Q/K concatenate pre-normalized semantic state and feature state. Only the
+    selected value stream supplies values. Regular and shifted windows follow
+    the original implementation.
     """
 
     def __init__(
         self,
-        hidden_dim: int = 256,
-        score_embed_dim: int = 256,
+        feature_dim: int = 256,
+        semantic_dim: int = 256,
         num_heads: int = 8,
         window_size: int = 12,
         shift_size: int = 0,
@@ -157,36 +154,40 @@ class WindowScoreAttention(nn.Module):
         guidance_dim: int = 0,
     ):
         super().__init__()
-        self.hidden_dim = int(hidden_dim)
-        self.score_embed_dim = int(score_embed_dim)
+        self.feature_dim = int(feature_dim)
+        self.semantic_dim = int(semantic_dim)
         self.num_heads = int(num_heads)
         self.window_size = int(window_size)
         self.shift_size = int(shift_size)
 
-        if self.hidden_dim % self.num_heads != 0:
+        if self.feature_dim % self.num_heads != 0:
             raise ValueError(
-                f"hidden_dim={hidden_dim} not divisible by num_heads={num_heads}"
+                f"feature_dim={feature_dim} not divisible by "
+                f"num_heads={num_heads}"
             )
         if not 0 <= self.shift_size < self.window_size:
             raise ValueError(
-                f"shift_size={shift_size} must be in [0, window_size={window_size})"
+                f"shift_size={shift_size} must be in "
+                f"[0, window_size={window_size})"
             )
 
-        if value_stream not in ("feature", "score"):
-            raise ValueError("value_stream must be 'feature' or 'score'")
+        if value_stream not in ("feature", "semantic"):
+            raise ValueError("value_stream must be 'feature' or 'semantic'")
         self.value_stream = value_stream
         self.value_dim = (
-            self.hidden_dim if value_stream == "feature" else self.score_embed_dim
+            self.feature_dim
+            if value_stream == "feature"
+            else self.semantic_dim
         )
 
         self.guidance_dim = int(guidance_dim)
-        qk_in_dim = self.hidden_dim + self.score_embed_dim + self.guidance_dim
+        qk_in_dim = self.feature_dim + self.semantic_dim + self.guidance_dim
 
-        self.q_proj = nn.Linear(qk_in_dim, self.hidden_dim)
-        self.k_proj = nn.Linear(qk_in_dim, self.hidden_dim)
+        self.q_proj = nn.Linear(qk_in_dim, self.feature_dim)
+        self.k_proj = nn.Linear(qk_in_dim, self.feature_dim)
 
-        self.v_proj = nn.Linear(self.value_dim, self.hidden_dim)
-        self.out_proj = nn.Linear(self.hidden_dim, self.value_dim)
+        self.v_proj = nn.Linear(self.value_dim, self.feature_dim)
+        self.out_proj = nn.Linear(self.feature_dim, self.value_dim)
 
         self.dropout = nn.Dropout(float(dropout))
 
@@ -207,13 +208,13 @@ class WindowScoreAttention(nn.Module):
         relative_coords = (
             coords_flatten[:, :, None] - coords_flatten[:, None, :]
         )  # [2, ws*ws, ws*ws]
-        relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # [N, N, 2]
+        relative_coords = relative_coords.permute(1, 2, 0).contiguous()
 
         relative_coords[:, :, 0] += ws - 1
         relative_coords[:, :, 1] += ws - 1
         relative_coords[:, :, 0] *= 2 * ws - 1
 
-        relative_position_index = relative_coords.sum(-1)  # [N, N]
+        relative_position_index = relative_coords.sum(-1)
         self.register_buffer("relative_position_index", relative_position_index)
 
     @staticmethod
@@ -240,19 +241,20 @@ class WindowScoreAttention(nn.Module):
         return x
 
     def _get_relative_position_bias(self) -> torch.Tensor:
-        """
-        Returns:
-            relative_position_bias: [num_heads, N, N] where N = window_size * window_size
-        """
+        """Return [num_heads, N, N], N = window_size * window_size."""
         ws = self.window_size
         N = ws * ws
 
         relative_position_bias = self.relative_position_bias_table[
             self.relative_position_index.reshape(-1)
         ]
-        relative_position_bias = relative_position_bias.view(N, N, self.num_heads)
-        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()
-        return relative_position_bias  # [num_heads, N, N]
+        relative_position_bias = relative_position_bias.view(
+            N, N, self.num_heads
+        )
+        relative_position_bias = relative_position_bias.permute(
+            2, 0, 1
+        ).contiguous()
+        return relative_position_bias
 
     def _build_shift_attn_mask(
         self,
@@ -298,31 +300,31 @@ class WindowScoreAttention(nn.Module):
 
     def forward(
         self,
-        feature: torch.Tensor,
-        score_embed: torch.Tensor,
+        feature_state: torch.Tensor,
+        semantic_state: torch.Tensor,
         guidance: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Return the update for value_stream; inputs are [B, C, D, H, W]."""
-        B, C, D, H, W = feature.shape
-        validate_guidance(guidance, feature, self.guidance_dim)
-        D_score = self.score_embed_dim
+        """Return the update for the value stream; inputs are [B, P, D, H, W]."""
+        B, P, D, H, W = feature_state.shape
+        validate_guidance(guidance, feature_state, self.guidance_dim)
+        D_semantic = self.semantic_dim
 
         if H % self.window_size != 0 or W % self.window_size != 0:
             raise ValueError(
-                f"WindowScoreAttention expects H/W divisible by window_size={self.window_size}, "
-                f"got H={H}, W={W}."
+                "WindowSpatialAttention expects H/W divisible by "
+                f"window_size={self.window_size}, got H={H}, W={W}."
             )
-        if tuple(score_embed.shape) != (B, C, D_score, H, W):
+        if tuple(semantic_state.shape) != (B, P, D_semantic, H, W):
             raise ValueError(
-                f"score_embed must be [{B}, {C}, {D_score}, {H}, {W}], "
-                f"got {tuple(score_embed.shape)}"
+                f"semantic_state must be [{B}, {P}, {D_semantic}, {H}, {W}], "
+                f"got {tuple(semantic_state.shape)}"
             )
 
-        bc = B * C
+        bc = B * P
         ws = self.window_size
 
-        f_flat = feature.reshape(bc, D, H, W)
-        s_flat = score_embed.reshape(bc, D_score, H, W)
+        f_flat = feature_state.reshape(bc, D, H, W)
+        s_flat = semantic_state.reshape(bc, D_semantic, H, W)
 
         f_flat, orig_h, orig_w = self._pad_to_window(f_flat, ws)
         s_flat, _, _ = self._pad_to_window(s_flat, ws)
@@ -335,22 +337,24 @@ class WindowScoreAttention(nn.Module):
             s_flat = torch.roll(s_flat, shifts=(-shift, -shift), dims=(-2, -1))
 
         f_windows = self._window_partition(f_flat)   # [num_win, ws*ws, D]
-        s_windows = self._window_partition(s_flat)   # [num_win, ws*ws, D_score]
+        s_windows = self._window_partition(s_flat)   # [num_win, ws*ws, D_sem]
 
         g_windows = None
         if guidance is not None:
             g_flat = guidance.reshape(bc, self.guidance_dim, H, W)
             g_flat, _, _ = self._pad_to_window(g_flat, ws)
             if shift > 0:
-                g_flat = torch.roll(g_flat, shifts=(-shift, -shift), dims=(-2, -1))
+                g_flat = torch.roll(
+                    g_flat, shifts=(-shift, -shift), dims=(-2, -1)
+                )
             g_windows = self._window_partition(g_flat)
 
         attn_mask = self._build_shift_attn_mask(
             padded_h=pad_h,
             padded_w=pad_w,
             bc=bc,
-            device=feature.device,
-            dtype=feature.dtype,
+            device=feature_state.device,
+            dtype=feature_state.dtype,
         )
 
         # Q/K from both streams; values from the selected stream only.
@@ -372,7 +376,6 @@ class WindowScoreAttention(nn.Module):
 
         attn = torch.matmul(q, k.transpose(-2, -1)) * (head_dim ** -0.5)
 
-        # Add relative position bias.
         rel_pos_bias = self._get_relative_position_bias().to(
             device=attn.device, dtype=attn.dtype
         )
@@ -391,86 +394,76 @@ class WindowScoreAttention(nn.Module):
         if shift > 0:
             out = torch.roll(out, shifts=(shift, shift), dims=(-2, -1))
         out = out[:, :, :orig_h, :orig_w]
-        return out.reshape(B, C, self.value_dim, H, W).contiguous()
+        return out.reshape(B, P, self.value_dim, H, W).contiguous()
 
 
-# ---------------------------------------------------------------------------
-# RefinerInterBlock
-# ---------------------------------------------------------------------------
-
-
-class RefinerInterBlock(nn.Module):
-    """Inter-class block with one score update followed by one feature update.
+class CrossClassAggregationBlock(nn.Module):
+    """Cross-class block with one semantic update then one feature update.
 
     Each step has its own pre-norm, projections and dropout. Q/K concatenate
-    [score, feature] at each spatial position; the value and the residual
-    target are the stream being updated. Prompts attend to each other
-    independently per image and spatial position.
+    [semantic_state, feature_state] at each spatial position; the value and
+    the residual target are the stream being updated. Prompts attend to each
+    other independently per image and spatial position.
     """
 
     def __init__(
         self,
-        hidden_dim: int = 256,
-        score_embed_dim: int = 256,
+        feature_dim: int = 256,
+        semantic_dim: int = 256,
         num_heads: int = 8,
         dropout: float = 0.1,
     ):
         super().__init__()
-        self.score_attn = ClassScoreAttention(
-            hidden_dim=hidden_dim,
-            score_embed_dim=score_embed_dim,
+        self.semantic_attention = CrossClassAttention(
+            feature_dim=feature_dim,
+            semantic_dim=semantic_dim,
             num_heads=num_heads,
             dropout=dropout,
-            value_stream="score",
+            value_stream="semantic",
         )
-        self.feature_attn = ClassScoreAttention(
-            hidden_dim=hidden_dim,
-            score_embed_dim=score_embed_dim,
+        self.feature_attention = CrossClassAttention(
+            feature_dim=feature_dim,
+            semantic_dim=semantic_dim,
             num_heads=num_heads,
             dropout=dropout,
             value_stream="feature",
         )
-        self.score_attn_norm_feature = nn.LayerNorm(hidden_dim)
-        self.score_attn_norm_score = nn.LayerNorm(score_embed_dim)
-        self.feature_attn_norm_feature = nn.LayerNorm(hidden_dim)
-        self.feature_attn_norm_score = nn.LayerNorm(score_embed_dim)
+        self.semantic_attention_norm_feature = nn.LayerNorm(feature_dim)
+        self.semantic_attention_norm_semantic = nn.LayerNorm(semantic_dim)
+        self.feature_attention_norm_feature = nn.LayerNorm(feature_dim)
+        self.feature_attention_norm_semantic = nn.LayerNorm(semantic_dim)
 
     def forward(
         self,
-        feature_36: torch.Tensor,
-        score_embed_36: torch.Tensor,
+        feature_state_36: torch.Tensor,
+        semantic_state_36: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        score_embed_36 = score_embed_36 + self.score_attn(
-            feature=apply_layer_norm_bcdhw(
-                feature_36, self.score_attn_norm_feature
+        semantic_state_36 = semantic_state_36 + self.semantic_attention(
+            feature_state=apply_layer_norm_bcdhw(
+                feature_state_36, self.semantic_attention_norm_feature
             ),
-            score_embed=apply_layer_norm_bcdhw(
-                score_embed_36, self.score_attn_norm_score
-            ),
-        )
-        feature_36 = feature_36 + self.feature_attn(
-            feature=apply_layer_norm_bcdhw(
-                feature_36, self.feature_attn_norm_feature
-            ),
-            score_embed=apply_layer_norm_bcdhw(
-                score_embed_36, self.feature_attn_norm_score
+            semantic_state=apply_layer_norm_bcdhw(
+                semantic_state_36, self.semantic_attention_norm_semantic
             ),
         )
-        return feature_36, score_embed_36
+        feature_state_36 = feature_state_36 + self.feature_attention(
+            feature_state=apply_layer_norm_bcdhw(
+                feature_state_36, self.feature_attention_norm_feature
+            ),
+            semantic_state=apply_layer_norm_bcdhw(
+                semantic_state_36, self.feature_attention_norm_semantic
+            ),
+        )
+        return feature_state_36, semantic_state_36
 
 
-# ---------------------------------------------------------------------------
-# RefinerIntraBlock
-# ---------------------------------------------------------------------------
-
-
-class WindowUpdate(nn.Module):
+class WindowAttentionUpdate(nn.Module):
     """One pre-normalized window attention update for a single stream."""
 
     def __init__(
         self,
-        hidden_dim: int,
-        score_embed_dim: int,
+        feature_dim: int,
+        semantic_dim: int,
         num_heads: int,
         window_size: int,
         shift_size: int,
@@ -479,9 +472,9 @@ class WindowUpdate(nn.Module):
         guidance_dim: int,
     ):
         super().__init__()
-        self.attn = WindowScoreAttention(
-            hidden_dim=hidden_dim,
-            score_embed_dim=score_embed_dim,
+        self.attn = WindowSpatialAttention(
+            feature_dim=feature_dim,
+            semantic_dim=semantic_dim,
             num_heads=num_heads,
             window_size=window_size,
             shift_size=shift_size,
@@ -489,35 +482,39 @@ class WindowUpdate(nn.Module):
             value_stream=value_stream,
             guidance_dim=guidance_dim,
         )
-        self.norm_feature = nn.LayerNorm(hidden_dim)
-        self.norm_score = nn.LayerNorm(score_embed_dim)
+        self.norm_feature = nn.LayerNorm(feature_dim)
+        self.norm_semantic = nn.LayerNorm(semantic_dim)
         self.norm_guidance = nn.LayerNorm(guidance_dim)
 
     def forward(
         self,
-        feature_36: torch.Tensor,
-        score_embed_36: torch.Tensor,
+        feature_state_36: torch.Tensor,
+        semantic_state_36: torch.Tensor,
         guidance: torch.Tensor,
     ) -> torch.Tensor:
         return self.attn(
-            feature=apply_layer_norm_bcdhw(feature_36, self.norm_feature),
-            score_embed=apply_layer_norm_bcdhw(score_embed_36, self.norm_score),
+            feature_state=apply_layer_norm_bcdhw(
+                feature_state_36, self.norm_feature
+            ),
+            semantic_state=apply_layer_norm_bcdhw(
+                semantic_state_36, self.norm_semantic
+            ),
             guidance=apply_layer_norm_bcdhw(guidance, self.norm_guidance),
         )
 
 
-class RefinerIntraBlock(nn.Module):
-    """Intra-class block: two score window steps, then two feature steps.
+class IntraClassAggregationBlock(nn.Module):
+    """Intra-class block: two semantic window steps, then two feature steps.
 
-    Score steps use CLIP middle guidance; feature steps use FPN36 guidance.
-    Regular and shifted windows each own independent parameters, and every
-    step re-normalizes and re-projects its current inputs.
+    Semantic steps use RemoteCLIP spatial guidance; feature steps use SAM3
+    FPN36 guidance. Regular and shifted windows each own independent
+    parameters, and every step re-normalizes and re-projects its inputs.
     """
 
     def __init__(
         self,
-        hidden_dim: int = 256,
-        score_embed_dim: int = 256,
+        feature_dim: int = 256,
+        semantic_dim: int = 256,
         num_heads: int = 8,
         window_size: int = 12,
         shift_size: int = 6,
@@ -526,43 +523,43 @@ class RefinerIntraBlock(nn.Module):
     ):
         super().__init__()
         step_kwargs = dict(
-            hidden_dim=hidden_dim,
-            score_embed_dim=score_embed_dim,
+            feature_dim=feature_dim,
+            semantic_dim=semantic_dim,
             num_heads=num_heads,
             window_size=window_size,
             dropout=dropout,
             guidance_dim=guidance_dim,
         )
-        self.score_regular = WindowUpdate(
-            shift_size=0, value_stream="score", **step_kwargs
+        self.semantic_regular = WindowAttentionUpdate(
+            shift_size=0, value_stream="semantic", **step_kwargs
         )
-        self.score_shifted = WindowUpdate(
-            shift_size=shift_size, value_stream="score", **step_kwargs
+        self.semantic_shifted = WindowAttentionUpdate(
+            shift_size=shift_size, value_stream="semantic", **step_kwargs
         )
-        self.feature_regular = WindowUpdate(
+        self.feature_regular = WindowAttentionUpdate(
             shift_size=0, value_stream="feature", **step_kwargs
         )
-        self.feature_shifted = WindowUpdate(
+        self.feature_shifted = WindowAttentionUpdate(
             shift_size=shift_size, value_stream="feature", **step_kwargs
         )
 
     def forward(
         self,
-        feature_36: torch.Tensor,
-        score_embed_36: torch.Tensor,
-        clip_mid_36: torch.Tensor,
-        sam_fpn_36: torch.Tensor,
+        feature_state_36: torch.Tensor,
+        semantic_state_36: torch.Tensor,
+        clip_spatial_guidance_36: torch.Tensor,
+        sam3_spatial_guidance_36: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        score_embed_36 = score_embed_36 + self.score_regular(
-            feature_36, score_embed_36, clip_mid_36
+        semantic_state_36 = semantic_state_36 + self.semantic_regular(
+            feature_state_36, semantic_state_36, clip_spatial_guidance_36
         )
-        score_embed_36 = score_embed_36 + self.score_shifted(
-            feature_36, score_embed_36, clip_mid_36
+        semantic_state_36 = semantic_state_36 + self.semantic_shifted(
+            feature_state_36, semantic_state_36, clip_spatial_guidance_36
         )
-        feature_36 = feature_36 + self.feature_regular(
-            feature_36, score_embed_36, sam_fpn_36
+        feature_state_36 = feature_state_36 + self.feature_regular(
+            feature_state_36, semantic_state_36, sam3_spatial_guidance_36
         )
-        feature_36 = feature_36 + self.feature_shifted(
-            feature_36, score_embed_36, sam_fpn_36
+        feature_state_36 = feature_state_36 + self.feature_shifted(
+            feature_state_36, semantic_state_36, sam3_spatial_guidance_36
         )
-        return feature_36, score_embed_36
+        return feature_state_36, semantic_state_36

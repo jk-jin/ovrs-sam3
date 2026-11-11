@@ -1,0 +1,5 @@
+method,variant,seed,miou,macc,pixel_acc,factor.blocks
+method_a,full,42,70.0,75.0,80.0,4
+method_a,full,43,72.0,77.0,82.0,4
+method_b,full,42,68.0,73.0,78.0,4
+method_c,full,42,0.0,0.0,0.0,4

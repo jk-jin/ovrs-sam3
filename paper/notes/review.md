@@ -2,11 +2,11 @@
 
 ## 方法概述段落角色与反向提纲
 
-1. 开篇定位：对冻结 SAM 3 的遥感适配，串联 SAM 3、RemoteCLIP、Refiner、DIF。
+1. 开篇定位：对冻结 SAM 3 的遥感适配，串联 SAM 3、RemoteCLIP、特征聚合、Semantic–Detail Fusion。
 2. 设计：局部图文相似度转分数嵌入，SAM 3 原始类别条件特征初始化另一流。
 3. 设计：类间提示轴交互与类内空间关系的区别，以及双流更新和固定指导。
 4. 边界：同义提示展开、共享标签、推理合并与全提示交互。
-5. 设计：DIF 三类输入、语义/细节支路、四方向当前实现及冻结解码路径。
+5. 设计：Semantic–Detail Fusion 三类输入、语义/细节支路、四方向当前实现及冻结解码路径。
 6. 限定：冻结与可训练部分、梯度边界；机制本身不构成性能证据。
 
 每段围绕一个问题，先解释输入与作用，再交代实现限制。后续小节分别展开任务定义、先验、交互、融合、训练与推理。
@@ -15,10 +15,10 @@
 
 | 主张 | 证据 | 状态 |
 | --- | --- | --- |
-| 当前逐类路径在 Refiner 前无显式跨提示交互 | sam3_image.py 的提示 pair 编码与分块缓存；encoder_refiner_attention.py 的交互轴 | 实现支持，限制在本文路径；SAM 3 文献仍待核实 |
-| RemoteCLIP 局部相似度参与条件特征更新 | score_embeddings.py、encoder_refiner.py 与注意力投影 | 实现支持；是否优于通用 CLIP 待验证 |
-| 类间沿展开提示，类内沿提示内部空间 | ClassScoreAttention reshape、WindowScoreAttention、RefinerInterBlock/RefinerIntraBlock | 实现支持 |
-| DIF 连接三类表征并复用冻结 SAM 3 解码器 | decoder_input_fusion.py、sam3_image.py、model_builder.py | 当前工作区支持；最终变体 TODO |
+| 当前逐类路径在特征聚合前无显式跨提示交互 | sam3_image.py 的提示 pair 编码与分块缓存；aggregation_attention.py 的交互轴 | 实现支持，限制在本文路径；SAM 3 文献仍待核实 |
+| RemoteCLIP 局部相似度参与条件特征更新 | remoteclip_guidance.py、feature_aggregation.py 与注意力投影 | 实现支持；是否优于通用 CLIP 待验证 |
+| 类间沿展开提示，类内沿提示内部空间 | CrossClassAttention reshape、WindowSpatialAttention、CrossClassAggregationBlock/IntraClassAggregationBlock | 实现支持 |
+| Semantic–Detail Fusion 连接三类表征并复用冻结 SAM 3 解码器 | semantic_detail_fusion.py、sam3_image.py、model_builder.py | 当前工作区支持；最终变体 TODO |
 | 减少道路/裸地等类别误响应 | 尚无已绑定当前实现的正式实验与混淆分析 | 待验证，正文仅作动机和研究目标 |
 | 改善边界 | 无已核实边界指标与固定容差 | 待验证 |
 | 增强跨数据集迁移 | 无独立正式目标划分结果，当前 LoveDA val 用于选择 | 待验证 |
@@ -34,13 +34,13 @@
 | 写作清晰度 | 交互轴、同义提示和梯度边界是否明确？概述已交代；公式和完整符号尚缺 | 需续写：任务定义与逐模块推导 |
 | 实验强度 | 有无稳定收益和失败案例？未有可报告结果 | 需新实验及结果追踪，不能写效果结论 |
 | 评价完整性 | 选择与正式评测是否独立？当前尚未 | 需确认划分、指标有效类别数、对照预算与文献 |
-| 方法合理性 | 复杂度是否值得、对类别提示是否稳健？未知 | 需成本测量、DIF/提示敏感性消融与目标域协议 |
+| 方法合理性 | 复杂度是否值得、对类别提示是否稳健？未知 | 需成本测量、Semantic–Detail Fusion/提示敏感性消融与目标域协议 |
 
 ## 下一轮需要确认
 
 - ReCA-SAM3 名称的正式英文展开、标题及作者单位。
-- Refiner 最终块数、头数、窗口/移位、固定图像指导与无 FFN 设计。
-- 四方向单尺度 DIF 是否定稿，以及替代融合对照的定义。
+- 特征聚合最终块数、头数、窗口/移位、固定图像指导与无 FFN 设计。
+- 四方向单尺度 Semantic–Detail Fusion 是否定稿，以及替代融合对照的定义。
 - RemoteCLIP 权重、模板、图文部分微调范围，是否匹配通用 CLIP 对照。
 - 主 BCE、蒸馏、忽略区域抑制、Dice 的最终组合、权重和边界外环。
 - 推理双门阈值、背景策略、提示词/TTA 设置及其选择数据。

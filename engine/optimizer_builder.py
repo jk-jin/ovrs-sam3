@@ -100,7 +100,7 @@ class OptimizerBuilder:
             if is_norm_by_type or is_norm_by_name:
                 group['weight_decay'] = base_wd * norm_decay_mult
 
-            if getattr(param, "_ovrs_disable_weight_decay", False):
+            if getattr(param, "_reca_disable_weight_decay", False):
                 group["weight_decay"] = 0.0
 
             params.append(group)
@@ -170,13 +170,13 @@ def enforce_optimizer_param_group_invariants(
 
     When an optimizer is restored from checkpoint, load_state_dict() may
     overwrite per-group hyperparameters (e.g. weight_decay).  This function
-    ensures that parameters marked with _ovrs_disable_weight_decay
+    ensures that parameters marked with _reca_disable_weight_decay
     always have weight_decay=0.0, regardless of what the checkpoint contains.
     """
     for group in optimizer.param_groups:
         params = list(group.get("params", []))
         if any(
-            getattr(param, "_ovrs_disable_weight_decay", False)
+            getattr(param, "_reca_disable_weight_decay", False)
             for param in params
         ):
             group["weight_decay"] = 0.0

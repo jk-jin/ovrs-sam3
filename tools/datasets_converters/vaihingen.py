@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Custom Vaihingen converter for OVRS-SAM3.
+Custom Vaihingen converter for ReCA-SAM3.
 
 Important change in this version:
 all archives are extracted to directories next to the archive files instead of

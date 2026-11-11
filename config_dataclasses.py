@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
+from .data.prompt_templates import REMOTECLIP_PROMPT_TEMPLATES
+
 
 @dataclass
 class FreezeConfig:
@@ -11,103 +13,27 @@ class FreezeConfig:
     frozen_modules: list[str] = field(default_factory=list)
 
     # "frozen" | "attention" | "transformer" | "full"
-    openclip_text_finetune: str = "frozen"
+    remoteclip_text_finetune: str = "frozen"
 
     # "frozen" | "attention" | "transformer" | "full"
-    openclip_image_finetune: str = "frozen"
+    remoteclip_image_finetune: str = "frozen"
 
 
 @dataclass
-class OpenCLIPConfig:
+class RemoteCLIPConfig:
     enabled: bool = False
     model_name: str = "ViT-L-14"
     pretrained: Optional[str] = None
     default_output: str = "feat_map"
     image_size: int = 504
 
-    image_intermediate_layers: list[int] = field(default_factory=lambda: [7, 15])
+    image_intermediate_layers: list[int] = field(
+        default_factory=lambda: [7, 15]
+    )
 
-    prompt_templates: list[str] = field(default_factory=lambda: [
-        # Basic remote-sensing viewpoints.
-        "a remote sensing image of {}.",
-        "a satellite image of {}.",
-        "an aerial image of {}.",
-        "an overhead image of {}.",
-        "a top-down view of {}.",
-        "a bird's-eye view of {}.",
-        "remote sensing imagery showing {}.",
-        "an overhead scene containing {}.",
-
-        # Natural caption variants.
-        "the remote sensing image shows {}.",
-        "the satellite image shows {}.",
-        "the aerial image shows {}.",
-        "an overhead image in which {} can be seen.",
-        "a satellite image in which {} is visible.",
-        "an aerial scene with {}.",
-        "a geographic scene containing {}.",
-        "a view from above showing {}.",
-
-        # Resolution and acquisition platforms.
-        "a high-resolution remote sensing image of {}.",
-        "a high-resolution satellite image of {}.",
-        "a high-resolution aerial image of {}.",
-        "a very high-resolution overhead image of {}.",
-        "a drone image of {}.",
-        "a UAV image of {}.",
-        "an orthophoto showing {}.",
-        "a wide-area satellite view containing {}.",
-
-        # Region and spatial extent.
-        "a close overhead view of {}.",
-        "a local overhead view containing {}.",
-        "a visible region of {} from above.",
-        "the spatial extent of {} in an overhead image.",
-        "the visible footprint of {} in an aerial image.",
-        "a land-cover area of {} in satellite imagery.",
-        "a land-use area of {} in aerial imagery.",
-        "a remote sensing region corresponding to {}.",
-
-        # Shape and boundary.
-        "the shape of {} in an overhead image.",
-        "the outline of {} in satellite imagery.",
-        "the boundary of {} in aerial imagery.",
-        "the edge pattern of {} in an overhead image.",
-        "the geometric structure of {} from above.",
-        "the spatial layout of {} in remote sensing imagery.",
-        "the visible form of {} in a satellite image.",
-        "the surface structure of {} in an aerial image.",
-
-        # Texture and appearance.
-        "the texture of {} in satellite imagery.",
-        "the fine-grained texture of {} in aerial imagery.",
-        "the visual pattern of {} in an overhead image.",
-        "the spatial pattern of {} in remote sensing imagery.",
-        "the color pattern of {} in an aerial image.",
-        "a homogeneous region of {} from above.",
-        "a heterogeneous region containing {} from above.",
-        "an overhead view where {} is distinguished from its surroundings.",
-
-        # Scale, count, and distribution.
-        "a small instance of {} in an aerial image.",
-        "a large instance of {} in a satellite image.",
-        "multiple instances of {} in overhead imagery.",
-        "a group of {} visible from above.",
-        "clustered {} in remote sensing imagery.",
-        "scattered {} in remote sensing imagery.",
-        "densely distributed {} in an overhead image.",
-        "sparsely distributed {} in an overhead image.",
-
-        # Spatial morphology and scene context.
-        "a compact region of {} in remote sensing imagery.",
-        "an elongated region of {} in remote sensing imagery.",
-        "a linear structure of {} in an overhead image.",
-        "a continuous region of {} viewed from above.",
-        "a fragmented region of {} viewed from above.",
-        "urban remote sensing imagery containing {}.",
-        "rural remote sensing imagery containing {}.",
-        "{} within its surrounding landscape in satellite imagery.",
-    ])
+    prompt_templates: list[str] = field(
+        default_factory=lambda: list(REMOTECLIP_PROMPT_TEMPLATES)
+    )
     normalize_label_for_clip: bool = True
 
     text_prompt_batch_size: int = 64
@@ -115,17 +41,17 @@ class OpenCLIPConfig:
 
 
 @dataclass
-class EncoderRefinerConfig:
+class AggregationConfig:
     enabled: bool = True
 
-    fusion_layers: int = 4  # Total blocks: inter → intra → inter → intra.
+    num_blocks: int = 4  # Total blocks: cross → intra → cross → intra.
     num_heads: int = 8
     dropout: float = 0.1
 
-    hidden_dim: int = 256
-    score_embed_dim: int = 256
+    feature_dim: int = 256
+    semantic_dim: int = 256
 
-    refiner_hw: int = 36
+    aggregation_hw: int = 36
     encoder_hw: int = 72
 
     window_size: int = 12
@@ -138,21 +64,15 @@ class EncoderRefinerConfig:
 class SemanticCriterionConfig:
     ignore_index: int = 255
 
-    final_balanced_bce_weight: float = 1.0
-    final_dice_weight: float = 0.0
+    seg_bce_weight: float = 1.0
+    seg_dice_weight: float = 0.0
 
     eps: float = 1e-6
 
-    sam3_mask_distill_weight: float = 0.05
-    sam3_mask_distill_boundary_width: int = 2
+    reference_distill_weight: float = 0.5
+    reference_boundary_width: int = 3
 
-    present_ignore_suppress_weight: float = 0.01
-
-
-@dataclass
-class AdapterConfig:
-    sam3_mask_prob_thd: Optional[float] = 0.1
-    final_mask_prob_thd: Optional[float] = 0.5
+    present_ignore_suppression_weight: float = 0.01
 
 
 @dataclass
@@ -168,13 +88,14 @@ class SegmentorBuildConfig:
 
     prompt_chunk_size: Optional[int] = None
 
-    freeze_cfg: FreezeConfig = field(default_factory=FreezeConfig)
-    openclip_cfg: OpenCLIPConfig = field(default_factory=OpenCLIPConfig)
-    encoder_refiner_cfg: EncoderRefinerConfig = field(default_factory=EncoderRefinerConfig)
-    criterion_cfg: SemanticCriterionConfig = field(
-        default_factory=SemanticCriterionConfig
+    freeze: FreezeConfig = field(default_factory=FreezeConfig)
+    remoteclip: RemoteCLIPConfig = field(default_factory=RemoteCLIPConfig)
+    aggregation: AggregationConfig = field(
+        default_factory=AggregationConfig
     )
-    adapter_cfg: AdapterConfig = field(default_factory=AdapterConfig)
+
+    reference_prob_threshold: Optional[float] = 0.1
+    prediction_prob_threshold: Optional[float] = 0.5
 
 
 @dataclass
@@ -182,7 +103,7 @@ class TrainerConfig:
     max_iters: int = 10000
     log_window_size: int = 20
     use_amp: bool = True
-    grad_clip_norm: Optional[float] = 0.1
+    grad_clip_norm: Optional[float] = 0.01
 
     save_dir: str = "./work_dirs/default"
     save_interval: int = 1000
@@ -209,6 +130,7 @@ class CheckpointManagerConfig:
     mode: str = "min"
     max_keep: int = 5
 
+
 @dataclass
 class LoggerHookConfig:
     interval: int = 20
@@ -228,17 +150,17 @@ class MetricsJsonlHookConfig:
 
 @dataclass
 class WandbHookConfig:
-    enabled: bool = False
-    project: str = "ovrs-sam3"
+    enabled: bool = True
+    project: str = "reca-sam3"
     name: Optional[str] = None
     group: Optional[str] = None
     tags: list[str] = field(default_factory=list)
-    mode: str = "online"
+    mode: str = "offline"
     train_interval: int = 20
+    log_per_class: bool = False
+    log_extra: bool = False
     priority: int = 90
 
-    name_from_config_keys: list[str] = field(default_factory=list)
-    name_prefix: Optional[str] = None
 
 @dataclass
 class VisualizerConfig:
@@ -257,8 +179,8 @@ class VisualizerConfig:
     save_score_heatmaps: bool = True
     heatmap_colormap: str = "turbo"
 
-    save_sam3_direct_segmentation: bool = False
-    sam3_direct_seg_threshold: float = 0.5
+    save_reference_segmentation: bool = False
+    reference_seg_threshold: float = 0.5
 
     vis_prob: float = 0.05
     max_samples_per_epoch: Optional[int] = 50
@@ -266,3 +188,84 @@ class VisualizerConfig:
 
     image_folder_pattern: str = "image_{image_id:06d}"
     ignore_index: int = 255
+
+
+@dataclass
+class ExperimentConfig:
+    name: str = "reca_sam3"
+    method_id: str = "reca_sam3"
+    method_name: str = "ReCA-SAM3"
+    variant_id: str = "full"
+    implementation_id: str = "reca-sam3-paper-v1"
+    kind: str = "main"
+    factors: Dict = field(default_factory=dict)
+    note: Optional[str] = None
+
+
+@dataclass
+class TrainingProtocolConfig:
+    regime: str = "supervised_adaptation"
+    dataset: Optional[str] = None
+    split: Optional[str] = None
+    protocol_id: Optional[str] = None
+
+
+@dataclass
+class RuntimeConfig:
+    seed: int = 42
+    device: str = "cuda"
+    use_amp: bool = True
+    work_dir: str = "./work_dirs/reca_sam3"
+
+
+@dataclass
+class ConsoleLoggingConfig:
+    enabled: bool = True
+    interval: int = 20
+    val_interval: int = 50
+    print_metric_tables: bool = True
+    print_per_class_metrics: bool = True
+
+
+@dataclass
+class LoggingConfig:
+    console: ConsoleLoggingConfig = field(
+        default_factory=ConsoleLoggingConfig
+    )
+    jsonl: MetricsJsonlHookConfig = field(
+        default_factory=MetricsJsonlHookConfig
+    )
+    wandb: WandbHookConfig = field(default_factory=WandbHookConfig)
+
+
+@dataclass
+class EvaluationConfig:
+    dataset: Optional[str] = None
+    split: Optional[str] = None
+    data_version: Optional[str] = None
+    protocol_id: Optional[str] = None
+
+    ignore_index: int = 255
+    background_prob_threshold: Optional[float] = 0.0
+    metric_groups: list[dict] = field(default_factory=list)
+
+    geometry: Dict = field(
+        default_factory=lambda: {
+            "input_hw": [1008, 1008],
+            "keep_ratio": False,
+        }
+    )
+    tta: Dict = field(
+        default_factory=lambda: {
+            "enabled": False,
+            "scales": [1.0],
+            "flip_modes": ["none", "h", "v"],
+            "size_divisor": 14,
+        }
+    )
+    postprocess: Dict = field(
+        default_factory=lambda: {
+            "reference_prob_threshold": 0.1,
+            "prediction_prob_threshold": 0.5,
+        }
+    )

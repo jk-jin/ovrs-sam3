@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import Optional, TypeVar
 
@@ -13,23 +14,19 @@ from huggingface_hub import hf_hub_download
 from iopath.common.file_io import g_pathmgr
 
 from .config_dataclasses import (
-    AdapterConfig,
+    AggregationConfig,
     CheckpointManagerConfig,
-    EncoderRefinerConfig,
     FreezeConfig,
     LoggerHookConfig,
     MetricsJsonlHookConfig,
-    OpenCLIPConfig,
+    RemoteCLIPConfig,
     SegmentorBuildConfig,
     SemanticCriterionConfig,
     TrainerConfig,
     VisualizerConfig,
     WandbHookConfig,
 )
-from .losses.semantic_criterion import (
-    HybridCriterion,
-    SemanticCriterion,
-)
+from .losses.semantic_criterion import SemanticCriterion
 from .engine.checkpoint import CheckpointManager
 from .engine.experiment_hooks import MetricsJsonlHook, WandbHook
 from .engine.hooks import LoggerHook
@@ -49,8 +46,8 @@ from .models.necks import Sam3DualViTDetNeck
 from .models.openclip_image_encoder import OpenCLIPImageEncoder
 from .models.openclip_text_encoder import OpenCLIPTextEncoder
 from .models.position_encoding import PositionEmbeddingSine
+from .models.reca_sam3 import ReCASAM3
 from .models.sam3_image import Sam3Image
-from .models.segmentor import SAM3Segmentor
 from .models.task_modes import (
     TASK_MODE_HYBRID,
     TASK_MODE_SEMANTIC,
@@ -105,14 +102,20 @@ _setup_tf32()
 
 class FrozenModuleMixin:
     @staticmethod
-    def set_requires_grad(module: Optional[nn.Module], requires_grad: bool) -> None:
+    def set_requires_grad(
+        module: Optional[nn.Module],
+        requires_grad: bool,
+    ) -> None:
         if module is None:
             return
         for p in module.parameters():
             p.requires_grad = requires_grad
 
     @staticmethod
-    def set_model_requires_grad(model: nn.Module, requires_grad: bool) -> None:
+    def set_model_requires_grad(
+        model: nn.Module,
+        requires_grad: bool,
+    ) -> None:
         for p in model.parameters():
             p.requires_grad = requires_grad
 
@@ -148,8 +151,12 @@ class FrozenModuleMixin:
                 continue
 
             if strict:
-                available_modules = "\n".join(sorted(named_modules.keys()))
-                available_parameters = "\n".join(sorted(named_parameters.keys()))
+                available_modules = "\n".join(
+                    sorted(named_modules.keys())
+                )
+                available_parameters = "\n".join(
+                    sorted(named_parameters.keys())
+                )
                 raise KeyError(
                     f"Unknown module/parameter name: {name}\n"
                     f"Available module names are:\n{available_modules}\n\n"
@@ -157,7 +164,7 @@ class FrozenModuleMixin:
                 )
 
 
-class SAM3ModelBuilder(FrozenModuleMixin):
+class ReCASAM3ModelBuilder(FrozenModuleMixin):
     @staticmethod
     def _coerce_config(obj, config_cls: type[ConfigT], name: str) -> ConfigT:
         if isinstance(obj, config_cls):
@@ -169,42 +176,50 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         raise TypeError(f"Unsupported {name} type: {type(obj)}")
 
     @classmethod
-    def _coerce_freeze_cfg(cls, obj) -> FreezeConfig:
-        return cls._coerce_config(obj, FreezeConfig, "freeze_cfg")
+    def _coerce_freeze(cls, obj) -> FreezeConfig:
+        return cls._coerce_config(obj, FreezeConfig, "freeze")
 
     @classmethod
-    def _coerce_openclip_cfg(cls, obj) -> OpenCLIPConfig:
-        return cls._coerce_config(obj, OpenCLIPConfig, "openclip_cfg")
+    def _coerce_remoteclip_cfg(cls, obj) -> RemoteCLIPConfig:
+        return cls._coerce_config(obj, RemoteCLIPConfig, "remoteclip")
 
     @classmethod
-    def _coerce_encoder_refiner_cfg(cls, obj) -> EncoderRefinerConfig:
-        return cls._coerce_config(obj, EncoderRefinerConfig, "encoder_refiner_cfg")
+    def _coerce_aggregation_cfg(cls, obj) -> AggregationConfig:
+        return cls._coerce_config(obj, AggregationConfig, "aggregation")
 
     @classmethod
-    def _coerce_criterion_cfg(cls, obj) -> SemanticCriterionConfig:
-        return cls._coerce_config(obj, SemanticCriterionConfig, "criterion_cfg")
-
-    @classmethod
-    def _coerce_adapter_cfg(cls, obj) -> AdapterConfig:
-        return cls._coerce_config(obj, AdapterConfig, "adapter_cfg")
-
-    @classmethod
-    def _normalize_build_cfg(cls, cfg: SegmentorBuildConfig) -> SegmentorBuildConfig:
+    def _normalize_build_cfg(
+        cls,
+        cfg: SegmentorBuildConfig,
+    ) -> SegmentorBuildConfig:
         cfg.task_mode = normalize_task_mode(cfg.task_mode)
-        cfg.freeze_cfg = cls._coerce_freeze_cfg(cfg.freeze_cfg)
-        cfg.openclip_cfg = cls._coerce_openclip_cfg(cfg.openclip_cfg)
-        cfg.encoder_refiner_cfg = cls._coerce_encoder_refiner_cfg(cfg.encoder_refiner_cfg)
-        cfg.criterion_cfg = cls._coerce_criterion_cfg(cfg.criterion_cfg)
-        cfg.adapter_cfg = cls._coerce_adapter_cfg(cfg.adapter_cfg)
+        cfg.freeze = cls._coerce_freeze(cfg.freeze)
+        cfg.remoteclip = cls._coerce_remoteclip_cfg(cfg.remoteclip)
+        cfg.aggregation = cls._coerce_aggregation_cfg(cfg.aggregation)
         return cfg
 
     @classmethod
     def build_config(cls, **kwargs) -> SegmentorBuildConfig:
         cfg = SegmentorBuildConfig(**kwargs)
         cfg = cls._normalize_build_cfg(cfg)
-        cfg.openclip_cfg = cls.validate_openclip_cfg(cfg.openclip_cfg)
-        cfg.encoder_refiner_cfg = cls.validate_encoder_refiner_cfg(cfg.encoder_refiner_cfg)
+        cfg.remoteclip = cls.validate_remoteclip_cfg(cfg.remoteclip)
+        cfg.aggregation = cls.validate_aggregation_cfg(cfg.aggregation)
         return cfg
+
+    @classmethod
+    def build_config_from_root(cls, cfg: dict) -> SegmentorBuildConfig:
+        model_cfg = dict(cfg["model"])
+        postprocess = dict(cfg["evaluation"]["postprocess"])
+        runtime = dict(cfg["runtime"])
+
+        model_cfg["device"] = str(runtime["device"])
+        model_cfg["reference_prob_threshold"] = postprocess[
+            "reference_prob_threshold"
+        ]
+        model_cfg["prediction_prob_threshold"] = postprocess[
+            "prediction_prob_threshold"
+        ]
+        return cls.build_config(**model_cfg)
 
     @staticmethod
     def _require_dict(obj, name: str) -> dict:
@@ -213,116 +228,149 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         return dict(obj)
 
     @staticmethod
-    def resolve_work_dir(cfg, work_dir_override: Optional[str] = None) -> str:
+    def resolve_work_dir(
+        cfg,
+        work_dir_override: Optional[str] = None,
+    ) -> str:
         if work_dir_override is not None:
             return str(work_dir_override)
-        return str(cfg.get("work_dir", "./work_dirs/default"))
+        return str(cfg["runtime"]["work_dir"])
 
     @staticmethod
-    def _resolve_openclip_pretrained(pretrained: Optional[str]) -> Optional[str]:
+    def _resolve_remoteclip_pretrained(
+        pretrained: Optional[str],
+    ) -> Optional[str]:
         if pretrained is None:
             return None
 
         p = Path(str(pretrained)).expanduser()
         if not p.is_file():
             raise FileNotFoundError(
-                f"openclip_cfg.pretrained: expected a local checkpoint file, but got {pretrained!r}."
+                "model.remoteclip.pretrained: expected a local checkpoint "
+                f"file, but got {pretrained!r}."
             )
 
         return str(p.resolve())
 
     @classmethod
-    def validate_openclip_cfg(cls, openclip_cfg: OpenCLIPConfig) -> OpenCLIPConfig:
-        openclip_cfg = cls._coerce_openclip_cfg(openclip_cfg)
+    def validate_remoteclip_cfg(
+        cls,
+        remoteclip_cfg: RemoteCLIPConfig,
+    ) -> RemoteCLIPConfig:
+        remoteclip_cfg = cls._coerce_remoteclip_cfg(remoteclip_cfg)
 
-        if not openclip_cfg.enabled:
-            return openclip_cfg
+        if not remoteclip_cfg.enabled:
+            return remoteclip_cfg
 
-        _ = cls._resolve_openclip_pretrained(openclip_cfg.pretrained)
+        _ = cls._resolve_remoteclip_pretrained(remoteclip_cfg.pretrained)
 
-        if not isinstance(openclip_cfg.prompt_templates, list) or len(openclip_cfg.prompt_templates) != 64:
-            raise ValueError("openclip_cfg.prompt_templates must be a list of 64 templates.")
+        if (
+            not isinstance(remoteclip_cfg.prompt_templates, list)
+            or len(remoteclip_cfg.prompt_templates) != 64
+        ):
+            raise ValueError(
+                "model.remoteclip.prompt_templates must be a list of 64 "
+                "templates."
+            )
 
-        for idx, template in enumerate(openclip_cfg.prompt_templates):
+        for idx, template in enumerate(remoteclip_cfg.prompt_templates):
             if "{}" not in str(template):
                 raise ValueError(
-                    f"openclip_cfg.prompt_templates[{idx}] must contain '{{}}'."
+                    "model.remoteclip.prompt_templates"
+                    f"[{idx}] must contain '{{}}'."
                 )
 
-        if not isinstance(openclip_cfg.text_prompt_batch_size, int) or openclip_cfg.text_prompt_batch_size <= 0:
+        if (
+            not isinstance(remoteclip_cfg.text_prompt_batch_size, int)
+            or remoteclip_cfg.text_prompt_batch_size <= 0
+        ):
             raise ValueError(
-                "openclip_cfg.text_prompt_batch_size must be a positive integer, "
-                f"got {openclip_cfg.text_prompt_batch_size!r}."
+                "model.remoteclip.text_prompt_batch_size must be a positive "
+                f"integer, got {remoteclip_cfg.text_prompt_batch_size!r}."
             )
 
         try:
-            _ = bool(openclip_cfg.text_prompt_use_checkpoint)
+            _ = bool(remoteclip_cfg.text_prompt_use_checkpoint)
         except Exception:
             raise ValueError(
-                "openclip_cfg.text_prompt_use_checkpoint must be convertible to bool, "
-                f"got {openclip_cfg.text_prompt_use_checkpoint!r}."
+                "model.remoteclip.text_prompt_use_checkpoint must be "
+                "convertible to bool, got "
+                f"{remoteclip_cfg.text_prompt_use_checkpoint!r}."
             )
 
-        return openclip_cfg
+        return remoteclip_cfg
 
     @classmethod
-    def validate_encoder_refiner_cfg(cls, cfg: EncoderRefinerConfig) -> EncoderRefinerConfig:
-        cfg = cls._coerce_encoder_refiner_cfg(cfg)
+    def validate_aggregation_cfg(
+        cls,
+        cfg: AggregationConfig,
+    ) -> AggregationConfig:
+        cfg = cls._coerce_aggregation_cfg(cfg)
 
         if not cfg.enabled:
             raise ValueError(
-                "encoder_refiner_cfg.enabled=False is not supported by the current "
-                "semantic training path."
+                "model.aggregation.enabled=False is not supported by the "
+                "current semantic training path."
             )
 
-        if cfg.fusion_layers <= 0:
+        if cfg.num_blocks <= 0:
             raise ValueError(
-                f"encoder_refiner_cfg.fusion_layers must be positive, got {cfg.fusion_layers}."
+                "model.aggregation.num_blocks must be positive, "
+                f"got {cfg.num_blocks}."
             )
 
         if cfg.num_heads <= 0:
             raise ValueError(
-                f"encoder_refiner_cfg.num_heads must be positive, got {cfg.num_heads}."
+                "model.aggregation.num_heads must be positive, "
+                f"got {cfg.num_heads}."
             )
 
-        if cfg.window_size <= 0 or cfg.refiner_hw % cfg.window_size != 0:
+        if (
+            cfg.window_size <= 0
+            or cfg.aggregation_hw % cfg.window_size != 0
+        ):
             raise ValueError(
-                "encoder_refiner_cfg.window_size must be positive and divide refiner_hw."
+                "model.aggregation.window_size must be positive and divide "
+                "aggregation_hw."
             )
         if not 0 <= cfg.shift_size < cfg.window_size:
             raise ValueError(
-                "encoder_refiner_cfg.shift_size must satisfy 0 <= shift_size < window_size."
+                "model.aggregation.shift_size must satisfy "
+                "0 <= shift_size < window_size."
             )
 
         if cfg.encoder_hw != 72:
             raise ValueError(
-                "encoder_hw=72 表示原始 encoder、单尺度融合与 Pixel Decoder "
-                "入口尺度，"
+                "encoder_hw=72 is the original encoder, single-scale fusion "
+                "and Pixel Decoder input scale, "
                 f"got {cfg.encoder_hw}."
             )
 
-        if cfg.refiner_hw != 36:
+        if cfg.aggregation_hw != 36:
             raise ValueError(
-                "refiner_hw=36 表示 Refiner Attention 尺度，"
-                f"got {cfg.refiner_hw}."
+                "aggregation_hw=36 is the aggregation attention scale, "
+                f"got {cfg.aggregation_hw}."
             )
 
-        if cfg.refiner_hw * 2 != cfg.encoder_hw:
+        if cfg.aggregation_hw * 2 != cfg.encoder_hw:
             raise ValueError(
-                "当前设计需要 refiner_hw * 2 == encoder_hw（36→72 双线性插值），"
-                f"got refiner_hw={cfg.refiner_hw}, encoder_hw={cfg.encoder_hw}."
+                "The current design requires aggregation_hw * 2 == "
+                "encoder_hw (36→72 bilinear upsampling), "
+                f"got aggregation_hw={cfg.aggregation_hw}, "
+                f"encoder_hw={cfg.encoder_hw}."
             )
 
-        if cfg.hidden_dim != 256:
+        if cfg.feature_dim != 256:
             raise ValueError(
-                "Refiner、单尺度融合和冻结 SAM3 head 均固定使用 256 通道，"
-                f"got {cfg.hidden_dim}."
+                "Aggregation, single-scale fusion and the frozen SAM3 head "
+                "all use 256 channels, "
+                f"got {cfg.feature_dim}."
             )
 
-        if cfg.score_embed_dim <= 0:
+        if cfg.semantic_dim <= 0:
             raise ValueError(
-                "encoder_refiner_cfg.score_embed_dim must be positive, "
-                f"got {cfg.score_embed_dim}."
+                "model.aggregation.semantic_dim must be positive, "
+                f"got {cfg.semantic_dim}."
             )
 
         return cfg
@@ -428,7 +476,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
     @staticmethod
     def _create_encoder_only_transformer() -> TransformerWrapper:
-        encoder = SAM3ModelBuilder._create_transformer_encoder()
+        encoder = ReCASAM3ModelBuilder._create_transformer_encoder()
         return TransformerWrapper(
             encoder=encoder,
             decoder=None,
@@ -503,32 +551,38 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         )
 
     @classmethod
-    def _create_openclip_encoders(
+    def _create_remoteclip_encoders(
         cls,
-        openclip_cfg: OpenCLIPConfig,
+        remoteclip_cfg: RemoteCLIPConfig,
     ) -> tuple[OpenCLIPTextEncoder, OpenCLIPImageEncoder]:
         import open_clip
 
-        pretrained = cls._resolve_openclip_pretrained(openclip_cfg.pretrained)
+        pretrained = cls._resolve_remoteclip_pretrained(
+            remoteclip_cfg.pretrained
+        )
         if pretrained is None:
             raise ValueError(
-                "openclip_cfg.enabled=True, but openclip_cfg.pretrained is None."
+                "model.remoteclip.enabled=True, but "
+                "model.remoteclip.pretrained is None."
             )
 
         clip_model = open_clip.create_model(
-            model_name=openclip_cfg.model_name,
+            model_name=remoteclip_cfg.model_name,
             pretrained=pretrained,
             precision="fp32",
             device="cpu",
         )
         clip_model.eval()
 
-        tokenizer = open_clip.get_tokenizer(openclip_cfg.model_name)
+        tokenizer = open_clip.get_tokenizer(remoteclip_cfg.model_name)
 
-        text_width = getattr(getattr(clip_model, "transformer", None), "width", None)
+        text_width = getattr(
+            getattr(clip_model, "transformer", None), "width", None
+        )
         if text_width is None:
             raise AttributeError(
-                "Cannot infer OpenCLIP text width from clip_model.transformer.width."
+                "Cannot infer OpenCLIP text width from "
+                "clip_model.transformer.width."
             )
 
         text_encoder = OpenCLIPTextEncoder(
@@ -545,9 +599,11 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         image_encoder = OpenCLIPImageEncoder(
             visual=clip_model.visual,
-            default_output=openclip_cfg.default_output,
-            intermediate_layers=list(openclip_cfg.image_intermediate_layers),
-            image_size=int(openclip_cfg.image_size),
+            default_output=remoteclip_cfg.default_output,
+            intermediate_layers=list(
+                remoteclip_cfg.image_intermediate_layers
+            ),
+            image_size=int(remoteclip_cfg.image_size),
         )
 
         return text_encoder, image_encoder
@@ -567,11 +623,13 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 if k.startswith("detector.")
             }
 
-        missing_keys, unexpected_keys = model.load_state_dict(ckpt, strict=False)
+        missing_keys, unexpected_keys = model.load_state_dict(
+            ckpt, strict=False
+        )
         if len(missing_keys) > 0 or len(unexpected_keys) > 0:
             print(
-                f"Loaded {checkpoint_path} with missing keys={missing_keys} "
-                f"and unexpected keys={unexpected_keys}"
+                f"Loaded {checkpoint_path} with missing keys="
+                f"{missing_keys} and unexpected keys={unexpected_keys}"
             )
 
     @staticmethod
@@ -581,12 +639,16 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         return hf_hub_download(repo_id=model_id, filename="sam3.pt")
 
     @classmethod
-    def apply_freeze_cfg(cls, model: nn.Module, freeze_cfg: FreezeConfig) -> None:
-        if freeze_cfg.train_adapters_only:
+    def apply_freeze_config(
+        cls,
+        model: nn.Module,
+        freeze_config: FreezeConfig,
+    ) -> None:
+        if freeze_config.train_adapters_only:
             cls.set_model_requires_grad(model, False)
             cls.set_modules_requires_grad(
                 model,
-                freeze_cfg.trainable_modules,
+                freeze_config.trainable_modules,
                 True,
                 strict=True,
             )
@@ -594,7 +656,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             cls.set_model_requires_grad(model, True)
             cls.set_modules_requires_grad(
                 model,
-                freeze_cfg.frozen_modules,
+                freeze_config.frozen_modules,
                 False,
                 strict=True,
             )
@@ -635,7 +697,7 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
         param.register_hook(hook)
         param._qv_only_grad_mask_registered = True
-        param._ovrs_disable_weight_decay = True
+        param._reca_disable_weight_decay = True
 
     @staticmethod
     def _normalize_finetune_mode(mode: str, name: str) -> str:
@@ -677,16 +739,20 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             if train:
                 param.requires_grad_(True)
 
-            if train and ("in_proj_weight" in lname or "in_proj_bias" in lname):
+            if train and (
+                "in_proj_weight" in lname or "in_proj_bias" in lname
+            ):
                 cls._register_qv_only_grad_mask(param)
 
     @classmethod
-    def set_openclip_text_finetune(
+    def set_remoteclip_text_finetune(
         cls,
         clip_text_encoder: nn.Module,
         mode: str,
     ) -> None:
-        mode = cls._normalize_finetune_mode(mode, "freeze_cfg.openclip_text_finetune")
+        mode = cls._normalize_finetune_mode(
+            mode, "model.freeze.remoteclip_text_finetune"
+        )
 
         cls.set_requires_grad(clip_text_encoder, False)
 
@@ -704,20 +770,27 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             # Also unfreeze positional embedding (lives outside transformer in
             # OpenCLIP's top-level module).
             for name, param in clip_text_encoder.named_parameters():
-                if "positional_embedding" in name.lower() or "position" in name.lower():
+                if (
+                    "positional_embedding" in name.lower()
+                    or "position" in name.lower()
+                ):
                     param.requires_grad_(True)
             return
 
         # mode == "attention"
-        cls._apply_attention_finetune(clip_text_encoder, attn_scope="transformer")
+        cls._apply_attention_finetune(
+            clip_text_encoder, attn_scope="transformer"
+        )
 
     @classmethod
-    def set_openclip_image_finetune(
+    def set_remoteclip_image_finetune(
         cls,
         clip_image_encoder: nn.Module,
         mode: str,
     ) -> None:
-        mode = cls._normalize_finetune_mode(mode, "freeze_cfg.openclip_image_finetune")
+        mode = cls._normalize_finetune_mode(
+            mode, "model.freeze.remoteclip_image_finetune"
+        )
 
         cls.set_requires_grad(clip_image_encoder, False)
 
@@ -728,7 +801,9 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         if mode == "frozen":
             return
 
-        visual = getattr(clip_image_encoder, "visual", clip_image_encoder)
+        visual = getattr(
+            clip_image_encoder, "visual", clip_image_encoder
+        )
 
         if mode == "full":
             cls.set_requires_grad(visual, True)
@@ -740,7 +815,10 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 cls.set_requires_grad(transformer, True)
             # Also unfreeze visual positional embedding.
             for name, param in visual.named_parameters():
-                if "positional_embedding" in name.lower() or "position" in name.lower():
+                if (
+                    "positional_embedding" in name.lower()
+                    or "position" in name.lower()
+                ):
                     param.requires_grad_(True)
             return
 
@@ -748,29 +826,43 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         cls._apply_attention_finetune(visual, attn_scope="transformer")
 
     @classmethod
-    def build_semantic_core_model(cls, cfg: SegmentorBuildConfig) -> nn.Module:
-        refiner_cfg = cfg.encoder_refiner_cfg
-        if not {7, 15}.issubset(cfg.openclip_cfg.image_intermediate_layers):
-            raise ValueError("CLIP middle guidance requires image_intermediate_layers to include [7, 15].")
+    def build_semantic_core_model(
+        cls,
+        cfg: SegmentorBuildConfig,
+    ) -> nn.Module:
+        aggregation_cfg = cfg.aggregation
+        if not {7, 15}.issubset(
+            cfg.remoteclip.image_intermediate_layers
+        ):
+            raise ValueError(
+                "RemoteCLIP spatial guidance requires "
+                "image_intermediate_layers to include [7, 15]."
+            )
         bpe_path = resolve_bpe_path(cfg.bpe_path)
         compile_mode = "default" if cfg.compile else None
 
-        position_encoding = cls._create_position_encoding(precompute_resolution=1008)
+        position_encoding = cls._create_position_encoding(
+            precompute_resolution=1008
+        )
         vit_backbone = cls._create_vit_backbone(compile_mode=compile_mode)
-        vit_neck = cls._create_vit_neck(position_encoding, vit_backbone)
+        vit_neck = cls._create_vit_neck(
+            position_encoding, vit_backbone
+        )
         text_encoder = cls._create_text_encoder(bpe_path)
         backbone = cls._create_vl_backbone(vit_neck, text_encoder)
 
         clip_text_encoder = None
         clip_image_encoder = None
 
-        if cfg.openclip_cfg.enabled:
-            clip_text_encoder, clip_image_encoder = cls._create_openclip_encoders(
-                cfg.openclip_cfg
+        if cfg.remoteclip.enabled:
+            clip_text_encoder, clip_image_encoder = (
+                cls._create_remoteclip_encoders(cfg.remoteclip)
             )
 
         transformer = cls._create_encoder_only_transformer()
-        segmentation_head = cls._create_segmentation_head(compile_mode=compile_mode)
+        segmentation_head = cls._create_segmentation_head(
+            compile_mode=compile_mode
+        )
         input_geometry_encoder = cls._create_geometry_encoder()
 
         model = Sam3Image(
@@ -786,18 +878,28 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             matcher=None,
             clip_image_encoder=clip_image_encoder,
             clip_text_encoder=clip_text_encoder,
-            openclip_prompt_templates=list(cfg.openclip_cfg.prompt_templates),
-            normalize_label_for_clip=bool(cfg.openclip_cfg.normalize_label_for_clip),
-            text_prompt_batch_size=int(cfg.openclip_cfg.text_prompt_batch_size),
-            text_prompt_use_checkpoint=bool(cfg.openclip_cfg.text_prompt_use_checkpoint),
-            encoder_refiner_fusion_layers=int(refiner_cfg.fusion_layers),
-            encoder_refiner_num_heads=int(refiner_cfg.num_heads),
-            encoder_refiner_dropout=float(refiner_cfg.dropout),
-            encoder_refiner_hidden_dim=int(refiner_cfg.hidden_dim),
-            encoder_refiner_score_embed_dim=int(refiner_cfg.score_embed_dim),
-            encoder_refiner_window_size=int(refiner_cfg.window_size),
-            encoder_refiner_shift_size=int(refiner_cfg.shift_size),
-            encoder_refiner_use_checkpoint=bool(refiner_cfg.use_checkpoint),
+            remoteclip_prompt_templates=list(
+                cfg.remoteclip.prompt_templates
+            ),
+            normalize_label_for_clip=bool(
+                cfg.remoteclip.normalize_label_for_clip
+            ),
+            text_prompt_batch_size=int(
+                cfg.remoteclip.text_prompt_batch_size
+            ),
+            text_prompt_use_checkpoint=bool(
+                cfg.remoteclip.text_prompt_use_checkpoint
+            ),
+            aggregation_num_blocks=int(aggregation_cfg.num_blocks),
+            aggregation_num_heads=int(aggregation_cfg.num_heads),
+            aggregation_dropout=float(aggregation_cfg.dropout),
+            aggregation_feature_dim=int(aggregation_cfg.feature_dim),
+            aggregation_semantic_dim=int(aggregation_cfg.semantic_dim),
+            aggregation_window_size=int(aggregation_cfg.window_size),
+            aggregation_shift_size=int(aggregation_cfg.shift_size),
+            aggregation_use_checkpoint=bool(
+                aggregation_cfg.use_checkpoint
+            ),
             task_mode=TASK_MODE_SEMANTIC,
         )
 
@@ -814,8 +916,8 @@ class SAM3ModelBuilder(FrozenModuleMixin):
     def build_adapter(cls, cfg: SegmentorBuildConfig) -> nn.Module:
         if cfg.task_mode == TASK_MODE_SEMANTIC:
             return SemanticSegAdapter(
-                sam3_mask_prob_thd=cfg.adapter_cfg.sam3_mask_prob_thd,
-                final_mask_prob_thd=cfg.adapter_cfg.final_mask_prob_thd,
+                reference_prob_threshold=cfg.reference_prob_threshold,
+                prediction_prob_threshold=cfg.prediction_prob_threshold,
             )
 
         if cfg.task_mode == TASK_MODE_HYBRID:
@@ -824,28 +926,26 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         raise ValueError(f"Unsupported task_mode: {cfg.task_mode}")
 
     @classmethod
-    def build_criterion(cls, cfg: SegmentorBuildConfig) -> nn.Module:
-        if cfg.task_mode == TASK_MODE_SEMANTIC:
-            return SemanticCriterion(cfg=cfg.criterion_cfg)
-
-        if cfg.task_mode == TASK_MODE_HYBRID:
-            return HybridCriterion()
-
-        raise ValueError(f"Unsupported task_mode: {cfg.task_mode}")
+    def build_criterion(cls, loss_cfg: dict) -> nn.Module:
+        loss_config = SemanticCriterionConfig(**dict(loss_cfg))
+        return SemanticCriterion(cfg=loss_config)
 
     @classmethod
-    def build_semantic_segmentor(cls, cfg: SegmentorBuildConfig) -> nn.Module:
+    def build_semantic_segmentor(
+        cls,
+        cfg: SegmentorBuildConfig,
+    ) -> nn.Module:
         core_model = cls.build_semantic_core_model(cfg)
         adapter = cls.build_adapter(cfg)
 
-        model = SAM3Segmentor(
+        model = ReCASAM3(
             core=core_model,
             adapter=adapter,
             task_mode=TASK_MODE_SEMANTIC,
         )
 
         model = model.to(cfg.device)
-        cls.apply_freeze_cfg(model, cfg.freeze_cfg)
+        cls.apply_freeze_config(model, cfg.freeze)
 
         core = getattr(model, "core", None)
 
@@ -863,41 +963,58 @@ class SAM3ModelBuilder(FrozenModuleMixin):
             core.geometry_encoder.eval()
             core.segmentation_head.eval()
 
-            # OpenCLIP image encoder.
+            # RemoteCLIP image encoder.
             clip_image_encoder = getattr(core, "clip_image_encoder", None)
             if clip_image_encoder is not None:
                 image_ft = str(
-                    getattr(cfg.freeze_cfg, "openclip_image_finetune", "frozen")
+                    getattr(
+                        cfg.freeze,
+                        "remoteclip_image_finetune",
+                        "frozen",
+                    )
                 ).lower()
-                cls.set_openclip_image_finetune(clip_image_encoder, mode=image_ft)
+                cls.set_remoteclip_image_finetune(
+                    clip_image_encoder, mode=image_ft
+                )
                 # Keep eval mode even when partially trainable:
-                # we train selected weights, not dropout / patch-dropout behavior.
+                # we train selected weights, not dropout / patch-dropout
+                # behavior.
                 clip_image_encoder.eval()
 
-            # OpenCLIP text encoder.
+            # RemoteCLIP text encoder.
             clip_text_encoder = getattr(core, "clip_text_encoder", None)
             if clip_text_encoder is not None:
                 text_ft = str(
-                    getattr(cfg.freeze_cfg, "openclip_text_finetune", "frozen")
+                    getattr(
+                        cfg.freeze,
+                        "remoteclip_text_finetune",
+                        "frozen",
+                    )
                 ).lower()
-                cls.set_openclip_text_finetune(clip_text_encoder, mode=text_ft)
+                cls.set_remoteclip_text_finetune(
+                    clip_text_encoder, mode=text_ft
+                )
                 # Keep eval mode even when partially trainable:
                 # we train selected weights, not dropout behavior.
                 clip_text_encoder.eval()
 
-            # Encoder refiner is the only module that should be in
-            # train mode during training.
+            # RemoteCLIP-guided aggregation is the only module that should
+            # be in train mode during training.
             if not cfg.eval_mode:
-                core.encoder_refiner.train()
+                core.feature_aggregation.train()
 
         model.core.prompt_chunk_size = (
-            None if cfg.prompt_chunk_size is None else int(cfg.prompt_chunk_size)
+            None if cfg.prompt_chunk_size is None
+            else int(cfg.prompt_chunk_size)
         )
 
         return model
 
     @classmethod
-    def build_hybrid_segmentor(cls, cfg: SegmentorBuildConfig) -> nn.Module:
+    def build_hybrid_segmentor(
+        cls,
+        cfg: SegmentorBuildConfig,
+    ) -> nn.Module:
         raise NotImplementedError(
             "Hybrid task mode is not implemented yet. "
             "The current codebase only supports semantic mode."
@@ -916,10 +1033,11 @@ class SAM3ModelBuilder(FrozenModuleMixin):
     @classmethod
     def build_training_components(
         cls,
-        cfg: SegmentorBuildConfig,
+        cfg: dict,
     ) -> tuple[nn.Module, nn.Module]:
-        model = cls.build_segmentor(cfg)
-        criterion = cls.build_criterion(cfg)
+        build_cfg = cls.build_config_from_root(cfg)
+        model = cls.build_segmentor(build_cfg)
+        criterion = cls.build_criterion(cfg["loss"])
         return model, criterion
 
     @classmethod
@@ -928,10 +1046,24 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         cfg,
         work_dir: str,
     ) -> TrainerConfig:
-        train_cfg = cls._require_dict(cfg.train_cfg, "train_cfg")
+        train_cfg = copy.deepcopy(
+            cls._require_dict(cfg["train_cfg"], "train_cfg")
+        )
+        evaluation = cfg["evaluation"]
+
         train_cfg["save_dir"] = str(work_dir)
-        train_cfg["tta_cfg"] = cfg.get("tta_cfg", None)
-        train_cfg["eval_cfg"] = cfg.get("eval_cfg", None)
+        train_cfg["device"] = str(cfg["runtime"]["device"])
+        train_cfg["use_amp"] = bool(cfg["runtime"]["use_amp"])
+        train_cfg["tta_cfg"] = copy.deepcopy(evaluation["tta"])
+        train_cfg["eval_cfg"] = {
+            "ignore_index": int(evaluation["ignore_index"]),
+            "background_prob_threshold": evaluation[
+                "background_prob_threshold"
+            ],
+            "metric_groups": copy.deepcopy(
+                evaluation["metric_groups"]
+            ),
+        }
         return TrainerConfig(**train_cfg)
 
     @classmethod
@@ -949,21 +1081,30 @@ class SAM3ModelBuilder(FrozenModuleMixin):
 
     @classmethod
     def build_hooks_from_cfg(cls, cfg) -> list:
-        default_hooks = cls._require_dict(cfg.default_hooks, "default_hooks")
-        logger_cfg = LoggerHookConfig(
-            **cls._require_dict(default_hooks["logger"], "default_hooks.logger")
-        )
-        hooks = [LoggerHook(logger_cfg)]
+        logging_cfg = cfg["logging"]
+        hooks = []
 
-        tracking_cfg = cfg.get("experiment_tracking", None)
-        if tracking_cfg is None:
-            tracking_cfg = {}
+        console_cfg = logging_cfg["console"]
+        if console_cfg["enabled"]:
+            logger_cfg = LoggerHookConfig(
+                interval=int(console_cfg["interval"]),
+                val_interval=int(console_cfg["val_interval"]),
+                print_metric_tables=bool(
+                    console_cfg["print_metric_tables"]
+                ),
+                print_per_class_metrics=bool(
+                    console_cfg["print_per_class_metrics"]
+                ),
+            )
+            hooks.append(LoggerHook(logger_cfg))
 
-        metrics_cfg_raw = tracking_cfg.get("metrics_jsonl", None)
-        if metrics_cfg_raw is None:
-            metrics_cfg_raw = {}
-        metrics_cfg = MetricsJsonlHookConfig(**dict(metrics_cfg_raw))
-        if metrics_cfg.enabled:
+        jsonl_cfg = logging_cfg["jsonl"]
+        if jsonl_cfg["enabled"]:
+            metrics_cfg = MetricsJsonlHookConfig(
+                enabled=True,
+                filename=str(jsonl_cfg["filename"]),
+                train_interval=int(jsonl_cfg["train_interval"]),
+            )
             hooks.append(MetricsJsonlHook(
                 enabled=metrics_cfg.enabled,
                 filename=metrics_cfg.filename,
@@ -971,11 +1112,9 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 priority=metrics_cfg.priority,
             ))
 
-        wandb_cfg_raw = tracking_cfg.get("wandb", None)
-        if wandb_cfg_raw is None:
-            wandb_cfg_raw = {}
-        wandb_cfg = WandbHookConfig(**dict(wandb_cfg_raw))
-        if wandb_cfg.enabled:
+        wandb_cfg_raw = logging_cfg["wandb"]
+        if wandb_cfg_raw["enabled"]:
+            wandb_cfg = WandbHookConfig(**dict(wandb_cfg_raw))
             hooks.append(WandbHook(
                 enabled=wandb_cfg.enabled,
                 project=wandb_cfg.project,
@@ -984,9 +1123,9 @@ class SAM3ModelBuilder(FrozenModuleMixin):
                 tags=wandb_cfg.tags,
                 mode=wandb_cfg.mode,
                 train_interval=wandb_cfg.train_interval,
+                log_per_class=wandb_cfg.log_per_class,
+                log_extra=wandb_cfg.log_extra,
                 priority=wandb_cfg.priority,
-                name_from_config_keys=wandb_cfg.name_from_config_keys,
-                name_prefix=wandb_cfg.name_prefix,
             ))
 
         return hooks
@@ -1011,9 +1150,16 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         if not save_dir.is_absolute():
             visualizer_cfg.save_dir = str(Path(work_dir) / save_dir)
 
+        evaluation = cfg["evaluation"]
+        eval_cfg = {
+            "ignore_index": int(evaluation["ignore_index"]),
+            "background_prob_threshold": evaluation[
+                "background_prob_threshold"
+            ],
+        }
         return VisualizationManager(
             visualizer_cfg,
-            eval_cfg=cfg.get("eval_cfg", None),
+            eval_cfg=eval_cfg,
         )
 
     @classmethod
@@ -1045,21 +1191,15 @@ class SAM3ModelBuilder(FrozenModuleMixin):
         )
 
 
-def build_segmentor_model(**kwargs) -> nn.Module:
-    cfg = SAM3ModelBuilder.build_config(**kwargs)
-    return SAM3ModelBuilder.build_segmentor(cfg)
-
-
-def build_training_components(**kwargs) -> tuple[nn.Module, nn.Module]:
-    cfg = SAM3ModelBuilder.build_config(**kwargs)
-    return SAM3ModelBuilder.build_training_components(cfg)
+def build_training_components(cfg: dict) -> tuple[nn.Module, nn.Module]:
+    return ReCASAM3ModelBuilder.build_training_components(cfg)
 
 
 def build_train_runtime_components(
     cfg,
     work_dir_override: Optional[str] = None,
 ):
-    return SAM3ModelBuilder.build_train_runtime_components(
+    return ReCASAM3ModelBuilder.build_train_runtime_components(
         cfg,
         work_dir_override=work_dir_override,
     )

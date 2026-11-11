@@ -13,18 +13,18 @@ from ..task_modes import OUTPUT_KEYS
 class SemanticSegAdapter(nn.Module):
     def __init__(
         self,
-        sam3_mask_prob_thd: Optional[float] = None,
-        final_mask_prob_thd: Optional[float] = None,
+        reference_prob_threshold: Optional[float] = None,
+        prediction_prob_threshold: Optional[float] = None,
     ):
         super().__init__()
 
-        self.sam3_mask_prob_thd = self._validate_threshold(
-            sam3_mask_prob_thd,
-            "sam3_mask_prob_thd",
+        self.reference_prob_threshold = self._validate_threshold(
+            reference_prob_threshold,
+            "reference_prob_threshold",
         )
-        self.final_mask_prob_thd = self._validate_threshold(
-            final_mask_prob_thd,
-            "final_mask_prob_thd",
+        self.prediction_prob_threshold = self._validate_threshold(
+            prediction_prob_threshold,
+            "prediction_prob_threshold",
         )
 
     @staticmethod
@@ -211,20 +211,20 @@ class SemanticSegAdapter(nn.Module):
     def _apply_prob_filters(
         self,
         student_score: torch.Tensor,
-        sam3_score: Optional[torch.Tensor],
+        reference_score: Optional[torch.Tensor],
     ) -> torch.Tensor:
         keep = torch.ones_like(student_score, dtype=torch.bool)
 
-        if self.final_mask_prob_thd is not None:
-            keep &= student_score >= self.final_mask_prob_thd
+        if self.prediction_prob_threshold is not None:
+            keep &= student_score >= self.prediction_prob_threshold
 
-        if self.sam3_mask_prob_thd is not None:
-            if sam3_score is None:
+        if self.reference_prob_threshold is not None:
+            if reference_score is None:
                 raise ValueError(
-                    "sam3_mask_prob_thd is enabled but the raw "
-                    "SAM3 score map is missing."
+                    "reference_prob_threshold is enabled but the raw "
+                    "reference score map is missing."
                 )
-            keep &= sam3_score >= self.sam3_mask_prob_thd
+            keep &= reference_score >= self.reference_prob_threshold
 
         return student_score.masked_fill(~keep, 0.0)
 
@@ -232,7 +232,7 @@ class SemanticSegAdapter(nn.Module):
         self,
         raw_prompt_score_map: torch.Tensor,
         metadata,
-        raw_sam3_prompt_score_map: Optional[
+        raw_reference_prompt_score_map: Optional[
             torch.Tensor
         ] = None,
     ) -> Dict[str, torch.Tensor]:
@@ -264,37 +264,37 @@ class SemanticSegAdapter(nn.Module):
             num_classes=num_classes,
         )
 
-        raw_sam3_score_map = None
-        if raw_sam3_prompt_score_map is not None:
-            raw_sam3_prompt_score_map = self._as_4d_map(
-                raw_sam3_prompt_score_map,
-                OUTPUT_KEYS.raw_sam3_prompt_score_map,
+        raw_reference_score_map = None
+        if raw_reference_prompt_score_map is not None:
+            raw_reference_prompt_score_map = self._as_4d_map(
+                raw_reference_prompt_score_map,
+                OUTPUT_KEYS.raw_reference_prompt_score_map,
             )
-            if tuple(raw_sam3_prompt_score_map.shape) != tuple(
+            if tuple(raw_reference_prompt_score_map.shape) != tuple(
                 raw_prompt_score_map.shape
             ):
                 raise ValueError(
-                    "raw_sam3_prompt_score_map must match "
+                    "raw_reference_prompt_score_map must match "
                     "raw_prompt_score_map in batch, prompt count "
                     "and spatial size, got "
-                    f"{tuple(raw_sam3_prompt_score_map.shape)} vs "
+                    f"{tuple(raw_reference_prompt_score_map.shape)} vs "
                     f"{tuple(raw_prompt_score_map.shape)}."
                 )
-            if raw_sam3_prompt_score_map.device != raw_prompt_score_map.device:
+            if raw_reference_prompt_score_map.device != raw_prompt_score_map.device:
                 raise ValueError(
-                    "raw_sam3_prompt_score_map and "
+                    "raw_reference_prompt_score_map and "
                     "raw_prompt_score_map must be on the same device."
                 )
 
-            raw_sam3_score_map = self._merge_prompt_channels(
-                prompt_map=raw_sam3_prompt_score_map,
+            raw_reference_score_map = self._merge_prompt_channels(
+                prompt_map=raw_reference_prompt_score_map,
                 prompt_to_class_id=prompt_to_class_id,
                 num_classes=num_classes,
             )
 
         final_score_map = self._apply_prob_filters(
             raw_final_score_map,
-            raw_sam3_score_map,
+            raw_reference_score_map,
         )
 
         outputs = {
@@ -307,12 +307,12 @@ class SemanticSegAdapter(nn.Module):
             OUTPUT_KEYS.final_pred:
                 final_score_map.argmax(dim=1),
         }
-        if raw_sam3_score_map is not None:
-            outputs[OUTPUT_KEYS.raw_sam3_prompt_score_map] = (
-                raw_sam3_prompt_score_map
+        if raw_reference_score_map is not None:
+            outputs[OUTPUT_KEYS.raw_reference_prompt_score_map] = (
+                raw_reference_prompt_score_map
             )
-            outputs[OUTPUT_KEYS.raw_sam3_score_map] = (
-                raw_sam3_score_map
+            outputs[OUTPUT_KEYS.raw_reference_score_map] = (
+                raw_reference_score_map
             )
         return outputs
 
@@ -370,21 +370,21 @@ class SemanticSegAdapter(nn.Module):
 
         raw_prompt_score_map = prompt_logits.sigmoid()
 
-        raw_sam3_prompt_score_map = None
-        if self.sam3_mask_prob_thd is not None:
-            sam3_direct_logits = raw_outputs.get(
-                OUTPUT_KEYS.sam3_direct_logits,
+        raw_reference_prompt_score_map = None
+        if self.reference_prob_threshold is not None:
+            reference_logits = raw_outputs.get(
+                OUTPUT_KEYS.sam3_reference_logits,
                 None,
             )
-            if sam3_direct_logits is None:
+            if reference_logits is None:
                 raise ValueError(
-                    "sam3_mask_prob_thd is enabled but "
-                    f"{OUTPUT_KEYS.sam3_direct_logits!r} is "
+                    "reference_prob_threshold is enabled but "
+                    f"{OUTPUT_KEYS.sam3_reference_logits!r} is "
                     "missing from the raw outputs."
                 )
-            raw_sam3_prompt_score_map = self._as_4d_map(
-                sam3_direct_logits,
-                OUTPUT_KEYS.sam3_direct_logits,
+            raw_reference_prompt_score_map = self._as_4d_map(
+                reference_logits,
+                OUTPUT_KEYS.sam3_reference_logits,
             ).sigmoid()
 
         outputs = dict(raw_outputs)
@@ -396,31 +396,22 @@ class SemanticSegAdapter(nn.Module):
                 raw_prompt_score_map=
                     raw_prompt_score_map,
                 metadata=metadata,
-                raw_sam3_prompt_score_map=
-                    raw_sam3_prompt_score_map,
+                raw_reference_prompt_score_map=
+                    raw_reference_prompt_score_map,
             )
         )
 
         for key in (
-            OUTPUT_KEYS.encoder_features,
-            OUTPUT_KEYS.refiner_features_36,
-            OUTPUT_KEYS.score_embed_36,
-            OUTPUT_KEYS.clip_score_embed_36,
-            OUTPUT_KEYS.template_clip_text_features,
-            OUTPUT_KEYS.clip_score_maps,
-            OUTPUT_KEYS.clip_score_embed,
-            OUTPUT_KEYS.clip_mid_features,
+            OUTPUT_KEYS.prompt_conditioned_features_72,
+            OUTPUT_KEYS.aggregated_features_36,
+            OUTPUT_KEYS.semantic_state_36,
+            OUTPUT_KEYS.clip_guidance_36,
+            OUTPUT_KEYS.remoteclip_template_text_features,
+            OUTPUT_KEYS.clip_template_scores_36,
+            OUTPUT_KEYS.clip_spatial_guidance_features,
         ):
             if key in raw_outputs:
                 outputs[key] = raw_outputs[key]
-
-        if (
-            OUTPUT_KEYS.clip_score_embed_36 in outputs
-            and OUTPUT_KEYS.clip_score_embed not in outputs
-        ):
-            outputs[OUTPUT_KEYS.clip_score_embed] = outputs[
-                OUTPUT_KEYS.clip_score_embed_36
-            ]
 
         return outputs
 

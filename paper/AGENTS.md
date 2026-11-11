@@ -19,13 +19,13 @@
 | ReCA-SAM3 | 工作名称；正式英文全称 TODO，不自行扩写 |
 | SAM 3 | 首次写 Segment Anything Model 3；全文正文保留 SAM 3 的空格 |
 | RemoteCLIP | 面向遥感图像与文本对齐的 CLIP 模型；不推断未经核实的预训练细节 |
-| Refiner | 特征细化模块；维护分数嵌入流与类别条件特征流 |
-| 类间注意力 | 同一图像同一位置沿展开提示轴交互，包含同类别同义提示 |
-| 类内注意力 | 同一提示内部的空间关系，通过普通与移位窗口建模 |
-| 原始类别条件特征 | 当前为完整 SAM 3 编码器及前置提示交叉注意力后的输出，未被 Refiner 更新 |
-| DIF | Decoder Input Fusion，解码器输入融合模块；单尺度四方向为当前实现，最终变体 TODO |
+| 特征聚合 | RemoteCLIP-guided feature aggregation；维护语义状态流与特征状态流 |
+| 类间注意力 | CrossClassAttention；同一图像同一位置沿展开提示轴交互，包含同类别同义提示 |
+| 类内注意力 | WindowSpatialAttention；同一提示内部的空间关系，通过普通与移位窗口建模 |
+| 提示条件特征 | `prompt_conditioned_features_72`；完整 SAM 3 编码器及前置提示交叉注意力后的输出，未被聚合模块更新 |
+| Semantic–Detail Fusion | 语义—细节融合模块；`SemanticDetailFusion`，单尺度四方向为当前实现，最终变体 TODO |
 | 冻结与适配 | 当前称“对冻结 SAM 3 的遥感适配”；RemoteCLIP 部分微调，整个系统不能称完全冻结 |
-| mIoU / IoU | 平均交并比 / 交并比；LoveDA 主表七类 mIoU，另存六类前景 mIoU 和背景 IoU |
+| mIoU / IoU | 平均交并比 / 交并比；LoveDA 只使用含 background 的七类 mIoU，逐类 IoU 单独保存 |
 | BCE / FFN / FPN / TTA | 首次解释二元交叉熵 / 前馈网络 / 特征金字塔网络 / 测试时增强 |
 | 迁移与开放词汇 | 跨数据集不能自动称严格未见类别；需核实训练与目标类别的语义重叠 |
 

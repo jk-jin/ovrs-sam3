@@ -1,6 +1,6 @@
 # Source notes
 
-These rewritten converters were prepared for direct use in OVRS-SAM3 without
+These rewritten converters were prepared for direct use in ReCA-SAM3 without
 installing MMSegmentation.
 
 ## Official MMSegmentation source scripts referenced

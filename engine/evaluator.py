@@ -15,7 +15,7 @@ TensorDict = Dict[str, torch.Tensor]
 def build_eval_semantic_pred(
     outputs: Dict[str, torch.Tensor],
     metadata,
-    prob_thd: Optional[float] = None,
+    background_prob_threshold: Optional[float] = None,
     ignore_index: int = 255,
 ) -> tuple[torch.Tensor, int, list[str]]:
     """
@@ -72,17 +72,17 @@ def build_eval_semantic_pred(
     if not exclude_from_forward:
         pred_eval = pred_model.long()
 
-        if prob_thd is not None and max_score is not None:
+        if background_prob_threshold is not None and max_score is not None:
             pred_eval = pred_eval.clone()
-            pred_eval[max_score <= float(prob_thd)] = background_class_id
+            pred_eval[max_score <= float(background_prob_threshold)] = background_class_id
 
         return pred_eval, eval_num_classes, eval_class_names
 
     pred_eval = pred_model.long().clone()
     pred_eval[pred_eval >= background_class_id] += 1
 
-    if prob_thd is not None and max_score is not None:
-        pred_eval[max_score <= float(prob_thd)] = background_class_id
+    if background_prob_threshold is not None and max_score is not None:
+        pred_eval[max_score <= float(background_prob_threshold)] = background_class_id
 
     return pred_eval, eval_num_classes, eval_class_names
 
@@ -91,7 +91,7 @@ class MulticlassSemanticEvaluator:
     def __init__(
         self,
         ignore_index: int = 255,
-        prob_thd: Optional[float] = None,
+        background_prob_threshold: Optional[float] = None,
         metric_groups: Optional[list[dict]] = None,
         **kwargs,
     ):
@@ -104,7 +104,7 @@ class MulticlassSemanticEvaluator:
 
         self.num_classes: Optional[int] = None
         self.ignore_index = int(ignore_index)
-        self.prob_thd = prob_thd
+        self.background_prob_threshold = background_prob_threshold
         self.metric_groups = self._validate_metric_groups(metric_groups)
         self.reset()
 
@@ -183,6 +183,7 @@ class MulticlassSemanticEvaluator:
         self.target_count = None
         self.correct = 0.0
         self.total = 0.0
+        self.num_samples = 0
 
     def _ensure_buffers(self, num_classes: int, device: torch.device):
         if self.num_classes is None:
@@ -236,7 +237,7 @@ class MulticlassSemanticEvaluator:
         pred_eval, eval_num_classes, _ = build_eval_semantic_pred(
             outputs=outputs,
             metadata=metadata,
-            prob_thd=self.prob_thd,
+            background_prob_threshold=self.background_prob_threshold,
             ignore_index=self.ignore_index,
         )
 
@@ -250,6 +251,7 @@ class MulticlassSemanticEvaluator:
         )
 
         self._ensure_buffers(num_classes=eval_num_classes, device=device)
+        self.num_samples += int(target.shape[0])
 
         valid = target != self.ignore_index
         self.correct += float(((pred_eval == target) & valid).sum().item())
@@ -347,6 +349,62 @@ class MulticlassSemanticEvaluator:
 
         return out
 
+    def per_class_stats(
+        self,
+        eval_class_names: Optional[list[str]] = None,
+    ) -> list[dict]:
+        """Return per-class statistics with null for undefined metrics."""
+        if self.num_classes is None:
+            return []
+
+        per_class_iou = self.intersection / self.union.clamp(min=1.0)
+        per_class_acc = self.intersection / self.target_count.clamp(min=1.0)
+
+        rows = []
+        for class_id in range(self.num_classes):
+            if eval_class_names is not None and class_id < len(
+                eval_class_names
+            ):
+                class_name = str(eval_class_names[class_id])
+            else:
+                class_name = f"class_{class_id}"
+
+            union = float(self.union[class_id].item())
+            target_pixels = float(self.target_count[class_id].item())
+
+            rows.append({
+                "class_id": int(class_id),
+                "class_name": class_name,
+                "iou": (
+                    float(per_class_iou[class_id].item())
+                    if union > 0 else None
+                ),
+                "accuracy": (
+                    float(per_class_acc[class_id].item())
+                    if target_pixels > 0 else None
+                ),
+                "intersection": float(
+                    self.intersection[class_id].item()
+                ),
+                "union": union,
+                "target_pixels": target_pixels,
+            })
+
+        return rows
+
+    def valid_class_counts(self) -> dict:
+        if self.num_classes is None:
+            return {
+                "valid_iou_classes": 0,
+                "valid_acc_classes": 0,
+            }
+        return {
+            "valid_iou_classes": int((self.union > 0).sum().item()),
+            "valid_acc_classes": int(
+                (self.target_count > 0).sum().item()
+            ),
+        }
+
 
 def _round_up(value: int, divisor: int) -> int:
     return int(math.ceil(value / divisor) * divisor)
@@ -410,8 +468,8 @@ def inference_with_tta(
     ]
     if unsupported_scales:
         raise ValueError(
-            "Current OVRS-SAM3 refiner requires fixed 1008×1008 SAM3 input "
-            "with 72×72 encoder and 36×36 refiner features. "
+            "ReCA-SAM3 requires fixed 1008×1008 SAM3 input "
+            "with 72×72 encoder and 36×36 aggregation features. "
             f"Only TTA scale=1.0 is supported, got {unsupported_scales}."
         )
 
@@ -427,8 +485,8 @@ def inference_with_tta(
         OUTPUT_KEYS.final_logits,
         OUTPUT_KEYS.raw_final_score_map,
         OUTPUT_KEYS.final_score_map,
-        OUTPUT_KEYS.raw_sam3_score_map,
-        OUTPUT_KEYS.sam3_direct_logits,
+        OUTPUT_KEYS.raw_reference_score_map,
+        OUTPUT_KEYS.sam3_reference_logits,
     }
 
     for scale in scales:
@@ -515,8 +573,8 @@ def inference_with_tta(
 
     metadata = batch.find_metadatas[0]
 
-    merged_sam3_prompt_score_map = merged_outputs.get(
-        OUTPUT_KEYS.raw_sam3_prompt_score_map,
+    merged_reference_prompt_score_map = merged_outputs.get(
+        OUTPUT_KEYS.raw_reference_prompt_score_map,
         None,
     )
 
@@ -526,8 +584,8 @@ def inference_with_tta(
                 OUTPUT_KEYS.raw_prompt_score_map
             ],
             metadata=metadata,
-            raw_sam3_prompt_score_map=
-                merged_sam3_prompt_score_map,
+            raw_reference_prompt_score_map=
+                merged_reference_prompt_score_map,
         )
     )
 
@@ -545,9 +603,9 @@ def inference_with_tta(
 
     # Per-view direct logits are meaningless after averaging; rebuild them
     # from the merged SAM3 prompt probabilities instead.
-    if merged_sam3_prompt_score_map is not None:
-        merged_outputs[OUTPUT_KEYS.sam3_direct_logits] = torch.logit(
-            merged_sam3_prompt_score_map.clamp(
+    if merged_reference_prompt_score_map is not None:
+        merged_outputs[OUTPUT_KEYS.sam3_reference_logits] = torch.logit(
+            merged_reference_prompt_score_map.clamp(
                 min=logit_eps,
                 max=1.0 - logit_eps,
             )

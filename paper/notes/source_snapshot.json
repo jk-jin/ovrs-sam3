@@ -1,25 +1,106 @@
 {
-  "date": "2026-11-09",
-  "commit": "84f0bdc56d4dd4f35cf882bfd78afd265ed38065",
+  "date": "2026-11-11",
+  "commit": "07b2f5de15d6a8bec2de097022da1759548c9fa5",
   "branch": "master",
-  "preexisting_modified_tracked_files": [
+  "modified_tracked_files": [
+    ".gitignore",
     "DESIGN.md",
-    "models/decoder_input_fusion.py"
+    "config_dataclasses.py",
+    "configs/_base_/evaluation.py",
+    "configs/_base_/model/ovrs_sam3.py",
+    "configs/_base_/model/reca_sam3.py",
+    "configs/_base_/optimizer/ovrs_sam3_adamw.py",
+    "configs/_base_/optimizer/reca_sam3_adamw.py",
+    "configs/_base_/runtime.py",
+    "configs/_base_/schedule/exp_4k.py",
+    "configs/_base_/schedule/full_20k.py",
+    "configs/_base_/tracking.py",
+    "configs/_base_/visualization.py",
+    "configs/datasets/eval/loveda.py",
+    "configs/datasets/train/loveda.py",
+    "configs/sweeps/full_isaid_loveda_final_v1.yaml",
+    "configs/test/_base_/reca_sam3_eval.py",
+    "configs/test/deepglobe.py",
+    "configs/test/dlrsd.py",
+    "configs/test/fast.py",
+    "configs/test/flair.py",
+    "configs/test/floodnet.py",
+    "configs/test/gid15.py",
+    "configs/test/gid5.py",
+    "configs/test/isaid.py",
+    "configs/test/ld50k.py",
+    "configs/test/loveda.py",
+    "configs/test/potsdam.py",
+    "configs/test/uavid.py",
+    "configs/test/udd.py",
+    "configs/test/vaihingen.py",
+    "configs/test/vdd.py",
+    "configs/train/isaid_loveda_exp.py",
+    "configs/train/isaid_loveda_full.py",
+    "engine/__init__.py",
+    "engine/checkpoint.py",
+    "engine/config.py",
+    "engine/evaluator.py",
+    "engine/experiment_hooks.py",
+    "engine/hooks.py",
+    "engine/optimizer_builder.py",
+    "engine/trainer.py",
+    "engine/visualization.py",
+    "losses/semantic_criterion.py",
+    "model_builder.py",
+    "models/adapters/semantic_adapter.py",
+    "models/aggregation_attention.py",
+    "models/data_misc.py",
+    "models/decoder_input_fusion.py",
+    "models/encoder_refiner.py",
+    "models/feature_aggregation.py",
+    "models/reca_sam3.py",
+    "models/remoteclip_guidance.py",
+    "models/sam3_image.py",
+    "models/semantic_detail_fusion.py",
+    "models/task_modes.py",
+    "paper/.gitignore",
+    "paper/AGENTS.md",
+    "paper/README.md",
+    "paper/notes/evaluation_protocol.md",
+    "paper/notes/review.md",
+    "paper/notes/source_snapshot.json",
+    "tools/collect_experiments.py",
+    "tools/datasets_converters/SOURCE_NOTES.md",
+    "tools/datasets_converters/dlrsd.py",
+    "tools/datasets_converters/isaid.py",
+    "tools/datasets_converters/loveda.py",
+    "tools/datasets_converters/potsdam.py",
+    "tools/datasets_converters/uavid.py",
+    "tools/datasets_converters/vaihingen.py",
+    "tools/train.py"
+  ],
+  "untracked_code_files": [
+    "README.md",
+    "configs/_base_/logging.py",
+    "configs/paths.local.example.py",
+    "data/prompt_templates.py",
+    "engine/result_writer.py",
+    "paper/export_config.json",
+    "tools/export_paper_results.py",
+    "tools/import_results.py"
   ],
   "sha256": {
-    "AGENTS.md": "855438598b34976d202f92ad6aa7a5a103e2b44bbb27da6c75168d9cfc998dec",
-    "DESIGN.md": "4c0f6e37cc736422484cb251698debb730aceba33d1c1a39c52b2235066ac77b",
+    "DESIGN.md": "5894af540d244398e2e5d70b66b745adb68fbb4bc59a64ae4f449bff741f73ca",
+    "README.md": "dd7a66c00a0e750e46243ac284c47527b1fcae04b12a468f94981381aba4fad5",
+    "config_dataclasses.py": "ac7bd30cb1be08338cbad9b677873d6ab1c78391cea6195d47ce98e93e089b00",
     "configs/_base_/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "configs/_base_/dataloader/semantic_eval.py": "41e0463ec874da06dc5889d90d3c723a2c8e4eac24db9a6f1a9ab33192107b80",
     "configs/_base_/dataloader/semantic_train.py": "26716ba45f3846545fa8ccfcd67f3e49ce0a57daa3103cf0b4d66777bd7ac14f",
-    "configs/_base_/evaluation.py": "3e517e4b928a4838b7f3a9809a09fcd0b58c2b25fb64e394b1e1336b52696bba",
-    "configs/_base_/model/ovrs_sam3.py": "fab17b3c3f225ac564c1ec9941f23cbe2cea62b4db9b3e25e1e67e69abfdfd31",
-    "configs/_base_/optimizer/ovrs_sam3_adamw.py": "e97f019e9c8029617a6c4a4f98fec6912d4598d263ee6a019c55262cda1eab32",
-    "configs/_base_/runtime.py": "399c07976c4356934e735db2e6c465a1002fe3f056a032b6ce8d6da1f6434265",
-    "configs/_base_/schedule/exp_4k.py": "79b2b0e21680cd3923d20032feaa34d0c934dc9cc3be66455098ccea60872fe2",
-    "configs/_base_/schedule/full_20k.py": "c34673bbc17045f29ec8fdc13e4d9ec93f170dc403057f5a8fb5d541ba35ea1c",
-    "configs/_base_/tracking.py": "154b474943bf109f0d91b6584824a6faccb46f137085b69807ec42b763947a00",
-    "configs/_base_/visualization.py": "566af22e82461bbeef7669657f2c3747af585a765ffc57a21a15d503075dd9bb",
+    "configs/_base_/evaluation.py": "c678fbebebe140ab847622eb2303bf36030dee86557428712f7e377171381457",
+    "configs/_base_/logging.py": "ecb03ac6195f43f8ab4d76fc5a1df6bcfceaf9a1111ed1b56e0f0e567c5dfa12",
+    "configs/_base_/loss/semantic.py": "11130c63ab9e43a9f5a04e34b06a2772858d287b13c83cea704dd4c388557d31",
+    "configs/_base_/model/reca_sam3.py": "699e16a827dbeaa2a2dc61baf8ddf2937b36d74c85e4fc61b27d30ca1302afd1",
+    "configs/_base_/optimizer/reca_sam3_adamw.py": "78da896d05be05db92facc8d53acd04cdf5d8bebd47189b844b0de3393c4c1fc",
+    "configs/_base_/runtime.py": "5009a8b0d3635ca3ad12933a195d93f1ff53f9c8cbe67e01f62981da3465464f",
+    "configs/_base_/schedule/exp_4k.py": "127e3ca1ac800429786a6ea83c116829271b3562ebb8403e39e6f1493e47af6b",
+    "configs/_base_/schedule/full_20k.py": "66e61ec1f5ce1aaacaff61941ca09aa3fee9b8ee9c6305dab749c06a5d67d533",
+    "configs/_base_/visualization.py": "d768a07deb59cfeb3408d65d6a68c554154358605a678c92acfcf8043b7da52e",
     "configs/datasets/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "configs/datasets/eval/deepglobe.py": "2355e25d37b28834d0728f214f33863fa18bec4b67a77fe2c00729826f97f5e7",
     "configs/datasets/eval/dlrsd.py": "360a7c235409e9163fef64e4d8a4f26d8264cd1354fb536279d6c0fddce99262",
@@ -30,7 +111,7 @@
     "configs/datasets/eval/gid5.py": "022b64a7c5abaabbc066c0295da6cf875a331609ce571c5f114e9c5e1b66177b",
     "configs/datasets/eval/isaid.py": "110a0775d228e2a9664cd0cb18aa4bc3e705d8ce7cd8d3364de815820cfce1a9",
     "configs/datasets/eval/ld50k.py": "76b963543e8731a2f8709ac4621e38767738fd932cef9ec993d3303bd32c7041",
-    "configs/datasets/eval/loveda.py": "d7fb8fa335edda10b5fe1c7b1bb8b85facc9144da759f92dd2d28cae718e67e3",
+    "configs/datasets/eval/loveda.py": "b2f27854a5969c8f7c87d9eef106160adc3cf9765ba94efa1ce117145c1e9ae2",
     "configs/datasets/eval/potsdam.py": "face3994b374b806293ad2a207e2d0d782b439cbae5dc19906a0df9cfb18d3d5",
     "configs/datasets/eval/uavid.py": "d809e3fe65b0cc6d01ac9d105e24b628d90eed8a436c5d04751237a9e64564e3",
     "configs/datasets/eval/udd.py": "1aa2ea9b0561b85b1e4646704cde0d9a769e138e4d1b404af52930fe649bc24a",
@@ -41,57 +122,120 @@
     "configs/datasets/train/gid5.py": "4eef65fceeeca0eda4e1f66a893756c11bb380bebb82e1816ff89897d7e7d460",
     "configs/datasets/train/isaid.py": "0afa75ccb4ec5946a4d1bdf50bb21b4150e8c671d3d507441b1472dd2b528478",
     "configs/datasets/train/ld50k.py": "a7b52318856009286aca17593400217640c0e1e5c88ac3ccd076778eb9b233c4",
-    "configs/datasets/train/loveda.py": "49972e81ffa130bb376c4ac2cc2ae155ff7542f451aa425e0389249a15b272e8",
-    "configs/sweeps/full_isaid_loveda_final_v1.yaml": "4f23918cd3b8408f32dba4475880286a624779b8a006c997275844cf7396d720",
-    "configs/test/_base_/ovrs_sam3_eval.py": "765d46c8f73abbbfad5e329fabe5d5f62e9d7320ba4b3e6a675927d6e4ddc2a8",
-    "configs/test/deepglobe.py": "53ec2c697bb088a33840b9fb4aac7cdb6a34736d4fd7730bf699e008a7595397",
-    "configs/test/dlrsd.py": "c51521b95b3f095c2ff446ff53d522eab207449dc468821989e5ec9db174a50b",
-    "configs/test/fast.py": "c02f06599760b5934349e1e8b98e27186bc95d1fbad7422a6344c5af8f1b0dd6",
-    "configs/test/flair.py": "a916b12203b19e70b1b2da61c77c5834058c3304483b8efbb8569fac0ab40894",
-    "configs/test/floodnet.py": "3048d978f7743a29b1646c99af5302058756fced63e32745c5468e536681d3f6",
-    "configs/test/gid15.py": "7d1d8ae11ccf7a345cda599009e194e1670fe1184d7cff78971c4e03616c1b31",
-    "configs/test/gid5.py": "7adf3582f6f0d767510d676f0cec8424601728b3efae6ada13934215b38b1956",
-    "configs/test/isaid.py": "27fafd304228da49dee974983ee47c07f1a578fbbfa6f291392ca14bfe912a57",
-    "configs/test/ld50k.py": "7a1807d9405d86d2759a0092174b70005ddd5d58bd22f0cf5851a3fb328c0ee2",
-    "configs/test/loveda.py": "bd83692469b066134fe45750f35c167cf7be0f0d7924c3ccc9aa7c275017f148",
-    "configs/test/potsdam.py": "7395f3985eef0f1eb88ce5f47be801db2aa7b29b39ce7781daf90ba0d57e8bb1",
-    "configs/test/uavid.py": "f94e9278435293342775b6df42502a966ab2aac2ae4f3f98676e8a82d70762c9",
-    "configs/test/udd.py": "e8e67f509d3540260b3590056a8f3f8ab23e2478602ecf65d0b6a34bd1432c25",
-    "configs/test/vaihingen.py": "a6dc197bb0c2c427ccfec97b813a8fdfcd0b5efde0d1f8e97009491265d5e13c",
-    "configs/test/vdd.py": "5da14cbca7c0762b078eba57c26970add06bd0972f8333aaacd2f27a425a2cce",
-    "configs/train/isaid_loveda_exp.py": "ee80e1924a4cad6c8833c470b651baec6afbc422fc48fb2f89c8c5224418d436",
-    "configs/train/isaid_loveda_full.py": "c204e6bfc28ef3f0e4131972fe99fc49f9d14e1451f0fbd8c9290ec4527f3898",
+    "configs/datasets/train/loveda.py": "3aa152a20e598186bb5afb2d482721e0d1f9052694ed6151d5f0e3595948d2cb",
+    "configs/experiments/ablation/isaid_loveda_distill_025.py": "3635e5f8d3cb7cfab26394fcaeb53d579299354ada974cb6623c278e6087366f",
+    "configs/experiments/dev/isaid_loveda_4k.py": "edaadd8681362ac10036e93d24ea70c62c758583bf2965bb9a54ce8c2f14550a",
+    "configs/experiments/main/isaid_loveda_full.py": "717cff5ef208fa55c0258108bfa79a1df3b749d168c0ec4259e5bf68b1d829ca",
+    "configs/paths.local.example.py": "6a850bffa038c2129efe16b186db5c3711fe260817bf331ee8978cbd44654d06",
+    "configs/protocols/isaid_loveda_semantic.py": "97daa13f5ded3833a36fd40d1d3753602319cfb791bd3d36245a86fd96052989",
+    "configs/sweeps/full_isaid_loveda_final_v1.yaml": "82b02be12ea94fdb2de43d62c45b48095cf4dae72aaa3d260e1cd194be11d293",
+    "configs/test/_base_/reca_sam3_eval.py": "af43afc703d14ba607019b9b98ee8bb25997c13cf43abdfec4bd3cd7f8a1cb05",
+    "configs/test/deepglobe.py": "e8b57327286a89687b8387fc8cb5ded1ff3885ffc064d73a5a304955b5763d61",
+    "configs/test/dlrsd.py": "64dc6644892775889da6b2069cc0daef5f9560c7e7ea3f158fe8dca430d325f9",
+    "configs/test/fast.py": "0ddcb06dc5fb2e933d7de10028bc336d6e4e7a7bb3e551c89351376c11d297f5",
+    "configs/test/flair.py": "869aa8866e4eff7840a408b3d2ffc4b14b636005b0e1a1f743891bba91bf4402",
+    "configs/test/floodnet.py": "d1a0586723abea100061f680c0fa0a454eb19f8746c8127d5358915c4fb76de0",
+    "configs/test/gid15.py": "22ca62edde15a2031a35b194730aed8affd281cefcdf059774363110c1705512",
+    "configs/test/gid5.py": "651bb9521c84fe121532d4bc9d3bcee54b4f3c13c17b68c85c5bfb53d5c460c3",
+    "configs/test/isaid.py": "00442c346b2bda16e5ad4a03831d271933e9c1c2c0219afbc0d1e0946157816a",
+    "configs/test/ld50k.py": "c091a00b3520531e9d24852fc7f0a37d02b443a56cf2174afb24b2c0cfaf2f09",
+    "configs/test/loveda.py": "5869c0fa2b15f8f41d844dcfdbf081f4faaeaab3d182ec39048be1aa5955ec62",
+    "configs/test/potsdam.py": "d0e1fac975f9dbc56711b7bb52ca9ea4dc98d841f18c19b61222599264a028d5",
+    "configs/test/uavid.py": "446f333c561711e6482d4c52d4362d5bc0abb8e4a7e70f7363a4c647c9cb16d3",
+    "configs/test/udd.py": "b6ac76d3478234b39a0e6930f8d0076d061573bdbd234ff495c5e08cf4996998",
+    "configs/test/vaihingen.py": "1101e432f6980f9cec0fcb3f7ea0b018ec56c26c1b611b3106764c91f19d9edf",
+    "configs/test/vdd.py": "19abcd3b133769668fd52cb67c9e26c617f82307b11964549989f20a9adaf763",
+    "data/__init__.py": "d1af2f893dcc54c88420855d4c02bf37de8708e6fed7232015fd76e47924a2b9",
+    "data/build.py": "165959a318fa976ee4f7bf22d5a6a43b70a46a51b0d690f4170db57059cd9ce7",
+    "data/class_prompts.py": "8adaa67633a0e4faca7a7093c116a31ddd11f253ac36a96a69e82de3398ca9b3",
     "data/collate.py": "90e13a221b97e51b393f93460efecb7ef975f2c6da725650dacf10984bd74fa6",
     "data/dataset.py": "5ca4197ca6e78ec46048fa10e4ad2c84ef2f403c88f91cdb6575793ae79d00cc",
-    "engine/config.py": "0ebc0a232862fb5ed14684ac1f9e42a2b4e7e1a605f04df0bd860e53e4b32d6d",
-    "engine/evaluator.py": "8b91c37737786c011b13b4677f3e98d5c9cc281cd505400dd8c7335bc3b758d8",
-    "engine/optimizer_builder.py": "b381e39e12b417be0706b32dc4e7539a757bbee9b07ab16c441316bda2585def",
-    "engine/trainer.py": "1f9a25e9f84bb9d3b7910891791cba2a1e3130706d96ca43688492e69dfc6a4d",
-    "losses/semantic_criterion.py": "1d5642644c29e7e6ad7bbd5eabd1848e76438e93bafc4afb768fd92a7950052c",
-    "model_builder.py": "c74dc669304888111661fcc74b750e4f37ba7ebaf7910d655ff0cb673e1d1e06",
-    "models/adapters/semantic_adapter.py": "361fdac171a7dc7fd68977ee7ba52329b2c727e1add8fe42609ced7a95314143",
-    "models/decoder_input_fusion.py": "2b2b9da47b039549ae261e4728f635d129b1ff94397226f91479144c67653470",
-    "models/encoder_refiner.py": "79f8592c64e953d11e39a4e23b9370448c3d641951b45ed860133e863fc902b2",
-    "models/encoder_refiner_attention.py": "acc2b1e2b838e6c6c51e79efddf54f4fc17e763e9b1f1e07c71dee71ceaabd92",
+    "data/prompt_templates.py": "30472ebefa5817d87379b508e447f0c1a1d83f31f15f6ca27b1205b0433bf308",
+    "data/resumable_sampler.py": "f4ab09436cd31a5c1472a8d8de73bca246bbf33363b49e39a4f5564fd066d39e",
+    "data/transforms.py": "a2a493329faf632241c8bc76466eabce7fbb5d11b45543f8b3a74e7a5aaf6efe",
+    "docs/migration_reca_sam3.md": "78264671ec6862700cca35faf3fa1b8c186e7e90f9c1d616dd7e04ad9e7d610e",
+    "docs/results_schema.md": "050b0fa9fd6dabf83386c4d1d0881d8368adfffbfd39607c867ee1b54150c9cc",
+    "docs/results_template.json": "d27eb9da0d7a8aace169bdcfaadcaee89e1bffaed5777ae2e2babe2d93c091f1",
+    "engine/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "engine/checkpoint.py": "982a8910df7ce0c49920f058100f88bff5aa3f0e3b8dbd47128f952d0bfc349e",
+    "engine/config.py": "b7e5dd0738848cc03817d474894cc8cfab88915af7eb424b743c4ab6a61deaf9",
+    "engine/evaluator.py": "df642855abaae7930a25eb7fde3a79ebf36fe5ec12dae452a11ab9fadee6029f",
+    "engine/experiment_hooks.py": "2a5863e550e4fbe308407d5a163e1c51606759f896699f32993819829a8f6cdd",
+    "engine/hooks.py": "028d846d23300d79c1e4dae193a2089c51cf2fe8c8bd70094fdc808d1398a5f0",
+    "engine/optimizer_builder.py": "f459b61f5a7d70885becfacf8c9cb41dd01a71279ab05548ac6d0a109a1eeea0",
+    "engine/result_writer.py": "d51beba2f8deb0c29a058ef3f5662690067c0d8c7858697fabb71e154c419cae",
+    "engine/runtime_state.py": "8f7819315820a5d26386168f1c1c3dd9fd38f6f744ae71f9094710b8c07d3f02",
+    "engine/trainer.py": "b3af9053f791ff09194b2a56fce8b0d3ee102cbc66c3adb1c830dc658af0e523",
+    "engine/visualization.py": "1ef2fb7743a2b3805c659f51fd109c62d02a542281a85c780a484c76134c5fa1",
+    "losses/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "losses/semantic_criterion.py": "4329ecfa967ab30c3601743a836eb2524977a67cbbcf55c1959942f510d53cca",
+    "model_builder.py": "4add4402a789eef8a83b1e43a0cc43efc2283b69384952f7c05b49b5c59b7b7b",
+    "models/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "models/act_ckpt_utils.py": "913317a663cf0f19317feb66ea43ff7a86e44393f39af3731ba3d33dfff93a82",
+    "models/adapters/__init__.py": "bcf286a2dc2693e22e313ee498aa99ba5a10c2778da5dfa51772c22abed80586",
+    "models/adapters/semantic_adapter.py": "655b716e56f079016cc81e98a0bcdd8bd6cd6b8a1d07ddc07381f087e8fa881b",
+    "models/aggregation_attention.py": "5ba1f1f9027276ffd0aa71ba198d24707d63a80f6438778484b0013719e61783",
+    "models/box_ops.py": "ad9973c5c31b65f2cd5cd22bdd0f65bdad96c357cf5fc1d04c7e8f2e51b356ed",
+    "models/data_misc.py": "46f6d71fa677d4d488fc1191ea9f7108e516d5685584f1ce9199b3444eadef9f",
+    "models/decoder.py": "28a59a2b246c87172bdee36546b6f1e5cb6cefe50aa66323dc8132b8a8c8f34b",
+    "models/encoder.py": "64bb7d3097f0d8ad5d0b3a5a521be806a63b9ae285670a5b69382b380af1f7dc",
+    "models/feature_aggregation.py": "9cf587f15047f9668ce55f46b23d0d359118e69d0564aadde839fd01aab3dcb3",
+    "models/geometry_encoders.py": "0b61cdf7160d0275176a66da089bbe126ce3a8ac34a4f2a088c68ce7d3cc54ee",
     "models/maskformer_segmentation.py": "3778da908b3bce0c0de168de231c9e77e8f747a9305c48fd473dd86d928787e6",
+    "models/model_misc.py": "3cbc66a849a62645fbe7596b8644ea465a08b507e3d6eb520b38742869b69495",
+    "models/necks.py": "c44c08367dd4201564d35c4ac6990dfb1a49ce88393d0ee860a78713c9a8dce9",
     "models/openclip_image_encoder.py": "a995f792dec3e154101d7dbf01e57cc9546137dcf194249cfe2bda0bc92eba7e",
     "models/openclip_text_encoder.py": "4a13b898a8ee649cbf22ffe4b26269f59fa4ef47e25a5df1bdffd730c0e18ffb",
-    "models/sam3_image.py": "575ea19d50433ba21a46aa8ab5b95c4087887d563ebcb47592c8b1c0bc33bfef",
-    "models/score_embeddings.py": "5ec42a180f1da83f29b6c1449575a0c5d3536d1e70ad748f0ba5592dc9d6ae8e",
-    "models/segmentor.py": "04f070b86a3517a922a7f4454ac61212b9498d0672aef47fbb1b341e121972f0"
+    "models/position_encoding.py": "ddaa792665cd179ef0514f725af199deb09cc89dbe2f10f32f21a3e204f65e60",
+    "models/reca_sam3.py": "86b8d45212f3ea2f33e811367163f39aae97015bbdf491d0266697e7f56fe479",
+    "models/remoteclip_guidance.py": "59e8fa4cf05f259f7c7a326cf3de1b4430578d1a42467404680622a15f7f720c",
+    "models/sam3_image.py": "37a43a34fb93ceef66cb37d8c49bd0ce2efe7edb8988a619b0f2236999b5edb4",
+    "models/semantic_detail_fusion.py": "c517ccc5d507ff88b46a4d99a41dd6fe84733f9909a852b8b08cff61562f8bf3",
+    "models/task_modes.py": "7eef9a4666481a7ea85e499153cb0880bcfb953808aa93e0326d9baa5d2adcb8",
+    "models/text_encoder_ve.py": "0b6257506c45aa6de8131a9ec4d9655ac29ea440bd2ad6a47cc814aa9fbf9f35",
+    "models/tokenizer_ve.py": "e8e0ea44125008e3a3109b6085a6eaca068a3624e0af00950bbdc553153bb969",
+    "models/vitdet.py": "32dfb0df4eff400ca0276bc6317b70c8db496823b97ad0c139e4d67a6a08de19",
+    "models/vl_combiner.py": "313f95927899606a7ffc0a32883d5bce18c5a251b0c3cf3ec8e535616b5fb474",
+    "paper/AGENTS.md": "e5aab951ab6f41fa76fc40424607b0af9269a8f3b8ea02bfcec0fd25577a0f41",
+    "paper/export_config.json": "f820e053918b667ad6d283c9557faf72a6190df43539f0ab032de9ed54cc033c",
+    "paper/notes/evaluation_protocol.md": "705c14745285dca3d9544df02690c88567c6b788c4744256695c18e6893d3310",
+    "tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tests/_bootstrap.py": "20b8acd330854932e824bd0d2b1d014410a329f1924407760e70ee79ef3d8cae",
+    "tests/fixtures/export/spec_main.json": "349238dc77728c4b974a1a928681f317e9fad23375dd9eac20969121e1c8aa00",
+    "tests/fixtures/export/spec_missing_seed.json": "b219ddcae3ae08c81afc4d4bcfea442fda45755974520d05a4c68631d575a2e6",
+    "tests/fixtures/export/spec_per_class.json": "d976695892bc2092f3d4c27179aaee7c23649443ed4ae56adf30c41b6bda3545",
+    "tests/fixtures/import/mapping.json": "8b53f070450eaecf044576e935fd031ee174b3fe9ecb4d2fc224a3598ad10a8c",
+    "tests/fixtures/import/protocol.json": "12a90445315a2a3c73765fa87e69084a61bc4db8d9a882ab88cdee0135ae0eed",
+    "tests/test_config_effective.py": "4b4eefcc71ef6039ea4679e64aa2dbac84099f082d84b9d3187f361ae4781fde",
+    "tests/test_experiment_results.py": "a7289066c35e5e8f5805c076deca21e0edd9625c6f3d184dac1ade53d2d8345b",
+    "tests/test_logging_and_export_extras.py": "0c838904368c04004f7c2d32168197db32f99974afaa667514673f5285b70ac2",
+    "tools/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tools/collect_experiments.py": "24e513df4249d3adb7277dabf08d25941517dcb5542b0f271eb47309efe0451f",
+    "tools/datasets_converters/SOURCE_NOTES.md": "a9116a82d96390b08f546a2833e7844aa01dc420b6203478e9ed9f5e66f022fe",
+    "tools/datasets_converters/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "tools/datasets_converters/dlrsd.py": "f31506ac5e4bdb7c6d1269ce7ba0480b454d6d89c3e02ab1f0ae4ef4b6f55c48",
+    "tools/datasets_converters/isaid.py": "f2669e51243344d1530a1e0405a99957d7ea5005315957606321bade239726c0",
+    "tools/datasets_converters/loveda.py": "8052135159161f46e20615d42d3ecd3fc3e02b82e6935321a35c2cb4b509481a",
+    "tools/datasets_converters/potsdam.py": "3daddc7f7fd89d5db203ff552766655bc88a72bb75b6ec57d2a893092ebd22ce",
+    "tools/datasets_converters/uavid.py": "1f8a4d01f525080b83ce92e6ef4bb3c7dbf6d5d715372f901d3d0ac0d515d53d",
+    "tools/datasets_converters/vaihingen.py": "94dc82ca4980cf6e04d451027c971faf92d2eab88a1838995f513bdfa3b02568",
+    "tools/export_paper_results.py": "a35935e0601234083e0ec77893f2b2dc8adc821eb89b950968025f6cfcacc91f",
+    "tools/import_results.py": "d0d656ed60a4ba200fd50605e89c1533ba3920b0a25209a792c65a43ce280a80",
+    "tools/train.py": "cea7eb060e91defb160311ce8d72439e51e635bbd9b367ddc937cfe4ef00ee15",
+    "utils/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "utils/experiment_results.py": "8640c0cd4aa71f929599b81b5a7d7a325028a646c751eb972a85f8494b20c671"
   },
   "merged_configs": {
-    "configs/train/isaid_loveda_full.py": {
+    "configs/experiments/main/isaid_loveda_full.py": {
       "model": {
         "task_mode": "semantic",
         "bpe_path": "assets/bpe_simple_vocab_16e6.txt.gz",
         "checkpoint_path": "weights/sam3.pt",
         "load_from_hf": false,
-        "device": "cuda",
         "eval_mode": false,
         "compile": false,
         "prompt_chunk_size": 4,
-        "openclip_cfg": {
+        "remoteclip": {
           "enabled": true,
           "model_name": "ViT-L-14",
           "pretrained": "weights/RemoteCLIP-ViT-L-14.pt",
@@ -171,66 +315,60 @@
           "text_prompt_batch_size": 64,
           "text_prompt_use_checkpoint": true
         },
-        "encoder_refiner_cfg": {
+        "aggregation": {
           "enabled": true,
-          "fusion_layers": 4,
+          "num_blocks": 4,
           "num_heads": 8,
           "dropout": 0.1,
-          "hidden_dim": 256,
-          "score_embed_dim": 256,
-          "refiner_hw": 36,
+          "feature_dim": 256,
+          "semantic_dim": 256,
+          "aggregation_hw": 36,
           "encoder_hw": 72,
           "window_size": 12,
           "shift_size": 6,
           "use_checkpoint": true
         },
-        "freeze_cfg": {
+        "freeze": {
           "train_adapters_only": true,
           "trainable_modules": [
-            "core.encoder_refiner"
+            "core.feature_aggregation"
           ],
           "frozen_modules": [],
-          "openclip_text_finetune": "attention",
-          "openclip_image_finetune": "attention"
-        },
-        "adapter_cfg": {
-          "sam3_mask_prob_thd": 0.1,
-          "final_mask_prob_thd": 0.5
-        },
-        "criterion_cfg": {
-          "ignore_index": 255,
-          "final_balanced_bce_weight": 1.0,
-          "final_dice_weight": 0.0,
-          "eps": 1e-06,
-          "sam3_mask_distill_weight": 0.5,
-          "sam3_mask_distill_boundary_width": 3,
-          "present_ignore_suppress_weight": 0.01
+          "remoteclip_text_finetune": "attention",
+          "remoteclip_image_finetune": "attention"
         }
       },
-      "optim_wrapper": {
-        "optimizer": {
-          "type": "AdamW",
-          "lr": 0.0001,
-          "weight_decay": 0.01,
-          "betas": [
-            0.9,
-            0.999
-          ],
-          "paramwise_cfg": {
-            "norm_decay_mult": 0.0,
-            "custom_keys": {
-              "core.encoder_refiner": {
-                "lr_mult": 1.0,
-                "decay_mult": 1.0
-              },
-              "core.clip_text_encoder": {
-                "lr_mult": 0.01,
-                "decay_mult": 1.0
-              },
-              "core.clip_image_encoder": {
-                "lr_mult": 0.01,
-                "decay_mult": 1.0
-              }
+      "loss": {
+        "ignore_index": 255,
+        "seg_bce_weight": 1.0,
+        "seg_dice_weight": 0.0,
+        "eps": 1e-06,
+        "reference_distill_weight": 0.5,
+        "reference_boundary_width": 3,
+        "present_ignore_suppression_weight": 0.01
+      },
+      "optimizer": {
+        "type": "AdamW",
+        "lr": 0.0001,
+        "weight_decay": 0.01,
+        "betas": [
+          0.9,
+          0.999
+        ],
+        "paramwise_cfg": {
+          "norm_decay_mult": 0.0,
+          "custom_keys": {
+            "core.feature_aggregation": {
+              "lr_mult": 1.0,
+              "decay_mult": 1.0
+            },
+            "core.clip_text_encoder": {
+              "lr_mult": 0.01,
+              "decay_mult": 1.0
+            },
+            "core.clip_image_encoder": {
+              "lr_mult": 0.01,
+              "decay_mult": 1.0
             }
           }
         }
@@ -239,14 +377,12 @@
         "max_iters": 20000,
         "save_interval": 2000,
         "eval_interval": 2000,
-        "val_max_iters": 2000,
+        "val_max_iters": null,
         "log_window_size": 20,
-        "use_amp": true,
         "grad_clip_norm": 0.01,
-        "monitor": "semantic.groups.loveda_no_background.miou",
+        "monitor": "semantic.miou",
         "monitor_mode": "max",
-        "max_keep_ckpts": 10,
-        "device": "cuda"
+        "max_keep_ckpts": 10
       },
       "param_scheduler": [
         {
@@ -258,79 +394,76 @@
         {
           "type": "CosineAnnealingLR",
           "T_max": 19000,
-          "eta_min": 1e-06
+          "eta_min": 1e-06,
+          "end": 20000
         }
       ],
-      "seed": 42,
-      "work_dir": "./work_dirs/full/isaid_loveda",
-      "default_scope": "sam3",
-      "log_level": "INFO",
-      "default_hooks": {
-        "logger": {
+      "runtime": {
+        "seed": 42,
+        "device": "cuda",
+        "use_amp": true,
+        "work_dir": "./work_dirs/main/isaid_loveda_full"
+      },
+      "evaluation": {
+        "dataset": "loveda",
+        "split": "val",
+        "data_version": "prepared-v1",
+        "protocol_id": "loveda_7class_resize1008_v1",
+        "ignore_index": 255,
+        "background_prob_threshold": 0.0,
+        "metric_groups": [],
+        "geometry": {
+          "input_hw": [
+            1008,
+            1008
+          ],
+          "keep_ratio": false
+        },
+        "tta": {
+          "enabled": false,
+          "scales": [
+            1.0
+          ],
+          "flip_modes": [
+            "none",
+            "h",
+            "v"
+          ],
+          "size_divisor": 14
+        },
+        "postprocess": {
+          "reference_prob_threshold": 0.1,
+          "prediction_prob_threshold": 0.5
+        }
+      },
+      "logging": {
+        "console": {
+          "enabled": true,
           "interval": 20,
           "val_interval": 50,
           "print_metric_tables": true,
           "print_per_class_metrics": true
-        }
-      },
-      "eval_cfg": {
-        "ignore_index": 255,
-        "prob_thd": 0.0,
-        "metric_groups": [
-          {
-            "name": "loveda_no_background",
-            "class_ids": [
-              1,
-              2,
-              3,
-              4,
-              5,
-              6
-            ],
-            "metrics": [
-              "miou",
-              "macc"
-            ]
-          }
-        ]
-      },
-      "tta_cfg": {
-        "enabled": false,
-        "scales": [
-          1.0
-        ],
-        "flip_modes": [
-          "none",
-          "h",
-          "v"
-        ],
-        "size_divisor": 14
-      },
-      "experiment_tracking": {
-        "metrics_jsonl": {
+        },
+        "jsonl": {
           "enabled": true,
           "filename": "metrics.jsonl",
-          "train_interval": 20,
-          "priority": 80
+          "train_interval": 20
         },
         "wandb": {
           "enabled": true,
-          "project": "ovrs-sam3",
-          "name": "full_isaid_loveda_final_v1",
-          "group": "full_isaid_loveda",
+          "mode": "offline",
+          "project": "reca-sam3",
+          "name": null,
+          "group": "main",
           "tags": [
-            "full",
+            "reca-sam3",
             "isaid-train",
             "loveda-val",
-            "refiner-36x36",
-            "fixed-32-templates",
-            "score-dim-256"
+            "64-templates"
           ],
-          "mode": "online",
           "train_interval": 20,
-          "priority": 90,
-          "name_from_config_keys": [],
-          "name_prefix": null
+          "log_per_class": false,
+          "log_extra": false
         }
       },
       "visualization": {
@@ -346,8 +479,8 @@
         "save_score_summary": false,
         "save_score_heatmaps": false,
         "heatmap_colormap": "turbo",
-        "save_sam3_direct_segmentation": false,
-        "sam3_direct_seg_threshold": 0.5,
+        "save_reference_segmentation": false,
+        "reference_seg_threshold": 0.5,
         "vis_prob": 0.02,
         "max_samples_per_epoch": 100,
         "vis_seed": 42,
@@ -498,7 +631,7 @@
           "img_suffix": ".png",
           "seg_suffix": ".png",
           "ignore_index": 255,
-          "reduce_zero_label": true,
+          "reduce_zero_label": false,
           "background_cfg": {
             "enabled": true,
             "class_id": 0,
@@ -511,6 +644,26 @@
           "pad_size_divisor": 14,
           "label_pad_value": 255
         }
+      },
+      "training": {
+        "regime": "supervised_adaptation",
+        "dataset": "isaid",
+        "split": "train",
+        "protocol_id": "isaid_train_v1"
+      },
+      "experiment": {
+        "name": "isaid_loveda_full",
+        "method_id": "reca_sam3",
+        "method_name": "ReCA-SAM3",
+        "variant_id": "full",
+        "implementation_id": "reca-sam3-paper-v1",
+        "kind": "main",
+        "factors": {
+          "num_blocks": 4,
+          "directional_fusion": true,
+          "reference_distill_weight": 0.5
+        },
+        "note": "iSAID train -> LoveDA val; seven-class semantic evaluation."
       }
     },
     "configs/test/loveda.py": {
@@ -519,11 +672,10 @@
         "bpe_path": "assets/bpe_simple_vocab_16e6.txt.gz",
         "checkpoint_path": "weights/sam3.pt",
         "load_from_hf": false,
-        "device": "cuda",
         "eval_mode": true,
         "compile": false,
         "prompt_chunk_size": 4,
-        "openclip_cfg": {
+        "remoteclip": {
           "enabled": true,
           "model_name": "ViT-L-14",
           "pretrained": "weights/RemoteCLIP-ViT-L-14.pt",
@@ -603,88 +755,99 @@
           "text_prompt_batch_size": 64,
           "text_prompt_use_checkpoint": true
         },
-        "encoder_refiner_cfg": {
+        "aggregation": {
           "enabled": true,
-          "fusion_layers": 4,
+          "num_blocks": 4,
           "num_heads": 8,
           "dropout": 0.1,
-          "hidden_dim": 256,
-          "score_embed_dim": 256,
-          "refiner_hw": 36,
+          "feature_dim": 256,
+          "semantic_dim": 256,
+          "aggregation_hw": 36,
           "encoder_hw": 72,
           "window_size": 12,
           "shift_size": 6,
           "use_checkpoint": true
         },
-        "freeze_cfg": {
+        "freeze": {
           "train_adapters_only": true,
           "trainable_modules": [
-            "core.encoder_refiner"
+            "core.feature_aggregation"
           ],
           "frozen_modules": [],
-          "openclip_text_finetune": "attention",
-          "openclip_image_finetune": "attention"
-        },
-        "adapter_cfg": {
-          "sam3_mask_prob_thd": 0.1,
-          "final_mask_prob_thd": 0.5
-        },
-        "criterion_cfg": {
-          "ignore_index": 255,
-          "final_balanced_bce_weight": 1.0,
-          "final_dice_weight": 0.0,
-          "eps": 1e-06,
-          "sam3_mask_distill_weight": 0.5,
-          "sam3_mask_distill_boundary_width": 3,
-          "present_ignore_suppress_weight": 0.01
+          "remoteclip_text_finetune": "attention",
+          "remoteclip_image_finetune": "attention"
         }
       },
-      "seed": 42,
-      "work_dir": "./work_dirs/test/loveda",
-      "default_scope": "sam3",
-      "log_level": "INFO",
-      "default_hooks": {
-        "logger": {
+      "loss": {
+        "ignore_index": 255,
+        "seg_bce_weight": 1.0,
+        "seg_dice_weight": 0.0,
+        "eps": 1e-06,
+        "reference_distill_weight": 0.5,
+        "reference_boundary_width": 3,
+        "present_ignore_suppression_weight": 0.01
+      },
+      "runtime": {
+        "seed": 42,
+        "device": "cuda",
+        "use_amp": true,
+        "work_dir": "./work_dirs/test/loveda"
+      },
+      "evaluation": {
+        "dataset": "loveda",
+        "split": "val",
+        "data_version": "prepared-v1",
+        "protocol_id": "loveda_7class_resize1008_v1",
+        "ignore_index": 255,
+        "background_prob_threshold": 0.0,
+        "metric_groups": [],
+        "geometry": {
+          "input_hw": [
+            1008,
+            1008
+          ],
+          "keep_ratio": false
+        },
+        "tta": {
+          "enabled": false,
+          "scales": [
+            1.0
+          ],
+          "flip_modes": [
+            "none",
+            "h",
+            "v"
+          ],
+          "size_divisor": 14
+        },
+        "postprocess": {
+          "reference_prob_threshold": 0.1,
+          "prediction_prob_threshold": 0.5
+        }
+      },
+      "logging": {
+        "console": {
+          "enabled": true,
           "interval": 20,
           "val_interval": 50,
           "print_metric_tables": true,
           "print_per_class_metrics": true
-        }
-      },
-      "eval_cfg": {
-        "ignore_index": 255,
-        "prob_thd": 0.0
-      },
-      "tta_cfg": {
-        "enabled": false,
-        "scales": [
-          1.0
-        ],
-        "flip_modes": [
-          "none",
-          "h",
-          "v"
-        ],
-        "size_divisor": 14
-      },
-      "experiment_tracking": {
-        "metrics_jsonl": {
+        },
+        "jsonl": {
           "enabled": true,
           "filename": "metrics.jsonl",
-          "train_interval": 20,
-          "priority": 80
+          "train_interval": 20
         },
         "wandb": {
-          "enabled": false,
-          "project": "ovrs-sam3",
+          "enabled": true,
+          "mode": "offline",
+          "project": "reca-sam3",
           "name": null,
           "group": null,
           "tags": [],
-          "mode": "online",
           "train_interval": 20,
-          "priority": 90,
-          "name_from_config_keys": [],
-          "name_prefix": null
+          "log_per_class": false,
+          "log_extra": false
         }
       },
       "visualization": {
@@ -700,26 +863,34 @@
         "save_score_summary": true,
         "save_score_heatmaps": true,
         "heatmap_colormap": "turbo",
-        "save_sam3_direct_segmentation": true,
-        "sam3_direct_seg_threshold": 0.5,
+        "save_reference_segmentation": false,
+        "reference_seg_threshold": 0.5,
         "vis_prob": 0.02,
         "max_samples_per_epoch": 100,
         "vis_seed": 42,
         "image_folder_pattern": "image_{image_id:06d}",
         "ignore_index": 255
       },
+      "experiment": {
+        "name": "test_loveda",
+        "method_id": "reca_sam3",
+        "method_name": "ReCA-SAM3",
+        "variant_id": "full",
+        "implementation_id": "reca-sam3-paper-v1",
+        "kind": "evaluation",
+        "factors": {},
+        "note": null
+      },
       "train_cfg": {
         "max_iters": 0,
         "log_window_size": 20,
-        "use_amp": true,
         "grad_clip_norm": null,
         "save_interval": 0,
         "eval_interval": 0,
         "val_max_iters": null,
         "monitor": "semantic.miou",
         "monitor_mode": "max",
-        "max_keep_ckpts": 1,
-        "device": "cuda"
+        "max_keep_ckpts": 1
       },
       "val_dataloader": {
         "batch_size": 1,
@@ -775,7 +946,7 @@
           "img_suffix": ".png",
           "seg_suffix": ".png",
           "ignore_index": 255,
-          "reduce_zero_label": true,
+          "reduce_zero_label": false,
           "background_cfg": {
             "enabled": true,
             "class_id": 0,
@@ -788,8 +959,14 @@
           "pad_size_divisor": 14,
           "label_pad_value": 255
         }
+      },
+      "training": {
+        "regime": "supervised_adaptation",
+        "dataset": null,
+        "split": null,
+        "protocol_id": null
       }
     }
   },
-  "note": "当前工作区核对记录；不是已完成实验的运行配置，不包含训练结果。"
+  "note": "工程整理后的工作区核对记录；包含未提交的命名、配置、日志与导出工具修改。不是训练结果或最终实验配置。"
 }

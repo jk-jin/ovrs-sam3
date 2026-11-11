@@ -1,8 +1,9 @@
 _base_ = [
-    "../../_base_/model/ovrs_sam3.py",
+    "../../_base_/model/reca_sam3.py",
+    "../../_base_/loss/semantic.py",
     "../../_base_/runtime.py",
     "../../_base_/evaluation.py",
-    "../../_base_/tracking.py",
+    "../../_base_/logging.py",
     "../../_base_/visualization.py",
 ]
 
@@ -10,10 +11,19 @@ model = dict(
     eval_mode=True,
 )
 
+experiment = dict(
+    name="eval",
+    method_id="reca_sam3",
+    method_name="ReCA-SAM3",
+    variant_id="full",
+    implementation_id="reca-sam3-paper-v1",
+    kind="evaluation",
+    factors=dict(),
+)
+
 train_cfg = dict(
     max_iters=0,
     log_window_size=20,
-    use_amp=True,
     grad_clip_norm=None,
     save_interval=0,
     eval_interval=0,
@@ -21,7 +31,6 @@ train_cfg = dict(
     monitor="semantic.miou",
     monitor_mode="max",
     max_keep_ckpts=1,
-    device="cuda",
 )
 
 visualization = dict(

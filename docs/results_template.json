@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "record_type": "single_run",
+  "eval_id": "example-only",
+  "status": "planned",
+  "role": "evaluation",
+  "experiment": {
+    "run_id": "example-run",
+    "name": "full_model_seed42",
+    "method_id": "reca_sam3",
+    "method_name": "ReCA-SAM3",
+    "variant_id": "full",
+    "implementation_id": "reca-sam3-paper-v1",
+    "kind": "main",
+    "seed": null,
+    "factors": {
+      "num_blocks": 4,
+      "directional_fusion": true
+    }
+  },
+  "training": {
+    "regime": "supervised_adaptation",
+    "dataset": "isaid",
+    "split": "train",
+    "protocol_id": "isaid_train_v1"
+  },
+  "checkpoint": {
+    "path": "../best.pth",
+    "step": null,
+    "sha256": null,
+    "selection": {
+      "dataset": "loveda",
+      "split": "val",
+      "metric": "semantic.miou",
+      "mode": "max",
+      "value": null
+    }
+  },
+  "evaluation": {
+    "dataset": "loveda",
+    "split": "val",
+    "data_version": "prepared-v1",
+    "sample_list_sha256": null,
+    "expected_samples": null,
+    "evaluated_samples": null,
+    "is_full": false,
+    "protocol_id": "loveda_7class_resize1008_v1",
+    "class_ids": [0, 1, 2, 3, 4, 5, 6],
+    "class_names": [
+      "background",
+      "building",
+      "road",
+      "water",
+      "barren",
+      "forest",
+      "agricultural"
+    ],
+    "metric_class_ids": [0, 1, 2, 3, 4, 5, 6],
+    "ignore_index": 255,
+    "include_background": true,
+    "absent_class_policy": "iou_union_positive_acc_target_positive",
+    "geometry": {
+      "input_hw": [1008, 1008],
+      "keep_ratio": false
+    },
+    "background_prob_threshold": 0.0,
+    "postprocess": {
+      "reference_prob_threshold": 0.1,
+      "prediction_prob_threshold": 0.5
+    },
+    "tta": {
+      "enabled": false,
+      "views": ["none"]
+    }
+  },
+  "metrics": {
+    "unit": "fraction",
+    "miou": null,
+    "macc": null,
+    "pixel_acc": null,
+    "per_class": []
+  },
+  "efficiency": null,
+  "provenance": {
+    "source": "native",
+    "git_commit": null,
+    "git_dirty": null,
+    "config_path": "../config.json"
+  }
+}

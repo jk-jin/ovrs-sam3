@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "tables": [
+    {
+      "name": "synthetic_missing_seed",
+      "filter": {
+        "evaluation.dataset": "loveda"
+      },
+      "rows": [
+        {
+          "label": "Method A",
+          "match": {
+            "experiment.method_id": "method_a"
+          }
+        }
+      ],
+      "metrics": ["miou"],
+      "allowed_varying_fields": [],
+      "factor_columns": [],
+      "display_unit": "percent",
+      "decimals": 2,
+      "aggregate_seeds": true,
+      "std_ddof": 1,
+      "expected_seeds": [42, 43, 44],
+      "layout": "column",
+      "caption": "Missing-seed draft test",
+      "label": "tab:synthetic_missing_seed",
+      "bold_best": false
+    }
+  ],
+  "curves": []
+}

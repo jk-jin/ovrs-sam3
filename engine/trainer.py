@@ -7,9 +7,27 @@ from pathlib import Path
 from typing import Dict, Iterable, Optional, Sequence
 
 import torch
-from torch.amp import GradScaler, autocast
 
-from ..models.task_modes import OUTPUT_KEYS
+try:
+    from torch.amp import GradScaler as _AmpGradScaler
+    from torch.amp import autocast as _torch_autocast
+
+    def _build_grad_scaler(device_type: str, enabled: bool):
+        return _AmpGradScaler(device=device_type, enabled=enabled)
+
+    def _autocast(device_type: str, enabled: bool):
+        return _torch_autocast(device_type=device_type, enabled=enabled)
+
+except ImportError:  # torch < 2.4 exposes AMP under torch.cuda.amp
+    from torch.cuda.amp import GradScaler as _CudaGradScaler
+    from torch.cuda.amp import autocast as _cuda_autocast
+
+    def _build_grad_scaler(device_type: str, enabled: bool):
+        return _CudaGradScaler(enabled=enabled)
+
+    def _autocast(device_type: str, enabled: bool):
+        return _cuda_autocast(enabled=enabled)
+
 from ..config_dataclasses import TrainerConfig
 from .checkpoint import CheckpointManager
 from .evaluator import (
@@ -37,6 +55,10 @@ class Trainer:
         hooks: Optional[Sequence[Hook]] = None,
         visualizer: Optional[VisualizationManager] = None,
         raw_cfg_for_logging=None,
+        result_writer=None,
+        is_eval_only: bool = False,
+        attempt_id: Optional[str] = None,
+        run_id: Optional[str] = None,
     ):
         self.model = model
         self.optimizer = optimizer
@@ -46,10 +68,19 @@ class Trainer:
         self.lr_scheduler = lr_scheduler
         self.cfg = cfg or TrainerConfig()
         self.raw_cfg_for_logging = raw_cfg_for_logging
+        self.result_writer = result_writer
+        self.is_eval_only = bool(is_eval_only)
+        self.attempt_id = attempt_id
+        self.run_id = run_id
+        self.selection_dataset = None
+        self.selection_split = None
+        self.parent_attempt_id = None
+        self.resume_from_step = None
+        self.last_val_summary = None
 
         self.device = torch.device(self.cfg.device)
-        self.scaler = GradScaler(
-            device="cuda",
+        self.scaler = _build_grad_scaler(
+            device_type="cuda",
             enabled=self.cfg.use_amp and self.device.type == "cuda",
         )
 
@@ -167,6 +198,9 @@ class Trainer:
         if extra.get("val_status") == "pending":
             self._pending_val_from_resume = True
 
+        self.parent_attempt_id = extra.get("attempt_id", None)
+        self.resume_from_step = self.global_iter
+
         self._restore_runtime_state(ckpt.get("runtime_state", {}) or {})
         print(f"Resumed from {path}, starting at iter={self.global_iter}")
         return ckpt
@@ -205,36 +239,36 @@ class Trainer:
     ) -> Dict[str, torch.Tensor]:
         """Streaming per-chunk loss/backward with proxy leaf gradient isolation.
 
-        Low-resolution Refiner runs once on all classes. High-resolution
+        Low-resolution aggregation runs once on all prompts. High-resolution
         decoding, loss and backward run per chunk. A detached proxy leaf
         accumulates gradients from all chunks; after all chunks, the
-        accumulated gradient is handed back to the real Refiner graph in
+        accumulated gradient is handed back to the real aggregation graph in
         a single backward call.
         """
-        if not hasattr(self.model, "build_encoder_refiner_cache"):
+        if not hasattr(self.model, "build_aggregation_cache"):
             raise AttributeError(
-                "Model must provide build_encoder_refiner_cache(batch)."
+                "Model must provide build_aggregation_cache(batch)."
             )
 
         label_map = batch.find_targets[0].semantic_label_map
         use_amp = self.cfg.use_amp and self.device.type == "cuda"
 
-        # ---- Build cache and run low-res Refiner once ----
-        with autocast(device_type=self.device.type, enabled=use_amp):
-            encoder_refiner_cache = self.model.build_encoder_refiner_cache(batch)
+        # ---- Build cache and run low-resolution aggregation once ----
+        with _autocast(device_type=self.device.type, enabled=use_amp):
+            aggregation_cache = self.model.build_aggregation_cache(batch)
 
-            refiner_out = (
-                self.model.run_encoder_refiner_lowres_from_cache(
-                    encoder_refiner_cache,
+            aggregation_out = (
+                self.model.run_aggregation_lowres_from_cache(
+                    aggregation_cache,
                     batch,
                     return_debug=False,
                 )
             )
 
-        refiner_features_36 = refiner_out["refiner_features_36"]
-        del refiner_out
+        aggregated_features_36 = aggregation_out["aggregated_features_36"]
+        del aggregation_out
 
-        B, C_total = refiner_features_36.shape[:2]
+        B, C_total = aggregated_features_36.shape[:2]
 
         metadata = batch.find_metadatas[0]
 
@@ -243,15 +277,15 @@ class Trainer:
 
         if C_total != num_prompt_channels:
             raise ValueError(
-                "Refiner prompt channel count does not match metadata: "
-                f"refiner={C_total}, "
+                "aggregation prompt channel count does not match metadata: "
+                f"aggregation={C_total}, "
                 f"metadata.num_prompts={num_prompt_channels}."
             )
 
         prompt_to_class_id = torch.as_tensor(
             metadata.prompt_to_class_id,
             dtype=torch.long,
-            device=refiner_features_36.device,
+            device=aggregated_features_36.device,
         )
 
         if prompt_to_class_id.ndim != 1:
@@ -262,15 +296,15 @@ class Trainer:
         if int(prompt_to_class_id.numel()) != C_total:
             raise ValueError(
                 "metadata.prompt_to_class_id length must equal the "
-                f"Refiner prompt count. Got "
+                f"aggregation prompt count. Got "
                 f"{prompt_to_class_id.numel()} and {C_total}."
             )
 
         # Detached proxy leaf — accumulates gradients from all chunks.
-        refiner_proxy = refiner_features_36.detach().requires_grad_(True)
+        aggregation_proxy = aggregated_features_36.detach().requires_grad_(True)
 
         # Build streaming loss context once.
-        with autocast(device_type=self.device.type, enabled=use_amp):
+        with _autocast(device_type=self.device.type, enabled=use_amp):
             loss_context = self.criterion.prepare_streaming_context(
                 targets={"label_map": label_map},
                 num_prompt_channels=C_total,
@@ -280,7 +314,7 @@ class Trainer:
             )
 
         effective_distill_weight = float(
-            loss_context.sam3_mask_distill_weight
+            loss_context.reference_distill_weight
         )
 
         need_teacher_logits = (
@@ -288,24 +322,24 @@ class Trainer:
             and loss_context.distill_pixel_denom > 0
         )
 
-        chunk_class_counts = encoder_refiner_cache["chunk_class_counts"]
+        chunk_prompt_counts = aggregation_cache["chunk_prompt_counts"]
 
         # GPU-side accumulators (detached scalars, .item() deferred).
         accum: Dict[str, torch.Tensor] = {}
 
         chunk_start = 0
-        for num_chunk_classes in chunk_class_counts:
+        for num_chunk_classes in chunk_prompt_counts:
             chunk_end = chunk_start + num_chunk_classes
 
-            refiner_proxy_chunk = refiner_proxy[
+            aggregation_proxy_chunk = aggregation_proxy[
                 :, chunk_start:chunk_end
             ]
 
-            with autocast(device_type=self.device.type, enabled=use_amp):
+            with _autocast(device_type=self.device.type, enabled=use_amp):
                 chunk_outputs = (
-                    self.model.decode_encoder_refiner_chunk_from_cache(
-                        encoder_refiner_cache=encoder_refiner_cache,
-                        refiner_feature_36_chunk=refiner_proxy_chunk,
+                    self.model.decode_aggregation_chunk_from_cache(
+                        aggregation_cache=aggregation_cache,
+                        aggregated_feature_36_chunk=aggregation_proxy_chunk,
                         class_start=chunk_start,
                         class_end=chunk_end,
                         return_teacher_logits=need_teacher_logits,
@@ -326,12 +360,12 @@ class Trainer:
 
             # Accumulate detached stats on GPU.
             for key in (
-                "loss_final_bce",
-                "loss_final_dice",
-                "loss_sam3_mask_distill_bce",
-                "loss_sam3_mask_distill_weighted",
-                "loss_present_ignore_suppress_bce",
-                "loss_present_ignore_suppress_weighted",
+                "loss_seg_bce",
+                "loss_seg_dice",
+                "loss_reference_distill_bce",
+                "loss_reference_distill_weighted",
+                "loss_present_ignore_suppression_bce",
+                "loss_present_ignore_suppression_weighted",
                 "total_loss",
             ):
                 val = chunk_loss_dict.get(key)
@@ -343,7 +377,7 @@ class Trainer:
                         accum[key] = accum[key] + detached
 
             # Release chunk intermediates.
-            del chunk_outputs, chunk_loss_dict, chunk_total_loss, refiner_proxy_chunk
+            del chunk_outputs, chunk_loss_dict, chunk_total_loss, aggregation_proxy_chunk
 
             chunk_start = chunk_end
 
@@ -353,18 +387,18 @@ class Trainer:
                 f"expected C_total={C_total}."
             )
 
-        # ---- Hand proxy gradient back to real Refiner graph ----
-        if refiner_proxy.grad is None:
+        # ---- Hand proxy gradient back to real aggregation graph ----
+        if aggregation_proxy.grad is None:
             raise RuntimeError(
-                "No gradient was accumulated on refiner_proxy. "
+                "No gradient was accumulated on aggregation_proxy. "
                 "Check that chunk losses have non-zero contribution."
             )
 
-        scaled_refiner_grad = refiner_proxy.grad.detach()
+        scaled_aggregation_grad = aggregation_proxy.grad.detach()
 
         torch.autograd.backward(
-            tensors=refiner_features_36,
-            grad_tensors=scaled_refiner_grad,
+            tensors=aggregated_features_36,
+            grad_tensors=scaled_aggregation_grad,
         )
 
         return accum
@@ -420,7 +454,7 @@ class Trainer:
 
     def _forward_val_outputs(self, batch) -> Dict[str, torch.Tensor]:
         use_amp = self.cfg.use_amp and self.device.type == "cuda"
-        with autocast(device_type=self.device.type, enabled=use_amp):
+        with _autocast(device_type=self.device.type, enabled=use_amp):
             outputs = inference_with_tta(self.model, batch, tta_cfg=self.cfg.tta_cfg)
         return outputs
 
@@ -501,7 +535,7 @@ class Trainer:
             return
 
         self.model.prepare_text_cache(
-            class_names=prompt_names,
+            prompt_names=prompt_names,
             device=self.device,
             force=force,
         )
@@ -638,6 +672,21 @@ class Trainer:
     # Checkpoint helpers
     # ------------------------------------------------------------------
 
+    def _checkpoint_extra(self) -> Dict[str, object]:
+        experiment = getattr(self, "experiment_cfg", None) or {}
+        return {
+            "monitor": self.cfg.monitor,
+            "monitor_mode": self.cfg.monitor_mode,
+            "attempt_id": self.attempt_id,
+            "selection_dataset": self.selection_dataset,
+            "selection_split": self.selection_split,
+            "run_id": self.run_id,
+            "experiment_name": experiment.get("name", None),
+            "config_fingerprint": getattr(
+                self, "config_fingerprint", None
+            ),
+        }
+
     def _save_checkpoint(
         self,
         train_stats: Dict[str, float],
@@ -656,10 +705,7 @@ class Trainer:
             scheduler=self.lr_scheduler,
             train_stats=train_stats,
             val_stats=val_stats or {},
-            extra={
-                "monitor": self.cfg.monitor,
-                "monitor_mode": self.cfg.monitor_mode,
-            },
+            extra=self._checkpoint_extra(),
         )
 
     # ------------------------------------------------------------------
@@ -682,6 +728,7 @@ class Trainer:
         eval_cfg = dict(self.cfg.eval_cfg or {})
         evaluator = MulticlassSemanticEvaluator(**eval_cfg)
         class_names = None
+        input_hw = None
 
         end = time.perf_counter()
 
@@ -694,6 +741,8 @@ class Trainer:
             data_time = time.perf_counter() - end
 
             batch = self._move_to_device(batch)
+            if input_hw is None and hasattr(batch, "img_batch"):
+                input_hw = tuple(batch.img_batch.shape[-2:])
 
             outputs = self._forward_val_outputs(batch)
 
@@ -731,8 +780,89 @@ class Trainer:
         if class_names is not None:
             stats["_class_names"] = class_names
 
+        expected_samples = self._get_val_expected_samples()
+        evaluated_samples = int(evaluator.num_samples)
+        is_full = bool(
+            val_max_iters is None
+            and expected_samples is not None
+            and evaluated_samples == expected_samples
+        )
+        self.last_val_summary = {
+            "stats": dict(stats),
+            "evaluator": evaluator,
+            "class_names": class_names,
+            "expected_samples": expected_samples,
+            "evaluated_samples": evaluated_samples,
+            "is_full": is_full,
+            "input_hw": input_hw,
+        }
+
         self.hook_manager.call("after_val", self, self.global_iter, stats)
         return stats
+
+    def _get_val_expected_samples(self) -> Optional[int]:
+        dataset = getattr(self.val_dataloader, "dataset", None)
+        while dataset is not None and hasattr(dataset, "dataset"):
+            dataset = dataset.dataset
+        if dataset is None:
+            return None
+        try:
+            return int(len(dataset))
+        except TypeError:
+            return None
+
+    def _write_validation_result(self, finalize_info: Optional[dict]) -> None:
+        if self.result_writer is None or self.last_val_summary is None:
+            return
+
+        if finalize_info is not None:
+            checkpoint_path = finalize_info.get("path")
+            checkpoint_step = finalize_info.get("global_iter")
+            selection = {
+                "metric": finalize_info.get("monitor"),
+                "mode": finalize_info.get("monitor_mode"),
+                "value": finalize_info.get("monitor_value"),
+                "is_best": finalize_info.get("is_new_best"),
+            }
+        else:
+            checkpoint_path = None
+            checkpoint_step = self.global_iter
+            selection = {
+                "metric": self.cfg.monitor,
+                "mode": self.cfg.monitor_mode,
+                "value": self.last_val_summary["stats"].get(
+                    self.cfg.monitor
+                ),
+                "is_best": None,
+            }
+
+        self.result_writer.write_result(
+            role="validation",
+            summary=self.last_val_summary,
+            checkpoint_path=checkpoint_path,
+            checkpoint_step=checkpoint_step,
+            selection=selection,
+            attempt_id=self.attempt_id,
+            resume_from_step=self.resume_from_step,
+        )
+
+    def write_eval_result(
+        self,
+        checkpoint_path: Optional[str],
+        checkpoint_step: Optional[int],
+        selection: Optional[dict] = None,
+    ) -> None:
+        if self.result_writer is None or self.last_val_summary is None:
+            return
+        self.result_writer.write_result(
+            role="evaluation",
+            summary=self.last_val_summary,
+            checkpoint_path=checkpoint_path,
+            checkpoint_step=checkpoint_step,
+            selection=selection or {},
+            attempt_id=self.attempt_id,
+            resume_from_step=None,
+        )
 
     # ------------------------------------------------------------------
     # Main training loop
@@ -793,17 +923,21 @@ class Trainer:
                 print(f"Replaying pending validation at iter={self.global_iter}...")
                 val_stats = self.val()
                 self.model.train()
+                finalize_info = None
                 if ckpt_path.exists():
-                    self.checkpoint_manager.finalize_after_validation(
-                        ckpt_path=ckpt_path,
-                        val_stats=val_stats,
-                        runtime_state=self.state_dict(),
-                        extra={
-                            "monitor": self.cfg.monitor,
-                            "monitor_mode": self.cfg.monitor_mode,
-                        },
+                    finalize_info = (
+                        self.checkpoint_manager.finalize_after_validation(
+                            ckpt_path=ckpt_path,
+                            val_stats=val_stats,
+                            runtime_state=self.state_dict(),
+                            extra=self._checkpoint_extra(),
+                        )
                     )
-                    print(f"Finalized pending validation checkpoint at iter={self.global_iter}")
+                    print(
+                        "Finalized pending validation checkpoint at "
+                        f"iter={self.global_iter}"
+                    )
+                self._write_validation_result(finalize_info)
 
         while self.global_iter < self.cfg.max_iters:
             data_time = time.perf_counter() - end
@@ -862,17 +996,23 @@ class Trainer:
             else:
                 val_stats = {}
 
+            finalize_info = None
             if ckpt_path is not None and should_eval:
-                self.checkpoint_manager.finalize_after_validation(
-                    ckpt_path=ckpt_path,
-                    val_stats=val_stats,
-                    runtime_state=self.state_dict(),
-                    extra={
-                        "monitor": self.cfg.monitor,
-                        "monitor_mode": self.cfg.monitor_mode,
-                    },
+                finalize_info = (
+                    self.checkpoint_manager.finalize_after_validation(
+                        ckpt_path=ckpt_path,
+                        val_stats=val_stats,
+                        runtime_state=self.state_dict(),
+                        extra=self._checkpoint_extra(),
+                    )
                 )
-                print(f"finalized checkpoint with validation stats at iter={self.global_iter}: {ckpt_path}")
+                print(
+                    "finalized checkpoint with validation stats at "
+                    f"iter={self.global_iter}: {ckpt_path}"
+                )
+
+            if should_eval:
+                self._write_validation_result(finalize_info)
 
             end = time.perf_counter()
 
@@ -889,8 +1029,20 @@ class Trainer:
 
         final_ckpt_path = None
         if need_final_save:
-            final_ckpt_path = self._save_checkpoint(final_train_stats, checkpoint_reason="final")
-            print(f"saved final training-state checkpoint at iter={self.global_iter}: {final_ckpt_path}")
+            final_ckpt_path = self._save_checkpoint(
+                final_train_stats, checkpoint_reason="final"
+            )
+            print(
+                "saved final training-state checkpoint at "
+                f"iter={self.global_iter}: {final_ckpt_path}"
+            )
+        else:
+            candidate = (
+                self.save_dir
+                / f"iter_{int(self.global_iter):07d}.pth"
+            )
+            if candidate.exists():
+                final_ckpt_path = candidate
 
         need_final_eval = (
             self.val_dataloader is not None
@@ -906,16 +1058,22 @@ class Trainer:
         else:
             final_val_stats = {}
 
+        finalize_info = None
         if final_ckpt_path is not None and need_final_eval:
-            self.checkpoint_manager.finalize_after_validation(
-                ckpt_path=final_ckpt_path,
-                val_stats=final_val_stats,
-                runtime_state=self.state_dict(),
-                extra={
-                    "monitor": self.cfg.monitor,
-                    "monitor_mode": self.cfg.monitor_mode,
-                },
+            finalize_info = (
+                self.checkpoint_manager.finalize_after_validation(
+                    ckpt_path=final_ckpt_path,
+                    val_stats=final_val_stats,
+                    runtime_state=self.state_dict(),
+                    extra=self._checkpoint_extra(),
+                )
             )
-            print(f"finalized final checkpoint with validation stats at iter={self.global_iter}: {final_ckpt_path}")
+            print(
+                "finalized final checkpoint with validation stats at "
+                f"iter={self.global_iter}: {final_ckpt_path}"
+            )
+
+        if need_final_eval:
+            self._write_validation_result(finalize_info)
 
         self.hook_manager.call("after_run", self)

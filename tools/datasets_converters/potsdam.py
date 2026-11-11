@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Custom Potsdam converter for OVRS-SAM3.
+Custom Potsdam converter for ReCA-SAM3.
 
 This version is written for the noBoundary labels package:
     5_Labels_all_noBoundary.zip

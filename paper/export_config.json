@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "tables": [
+    {
+      "name": "main_loveda",
+      "filter": {
+        "evaluation.dataset": "loveda",
+        "evaluation.split": "val"
+      },
+      "rows": [
+        {
+          "label": "ReCA-SAM3",
+          "match": {
+            "experiment.variant_id": "full",
+            "experiment.method_id": "reca_sam3"
+          }
+        }
+      ],
+      "metrics": [
+        "miou",
+        "macc",
+        "pixel_acc"
+      ],
+      "allowed_varying_fields": [
+        "training.regime"
+      ],
+      "factor_columns": [
+        "experiment.factors.num_blocks",
+        "experiment.factors.directional_fusion"
+      ],
+      "display_unit": "percent",
+      "decimals": 2,
+      "aggregate_seeds": true,
+      "std_ddof": 1,
+      "layout": "column",
+      "caption": "LoveDA 七类语义分割主结果",
+      "label": "tab:main_loveda",
+      "bold_best": false
+    },
+    {
+      "name": "per_class_loveda",
+      "filter": {
+        "evaluation.dataset": "loveda",
+        "evaluation.split": "val"
+      },
+      "rows": [
+        {
+          "label": "ReCA-SAM3",
+          "match": {
+            "experiment.variant_id": "full",
+            "experiment.method_id": "reca_sam3"
+          }
+        }
+      ],
+      "metrics": [
+        "iou.background",
+        "iou.building",
+        "iou.road",
+        "iou.water",
+        "iou.barren",
+        "iou.forest",
+        "iou.agricultural"
+      ],
+      "allowed_varying_fields": [
+        "training.regime"
+      ],
+      "factor_columns": [],
+      "display_unit": "percent",
+      "decimals": 2,
+      "aggregate_seeds": true,
+      "std_ddof": 1,
+      "layout": "wide",
+      "caption": "LoveDA 七类逐类 IoU",
+      "label": "tab:per_class_loveda",
+      "bold_best": false
+    },
+    {
+      "name": "ablation_distill",
+      "filter": {
+        "evaluation.dataset": "loveda",
+        "evaluation.split": "val",
+        "experiment.method_id": "reca_sam3"
+      },
+      "rows": [
+        {
+          "label": "蒸馏权重 0.5",
+          "match": {
+            "experiment.variant_id": "full"
+          }
+        },
+        {
+          "label": "蒸馏权重 0.25",
+          "match": {
+            "experiment.variant_id": "distill_0.25"
+          }
+        }
+      ],
+      "metrics": [
+        "miou",
+        "macc"
+      ],
+      "allowed_varying_fields": [
+        "experiment.factors.reference_distill_weight"
+      ],
+      "factor_columns": [
+        "experiment.factors.reference_distill_weight"
+      ],
+      "display_unit": "percent",
+      "decimals": 2,
+      "aggregate_seeds": true,
+      "std_ddof": 1,
+      "layout": "column",
+      "caption": "Reference 蒸馏权重参数消融",
+      "label": "tab:ablation_distill",
+      "bold_best": false
+    }
+  ],
+  "curves": []
+}

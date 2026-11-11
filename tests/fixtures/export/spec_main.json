@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "tables": [
+    {
+      "name": "synthetic_main",
+      "filter": {
+        "evaluation.dataset": "loveda",
+        "evaluation.split": "val"
+      },
+      "rows": [
+        {
+          "label": "Method & A_结果",
+          "match": {
+            "experiment.method_id": "method_a"
+          }
+        },
+        {
+          "label": "Method B",
+          "match": {
+            "experiment.method_id": "method_b"
+          }
+        },
+        {
+          "label": "Method C",
+          "match": {
+            "experiment.method_id": "method_c"
+          }
+        }
+      ],
+      "metrics": [
+        "miou",
+        "macc",
+        "pixel_acc"
+      ],
+      "allowed_varying_fields": [],
+      "factor_columns": [
+        "experiment.factors.blocks"
+      ],
+      "display_unit": "percent",
+      "decimals": 2,
+      "aggregate_seeds": true,
+      "std_ddof": 1,
+      "layout": "column",
+      "caption": "Synthetic & test_结果",
+      "label": "tab:synthetic_main",
+      "bold_best": false
+    }
+  ],
+  "curves": []
+}

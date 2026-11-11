@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "columns": {
+    "experiment.method_id": "method",
+    "experiment.variant_id": "variant",
+    "experiment.seed": "seed",
+    "metrics.miou": "miou",
+    "metrics.macc": "macc",
+    "metrics.pixel_acc": "pixel_acc"
+  },
+  "constants": {
+    "record_type": "single_run",
+    "role": "evaluation",
+    "experiment.kind": "comparison",
+    "experiment.implementation_id": "synthetic-test-v1",
+    "provenance.source": "external_run"
+  }
+}

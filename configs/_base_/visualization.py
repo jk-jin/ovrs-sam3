@@ -14,8 +14,8 @@ visualization = dict(
     save_score_heatmaps=True,
     heatmap_colormap="turbo",
 
-    save_sam3_direct_segmentation=True,
-    sam3_direct_seg_threshold=0.5,
+    save_reference_segmentation=False,
+    reference_seg_threshold=0.5,
 
     vis_prob=0.05,
     max_samples_per_epoch=100,

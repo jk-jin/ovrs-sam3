@@ -2,3 +2,7 @@
 /CLAUDE.md
 /AGENTS.md
 /.agents/
+__pycache__/
+*.pyc
+.pytest_cache/
+/work_dirs/

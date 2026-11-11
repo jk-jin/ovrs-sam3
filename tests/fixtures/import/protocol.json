@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "training": {
+    "regime": "supervised_adaptation",
+    "dataset": "isaid",
+    "split": "train",
+    "protocol_id": "synthetic-train-v1"
+  },
+  "evaluation": {
+    "dataset": "loveda",
+    "split": "val",
+    "data_version": "synthetic-test",
+    "sample_list_sha256": "synthetic-test-list",
+    "expected_samples": 10,
+    "evaluated_samples": 10,
+    "is_full": true,
+    "protocol_id": "loveda_7class_synthetic_test",
+    "class_ids": [0, 1, 2, 3, 4, 5, 6],
+    "class_names": [
+      "background",
+      "building",
+      "road",
+      "water",
+      "barren",
+      "forest",
+      "agricultural"
+    ],
+    "metric_class_ids": [0, 1, 2, 3, 4, 5, 6],
+    "ignore_index": 255,
+    "include_background": true,
+    "absent_class_policy": "iou_union_positive_acc_target_positive",
+    "geometry": {
+      "input_hw": [1008, 1008],
+      "keep_ratio": false
+    },
+    "background_prob_threshold": 0.0,
+    "postprocess": {
+      "reference_prob_threshold": 0.1,
+      "prediction_prob_threshold": 0.5
+    },
+    "tta": {
+      "enabled": false,
+      "views": ["none"]
+    }
+  },
+  "provenance": {
+    "source": "external_run",
+    "notes": "SYNTHETIC TEST FIXTURE - not a real measurement."
+  }
+}

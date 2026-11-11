@@ -67,7 +67,7 @@ DLRSD_CATEGORIES = [
 DLRSD_PALETTE = {cat["id"] - 1: cat["color"] for cat in DLRSD_CATEGORIES}
 VALID_LABELS = set(DLRSD_PALETTE.keys()) | {255}
 IGNORE_INDEX = 255
-PNG_COMPRESS_LEVEL = max(0, min(9, int(os.environ.get('OVRS_CONVERTER_PNG_COMPRESS', '1'))))
+PNG_COMPRESS_LEVEL = max(0, min(9, int(os.environ.get('RECA_CONVERTER_PNG_COMPRESS', '1'))))
 IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp'}
 MASK_EXTS = {'.png', '.tif', '.tiff', '.bmp', '.jpg', '.jpeg'}
 
@@ -393,7 +393,7 @@ def _worker_copy_and_convert(task):
 
 
 def _get_num_workers():
-    env = os.environ.get('OVRS_CONVERTER_WORKERS')
+    env = os.environ.get('RECA_CONVERTER_WORKERS')
     if env:
         try:
             return max(1, int(env))

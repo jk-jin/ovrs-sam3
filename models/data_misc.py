@@ -51,7 +51,7 @@ class BatchedInferenceMetadata:
     num_classes: int
     class_names: List[str]
 
-    # Expanded text-prompt space used by SAM3 / RemoteCLIP / Refiner.
+    # Expanded text-prompt space used by SAM3 / RemoteCLIP / feature aggregation.
     num_prompts: int
     prompt_names: List[str]
 

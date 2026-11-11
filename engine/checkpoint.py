@@ -178,7 +178,7 @@ class CheckpointManager:
         val_stats: Optional[Dict[str, float]] = None,
         runtime_state: Optional[Dict[str, Any]] = None,
         extra: Optional[Dict[str, Any]] = None,
-    ) -> Path:
+    ) -> Dict[str, Any]:
         ckpt_path = Path(ckpt_path)
         if not ckpt_path.exists():
             raise FileNotFoundError(f"Checkpoint file not found: {ckpt_path}")
@@ -190,20 +190,25 @@ class CheckpointManager:
 
         # 2. Determine if new best — compare ONCE before updating best_score.
         is_new_best = False
+        monitor_value = None
         val_stats_dict = payload["val_stats"] or {}
         if self.cfg.monitor in val_stats_dict:
-            score = float(val_stats_dict[self.cfg.monitor])
-            if self._is_better(score):
-                self.best_score = score
+            monitor_value = float(val_stats_dict[self.cfg.monitor])
+            if self._is_better(monitor_value):
+                self.best_score = monitor_value
                 is_new_best = True
 
         # 3. Update checkpoint_manager state in payload.
         payload["checkpoint_manager"] = self.state_dict()
 
-        # 4. Update extra.
+        # 4. Update extra with the actual selection fact.
         merged_extra = dict(payload.get("extra", {}) or {})
         merged_extra.update(dict(extra or {}))
         merged_extra["val_status"] = "done"
+        merged_extra["monitor"] = str(self.cfg.monitor)
+        merged_extra["monitor_mode"] = str(self.cfg.mode)
+        merged_extra["monitor_value"] = monitor_value
+        merged_extra["is_best_checkpoint"] = bool(is_new_best)
         payload["extra"] = merged_extra
 
         # 5. Update runtime_state if provided.
@@ -221,7 +226,14 @@ class CheckpointManager:
             best_path = self.save_dir / "best.pth"
             self._atomic_copy(ckpt_path, best_path)
 
-        return ckpt_path
+        return {
+            "path": ckpt_path,
+            "global_iter": int(payload.get("global_iter", 0)),
+            "monitor": str(self.cfg.monitor),
+            "monitor_mode": str(self.cfg.mode),
+            "monitor_value": monitor_value,
+            "is_new_best": bool(is_new_best),
+        }
 
     # ------------------------------------------------------------------
     # latest.pth — atomic file copy

@@ -134,8 +134,6 @@ class LoggerHook(Hook):
         if isinstance(value, int):
             return str(value)
         if isinstance(value, float):
-            if str(key).startswith("residual/"):
-                return f"{value:.4e}"
             return f"{value:.4f}"
         return str(value)
 

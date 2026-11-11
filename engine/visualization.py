@@ -57,7 +57,7 @@ class BaseSemanticOverlayTask(VisualizationTask):
         raw_final_pred, eval_num_classes, eval_class_names = build_eval_semantic_pred(
             outputs=raw_outputs_for_pred,
             metadata=metadata,
-            prob_thd=manager.eval_prob_thd,
+            background_prob_threshold=manager.background_prob_threshold,
             ignore_index=manager.cfg.ignore_index,
         )
 
@@ -67,7 +67,7 @@ class BaseSemanticOverlayTask(VisualizationTask):
         final_pred, _, _ = build_eval_semantic_pred(
             outputs=final_outputs_for_pred,
             metadata=metadata,
-            prob_thd=manager.eval_prob_thd,
+            background_prob_threshold=manager.background_prob_threshold,
             ignore_index=manager.cfg.ignore_index,
         )
 
@@ -158,7 +158,7 @@ class BaseSemanticOverlayTask(VisualizationTask):
                     f.write(
                         "pred_raw_final.png\t"
                         f"{raw_final_source}; eval_style_pred="
-                        f"prob_thd={manager.eval_prob_thd}, "
+                        f"background_prob_threshold={manager.background_prob_threshold}, "
                         f"background_enabled={bg_enabled}, "
                         f"background_class_id={bg_class_id}, "
                         f"background_exclude_from_forward={bg_excl}, "
@@ -167,7 +167,7 @@ class BaseSemanticOverlayTask(VisualizationTask):
                     f.write(
                         "pred_raw_final_overlay.png\t"
                         f"{raw_final_source}; eval_style_pred="
-                        f"prob_thd={manager.eval_prob_thd}, "
+                        f"background_prob_threshold={manager.background_prob_threshold}, "
                         f"background_enabled={bg_enabled}, "
                         f"background_class_id={bg_class_id}, "
                         f"background_exclude_from_forward={bg_excl}, "
@@ -176,7 +176,7 @@ class BaseSemanticOverlayTask(VisualizationTask):
                 f.write(
                     "pred.png\t"
                     f"{final_source}; eval_style_pred="
-                    f"prob_thd={manager.eval_prob_thd}, "
+                    f"background_prob_threshold={manager.background_prob_threshold}, "
                     f"background_enabled={bg_enabled}, "
                     f"background_class_id={bg_class_id}, "
                     f"background_exclude_from_forward={bg_excl}, "
@@ -185,7 +185,7 @@ class BaseSemanticOverlayTask(VisualizationTask):
                 f.write(
                     "pred_overlay.png\t"
                     f"{final_source}; eval_style_pred="
-                    f"prob_thd={manager.eval_prob_thd}, "
+                    f"background_prob_threshold={manager.background_prob_threshold}, "
                     f"background_enabled={bg_enabled}, "
                     f"background_class_id={bg_class_id}, "
                     f"background_exclude_from_forward={bg_excl}, "
@@ -272,14 +272,14 @@ class ScoreAnalysisTask(VisualizationTask):
                 )
 
 
-class Sam3DirectSegmentationTask(VisualizationTask):
-    name = "sam3_direct_segmentation"
+class ReferenceSegmentationTask(VisualizationTask):
+    name = "reference_segmentation"
 
     def run(self, manager: "VisualizationManager", ctx: VisualizationContext) -> None:
-        if not manager.cfg.save_sam3_direct_segmentation:
+        if not manager.cfg.save_reference_segmentation:
             return
 
-        direct_logits = manager._build_sam3_direct_segmentation_for_visualization(
+        direct_logits = manager._build_reference_segmentation_for_visualization(
             model=ctx.model,
             batch=ctx.batch,
         )
@@ -288,7 +288,7 @@ class Sam3DirectSegmentationTask(VisualizationTask):
 
         if direct_logits.dim() != 4:
             raise ValueError(
-                "Expected sam3 direct logits as [B, 1, H, W] or [B, C, H, W], "
+                "Expected SAM3 reference logits as [B, 1, H, W] or [B, C, H, W], "
                 f"got {tuple(direct_logits.shape)}."
             )
 
@@ -307,7 +307,7 @@ class Sam3DirectSegmentationTask(VisualizationTask):
             if logits_b.shape[0] == 1:
                 score_map = logits_b[0].sigmoid()
                 pred_mask = (
-                    score_map >= float(manager.cfg.sam3_direct_seg_threshold)
+                    score_map >= float(manager.cfg.reference_seg_threshold)
                 ).long()
             else:
                 score_map = logits_b.softmax(dim=0).max(dim=0).values
@@ -317,20 +317,20 @@ class Sam3DirectSegmentationTask(VisualizationTask):
                 score_map,
                 out_hw=out_hw,
                 normalize="prob",
-            ).save(sample_dir / "sam3_direct_score_heatmap.png")
+            ).save(sample_dir / "reference_score_heatmap.png")
 
             pred_mask_out = manager._prepare_label_map(pred_mask, out_hw)
 
             manager._colorize_label_map(
                 pred_mask_out,
                 num_classes=max(2, int(logits_b.shape[0])),
-            ).save(sample_dir / "sam3_direct_pred.png")
+            ).save(sample_dir / "reference_pred.png")
 
             manager._overlay_label_map(
                 overlay_image,
                 pred_mask_out,
                 num_classes=max(2, int(logits_b.shape[0])),
-            ).save(sample_dir / "sam3_direct_overlay.png")
+            ).save(sample_dir / "reference_overlay.png")
 
 class VisualizationManager:
     def __init__(
@@ -348,8 +348,8 @@ class VisualizationManager:
         self.tasks = self._build_tasks()
 
     @property
-    def eval_prob_thd(self) -> Optional[float]:
-        value = self.eval_cfg.get("prob_thd", None)
+    def background_prob_threshold(self) -> Optional[float]:
+        value = self.eval_cfg.get("background_prob_threshold", None)
         if value is None:
             return None
         return float(value)
@@ -358,7 +358,7 @@ class VisualizationManager:
         return [
             BaseSemanticOverlayTask(),
             ScoreAnalysisTask(),
-            Sam3DirectSegmentationTask(),
+            ReferenceSegmentationTask(),
         ]
 
     @staticmethod
@@ -370,7 +370,7 @@ class VisualizationManager:
         model = cls._unwrap_model(model)
         return getattr(model, "core", None)
 
-    def _build_sam3_direct_segmentation_for_visualization(
+    def _build_reference_segmentation_for_visualization(
         self,
         model: torch.nn.Module,
         batch: Any,
@@ -698,60 +698,6 @@ class VisualizationManager:
             self._extract_final_logits_raw_and_gated_score_maps(outputs)
         )
         return final_logits, final_score_map, gated_source
-
-    def _extract_semantic_logits_and_score_map(
-        self,
-        outputs: Dict[str, torch.Tensor],
-    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[str]]:
-        semantic_score_map = self._get_output(outputs, OUTPUT_KEYS.semantic_score_map)
-        semantic_logits = self._get_output(outputs, OUTPUT_KEYS.semantic_logits)
-
-        if semantic_score_map is not None:
-            if semantic_score_map.dim() != 4:
-                raise ValueError(
-                    f"Expected semantic_score_map as [B, C, H, W], "
-                    f"got {tuple(semantic_score_map.shape)}."
-                )
-
-            if semantic_logits is not None:
-                if semantic_logits.dim() != 4:
-                    raise ValueError(
-                        f"Expected semantic_logits as [B, C, H, W], "
-                        f"got {tuple(semantic_logits.shape)}."
-                    )
-                if tuple(semantic_logits.shape) != tuple(semantic_score_map.shape):
-                    raise ValueError(
-                        "semantic_logits and semantic_score_map shape mismatch: "
-                        f"{tuple(semantic_logits.shape)} vs {tuple(semantic_score_map.shape)}."
-                    )
-            else:
-                semantic_logits = semantic_score_map.clamp_min(1e-12).log()
-
-            return semantic_logits, semantic_score_map, OUTPUT_KEYS.semantic_score_map
-
-        if semantic_logits is not None:
-            if semantic_logits.dim() != 4:
-                raise ValueError(
-                    f"Expected semantic_logits as [B, C, H, W], "
-                    f"got {tuple(semantic_logits.shape)}."
-                )
-            return (
-                semantic_logits,
-                semantic_logits.softmax(dim=1),
-                f"softmax({OUTPUT_KEYS.semantic_logits})",
-            )
-
-        return None, None, None
-
-    @staticmethod
-    def _extract_pred_from_logits(
-        logits: Optional[torch.Tensor],
-    ) -> Optional[torch.Tensor]:
-        if logits is None:
-            return None
-        if logits.dim() != 4:
-            raise ValueError(f"Expected logits [B, C, H, W], got {tuple(logits.shape)}.")
-        return logits.argmax(dim=1).long()
 
     @staticmethod
     def _apply_turbo_colormap(x: np.ndarray) -> np.ndarray:

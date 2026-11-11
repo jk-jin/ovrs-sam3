@@ -18,25 +18,25 @@ def _safe_group_norm(num_channels: int) -> nn.GroupNorm:
     return nn.GroupNorm(num_groups, num_channels)
 
 
-class ClipScoreEmbedding(nn.Module):
-    """Build a 36×36 score embedding from RemoteCLIP text scores and features.
+class RemoteCLIPGuidanceEmbedding(nn.Module):
+    """Build 36×36 RemoteCLIP guidance from template scores and dense features.
 
     Inputs:
         remoteclip_feat_map: [B, D_clip, 36, 36]
-        template text:       [C, 64, D_clip]
+        template text:       [P, 64, D_clip]
 
     Process:
         1. Compute 64 normalized template score maps.
-        2. Project score maps from 64 to 256 channels.
-        3. L2-normalize score features and dense CLIP features separately.
+        2. Project score maps from 64 to `feature_dim` channels.
+        3. L2-normalize score features and dense RemoteCLIP features separately.
         4. Concatenate and fuse them with a 1×1 convolution.
         5. L2-normalize both 256-channel fusion paths separately.
         6. Concatenate and apply two ordinary 3×3 convolutions.
 
     Outputs:
-        clip_score_embed_36: [B, C, 256, 36, 36]
-        score_maps_36:       [B, C, 64, 36, 36]
-        template_clip_text:  [C, 64, D_clip]
+        clip_guidance_36:        [B, P, 256, 36, 36]
+        clip_template_scores_36: [B, P, 64, 36, 36]
+        remoteclip_template_text:[P, 64, D_clip]
     """
 
     def __init__(
@@ -45,7 +45,7 @@ class ClipScoreEmbedding(nn.Module):
         prompt_templates: list[str],
         normalize_label: bool = True,
         clip_output_dim: int = 768,
-        score_embed_dim: int = 256,
+        feature_dim: int = 256,
         text_prompt_batch_size: int = 64,
         text_prompt_use_checkpoint: bool = True,
     ):
@@ -56,7 +56,7 @@ class ClipScoreEmbedding(nn.Module):
         self.prompt_templates = list(prompt_templates)
         self.normalize_label = bool(normalize_label)
         self.clip_output_dim = int(clip_output_dim)
-        self.score_embed_dim = int(score_embed_dim)
+        self.feature_dim = int(feature_dim)
         self.num_prompt_templates = len(self.prompt_templates)
         self.text_prompt_batch_size = int(text_prompt_batch_size)
         self.text_prompt_use_checkpoint = bool(
@@ -75,55 +75,55 @@ class ClipScoreEmbedding(nn.Module):
                 f"got {self.clip_output_dim}."
             )
 
-        if self.score_embed_dim <= 0:
+        if self.feature_dim <= 0:
             raise ValueError(
-                "score_embed_dim must be positive, "
-                f"got {self.score_embed_dim}."
+                "feature_dim must be positive, "
+                f"got {self.feature_dim}."
             )
 
-        # 64-channel template score maps → 256-channel intermediate feature 1.
-        self.score_stem = nn.Sequential(
+        # 64-channel template score maps → feature_dim intermediate feature.
+        self.template_projection = nn.Sequential(
             nn.Conv2d(
                 self.num_prompt_templates,
-                self.score_embed_dim,
+                self.feature_dim,
                 kernel_size=1,
                 bias=False,
             ),
-            _safe_group_norm(self.score_embed_dim),
+            _safe_group_norm(self.feature_dim),
             nn.GELU(),
         )
 
-        # Normalized intermediate feature 1 + normalized dense CLIP feature.
-        self.score_clip_fusion = nn.Sequential(
+        # Normalized intermediate feature + normalized dense RemoteCLIP feature.
+        self.remoteclip_fusion = nn.Sequential(
             nn.Conv2d(
-                self.score_embed_dim + self.clip_output_dim,
-                self.score_embed_dim,
+                self.feature_dim + self.clip_output_dim,
+                self.feature_dim,
                 kernel_size=1,
                 bias=False,
             ),
-            _safe_group_norm(self.score_embed_dim),
+            _safe_group_norm(self.feature_dim),
             nn.GELU(),
         )
 
         # Normalized intermediate feature 1 + normalized intermediate feature 2.
-        self.spatial_fusion = nn.Sequential(
+        self.spatial_enhancement = nn.Sequential(
             nn.Conv2d(
-                self.score_embed_dim * 2,
-                self.score_embed_dim,
+                self.feature_dim * 2,
+                self.feature_dim,
                 kernel_size=3,
                 padding=1,
                 bias=False,
             ),
-            _safe_group_norm(self.score_embed_dim),
+            _safe_group_norm(self.feature_dim),
             nn.GELU(),
             nn.Conv2d(
-                self.score_embed_dim,
-                self.score_embed_dim,
+                self.feature_dim,
+                self.feature_dim,
                 kernel_size=3,
                 padding=1,
                 bias=False,
             ),
-            _safe_group_norm(self.score_embed_dim),
+            _safe_group_norm(self.feature_dim),
             nn.GELU(),
         )
 
@@ -197,7 +197,7 @@ class ClipScoreEmbedding(nn.Module):
 
         if image_clip_dim != self.clip_output_dim:
             raise ValueError(
-                "CLIP dimension mismatch: expected "
+                "RemoteCLIP dimension mismatch: expected "
                 f"{self.clip_output_dim}, got {image_clip_dim}."
             )
 
@@ -207,43 +207,43 @@ class ClipScoreEmbedding(nn.Module):
                 f"got {(height, width)}."
             )
 
-        num_classes = len(class_names)
-        if num_classes == 0:
+        num_prompts = len(class_names)
+        if num_prompts == 0:
             raise ValueError("class_names is empty.")
 
-        template_clip_text = self._encode_template_text(
+        remoteclip_template_text = self._encode_template_text(
             class_names=class_names,
             device=remoteclip_feat_map.device,
         )
 
         expected_text_shape = (
-            num_classes,
+            num_prompts,
             self.num_prompt_templates,
             self.clip_output_dim,
         )
-        if tuple(template_clip_text.shape) != expected_text_shape:
+        if tuple(remoteclip_template_text.shape) != expected_text_shape:
             raise ValueError(
-                "template_clip_text shape mismatch: expected "
+                "remoteclip_template_text shape mismatch: expected "
                 f"{expected_text_shape}, "
-                f"got {tuple(template_clip_text.shape)}."
+                f"got {tuple(remoteclip_template_text.shape)}."
             )
 
-        template_clip_text = template_clip_text.to(
+        remoteclip_template_text = remoteclip_template_text.to(
             device=remoteclip_feat_map.device,
             dtype=remoteclip_feat_map.dtype,
         )
 
         # Normalize every template text vector along D_clip.
         text_norm = F.normalize(
-            template_clip_text,
+            remoteclip_template_text,
             p=2,
             dim=-1,
             eps=_L2_NORM_EPS,
         )
 
-        # Normalize every spatial CLIP vector along D_clip.
+        # Normalize every spatial RemoteCLIP vector along D_clip.
         # This normalized feature is used both for similarity calculation
-        # and for the direct dense CLIP fusion branch.
+        # and for the direct dense RemoteCLIP fusion branch.
         image_norm = F.normalize(
             remoteclip_feat_map,
             p=2,
@@ -251,7 +251,7 @@ class ClipScoreEmbedding(nn.Module):
             eps=_L2_NORM_EPS,
         )
 
-        score_maps_36 = (
+        clip_template_scores_36 = (
             torch.einsum(
                 "ckd,bdhw->bckhw",
                 text_norm,
@@ -260,15 +260,14 @@ class ClipScoreEmbedding(nn.Module):
             * _SCORE_SCALE
         )
 
-        score_flat = score_maps_36.reshape(
-            batch_size * num_classes,
+        score_flat = clip_template_scores_36.reshape(
+            batch_size * num_prompts,
             self.num_prompt_templates,
             height,
             width,
         )
 
-        # 64 template channels → 256-channel intermediate feature 1.
-        score_mid_1 = self.score_stem(score_flat)
+        score_mid_1 = self.template_projection(score_flat)
 
         # Perform per-pixel channel-wise L2 normalization before fusion.
         score_mid_1_norm = F.normalize(
@@ -278,18 +277,18 @@ class ClipScoreEmbedding(nn.Module):
             eps=_L2_NORM_EPS,
         )
 
-        # Broadcast the normalized image-level CLIP feature over classes.
+        # Broadcast the normalized image-level RemoteCLIP feature over prompts.
         clip_feature_flat = (
             image_norm[:, None]
             .expand(
                 batch_size,
-                num_classes,
+                num_prompts,
                 self.clip_output_dim,
                 height,
                 width,
             )
             .reshape(
-                batch_size * num_classes,
+                batch_size * num_prompts,
                 self.clip_output_dim,
                 height,
                 width,
@@ -301,7 +300,7 @@ class ClipScoreEmbedding(nn.Module):
             [score_mid_1_norm, clip_feature_flat],
             dim=1,
         )
-        score_mid_2 = self.score_clip_fusion(score_clip_input)
+        score_mid_2 = self.remoteclip_fusion(score_clip_input)
 
         # Normalize both 256-channel paths before the second concatenation.
         score_mid_2_norm = F.normalize(
@@ -315,20 +314,20 @@ class ClipScoreEmbedding(nn.Module):
             [score_mid_1_norm, score_mid_2_norm],
             dim=1,
         )
-        clip_score_flat = self.spatial_fusion(
+        clip_guidance_flat = self.spatial_enhancement(
             spatial_fusion_input
         )
 
-        clip_score_embed_36 = clip_score_flat.reshape(
+        clip_guidance_36 = clip_guidance_flat.reshape(
             batch_size,
-            num_classes,
-            self.score_embed_dim,
+            num_prompts,
+            self.feature_dim,
             height,
             width,
         ).contiguous()
 
         return (
-            clip_score_embed_36,
-            score_maps_36.contiguous(),
-            template_clip_text.contiguous(),
+            clip_guidance_36,
+            clip_template_scores_36.contiguous(),
+            remoteclip_template_text.contiguous(),
         )

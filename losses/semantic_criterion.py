@@ -47,7 +47,7 @@ class SemanticStreamingContext:
     # Number of valid pixels multiplied by P.
     total_valid_pixels: int
 
-    sam3_mask_distill_weight: float
+    reference_distill_weight: float
 
     # [B] number of ignore pixels per image.
     ignore_pixel_count: torch.Tensor
@@ -88,15 +88,15 @@ class SemanticCriterion(nn.Module):
         super().__init__()
         self.cfg = cfg or SemanticCriterionConfig()
 
-        distill_weight = float(self.cfg.sam3_mask_distill_weight)
+        distill_weight = float(self.cfg.reference_distill_weight)
         if distill_weight < 0.0:
             raise ValueError(
-                "sam3_mask_distill_weight must be >= 0, "
+                "reference_distill_weight must be >= 0, "
                 f"got {distill_weight}."
             )
 
         boundary_width = (
-            self.cfg.sam3_mask_distill_boundary_width
+            self.cfg.reference_boundary_width
         )
 
         if (
@@ -104,23 +104,23 @@ class SemanticCriterion(nn.Module):
             or not isinstance(boundary_width, int)
         ):
             raise TypeError(
-                "sam3_mask_distill_boundary_width must be "
+                "reference_boundary_width must be "
                 "a non-negative integer, "
                 f"got {boundary_width!r}."
             )
 
         if boundary_width < 0:
             raise ValueError(
-                "sam3_mask_distill_boundary_width must be >= 0, "
+                "reference_boundary_width must be >= 0, "
                 f"got {boundary_width}."
             )
 
         suppress_weight = float(
-            self.cfg.present_ignore_suppress_weight
+            self.cfg.present_ignore_suppression_weight
         )
         if not math.isfinite(suppress_weight) or suppress_weight < 0.0:
             raise ValueError(
-                "present_ignore_suppress_weight must be a finite "
+                "present_ignore_suppression_weight must be a finite "
                 f"non-negative value, got {suppress_weight}."
             )
 
@@ -305,7 +305,7 @@ class SemanticCriterion(nn.Module):
         )
 
         boundary_width = int(
-            self.cfg.sam3_mask_distill_boundary_width
+            self.cfg.reference_boundary_width
         )
 
         # [B, M, H, W]
@@ -403,8 +403,8 @@ class SemanticCriterion(nn.Module):
             num_present_pairs=num_present_pairs,
             distill_pixel_denom=distill_pixel_denom,
             total_valid_pixels=total_valid_pixels,
-            sam3_mask_distill_weight=float(
-                self.cfg.sam3_mask_distill_weight
+            reference_distill_weight=float(
+                self.cfg.reference_distill_weight
             ),
             ignore_pixel_count=ignore_pixel_count,
             present_ignore_pair_count=present_ignore_pair_count,
@@ -499,7 +499,7 @@ class SemanticCriterion(nn.Module):
             :, class_start:class_end
         ].to(device=device)
 
-        dice_weight = float(self.cfg.final_dice_weight)
+        dice_weight = float(self.cfg.seg_dice_weight)
         if dice_weight > 0.0 and context.num_present_pairs > 0:
             if target_full is not None:
                 target_chunk_full = target_full[:, class_start:class_end]
@@ -516,11 +516,11 @@ class SemanticCriterion(nn.Module):
             dice_contribution = zero
 
         # ---- SAM3 teacher distillation ----
-        distill_weight = float(context.sam3_mask_distill_weight)
+        distill_weight = float(context.reference_distill_weight)
         if distill_weight > 0.0 and context.distill_pixel_denom > 0:
             if OUTPUT_KEYS.sam3_teacher_logits not in outputs:
                 raise ValueError(
-                    "sam3_mask_distill_weight > 0 but "
+                    "reference_distill_weight > 0 but "
                     f"{OUTPUT_KEYS.sam3_teacher_logits!r} is missing."
                 )
             chunk_presence_float = present_mask.to(dtype=torch.float32)
@@ -560,7 +560,7 @@ class SemanticCriterion(nn.Module):
         # is averaged first, same-class prompts share the class weight, and
         # the global denominator is the image–present-class pair count.
         suppress_weight = float(
-            self.cfg.present_ignore_suppress_weight
+            self.cfg.present_ignore_suppression_weight
         )
         if suppress_weight > 0.0 and context.present_ignore_pair_count > 0:
             ignore_mask = label_map.eq(int(self.cfg.ignore_index)).to(
@@ -605,19 +605,19 @@ class SemanticCriterion(nn.Module):
 
         # ---- Total ----
         chunk_total = (
-            float(self.cfg.final_balanced_bce_weight) * plain_bce_contribution
+            float(self.cfg.seg_bce_weight) * plain_bce_contribution
             + dice_weight * dice_contribution
             + weighted_distill_contribution
             + weighted_suppress_contribution
         )
 
         return {
-            "loss_final_bce": plain_bce_contribution,
-            "loss_final_dice": dice_contribution,
-            "loss_sam3_mask_distill_bce": distill_contribution,
-            "loss_sam3_mask_distill_weighted": weighted_distill_contribution,
-            "loss_present_ignore_suppress_bce": suppress_contribution,
-            "loss_present_ignore_suppress_weighted": (
+            "loss_seg_bce": plain_bce_contribution,
+            "loss_seg_dice": dice_contribution,
+            "loss_reference_distill_bce": distill_contribution,
+            "loss_reference_distill_weighted": weighted_distill_contribution,
+            "loss_present_ignore_suppression_bce": suppress_contribution,
+            "loss_present_ignore_suppression_weighted": (
                 weighted_suppress_contribution
             ),
             "total_loss": chunk_total,

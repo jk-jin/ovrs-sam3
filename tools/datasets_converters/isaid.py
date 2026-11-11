@@ -58,7 +58,7 @@ ISAID_PALETTE = {
 
 VALID_LABELS = set(ISAID_PALETTE.keys()) | {255}
 IGNORE_INDEX = 255
-PNG_COMPRESS_LEVEL = max(0, min(9, int(os.environ.get('OVRS_CONVERTER_PNG_COMPRESS', '1'))))
+PNG_COMPRESS_LEVEL = max(0, min(9, int(os.environ.get('RECA_CONVERTER_PNG_COMPRESS', '1'))))
 
 
 def _pack_color(color):
@@ -283,7 +283,7 @@ def _worker_crop_label(task):
 
 
 def _get_num_workers():
-    env = os.environ.get('OVRS_CONVERTER_WORKERS')
+    env = os.environ.get('RECA_CONVERTER_WORKERS')
     if env:
         try:
             return max(1, int(env))

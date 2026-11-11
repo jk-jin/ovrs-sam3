@@ -2,7 +2,7 @@
 """
 Source notice
 -------------
-This file is adapted for the user's OVRS-SAM3 project from the official
+This file is adapted for the user's ReCA-SAM3 project from the official
 MMSegmentation dataset converter style.
 
 Original project: OpenMMLab / MMSegmentation

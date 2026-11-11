@@ -25,26 +25,27 @@ class ModelOutputKeys:
     prompt_logits: str = "prompt_logits"
     raw_prompt_score_map: str = "raw_prompt_score_map"
 
-    # Original SAM3 semantic path, decoded only when inference requests it.
-    # sam3_direct_logits is [B, P, H, W]; the score maps merge prompts to
+    # Frozen SAM3 reference path, decoded only when inference requests it.
+    # sam3_reference_logits is [B, P, H, W]; score maps merge prompts to
     # original classes by pixel-wise maximum.
-    sam3_direct_logits: str = "sam3_direct_logits"
-    raw_sam3_prompt_score_map: str = "raw_sam3_prompt_score_map"
-    raw_sam3_score_map: str = "raw_sam3_score_map"
+    sam3_reference_logits: str = "sam3_reference_logits"
+    raw_reference_prompt_score_map: str = "raw_reference_prompt_score_map"
+    raw_reference_score_map: str = "raw_reference_score_map"
 
-    # Encoder feature refiner outputs
-    encoder_features: str = "encoder_features"
-    refiner_features_36: str = "refiner_features_36"
-    score_embed_36: str = "score_embed_36"
-    clip_score_embed_36: str = "clip_score_embed_36"
-    template_clip_text_features: str = "template_clip_text_features"
-    clip_score_maps: str = "clip_score_maps"
-    clip_score_embed: str = "clip_score_embed"
-    clip_mid_features: str = "clip_mid_features"
+    # RemoteCLIP-guided aggregation outputs
+    prompt_conditioned_features_72: str = "prompt_conditioned_features_72"
+    aggregated_features_36: str = "aggregated_features_36"
+    semantic_state_36: str = "semantic_state_36"
+    clip_guidance_36: str = "clip_guidance_36"
+    clip_template_scores_36: str = "clip_template_scores_36"
+    remoteclip_template_text_features: str = (
+        "remoteclip_template_text_features"
+    )
+    clip_spatial_guidance_features: str = "clip_spatial_guidance_features"
 
     # Frozen SAM3 teacher logits — per-chunk temporary output during training
     # for distillation only. Inference writes its optional full-prompt result
-    # to sam3_direct_logits instead.
+    # to sam3_reference_logits instead.
     sam3_teacher_logits: str = "sam3_teacher_logits"
 
 

@@ -10,7 +10,9 @@ from .sam3_image import Sam3Image
 from .task_modes import normalize_task_mode
 
 
-class SAM3Segmentor(nn.Module):
+class ReCASAM3(nn.Module):
+    """ReCA-SAM3 segmentor: frozen SAM3 core plus RemoteCLIP-guided aggregation."""
+
     def __init__(
         self,
         core: Sam3Image,
@@ -49,11 +51,11 @@ class SAM3Segmentor(nn.Module):
         if getattr(core, "clip_text_encoder", None) is not None:
             core.clip_text_encoder.eval()
 
-        # Encoder refiner is the trainable module.
+        # RemoteCLIP-guided aggregation is the trainable module.
         if mode:
-            core.encoder_refiner.train()
+            core.feature_aggregation.train()
         else:
-            core.encoder_refiner.eval()
+            core.feature_aggregation.eval()
 
         return self
 
@@ -62,83 +64,84 @@ class SAM3Segmentor(nn.Module):
 
     def prepare_text_cache(
         self,
-        class_names: List[str],
+        prompt_names: List[str],
         device: Optional[torch.device] = None,
         force: bool = False,
     ) -> None:
         self.core.prepare_text_cache(
-            class_texts=class_names,
+            prompt_names=prompt_names,
             device=device,
             force=force,
         )
 
-    def build_encoder_refiner_cache(
+    def build_aggregation_cache(
         self,
         batch: BatchedDatapoint,
     ) -> Dict[str, Any]:
-        return self.core.build_encoder_refiner_cache(batch)
+        return self.core.build_aggregation_cache(batch)
 
-    def run_encoder_refiner_lowres_from_cache(
+    def run_aggregation_lowres_from_cache(
         self,
-        encoder_refiner_cache: Dict[str, Any],
+        aggregation_cache: Dict[str, Any],
         batch: BatchedDatapoint,
         return_debug: bool = False,
     ) -> Dict[str, torch.Tensor]:
-        return self.core.run_encoder_refiner_lowres_from_cache(
-            encoder_refiner_cache=encoder_refiner_cache,
+        return self.core.run_aggregation_lowres_from_cache(
+            aggregation_cache=aggregation_cache,
             batch=batch,
             return_debug=return_debug,
         )
 
-    def decode_encoder_refiner_chunk_from_cache(
+    def decode_aggregation_chunk_from_cache(
         self,
-        encoder_refiner_cache: Dict[str, Any],
-        refiner_feature_36_chunk: torch.Tensor,
+        aggregation_cache: Dict[str, Any],
+        aggregated_feature_36_chunk: torch.Tensor,
         class_start: int,
         class_end: int,
         return_teacher_logits: bool = False,
     ) -> Dict[str, torch.Tensor]:
-        return self.core.decode_encoder_refiner_chunk_from_cache(
-            encoder_refiner_cache=encoder_refiner_cache,
-            refiner_feature_36_chunk=refiner_feature_36_chunk,
+        return self.core.decode_aggregation_chunk_from_cache(
+            aggregation_cache=aggregation_cache,
+            aggregated_feature_36_chunk=aggregated_feature_36_chunk,
             class_start=class_start,
             class_end=class_end,
             return_teacher_logits=return_teacher_logits,
         )
 
-    def run_encoder_refiner_from_cache(
+    def run_aggregation_from_cache(
         self,
-        encoder_refiner_cache: Dict[str, Any],
+        aggregation_cache: Dict[str, Any],
         batch: BatchedDatapoint,
         return_debug: bool = False,
-        return_sam3_logits: bool = False,
+        return_reference_logits: bool = False,
     ) -> Dict[str, torch.Tensor]:
-        return self.core.run_encoder_refiner_from_cache(
-            encoder_refiner_cache=encoder_refiner_cache,
+        return self.core.run_aggregation_from_cache(
+            aggregation_cache=aggregation_cache,
             batch=batch,
             return_debug=return_debug,
-            return_sam3_logits=return_sam3_logits,
+            return_reference_logits=return_reference_logits,
         )
 
     def forward(self, batch: BatchedDatapoint) -> dict[str, torch.Tensor]:
         if self.training:
             raise RuntimeError(
-                "SAM3Segmentor.forward() must not be called during training. "
+                "ReCASAM3.forward() must not be called during training. "
                 "The Trainer must use the streaming chunk path: "
-                "build_encoder_refiner_cache() + "
-                "run_encoder_refiner_lowres_from_cache() + per-chunk "
-                "decode_encoder_refiner_chunk_from_cache()."
+                "build_aggregation_cache() + "
+                "run_aggregation_lowres_from_cache() + per-chunk "
+                "decode_aggregation_chunk_from_cache()."
             )
 
-        encoder_refiner_cache = self.build_encoder_refiner_cache(batch)
+        aggregation_cache = self.build_aggregation_cache(batch)
 
-        # The SAM3 rejection gate alone decides whether the original path is
+        # The reference gate alone decides whether the original path is
         # decoded; training distillation is irrelevant here.
-        raw_outputs = self.run_encoder_refiner_from_cache(
-            encoder_refiner_cache=encoder_refiner_cache,
+        raw_outputs = self.run_aggregation_from_cache(
+            aggregation_cache=aggregation_cache,
             batch=batch,
-            return_sam3_logits=(
-                getattr(self.adapter, "sam3_mask_prob_thd", None) is not None
+            return_reference_logits=(
+                getattr(self.adapter, "reference_prob_threshold", None)
+                is not None
             ),
         )
 

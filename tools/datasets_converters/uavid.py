@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-UAVid converter for OVRS-SAM3.
+UAVid converter for ReCA-SAM3.
 
 There is no official UAVid converter in MMSegmentation's public
 tools/dataset_converters directory.

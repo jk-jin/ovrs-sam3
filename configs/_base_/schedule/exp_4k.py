@@ -5,12 +5,10 @@ train_cfg = dict(
     val_max_iters=500,
 
     log_window_size=20,
-    use_amp=True,
     grad_clip_norm=0.01,
     monitor="semantic.miou",
     monitor_mode="max",
     max_keep_ckpts=5,
-    device="cuda",
 )
 
 param_scheduler = [
@@ -24,5 +22,6 @@ param_scheduler = [
         type="CosineAnnealingLR",
         T_max=3600,
         eta_min=1e-6,
+        end=4000,
     ),
 ]

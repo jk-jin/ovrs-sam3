@@ -1,0 +1,25 @@
+logging = dict(
+    console=dict(
+        enabled=True,
+        interval=20,
+        val_interval=50,
+        print_metric_tables=True,
+        print_per_class_metrics=True,
+    ),
+    jsonl=dict(
+        enabled=True,
+        filename="metrics.jsonl",
+        train_interval=20,
+    ),
+    wandb=dict(
+        enabled=True,
+        mode="offline",
+        project="reca-sam3",
+        name=None,
+        group=None,
+        tags=[],
+        train_interval=20,
+        log_per_class=False,
+        log_extra=False,
+    ),
+)

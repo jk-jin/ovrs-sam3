@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "tables": [
+    {
+      "name": "synthetic_per_class",
+      "filter": {
+        "evaluation.dataset": "loveda"
+      },
+      "rows": [
+        {
+          "label": "Method A",
+          "match": {
+            "experiment.method_id": "method_a"
+          }
+        }
+      ],
+      "metrics": ["iou.building", "iou.road"],
+      "allowed_varying_fields": [],
+      "factor_columns": [],
+      "display_unit": "percent",
+      "decimals": 2,
+      "aggregate_seeds": true,
+      "std_ddof": 1,
+      "layout": "wide",
+      "caption": "Synthetic per-class test",
+      "label": "tab:synthetic_per_class",
+      "bold_best": false
+    }
+  ],
+  "curves": []
+}
