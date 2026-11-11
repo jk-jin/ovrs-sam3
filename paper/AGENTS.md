@@ -4,7 +4,7 @@
 
 - 正文与章节标题暂用中文；所有表格、表题、表注及图内标注和图题用英文。全文英译等待用户另行指令。
 - 2026-11-11行文约定：论文只保留精炼的学术论述；进度、实现现状、缺失证据、写作提醒和待办集中记录于 notes/manuscript_status.md。数值缺失保留 --，不能把未完成实验写成已验证结论。
-- 固定实验集合为 DLRSD、iSAID、LoveDA、Potsdam、Vaihingen、UAVid、UDD5、VDD；LoveDA仅七类含背景及逐类IoU。文献数值以本地真实PDF逐项登记，不覆盖Zotero自动导出库。
+- 固定实验集合为 DLRSD、iSAID、LoveDA、Potsdam、Vaihingen、UAVid、UDD5、VDD；本方法LoveDA仅七类含背景及逐类IoU；用户明确接受的外部原文报告值可在参考区标注展示，不把未确认口径写成已核实。文献数值以本地真实PDF逐项登记，不覆盖Zotero自动导出库。
 - 保持 IEEEtran journal 双栏结构，main.tex 通过 input 组织章节；使用 XeLaTeX 和本机中文字体。
 - 写架构前先读仓库 AGENTS.md、DESIGN.md，再核对源实现和最终合并配置。源码优先；保留已有正文和用户本地改动。
 - 只在用户授权范围内编辑。本轮范围限于 paper/；不修改模型、配置或根目录文档；仅在用户明确要求时提交 Git。

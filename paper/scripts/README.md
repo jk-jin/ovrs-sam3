@@ -30,3 +30,7 @@
 ## Display policy
 
 All generated table captions, notes, headers, switches, and variant names use English. Main-text discussion remains Chinese during review. The eight-dataset table spans both columns; ablation, gate, and efficiency tables use one column and allow top/bottom placement. Source records and numerical validation are unchanged. Manuscript status and pending work are maintained in `../notes/manuscript_status.md`.
+
+## Explicitly approved reported values
+
+`table_spec.json` may list specific `approved_reported_result_ids`. An unresolved record in this list is displayed only in the literature reference panel with a dagger and source-protocol note. It remains unresolved in the source CSV and cannot contribute to a matched-protocol average. Incompatible records remain blocked. This permits explicit editorial selection without changing scientific provenance.

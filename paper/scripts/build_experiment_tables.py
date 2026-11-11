@@ -147,6 +147,11 @@ def resolve(row,dataset,lit,native,spec,missing):
         r=lit[rid]
         if r['dataset']!=dataset or r['method_id']!=row['method_id'] or r['method_variant']!=row['variant_id'] or r['metric']!='miou':
             raise DataError(f'{rid}: selected literature cell identity mismatch')
+        if r['protocol_status']=='unresolved' and rid in spec.get('approved_reported_result_ids',[]):
+            if row.get('panel')!='reference':
+                raise DataError(f'{rid}: approved reported values belong in the reference panel only')
+            display,value=scalar_literature(r)
+            return (display+r'$^{\dagger}$' if value is not None else '--'),value,False
         if r['protocol_status'] in {'unresolved','incompatible'}:
             missing.append({'row':row['row_id'],'dataset':dataset,'reason':r['protocol_status'],'result_id':rid})
             return '--',None,False
@@ -243,7 +248,7 @@ def build(args):
         r'Semantic segmentation results on the eight-dataset evaluation set (mIoU, \%).',
         'tab:main_rskt8', ['Method']+spec['datasets']+avg_headers, body,
         'L{0.25\\textwidth}'+'c'*10, True,
-        r'iSAID is the adaptation source for ReCA-SAM3. N: native evaluation; S: SegEarth-OV3 Tables 1 and 4; E: SegEarth-OV (CVPR 2025), Table 1; P: ProC-SAM3 (arXiv v2), Table I; R: RSKT-Seg, Table 1 (iSAID/ViT-L); I: Pi-Seg (arXiv v3), Table 1 (iSAID/ViT-L). Method citations identify the original methods; numerical sources are SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026}, SegEarth-OV~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025}, ProC-SAM3~\cite{songPromptCalibratedSAM32026}, RSKT-Seg~\cite{liExploringEfficientOpenVocabulary2026}, and Pi-Seg~\cite{liPerturbationRegularizedOpenVocabularyRemote2026}. Literature rows retain their reported settings and are not ranked. LoveDA uses seven classes including background. -- denotes unavailable or unverified results.')
+        r'iSAID is the adaptation source for ReCA-SAM3. N: native evaluation; S: SegEarth-OV3 Tables 1 and 4; E: SegEarth-OV (CVPR 2025), Table 1; P: ProC-SAM3 (arXiv v2), Table I; R: RSKT-Seg, Table 1 (iSAID/ViT-L); I: Pi-Seg (arXiv v3), Table 1 (iSAID/ViT-L). Method citations identify the original methods; numerical sources are SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026}, SegEarth-OV~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025}, ProC-SAM3~\cite{songPromptCalibratedSAM32026}, RSKT-Seg~\cite{liExploringEfficientOpenVocabulary2026}, and Pi-Seg~\cite{liPerturbationRegularizedOpenVocabularyRemote2026}. Literature rows retain their reported settings and are not ranked. Unmarked LoveDA results use seven classes including background. $^{\dagger}$ denotes source-reported single-source results with category mappings not fully harmonized. -- denotes unavailable or unverified results.')
     for section,filename,label,caption in [
         ('core_rows','ablation_core.tex','tab:ablation_core',r'Ablation of feature aggregation and fusion (mIoU, \%).'),
         ('loss_rows','ablation_losses.tex','tab:ablation_losses',r'Ablation of supervision terms (mIoU, \%).')]:

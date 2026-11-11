@@ -577,5 +577,11 @@
   "native_decimals": 2,
   "std_ddof": 1,
   "gate_timing_selection": {},
-  "efficiency_selection": {}
+  "efficiency_selection": {},
+  "approved_reported_result_ids": [
+    "cat_seg_rskt_isaid_l_loveda",
+    "gsnet_rskt_isaid_l_loveda",
+    "rskt_seg_rskt_isaid_l_loveda",
+    "pi_isaid_l_loveda"
+  ]
 }

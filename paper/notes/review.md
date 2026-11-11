@@ -107,3 +107,9 @@
 - 来源：SegEarth-OV正式CVPR表和补充材料已核验，新增独立正式版记录，保留旧arXiv来源不混拼。
 - 自审：数值逐项目检；4个历史类别映射未决项仍阻止入表；47.4/41.6原报告与复现分开；不变更已有非空成绩与模型；英文表注和四页布局复核。
 - 详细待确认项见literature_fill_audit.md；本方法实验、均值和对照排名仍未完成。
+
+## 2026-11-11 用户确认外部文献数值填写
+
+按用户明确决定，LoveDA参考区补入CAT-Seg25.11、GSNet27.21、RSKT-Seg29.62（均来自RSKT-Seg Table1 iSAID/ViT-L）和Pi-Seg31.45（自身arXiv v3 Table1 iSAID/ViT-L）。SegEarth-OV3继续使用原报告47.4，不换成他文复现41.6。
+
+四项附来源协议标记，底层protocol_status保持unresolved，不虚构七类已核实元数据。主表现显示54个文献参考数值；既有待确认清单中这四项的“是否展示”已由用户决定，协议限制仍是事实记录。数字来源和选择许可见literature_fill_audit.md及table_spec.json。

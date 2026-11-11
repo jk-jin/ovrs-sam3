@@ -123,3 +123,9 @@ cd paper && latexmk -g -xelatex -halt-on-error -file-line-error -outdir=build ma
 ## 2026-11-11 文献缺项补核
 
 新增3项LoveDA参考成绩，SegEarth-OV行切换为已核验CVPR正式来源。记录及待用户确认的4项候选见 [literature_fill_audit.md](notes/literature_fill_audit.md)。主表仍不对未对齐参考行排名或计算不完整均值。
+
+## 2026-11-11 用户确认外部文献数值填写
+
+按用户明确决定，LoveDA参考区补入CAT-Seg25.11、GSNet27.21、RSKT-Seg29.62（均来自RSKT-Seg Table1 iSAID/ViT-L）和Pi-Seg31.45（自身arXiv v3 Table1 iSAID/ViT-L）。SegEarth-OV3继续使用原报告47.4，不换成他文复现41.6。
+
+四项附来源协议标记，底层protocol_status保持unresolved，不虚构七类已核实元数据。主表现显示54个文献参考数值；既有待确认清单中这四项的“是否展示”已由用户决定，协议限制仍是事实记录。数字来源和选择许可见literature_fill_audit.md及table_spec.json。

@@ -97,3 +97,9 @@
 远程原始PDF与官方类别代码补核后，LoveDA参考区填入SAM 3 Semantic-only35.4、SegEarth-OV3原报告47.4、ProC-SAM3 46.1；SegEarth-OV36.9保留并改用CVPR正式来源。当前68条来源登记，主表50个可显示参考数值，4个单源LoveDA数值仍待确认。旧文中的61条/47显示等统计是上一轮快照。
 
 新的未决证据、候选数值与用户选择事项统一见 [literature_fill_audit.md](literature_fill_audit.md)，原始文献审阅记录保留历史。没有实验结果被估算，也没有将reference_only提升为matched。
+
+## 2026-11-11 用户确认外部文献数值填写
+
+按用户明确决定，LoveDA参考区补入CAT-Seg25.11、GSNet27.21、RSKT-Seg29.62（均来自RSKT-Seg Table1 iSAID/ViT-L）和Pi-Seg31.45（自身arXiv v3 Table1 iSAID/ViT-L）。SegEarth-OV3继续使用原报告47.4，不换成他文复现41.6。
+
+四项附来源协议标记，底层protocol_status保持unresolved，不虚构七类已核实元数据。主表现显示54个文献参考数值；既有待确认清单中这四项的“是否展示”已由用户决定，协议限制仍是事实记录。数字来源和选择许可见literature_fill_audit.md及table_spec.json。

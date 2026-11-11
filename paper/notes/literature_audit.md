@@ -53,3 +53,9 @@
 当前68条来源记录（新增7条正式版来源，旧arXiv记录保留）；主表仍选54条，其中50项可显示、4项因单源历史类别口径待确认而阻止显示。没有matched记录；没有填入本方法或adapter的结果。原来关于“OV3/ProC七类未确认”和“SegEarth-OV尚未核实正式版”的判定仅描述上一轮证据状态，不再适用于本次已补核的记录。
 
 CAT-Seg25.11、GSNet27.21、RSKT29.62、Pi31.45保留候选。RSKT v3附录仍称7类但官方注册含no-data共8项；Pi现有注册7类但与单源Table1的历史映射尚未直接绑定。OV3复现41.6与原报告47.4分别保留，不解释为已证实的6/7类差异。
+
+## 2026-11-11 用户确认外部文献数值填写
+
+按用户明确决定，LoveDA参考区补入CAT-Seg25.11、GSNet27.21、RSKT-Seg29.62（均来自RSKT-Seg Table1 iSAID/ViT-L）和Pi-Seg31.45（自身arXiv v3 Table1 iSAID/ViT-L）。SegEarth-OV3继续使用原报告47.4，不换成他文复现41.6。
+
+四项附来源协议标记，底层protocol_status保持unresolved，不虚构七类已核实元数据。主表现显示54个文献参考数值；既有待确认清单中这四项的“是否展示”已由用户决定，协议限制仍是事实记录。数字来源和选择许可见literature_fill_audit.md及table_spec.json。

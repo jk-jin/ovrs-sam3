@@ -129,33 +129,9 @@
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "cat_seg_rskt_isaid_l",
-      "dataset": "LoveDA",
-      "reason": "unresolved",
-      "result_id": "cat_seg_rskt_isaid_l_loveda"
-    },
-    {
-      "row": "rskt_seg_rskt_isaid_l",
-      "dataset": "LoveDA",
-      "reason": "unresolved",
-      "result_id": "rskt_seg_rskt_isaid_l_loveda"
-    },
-    {
       "row": "pi_isaid_l",
       "dataset": "iSAID",
       "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "pi_isaid_l",
-      "dataset": "LoveDA",
-      "reason": "unresolved",
-      "result_id": "pi_isaid_l_loveda"
-    },
-    {
-      "row": "gsnet_rskt_isaid_l",
-      "dataset": "LoveDA",
-      "reason": "unresolved",
-      "result_id": "gsnet_rskt_isaid_l_loveda"
     },
     {
       "row": "T00",

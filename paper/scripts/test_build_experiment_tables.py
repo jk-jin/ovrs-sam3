@@ -9,6 +9,22 @@ spec=importlib.util.spec_from_file_location('renderer',Path(__file__).with_name(
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 
 class RendererBoundaries(unittest.TestCase):
+    def test_approved_reported_value_preserves_protocol_limit(self):
+        record=dict(dataset='LoveDA',method_id='cat',method_variant='isaid',metric='miou',protocol_status='unresolved',value='25.11',unit='percent')
+        row=dict(row_id='cat',method_id='cat',variant_id='isaid',panel='reference',literature_record_ids={'LoveDA':'reported'})
+        def resolve(spec):return m.resolve(row,'LoveDA',{'reported':record},{},spec,[])
+        self.assertEqual(resolve({}),('--',None,False))
+        approved={'approved_reported_result_ids':['reported']}
+        display,value,matched=resolve(approved)
+        self.assertEqual(value,25.11)
+        self.assertIn('dagger',display)
+        self.assertFalse(matched)
+        self.assertEqual(m.average({'LoveDA':(display,value,matched)},['LoveDA'],True),'--')
+        row['panel']='native'
+        with self.assertRaises(m.DataError):resolve(approved)
+        row['panel']='reference';record['protocol_status']='incompatible'
+        self.assertEqual(resolve(approved),('--',None,False))
+
     def test_zero_missing_and_units(self):
         self.assertEqual(m.scalar_literature({'value':'0','unit':'percent'}),('0',0))
         self.assertEqual(m.scalar_literature({'value':'','unit':'percent'}),('--',None))
@@ -78,3 +94,4 @@ class RendererBoundaries(unittest.TestCase):
         with self.assertRaises(m.DataError):m.resolve(row,'LoveDA',{}, {}, {}, [])
 
 if __name__=='__main__':unittest.main()
+
