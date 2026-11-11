@@ -1,6 +1,6 @@
 {
   "draft": true,
-  "literature_records": 61,
+  "literature_records": 68,
   "native_records": 0,
   "missing_cells": [
     {
@@ -95,12 +95,6 @@
     },
     {
       "row": "sam_sem_ov3",
-      "dataset": "LoveDA",
-      "reason": "unresolved",
-      "result_id": "sam_sem_ov3_loveda"
-    },
-    {
-      "row": "sam_sem_ov3",
       "dataset": "Potsdam",
       "reason": "planned_or_not_reported"
     },
@@ -130,21 +124,9 @@
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "ov3_original",
-      "dataset": "LoveDA",
-      "reason": "unresolved",
-      "result_id": "ov3_original_loveda"
-    },
-    {
       "row": "proc_original",
       "dataset": "DLRSD",
       "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "proc_original",
-      "dataset": "LoveDA",
-      "reason": "unresolved",
-      "result_id": "proc_original_loveda"
     },
     {
       "row": "cat_seg_rskt_isaid_l",

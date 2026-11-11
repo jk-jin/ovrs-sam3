@@ -119,3 +119,7 @@ cd paper && latexmk -g -xelatex -halt-on-error -file-line-error -outdir=build ma
 正文保留中文学术表达，图表及其说明使用英文。状态说明、证据缺口、投稿待办和本轮验证集中见 [manuscript_status.md](notes/manuscript_status.md)。表格生成入口和实验数字来源保持不变。本轮只调整paper/，未训练、未提交Git。
 
 用户随后明确授权将上述修改提交到GitHub默认分支；提交范围仍限于paper/源码，不包含本地build/及依赖文件。
+
+## 2026-11-11 文献缺项补核
+
+新增3项LoveDA参考成绩，SegEarth-OV行切换为已核验CVPR正式来源。记录及待用户确认的4项候选见 [literature_fill_audit.md](notes/literature_fill_audit.md)。主表仍不对未对齐参考行排名或计算不完整均值。

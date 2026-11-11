@@ -15,10 +15,10 @@ ReCA-SAM3$^{N}$ & -- & -- & -- & -- & -- & -- & -- & -- & -- & --\\
 SAM 3 adapter$^{N}$ & -- & -- & -- & -- & -- & -- & -- & -- & -- & --\\
 \midrule
 \multicolumn{11}{l}{Literature results under original settings}\\
-SAM 3 Semantic-only~\cite{carionSAM3Segment2026}$^{S}$ & -- & -- & -- & -- & -- & 47.1 & -- & -- & -- & --\\
+SAM 3 Semantic-only~\cite{carionSAM3Segment2026}$^{S}$ & -- & -- & 35.4 & -- & -- & 47.1 & -- & -- & -- & --\\
 SegEarth-OV~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025}$^{E}$ & -- & 21.7 & 36.9 & 47.1 & 29.1 & 42.5 & 50.6 & 45.3 & -- & --\\
-SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026}$^{S}$ & -- & 27.6 & -- & 57.8 & 60.8 & 54.7 & 71.7 & 64.5 & -- & --\\
-ProC-SAM3~\cite{songPromptCalibratedSAM32026}$^{P}$ & -- & 29.5 & -- & 58.8 & 64.5 & 60.0 & 73.4 & 67.5 & -- & --\\
+SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026}$^{S}$ & -- & 27.6 & 47.4 & 57.8 & 60.8 & 54.7 & 71.7 & 64.5 & -- & --\\
+ProC-SAM3~\cite{songPromptCalibratedSAM32026}$^{P}$ & -- & 29.5 & 46.1 & 58.8 & 64.5 & 60.0 & 73.4 & 67.5 & -- & --\\
 CAT-Seg / iSAID~\cite{choCATSegCostAggregation2024}$^{R}$ & 28.80 & 94.77 & -- & 23.90 & 21.74 & 16.10 & 24.32 & 30.16 & -- & --\\
 RSKT-Seg / iSAID~\cite{liExploringEfficientOpenVocabulary2026}$^{R}$ & 31.57 & 93.96 & -- & 28.57 & 25.55 & 17.36 & 34.01 & 33.40 & -- & --\\
 Pi-Seg / iSAID~\cite{liPerturbationRegularizedOpenVocabularyRemote2026}$^{I}$ & 33.67 & -- & -- & 28.14 & 23.83 & 12.34 & 37.24 & 38.24 & -- & --\\
@@ -27,6 +27,6 @@ GSNet / iSAID re-eval.~\cite{yeOpenVocabularyRemoteSensing2025}$^{R}$ & 31.50 & 
 \end{tabular}
 \par\vspace{3pt}
 \begin{minipage}{\textwidth}
-\footnotesize iSAID is the adaptation source for ReCA-SAM3. N: native evaluation; S: SegEarth-OV3 Tables 1 and 4; E: SegEarth-OV (arXiv v2), Table 1; P: ProC-SAM3 (arXiv v2), Table I; R: RSKT-Seg, Table 1 (iSAID/ViT-L); I: Pi-Seg (arXiv v3), Table 1 (iSAID/ViT-L). Method citations identify the original methods; numerical sources are SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026}, SegEarth-OV~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025}, ProC-SAM3~\cite{songPromptCalibratedSAM32026}, RSKT-Seg~\cite{liExploringEfficientOpenVocabulary2026}, and Pi-Seg~\cite{liPerturbationRegularizedOpenVocabularyRemote2026}. Literature rows retain their reported settings and are not ranked. LoveDA uses seven classes including background. -- denotes unavailable or unverified results.
+\footnotesize iSAID is the adaptation source for ReCA-SAM3. N: native evaluation; S: SegEarth-OV3 Tables 1 and 4; E: SegEarth-OV (CVPR 2025), Table 1; P: ProC-SAM3 (arXiv v2), Table I; R: RSKT-Seg, Table 1 (iSAID/ViT-L); I: Pi-Seg (arXiv v3), Table 1 (iSAID/ViT-L). Method citations identify the original methods; numerical sources are SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026}, SegEarth-OV~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025}, ProC-SAM3~\cite{songPromptCalibratedSAM32026}, RSKT-Seg~\cite{liExploringEfficientOpenVocabulary2026}, and Pi-Seg~\cite{liPerturbationRegularizedOpenVocabularyRemote2026}. Literature rows retain their reported settings and are not ranked. LoveDA uses seven classes including background. -- denotes unavailable or unverified results.
 \end{minipage}
 \end{table*}

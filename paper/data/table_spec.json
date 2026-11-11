@@ -46,20 +46,20 @@
     {
       "row_id": "ov_original",
       "method_id": "segearth_ov",
-      "variant_id": "arxiv_v2",
+      "variant_id": "cvpr2025_full",
       "label": "SegEarth-OV",
       "citekey": "liSegEarthOVTrainingFreeOpenVocabulary2025",
       "source_citekey": "liSegEarthOVTrainingFreeOpenVocabulary2025",
       "resource": "E",
       "panel": "reference",
       "literature_record_ids": {
-        "iSAID": "ov_original_isaid",
-        "LoveDA": "ov_original_loveda",
-        "Potsdam": "ov_original_potsdam",
-        "Vaihingen": "ov_original_vaihingen",
-        "UAVid": "ov_original_uavid",
-        "UDD5": "ov_original_udd5",
-        "VDD": "ov_original_vdd"
+        "iSAID": "ov_cvpr_isaid",
+        "LoveDA": "ov_cvpr_loveda",
+        "Potsdam": "ov_cvpr_potsdam",
+        "Vaihingen": "ov_cvpr_vaihingen",
+        "UAVid": "ov_cvpr_uavid",
+        "UDD5": "ov_cvpr_udd5",
+        "VDD": "ov_cvpr_vdd"
       }
     },
     {

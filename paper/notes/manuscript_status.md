@@ -91,3 +91,9 @@
 - 本机TeX补充依赖只用于审阅，不加入项目源码。用户本地继续使用README中的标准latexmk命令。
 
 
+
+## 本次文献填表更新
+
+远程原始PDF与官方类别代码补核后，LoveDA参考区填入SAM 3 Semantic-only35.4、SegEarth-OV3原报告47.4、ProC-SAM3 46.1；SegEarth-OV36.9保留并改用CVPR正式来源。当前68条来源登记，主表50个可显示参考数值，4个单源LoveDA数值仍待确认。旧文中的61条/47显示等统计是上一轮快照。
+
+新的未决证据、候选数值与用户选择事项统一见 [literature_fill_audit.md](literature_fill_audit.md)，原始文献审阅记录保留历史。没有实验结果被估算，也没有将reference_only提升为matched。

@@ -44,3 +44,12 @@
 ## 尚待解决
 
 取得RSKT-Seg完整协议附录或相应明确文档；确认所有来源的LoveDA含背景口径；补VDD全文和ISPRS原始条目；核查iSAID背景、UAVid车辆合并/序列、UDD5重标、VDD test/val及全部波段/裁块。没有这些证据时，文献数值只留参考，不以形式上同名的数据集认定matched。
+
+
+## 2026-11-11 远程原文补核更新（覆盖上文对应旧判定）
+
+全文重新下载与表格目检见 [literature_fill_audit.md](literature_fill_audit.md)。官方七类配置为OV3和ProC提供了类别口径佐证，主表新增LoveDA 35.4（Semantic-only）、47.4（OV3原报告）、46.1（ProC）。SegEarth-OV的七个所选成绩改用CVPR正式PDF来源，数值不变，七类LoveDA36.9由正式补充材料确认。
+
+当前68条来源记录（新增7条正式版来源，旧arXiv记录保留）；主表仍选54条，其中50项可显示、4项因单源历史类别口径待确认而阻止显示。没有matched记录；没有填入本方法或adapter的结果。原来关于“OV3/ProC七类未确认”和“SegEarth-OV尚未核实正式版”的判定仅描述上一轮证据状态，不再适用于本次已补核的记录。
+
+CAT-Seg25.11、GSNet27.21、RSKT29.62、Pi31.45保留候选。RSKT v3附录仍称7类但官方注册含no-data共8项；Pi现有注册7类但与单源Table1的历史映射尚未直接绑定。OV3复现41.6与原报告47.4分别保留，不解释为已证实的6/7类差异。
