@@ -1,22 +1,22 @@
 % Generated from paper/data; do not hand-edit numeric cells.
-\begin{table*}[t]
+\begin{table}[!tb]
 \centering
-\caption{推理双门四组计划。同一 checkpoint、数据和提示，不增加训练次数。}
+\caption{Effect of inference gates (mIoU, \%).}
 \label{tab:postprocess_gates}
 \small
-\setlength{\tabcolsep}{3pt}
+\setlength{\tabcolsep}{2pt}
 \begin{tabular}{lcccccc}
 \toprule
-组别 & Reference 门 & Prediction 门 & LoveDA & Potsdam & UAVid & 时间（ms）\\
+ID & \shortstack{Ref.\\gate} & \shortstack{Pred.\\gate} & LoveDA & Potsdam & UAVid & \shortstack{Time\\(ms)}\\
 \midrule
-P00 & 关 & 关 & -- & -- & -- & --\\
-P10 & 开 & 关 & -- & -- & -- & --\\
-P01 & 关 & 开 & -- & -- & -- & --\\
-P11 & 开 & 开 & -- & -- & -- & --\\
+P00 & Off & Off & -- & -- & -- & --\\
+P10 & On & Off & -- & -- & -- & --\\
+P01 & Off & On & -- & -- & -- & --\\
+P11 & On & On & -- & -- & -- & --\\
 \bottomrule
 \end{tabular}
 \par\vspace{3pt}
-\begin{minipage}{\textwidth}
-\footnotesize mIoU（\%）与端到端时间均待测。关采用代码 None 语义；开启 Reference 门需额外原始 SAM 3 解码，其开销计入总时间。时间须来自实际统一硬件测量，当前不从 mIoU 长表推断。
+\begin{minipage}{\columnwidth}
+\footnotesize All settings share one checkpoint. Ref. and Pred. denote reference and prediction gates. Latency includes reference decoding when enabled. -- denotes unavailable results.
 \end{minipage}
-\end{table*}
+\end{table}

@@ -24,7 +24,7 @@
       "row_id": "simple_adapter",
       "method_id": "reca_sam3",
       "variant_id": "simple_adapter",
-      "label": "简单 SAM 3 adapter",
+      "label": "SAM 3 adapter",
       "panel": "native",
       "resource": "N",
       "native_selection": {}
@@ -235,7 +235,7 @@
     {
       "plan_id": "T00",
       "variant_id": "full",
-      "name": "完整 ReCA-SAM3",
+      "name": "Full",
       "kind": "training",
       "change": "保留完整当前设计",
       "question": "共享基准",
@@ -257,7 +257,7 @@
     {
       "plan_id": "T01",
       "variant_id": "simple_adapter",
-      "name": "简单 SAM 3 adapter",
+      "name": "SAM 3 adapter",
       "kind": "training",
       "change": "原始提示条件特征经共享残差卷积adapter进入相同冻结解码器；移除RemoteCLIP、聚合及SDF",
       "question": "适配本身贡献",
@@ -279,7 +279,7 @@
     {
       "plan_id": "T02",
       "variant_id": "diagonal_cross_class",
-      "name": "阻断跨类别交换",
+      "name": "Diagonal class attention",
       "kind": "training",
       "change": "所有类间块两次注意力屏蔽全部非对角展开提示项；保留投影和残差；同时移除别名交互",
       "question": "跨提示交换贡献",
@@ -301,7 +301,7 @@
     {
       "plan_id": "T03",
       "variant_id": "no_intra_class",
-      "name": "无类内聚合",
+      "name": "w/o spatial aggregation",
       "kind": "training",
       "change": "两条流全部类内块bypass，类间不变",
       "question": "空间建模贡献",
@@ -323,7 +323,7 @@
     {
       "plan_id": "T04",
       "variant_id": "generic_clip",
-      "name": "通用 CLIP",
+      "name": "Generic CLIP",
       "kind": "training",
       "change": "图像/文本/中间层指导换同ViT-L/14通用CLIP权重，保持提取与微调策略",
       "question": "遥感预训练贡献",
@@ -345,7 +345,7 @@
     {
       "plan_id": "T05",
       "variant_id": "no_score_prior",
-      "name": "无初始模板分数先验",
+      "name": "w/o score prior",
       "kind": "training",
       "change": "初始语义状态置同形零；保留CLIP中间层指导与双流",
       "question": "初始化先验贡献",
@@ -367,7 +367,7 @@
     {
       "plan_id": "T06",
       "variant_id": "simple_fusion",
-      "name": "简单拼接融合",
+      "name": "Simple fusion",
       "kind": "training",
       "change": "上采样聚合特征、原始提示条件特征、FPN三路256通道拼接，1x1 768->256+GN+GELU+3x3 256->256",
       "question": "SDF设计贡献",
@@ -389,7 +389,7 @@
     {
       "plan_id": "T07",
       "variant_id": "single_orientation",
-      "name": "SDF 单方向",
+      "name": "Single orientation",
       "kind": "training",
       "change": "两支路保留256通道/投影/归一化/残差，仅0度卷积",
       "question": "方向聚合贡献",
@@ -413,7 +413,7 @@
     {
       "plan_id": "T00",
       "variant_id": "full",
-      "name": "完整 ReCA-SAM3",
+      "name": "Full",
       "kind": "training",
       "change": "保留完整当前设计",
       "question": "共享基准",
@@ -435,7 +435,7 @@
     {
       "plan_id": "T08",
       "variant_id": "no_distillation",
-      "name": "无参考蒸馏",
+      "name": "w/o distillation",
       "kind": "training",
       "change": "reference_distill_weight=0，其他监督不变",
       "question": "蒸馏贡献",
@@ -457,7 +457,7 @@
     {
       "plan_id": "T09",
       "variant_id": "no_ignore_suppression",
-      "name": "无忽略区域抑制",
+      "name": "w/o suppression",
       "kind": "training",
       "change": "present_ignore_suppression_weight=0，其他监督不变",
       "question": "抑制贡献",

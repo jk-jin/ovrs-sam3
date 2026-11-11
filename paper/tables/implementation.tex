@@ -1,23 +1,21 @@
-\begin{table*}[t]
+% Reference table; implementation settings are described in the main text.
+\begin{table}[!t]
 \centering
-\caption{当前实现的配置起点，尚非已执行或最终锁定的实验设置。来源为本地 main 入口及其继承配置。}
+\caption{Implementation settings of ReCA-SAM3.}
 \label{tab:implementation}
 \small
-\begin{tabular}{lL{0.78\textwidth}}
+\begin{tabular}{lL{0.62\columnwidth}}
 \toprule
-项目 & 当前配置／待定项\\
+Component & Setting\\
 \midrule
-骨干 & SAM 3（本地 sam3.pt，权重版本及哈希 TODO）；RemoteCLIP ViT-L/14（权重哈希 TODO）\\
-可训练范围 & SAM 3 编码器与解码器冻结；特征聚合、分数先验和 SDF 可训练；RemoteCLIP 图文 Q/V 与位置参数部分微调\\
-输入与模板 & SAM 3 输入 $1008\times1008$；RemoteCLIP 输入 $504\times504$；64 个遥感模板；每块 4 个展开提示\\
-聚合与融合 & 4 个类间/类内交替块、8 头、窗口 12、移位 6、dropout 0.1；SDF 为单尺度、256 通道双支路四方向；最终设计待锁定\\
-优化器与学习率 & AdamW；基础 $10^{-4}$，RemoteCLIP 乘 0.01；weight decay 0.01，归一化参数无衰减；梯度裁剪 0.01\\
-批量与预算 & 单进程 batch 2；有效全局 batch 取决于实际设备/累积策略，TODO；20k 步，1k 线性 warmup，后续余弦衰减；每 2k 保存/完整验证\\
-损失 & BCE 权重 1，Dice 0；reference 蒸馏 0.5、忽略标签外边界宽度 3；存在类别忽略区域抑制 0.01\\
-选择策略 & 当前 LoveDA val 七类 semantic.miou 取最大；不使用目标标签的正式选择方案 TODO\\
-后处理 & reference 门 0.1、prediction 门 0.5、背景回填阈值 0；TTA 关闭；最终方案及开发集选择记录 TODO\\
-硬件与精度 & AMP 开启；实际 GPU、分布式规模、精度细节、端到端计时和峰值显存 TODO\\
-种子与权重 & 运行时默认 seed 42 仅为代码值；正式单 seed 与三 seed 清单、训练日志和 checkpoint 记录 TODO\\
+Backbones & Frozen SAM 3; RemoteCLIP ViT-L/14\\
+Aggregation & Four blocks; eight heads; window/shift 12/6\\
+Fusion & Two 256-channel branches; four orientations\\
+Optimizer & AdamW; base learning rate $10^{-4}$\\
+Training & Batch size 2; 20,000 steps; 1,000 warmup steps\\
+Loss weights & Segmentation 1; distillation 0.5; suppression 0.01\\
+Inference & Prompt chunk size 4; no test-time augmentation\\
 \bottomrule
 \end{tabular}
-\end{table*}
+\end{table}
+

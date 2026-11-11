@@ -1,21 +1,21 @@
 % Generated from paper/data; do not hand-edit numeric cells.
-\begin{table*}[t]
+\begin{table}[!tb]
 \centering
-\caption{监督目标消融计划。Full 为同一共享 T00；其余每行仅关闭一个损失项。}
+\caption{Ablation of supervision terms (mIoU, \%).}
 \label{tab:ablation_losses}
 \small
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{L{0.30\textwidth}ccccc}
+\setlength{\tabcolsep}{2pt}
+\begin{tabular}{L{0.28\columnwidth}ccccc}
 \toprule
-变体 & 蒸馏 & 抑制 & LoveDA & Potsdam & UAVid\\
+Variant & Distill. & Suppress. & LoveDA & Potsdam & UAVid\\
 \midrule
-T00 完整 ReCA-SAM3 & 开 & 开 & -- & -- & --\\
-T08 无参考蒸馏 & 关 & 开 & -- & -- & --\\
-T09 无忽略区域抑制 & 开 & 关 & -- & -- & --\\
+T00 Full & On & On & -- & -- & --\\
+T08 w/o distillation & Off & On & -- & -- & --\\
+T09 w/o suppression & On & Off & -- & -- & --\\
 \bottomrule
 \end{tabular}
 \par\vspace{3pt}
-\begin{minipage}{\textwidth}
-\footnotesize mIoU 单位为百分比；当前 LoveDA 为开发选择域，独立正式划分仍待确认；种子计划未锁定，不生成标准差。
+\begin{minipage}{\columnwidth}
+\footnotesize All variants use iSAID adaptation and the same inference settings. LoveDA is the development domain. -- denotes unavailable results.
 \end{minipage}
-\end{table*}
+\end{table}

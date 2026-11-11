@@ -2,13 +2,13 @@
 
 ## 写作流程
 
-- 摘要、正文、章节标题、图表标题和注释中文优先。用户另行发起全文英译后才进入英文阶段。
-- 2026-11-11实验重建约定：正文、表题、图题与说明用中文；正式图内部标注用英文，当前图形可用可编译占位框。本条覆盖此前图注英文约定。
+- 正文与章节标题暂用中文；所有表格、表题、表注及图内标注和图题用英文。全文英译等待用户另行指令。
+- 2026-11-11行文约定：论文只保留精炼的学术论述；进度、实现现状、缺失证据、写作提醒和待办集中记录于 notes/manuscript_status.md。数值缺失保留 --，不能把未完成实验写成已验证结论。
 - 固定实验集合为 DLRSD、iSAID、LoveDA、Potsdam、Vaihingen、UAVid、UDD5、VDD；LoveDA仅七类含背景及逐类IoU。文献数值以本地真实PDF逐项登记，不覆盖Zotero自动导出库。
 - 保持 IEEEtran journal 双栏结构，main.tex 通过 input 组织章节；使用 XeLaTeX 和本机中文字体。
 - 写架构前先读仓库 AGENTS.md、DESIGN.md，再核对源实现和最终合并配置。源码优先；保留已有正文和用户本地改动。
-- 只在用户授权范围内编辑。本轮范围限于 paper/；不修改模型、配置或根目录文档，不提交 Git。
-- 当前实现、最终待确认设计、实验主张分别记录。当前默认值不等于定稿或最优设置，未确认处写中文 TODO。
+- 只在用户授权范围内编辑。本轮范围限于 paper/；不修改模型、配置或根目录文档；仅在用户明确要求时提交 Git。
+- 当前实现、最终待确认设计、实验主张分别记录。当前默认值不等于定稿或最优设置，未确认项记入 notes/manuscript_status.md，不在可见正文中插入 TODO。
 - 不编造结果、尺寸、超参数、文献、协议或基线。待跑或未知表格数值统一写 --，不能当零。核实原始文献后才录入 references.bib。
 - 引入公式时，在首次出现处解释每个符号、索引、作用轴及必要的尺寸；当前框架未写未核对的推导公式。
 - 每节续写前先列提纲，再按段落单一主题写作；更新 notes/review.md 的主张—证据映射和五维自审。
@@ -18,7 +18,7 @@
 
 | 用语 | 约定 |
 | --- | --- |
-| ReCA-SAM3 | 工作名称；正式英文全称 TODO，不自行扩写 |
+| ReCA-SAM3 | RemoteCLIP-Guided Cross-Class Feature Aggregation for Open-Vocabulary Remote Sensing Semantic Segmentation |
 | SAM 3 | 首次写 Segment Anything Model 3；全文正文保留 SAM 3 的空格 |
 | RemoteCLIP | 面向遥感图像与文本对齐的 CLIP 模型；不推断未经核实的预训练细节 |
 | 特征聚合 | RemoteCLIP-guided feature aggregation；维护语义状态流与特征状态流 |
@@ -36,3 +36,4 @@
 在 paper/ 执行 `latexmk -xelatex -halt-on-error -file-line-error -outdir=build main.tex`。
 检查缺字、未定义引用、表格越界和 PDF 双栏布局；build/ 为本地生成目录。
 主结果与消融必须记录选择划分和正式评测划分，禁止混用为独立评测证据。
+

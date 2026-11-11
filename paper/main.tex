@@ -1,24 +1,19 @@
-% 中文工作稿；IEEEtran 双栏结构，使用 XeLaTeX 编译。
+% Chinese body for review; English tables and figure captions.
 \documentclass[journal]{IEEEtran}
 \usepackage[UTF8,fontset=none,scheme=plain]{ctex}
 \setmainfont{TeX Gyre Termes}
 \setCJKmainfont{Noto Serif CJK SC}
 \setCJKsansfont{Noto Sans CJK SC}
 \setCJKmonofont{Noto Sans Mono CJK SC}
-\usepackage{amsmath,amssymb,booktabs,array,graphicx,placeins}
+\usepackage{amsmath,amssymb,booktabs,array,graphicx}
 \usepackage[hidelinks,unicode]{hyperref}
 \renewcommand{\abstractname}{摘要}
 \renewcommand{\IEEEkeywordsname}{关键词}
-\renewcommand{\figurename}{图}
-\renewcommand{\tablename}{表}
 \renewcommand{\refname}{参考文献}
-\newcommand{\TODO}[1]{\textbf{TODO：}#1}
 \newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
-\newcommand{\blankresult}{\rule{0pt}{2.4ex}}
-\title{ReCA-SAM3：面向开放词汇遥感语义分割的 RemoteCLIP 引导跨类别特征聚合}
-\author{\IEEEauthorblockN{作者与单位：待确认}}
+\title{ReCA-SAM3: RemoteCLIP-Guided Cross-Class Feature Aggregation for Open-Vocabulary Remote Sensing Semantic Segmentation}
+\author{}
 \begin{document}
-\raggedbottom
 \maketitle
 \input{sections/abstract}
 \begin{IEEEkeywords}
@@ -32,3 +27,4 @@
 \bibliographystyle{IEEEtran}
 \bibliography{references}
 \end{document}
+

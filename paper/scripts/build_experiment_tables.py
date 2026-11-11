@@ -204,7 +204,7 @@ def measurement(selection, native, row_id, field, missing):
 def table(caption,label,columns,rows,align,wide=False,note=''):
     env='table*' if wide else 'table'
     align=align.replace('p{','L{')
-    content=[f'\\begin{{{env}}}[t]',r'\centering',f'\\caption{{{caption}}}',f'\\label{{{label}}}',r'\small',r'\setlength{\tabcolsep}{3pt}',f'\\begin{{tabular}}{{{align}}}',r'\toprule',' & '.join(columns)+r'\\',r'\midrule']
+    content=[f'\\begin{{{env}}}'+('[!t]' if wide else '[!tb]'),r'\centering',f'\\caption{{{caption}}}',f'\\label{{{label}}}',r'\footnotesize' if wide else r'\small',r'\setlength{\tabcolsep}{2pt}',f'\\begin{{tabular}}{{{align}}}',r'\toprule',' & '.join(columns)+r'\\',r'\midrule']
     for row in rows:
         if isinstance(row,str):content.append(row)
         else:content.append(' & '.join(row)+r'\\')
@@ -234,19 +234,28 @@ def build(args):
         if row['panel']!=panel:
             panel=row['panel'];n=1+len(spec['datasets'])+len(spec['display_averages'])
             body.append(r'\midrule' if body else '')
-            body.append(r'\multicolumn{'+str(n)+r'}{l}{'+('本文计划结果（尚未完成）' if panel=='native' else '文献参考结果（资源或协议尚未匹配，不参与排名）')+r'}\\')
+            body.append(r'\multicolumn{'+str(n)+r'}{l}{'+('ReCA-SAM3 and adaptation baseline' if panel=='native' else 'Literature results under original settings')+r'}\\')
         cells={d:resolve(row,d,lit,native,spec,missing) for d in spec['datasets']}
         name=latex(row['label'])+(r'~\cite{'+row['citekey']+'}' if row.get('citekey') else '')+r'$^{'+row['resource']+'}$'
         body.append([name]+[cells[d][0] for d in spec['datasets']]+[average(cells,spec['averages'][a],spec['averages_locked']) for a in spec['display_averages']])
-    outputs['main_rskt8.tex']=table(r'八数据集 mIoU（\%）框架与文献参考结果。iSAID 为本文源域；其余列为目标数据集。-- 表示未完成、未报告或口径未核实，所有数值均不排名。','tab:main_rskt8',['方法']+spec['datasets']+spec['display_averages'],body,'p{0.245\\textwidth}'+'c'*10,True,r'N：本文待测；S、E、P、R、I 为表~\ref{tab:resource_settings} 的资源/来源标记。R 的数值来自 RSKT-Seg~\cite{liExploringEfficientOpenVocabulary2026} Table~1 的 iSAID/ViT-L 区；S 的数值来自 SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026} Table~1 或 Table~4；E 为 SegEarth-OV 本地 arXiv v2 Table~1；P 为 ProC-SAM3 本地 arXiv v2 Table~I；I 为 Pi-Seg arXiv v3 Table~1 的 iSAID/ViT-L 区。LoveDA 仅展示已确认的含背景七类成绩。平均集合与协议未锁定，均值保留 --，不复制源论文的平均。')
-    for section,filename,label,caption in [('core_rows','ablation_core.tex','tab:ablation_core','核心结构消融计划。所有成绩待测；每行定义见正文，结构变体需重新训练。'),('loss_rows','ablation_losses.tex','tab:ablation_losses','监督目标消融计划。Full 为同一共享 T00；其余每行仅关闭一个损失项。')]:
+    avg_headers = [r'\shortstack{Avg.\\8}', r'\shortstack{Target\\avg.}']
+    outputs['main_rskt8.tex']=table(
+        r'Semantic segmentation results on the eight-dataset evaluation set (mIoU, \%).',
+        'tab:main_rskt8', ['Method']+spec['datasets']+avg_headers, body,
+        'L{0.25\\textwidth}'+'c'*10, True,
+        r'iSAID is the adaptation source for ReCA-SAM3. N: native evaluation; S: SegEarth-OV3 Tables 1 and 4; E: SegEarth-OV (arXiv v2), Table 1; P: ProC-SAM3 (arXiv v2), Table I; R: RSKT-Seg, Table 1 (iSAID/ViT-L); I: Pi-Seg (arXiv v3), Table 1 (iSAID/ViT-L). Method citations identify the original methods; numerical sources are SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026}, SegEarth-OV~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025}, ProC-SAM3~\cite{songPromptCalibratedSAM32026}, RSKT-Seg~\cite{liExploringEfficientOpenVocabulary2026}, and Pi-Seg~\cite{liPerturbationRegularizedOpenVocabularyRemote2026}. Literature rows retain their reported settings and are not ranked. LoveDA uses seven classes including background. -- denotes unavailable or unverified results.')
+    for section,filename,label,caption in [
+        ('core_rows','ablation_core.tex','tab:ablation_core',r'Ablation of feature aggregation and fusion (mIoU, \%).'),
+        ('loss_rows','ablation_losses.tex','tab:ablation_losses',r'Ablation of supervision terms (mIoU, \%).')]:
         body=[]
         for p in spec[section]:
             row=dict(row_id=p['plan_id'],method_id='reca_sam3',variant_id=p['variant_id'],native_selection=spec['ablation_native_selection'].get(p['plan_id'],{}))
             vals=[resolve(row,d,lit,native,spec,missing)[0] for d in spec['ablation_datasets']]
-            body.append([p['plan_id']+' '+latex(p['name'])]+(['开' if p['plan_id']!='T08' else '关','开' if p['plan_id']!='T09' else '关'] if section=='loss_rows' else [])+vals)
-        cols=['变体']+(['蒸馏','抑制'] if section=='loss_rows' else [])+spec['ablation_datasets']
-        outputs[filename]=table(caption,label,cols,body,'p{0.30\\textwidth}'+'c'*(len(cols)-1),True,'mIoU 单位为百分比；当前 LoveDA 为开发选择域，独立正式划分仍待确认；种子计划未锁定，不生成标准差。')
+            body.append([p['plan_id']+' '+latex(p['name'])]+(['On' if p['plan_id']!='T08' else 'Off','On' if p['plan_id']!='T09' else 'Off'] if section=='loss_rows' else [])+vals)
+        cols=['Variant']+(['Distill.','Suppress.'] if section=='loss_rows' else [])+spec['ablation_datasets']
+        width='0.28' if section=='loss_rows' else '0.40'
+        outputs[filename]=table(caption,label,cols,body,'L{'+width+'\\columnwidth}'+'c'*(len(cols)-1),False,
+            'All variants use iSAID adaptation and the same inference settings. LoveDA is the development domain. -- denotes unavailable results.')
     body=[]
     for p in spec['gate_rows']:
         row=dict(row_id=p['plan_id'],method_id='reca_sam3',variant_id='full',native_selection=spec['gate_native_selection'].get(p['plan_id'],{}))
@@ -256,12 +265,21 @@ def build(args):
                 for k,enabled in [('reference_prob_threshold',p['reference_gate']=='true'),('prediction_prob_threshold',p['prediction_gate']=='true')]:
                     raw=r.get(k,'');is_off=raw.strip().lower() in {'','none','null'}
                     if enabled==is_off:raise DataError(f'{rid}: gate {k} does not match {p["plan_id"]}')
-        body.append([p['plan_id'],'开' if p['reference_gate']=='true' else '关','开' if p['prediction_gate']=='true' else '关']+[resolve(row,d,lit,native,spec,missing)[0] for d in spec['ablation_datasets']]+[measurement(spec.get('gate_timing_selection',{}).get(p['plan_id']),native,p['plan_id'],'time_ms',missing)])
+        body.append([p['plan_id'],'On' if p['reference_gate']=='true' else 'Off','On' if p['prediction_gate']=='true' else 'Off']+[resolve(row,d,lit,native,spec,missing)[0] for d in spec['ablation_datasets']]+[measurement(spec.get('gate_timing_selection',{}).get(p['plan_id']),native,p['plan_id'],'time_ms',missing)])
     # Gate evaluations must all use one explicitly selected checkpoint.
     gate_hashes={r.get('checkpoint_sha256') for p in spec['gate_native_selection'].values() for sel in p.values() for rid in sel.get('eval_ids',[]) for r in [native.get(rid,{})]}
     if len(gate_hashes)>1:raise DataError('Gate analysis must reuse the same checkpoint')
-    outputs['postprocess_gates.tex']=table('推理双门四组计划。同一 checkpoint、数据和提示，不增加训练次数。','tab:postprocess_gates',['组别','Reference 门','Prediction 门']+spec['ablation_datasets']+['时间（ms）'],body,'l'+'c'*6,True,r'mIoU（\%）与端到端时间均待测。关采用代码 None 语义；开启 Reference 门需额外原始 SAM 3 解码，其开销计入总时间。时间须来自实际统一硬件测量，当前不从 mIoU 长表推断。')
-    outputs['efficiency.tex']=table('计算开销计划。总参数与可训练参数分列，时间和峰值显存采用统一测量设置。','tab:efficiency',['方法',r'\shortstack{总参数\\(M)}',r'\shortstack{可训练\\(M)}',r'\shortstack{时间\\(ms)}',r'\shortstack{显存\\(GB)}'],[[name]+[measurement(spec.get('efficiency_selection',{}).get(variant,{}).get(field),native,'cost_'+variant,field,missing) for field in ['total_parameters_m','trainable_parameters_m','time_ms','peak_memory_gb']] for variant,name in [('semantic_only','SAM 3 Semantic-only'),('simple_adapter','简单 adapter'),('full','T00 Full'),('single_orientation','T07 SDF 单方向')]],'L{0.31\\columnwidth}cccc',False,'固定 GPU、精度、输入、batch、提示数、chunk、缓存状态与双门。Reference 解码成本计入端到端时间；不将异硬件文献耗时用于公平排名。')
+    outputs['postprocess_gates.tex']=table(
+        r'Effect of inference gates (mIoU, \%).', 'tab:postprocess_gates',
+        ['ID',r'\shortstack{Ref.\\gate}',r'\shortstack{Pred.\\gate}']+spec['ablation_datasets']+[r'\shortstack{Time\\(ms)}'],
+        body,'l'+'c'*6,False,
+        'All settings share one checkpoint. Ref. and Pred. denote reference and prediction gates. Latency includes reference decoding when enabled. -- denotes unavailable results.')
+    outputs['efficiency.tex']=table(
+        'Computational cost under a common measurement setup.', 'tab:efficiency',
+        ['Method',r'\shortstack{Total\\(M)}',r'\shortstack{Trainable\\(M)}',r'\shortstack{Time\\(ms)}',r'\shortstack{Memory\\(GB)}'],
+        [[name]+[measurement(spec.get('efficiency_selection',{}).get(variant,{}).get(field),native,'cost_'+variant,field,missing) for field in ['total_parameters_m','trainable_parameters_m','time_ms','peak_memory_gb']] for variant,name in [('semantic_only','SAM 3 Semantic-only'),('simple_adapter','SAM 3 adapter'),('full','ReCA-SAM3'),('single_orientation','Single-orientation SDF')]],
+        'L{0.30\\columnwidth}cccc',False,
+        'Total and trainable parameters are reported in millions. Measurements use the same hardware, precision, input size, batch size, prompt count, and cache policy. -- denotes unavailable results.')
     report={'draft':args.draft,'literature_records':len(lit),'native_records':len(native),'missing_cells':missing,'averages_locked':spec['averages_locked'],'note':'Planned cells are distinct from invalid data; no training or synthetic results.'}
     # Formal mode requires the main native and planned ablation/gate cells, never optional reference coverage.
     required={r['row_id'] for r in spec['main_rows'] if r['panel']=='native'}|{p['plan_id'] for p in spec['core_rows']+spec['loss_rows']+spec['gate_rows']}|{'cost_semantic_only','cost_simple_adapter','cost_full','cost_single_orientation'}
@@ -283,3 +301,4 @@ def main():
     try:build(args)
     except (DataError,ValueError,KeyError) as exc:ap.exit(2,f'Invalid/incomplete data: {exc}\n')
 if __name__=='__main__':main()
+

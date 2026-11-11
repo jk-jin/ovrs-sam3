@@ -112,3 +112,10 @@ cd paper && latexmk -g -xelatex -halt-on-error -file-line-error -outdir=build ma
 ```
 
 八数据集集合已固定，但RSKT附录、类别/背景、划分/波段/裁块与原始大图或序列独立性尚未全部匹配；当前本地LoveDA val参与checkpoint选择。先确认正式选择与评测方案，再运行矩阵，不把本轮框架交付写成模型实验已完成。全文英译仍等待另行指令。
+
+
+## 2026-11-11 投稿语言与版式整理
+
+正文保留中文学术表达，图表及其说明使用英文。状态说明、证据缺口、投稿待办和本轮验证集中见 [manuscript_status.md](notes/manuscript_status.md)。表格生成入口和实验数字来源保持不变。本轮只调整paper/，未训练、未提交Git。
+
+用户随后明确授权将上述修改提交到GitHub默认分支；提交范围仍限于paper/源码，不包含本地build/及依赖文件。

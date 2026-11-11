@@ -1,20 +1,20 @@
 % Generated from paper/data; do not hand-edit numeric cells.
-\begin{table*}[t]
+\begin{table*}[!t]
 \centering
-\caption{八数据集 mIoU（\%）框架与文献参考结果。iSAID 为本文源域；其余列为目标数据集。-- 表示未完成、未报告或口径未核实，所有数值均不排名。}
+\caption{Semantic segmentation results on the eight-dataset evaluation set (mIoU, \%).}
 \label{tab:main_rskt8}
-\small
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{L{0.245\textwidth}cccccccccc}
+\footnotesize
+\setlength{\tabcolsep}{2pt}
+\begin{tabular}{L{0.25\textwidth}cccccccccc}
 \toprule
-方法 & DLRSD & iSAID & LoveDA & Potsdam & Vaihingen & UAVid & UDD5 & VDD & Avg-8 & Target Avg\\
+Method & DLRSD & iSAID & LoveDA & Potsdam & Vaihingen & UAVid & UDD5 & VDD & \shortstack{Avg.\\8} & \shortstack{Target\\avg.}\\
 \midrule
 
-\multicolumn{11}{l}{本文计划结果（尚未完成）}\\
+\multicolumn{11}{l}{ReCA-SAM3 and adaptation baseline}\\
 ReCA-SAM3$^{N}$ & -- & -- & -- & -- & -- & -- & -- & -- & -- & --\\
-简单 SAM 3 adapter$^{N}$ & -- & -- & -- & -- & -- & -- & -- & -- & -- & --\\
+SAM 3 adapter$^{N}$ & -- & -- & -- & -- & -- & -- & -- & -- & -- & --\\
 \midrule
-\multicolumn{11}{l}{文献参考结果（资源或协议尚未匹配，不参与排名）}\\
+\multicolumn{11}{l}{Literature results under original settings}\\
 SAM 3 Semantic-only~\cite{carionSAM3Segment2026}$^{S}$ & -- & -- & -- & -- & -- & 47.1 & -- & -- & -- & --\\
 SegEarth-OV~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025}$^{E}$ & -- & 21.7 & 36.9 & 47.1 & 29.1 & 42.5 & 50.6 & 45.3 & -- & --\\
 SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026}$^{S}$ & -- & 27.6 & -- & 57.8 & 60.8 & 54.7 & 71.7 & 64.5 & -- & --\\
@@ -27,6 +27,6 @@ GSNet / iSAID re-eval.~\cite{yeOpenVocabularyRemoteSensing2025}$^{R}$ & 31.50 & 
 \end{tabular}
 \par\vspace{3pt}
 \begin{minipage}{\textwidth}
-\footnotesize N：本文待测；S、E、P、R、I 为表~\ref{tab:resource_settings} 的资源/来源标记。R 的数值来自 RSKT-Seg~\cite{liExploringEfficientOpenVocabulary2026} Table~1 的 iSAID/ViT-L 区；S 的数值来自 SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026} Table~1 或 Table~4；E 为 SegEarth-OV 本地 arXiv v2 Table~1；P 为 ProC-SAM3 本地 arXiv v2 Table~I；I 为 Pi-Seg arXiv v3 Table~1 的 iSAID/ViT-L 区。LoveDA 仅展示已确认的含背景七类成绩。平均集合与协议未锁定，均值保留 --，不复制源论文的平均。
+\footnotesize iSAID is the adaptation source for ReCA-SAM3. N: native evaluation; S: SegEarth-OV3 Tables 1 and 4; E: SegEarth-OV (arXiv v2), Table 1; P: ProC-SAM3 (arXiv v2), Table I; R: RSKT-Seg, Table 1 (iSAID/ViT-L); I: Pi-Seg (arXiv v3), Table 1 (iSAID/ViT-L). Method citations identify the original methods; numerical sources are SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026}, SegEarth-OV~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025}, ProC-SAM3~\cite{songPromptCalibratedSAM32026}, RSKT-Seg~\cite{liExploringEfficientOpenVocabulary2026}, and Pi-Seg~\cite{liPerturbationRegularizedOpenVocabularyRemote2026}. Literature rows retain their reported settings and are not ranked. LoveDA uses seven classes including background. -- denotes unavailable or unverified results.
 \end{minipage}
 \end{table*}

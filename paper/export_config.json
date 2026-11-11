@@ -26,7 +26,7 @@
       "aggregate_seeds": true,
       "std_ddof": 1,
       "layout": "column",
-      "caption": "dlrsd 自测结果（协议待锁定）",
+      "caption": "Semantic segmentation results on DLRSD (percent).",
       "label": "tab:native_dlrsd",
       "bold_best": false
     },
@@ -55,7 +55,7 @@
       "aggregate_seeds": true,
       "std_ddof": 1,
       "layout": "column",
-      "caption": "isaid 自测结果（协议待锁定）",
+      "caption": "Semantic segmentation results on iSAID (percent).",
       "label": "tab:native_isaid",
       "bold_best": false
     },
@@ -84,7 +84,7 @@
       "aggregate_seeds": true,
       "std_ddof": 1,
       "layout": "column",
-      "caption": "loveda 自测结果（协议待锁定）",
+      "caption": "Semantic segmentation results on LoveDA (percent).",
       "label": "tab:native_loveda",
       "bold_best": false
     },
@@ -113,7 +113,7 @@
       "aggregate_seeds": true,
       "std_ddof": 1,
       "layout": "column",
-      "caption": "potsdam 自测结果（协议待锁定）",
+      "caption": "Semantic segmentation results on Potsdam (percent).",
       "label": "tab:native_potsdam",
       "bold_best": false
     },
@@ -142,7 +142,7 @@
       "aggregate_seeds": true,
       "std_ddof": 1,
       "layout": "column",
-      "caption": "vaihingen 自测结果（协议待锁定）",
+      "caption": "Semantic segmentation results on Vaihingen (percent).",
       "label": "tab:native_vaihingen",
       "bold_best": false
     },
@@ -171,7 +171,7 @@
       "aggregate_seeds": true,
       "std_ddof": 1,
       "layout": "column",
-      "caption": "uavid 自测结果（协议待锁定）",
+      "caption": "Semantic segmentation results on UAVid (percent).",
       "label": "tab:native_uavid",
       "bold_best": false
     },
@@ -200,7 +200,7 @@
       "aggregate_seeds": true,
       "std_ddof": 1,
       "layout": "column",
-      "caption": "udd 自测结果（协议待锁定）",
+      "caption": "Semantic segmentation results on UDD5 (percent).",
       "label": "tab:native_udd",
       "bold_best": false
     },
@@ -229,7 +229,7 @@
       "aggregate_seeds": true,
       "std_ddof": 1,
       "layout": "column",
-      "caption": "vdd 自测结果（协议待锁定）",
+      "caption": "Semantic segmentation results on VDD (percent).",
       "label": "tab:native_vdd",
       "bold_best": false
     },
@@ -263,7 +263,7 @@
       "aggregate_seeds": true,
       "std_ddof": 1,
       "layout": "wide",
-      "caption": "LoveDA 七类逐类 IoU（自测）",
+      "caption": "Per-class IoU on LoveDA (percent).",
       "label": "tab:native_loveda_per_class",
       "bold_best": false
     }

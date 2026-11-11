@@ -25,3 +25,8 @@
 - 不带--draft：全部必需自测/消融/双门/计时/开销和协议锁定齐备才通过；参考方法缺列允许，但不生成不完整平均。
 - 测试：`PYTHONDONTWRITEBYTECODE=1 python paper/scripts/test_build_experiment_tables.py`，合成数据仅存内存和临时目录。
 - 原生逐数据集严格导出仍用根tools/export_paper_results.py与paper/export_config.json。该schema不接收八列文献横表，不修改根工具的校验。
+
+
+## Display policy
+
+All generated table captions, notes, headers, switches, and variant names use English. Main-text discussion remains Chinese during review. The eight-dataset table spans both columns; ablation, gate, and efficiency tables use one column and allow top/bottom placement. Source records and numerical validation are unchanged. Manuscript status and pending work are maintained in `../notes/manuscript_status.md`.
