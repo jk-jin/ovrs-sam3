@@ -1,70 +1,66 @@
 \section{实验}
-\subsection{数据划分、选择协议与评价指标}
-当前训练配置使用 iSAID 训练划分，并用 LoveDA 验证划分的六类前景平均交并比（mIoU）选择 checkpoint。这是当前开发与选择协议，不能将同一划分再作为独立正式评测的证据。\TODO{在运行主实验前确认正式评测划分及标签获取方式，并冻结 checkpoint、超参数和后处理；若仍使用选择划分报告，则明确其为开发结果。}
+\subsection{数据集与评测协议}
+本文采用 RSKT-Seg 的八数据集评测集合~\cite{liExploringEfficientOpenVocabulary2026}，顺序固定为 DLRSD、iSAID、LoveDA、Potsdam、Vaihingen、UAVid、UDD5 和 VDD。该集合覆盖地表覆盖、城市场景、密集航空目标及无人机斜视图像。集合相同不意味着划分、类别映射和处理方式已经一致；本地 RSKT-Seg 正式版将详细说明指向未随附件提供的附录，因而本稿暂不声称完全复用其评测协议。表~\ref{tab:datasets_protocol} 列出本地配置及待核实项。
 
-LoveDA 主结果统一报告包含背景的七类 mIoU，另存六类前景 mIoU 和背景交并比（IoU）。七类依次为背景、建筑、道路、水体、裸地、森林和农业用地。当前评测器全类指标可用于七类口径，但会排除并集为零的类别，须同时核查类别有效数和逐类 IoU。原始标签的零值忽略、标签减一与背景排除分别属于不同处理步骤，不得重复变换。表中空白均表示待跑或待核实，不能解释为零。
+主设置为 iSAID 单源监督适配，iSAID 同时用于源域保持诊断，其余七个数据集构成预定目标集合。DLRSD 单源仅作为可选扩展，若实施则另列 panel，不与 iSAID 训练结果混合。当前开发入口在 LoveDA val 上以含背景的七类 mIoU 选择 checkpoint；因此该划分参与了模型选择，不能作为未参与选择的独立目标评测。\TODO{正式运行前固定源域留出验证或预先固定训练步数等不使用目标标签的选择方案，并核实原始大图或视频序列之间的独立性；本轮未实施该调整。若保留 LoveDA val 选择，须将其从独立目标均值中排除。}
 
-\TODO{补齐所有评测数据集、样本清单、类别映射、训练与评测类别重叠、图像变换及忽略标签。以独立指标文件记录逐类 IoU、七类 mIoU、六类前景 mIoU、背景 IoU 和选择依据，见配套协议记录。}
+主指标为平均交并比 mIoU（\%），补充平均类别准确率 mAcc 和逐类 IoU。LoveDA 仅使用包含 background 的七类口径；逐类保存 background、building、road、water、barren、forest 和 agricultural 的 IoU。其他数据集按核实后的基准定义处理，不能统一删除背景。零并集类别政策、有效类别数与标签映射均需随结果保存；未知数据不记为零。源域与目标域的类别语义重叠、基础模型预训练数据是否覆盖目标图像仍需披露，跨数据集迁移不能自动称为严格未见类别评测。
 
-\subsection{实现细节与比较公平性}
-\TODO{从最终合并配置和运行日志填写训练预算、批量、优化器、学习率、损失、冻结参数范围、checkpoint 标识和随机种子。当前配置快照在 README 中，不代表定稿。所有对照统一提示、输入、后处理和 TTA，或清楚列出不能统一的差异。}
+Avg-8 仅对八列齐备且协议已解释的结果等权计算，它包含源域，不能称跨域平均。Target Avg 的预定共同集合为除 iSAID 外的七个数据集；在当前选择设置下，它包含开发域 LoveDA。若报告 Independent Target Avg，其集合固定为 DLRSD、Potsdam、Vaihingen、UAVid、UDD5 和 VDD。缺少任一必需单元格或协议未锁定时均显示 --，不按每行可用项改变分母，不复制原论文的跨数据集平均。文献值保留原报告精度，自测值及派生均值预定保留两位小数；变化量用百分点表达。
+\input{tables/datasets_protocol}
+\input{tables/dataset_processing}
 
-主表按本轮是否额外使用遥感分割训练区分比较组。“无额外遥感训练”不表示预训练阶段未接触遥感数据，RemoteCLIP 等预训练数据来源仍需核实。SAM 3、SegEarth-OV3 的具体版本、官方权重与复现方式均待核实；同样用 iSAID 训练的对照需匹配训练预算及选择协议。
+\subsection{实现细节与比较设置}
+当前代码采用冻结 SAM 3 编码器、Pixel Decoder 与语义头的适配路径，训练 RemoteCLIP 引导特征聚合及 Semantic--Detail Fusion（SDF，语义—细节融合）模块，并部分微调 RemoteCLIP 图文分支的注意力 Q/V 和位置参数。冻结解码器在学生路径中仍允许输入梯度通过，不能将整个系统称为完全冻结。表~\ref{tab:implementation} 的数值来自当前合并配置，只表示待锁定的实现起点，不能作为已执行实验的日志。
 
-\begin{table}[t]
-\centering
-\caption{LoveDA 主结果占位。正式评测划分待确认；主指标为七类 mIoU，单位为百分比。空白表示无可报告结果。}
-\label{tab:main}
-\small
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{p{0.47\columnwidth}ccc}
-\toprule
-方法 & 七类 & 前景六类 & 背景 IoU\\
-\midrule
-\multicolumn{4}{l}{无额外遥感训练（本轮分割适配）}\\
-SAM 3 & \blankresult & & \\
-SegEarth-OV3 & & & \\
-\midrule
-\multicolumn{4}{l}{同样使用 iSAID 训练}\\
-简单 SAM 3 adapter & & & \\
-其他同预算对照（待确认） & & & \\
-ReCA-SAM3 & & & \\
-\bottomrule
-\end{tabular}
-\end{table}
+文献成绩与本文实测分开登记。本文数值尚未确认；文献数值逐项记录实际本地 PDF 的版本、哈希、页码、表号和行列，方法原论文与数字来源分别引用。资源分组依据原文训练数据和标签使用情况，而非是否冻结参数。所有自测比较将锁定训练数据、模型选择、输入、提示、损失基准、推理和硬件；文献训练预算未统一，不能写成全部方法在同一预算下复现。
+\input{tables/implementation}
 
-\subsection{消融实验}
-\TODO{先锁定完整模型，再逐项修改，并匹配训练、选择与评测设置。关闭跨类交互的具体实现、通用 CLIP 的架构及预训练权重、简单 adapter 的结构和参数预算都需先定义。DIF 消融需覆盖替代融合和四方向聚合的必要性，并报告参数、时间与显存成本。}
-\begin{table}[t]
-\centering
-\caption{消融实验占位。所有行采用相同 iSAID 训练及独立正式评测协议；变体实现和比较预算待确认。}
-\label{tab:ablation}
-\small
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{p{0.66\columnwidth}c}
-\toprule
-变体 & 七类 mIoU（\%）\\
-\midrule
-完整 ReCA-SAM3 & \blankresult\\
-简单 SAM 3 adapter & \\
-关闭跨类交互 & \\
-通用 CLIP 替换 RemoteCLIP & \\
-DIF 替代融合（待定义） & \\
-DIF 关闭四方向聚合 & \\
-\bottomrule
-\end{tabular}
-\end{table}
+\subsection{与现有方法的比较}
+表~\ref{tab:main_rskt8} 将本文待测行与文献参考区域分开，资源与来源见表~\ref{tab:resource_settings}。候选包括 SAM 3 Semantic-only、SegEarth-OV、完整 SegEarth-OV3、ProC-SAM3、CAT-Seg、RSKT-Seg、Pi-Seg、GSNet，以及本文的简单 adapter 和 ReCA-SAM3。SAM 3 Semantic-only 的已有局部数值来自 SegEarth-OV3 对仅语义头变体的实验，不能替代完整 SegEarth-OV3；GSNet 的 iSAID 行是 RSKT-Seg 对该方法的重评设置，不能把 GSNet 原论文的 LandDiscover50K 训练改称 iSAID 训练。
 
-\subsection{定性比较与待验证主张}
+本地附件还揭示了版本与复现差异。SegEarth-OV 和 ProC-SAM3 的实际附件分别为 arXiv v2，而文献库条目分别登记 CVPR 和 GRSL 发表信息；本稿数值仅归属于实际读取版本。SegEarth-OV3 原论文与 ProC-SAM3 标星复现行分别存档，未选取较高值或拼接为一行。LoveDA 类别数和背景口径未获该来源明确确认的单元格不进入七类列。当前没有已确认与本项目完全匹配的文献行，因此参考区不排名、不加粗；其数值不证明本文已经取得优势。Pi-Seg 的多源设置、GSNet 原始大规模训练等资源差异另作披露，不能混入 iSAID 单源行。PCA-Seg 保留在相关工作；SkySense-O 等未完成协议对齐的可选方法不强行补入主表。
+
+\TODO{在协议与自测结果齐备后，比较源域保持、共同目标集合上的迁移及失败情形，结合训练资源解释差异。当前不写最优、显著提升或已证明泛化。}
+\input{tables/main_rskt8}
+\input{tables/resource_settings}
+
+\subsection{核心模块消融}
+核心矩阵包含十个训练设置 T00--T09，表~\ref{tab:ablation_core} 与表~\ref{tab:ablation_losses} 共用 T00 Full，不为每张表重复训练。结构及损失变体从相同预训练起点重新训练，不能在完整权重上临时关闭模块当作训练消融。优先在 LoveDA 七类、Potsdam、UAVid 报告，Full、adapter 和 T02 优先覆盖全部八数据集；iSAID 另用于源域诊断。先用一个预先固定的 seed 完成矩阵，Full、adapter、T02 优先补三个预先指定 seed；当前正式种子清单为 TODO，代码默认 seed 不代表已完成运行，单 seed 不显示虚构标准差。
+
+T00 保留完整当前设计。T01 使用所有提示共享的残差 adapter：原始 256 通道提示条件特征依次经过 $1\times1$ 卷积（256 到 256）、GroupNorm（GN，组归一化）、GELU、$3\times3$ 卷积（256 到 256）、GN，再与原输入残差相加，送入相同冻结解码器；不使用 RemoteCLIP、特征聚合和 SDF。其成本单列，不声称与 Full 参数完全相同。
+
+T02 在所有类间块的两次注意力中屏蔽展开提示轴的全部非对角项，仅允许每个提示关注自身，保留投影和残差。该设置同时阻断同类别别名之间的信息交换，不能保留别名交互却称完全无跨提示交互。T03 bypass 两条流的所有类内块，保持类间流程。T04 将图像、文本和中间层指导全部替换为同 ViT-L/14 架构的通用 CLIP 权重，保持提取和部分微调策略。
+
+T05 将初始语义状态设为同形状零张量，保留 CLIP 中间层指导和双流结构，因此称“无初始模板分数先验”，不能称“无 RemoteCLIP”。T06 将上采样聚合特征、原始提示条件特征和 FPN（特征金字塔网络）三路各 256 通道拼接，依次经 $1\times1$ 卷积（768 到 256）、GN、GELU 和 $3\times3$ 卷积（256 到 256）得到相同解码器输入；这是待实现对照，尚未声称代码支持。T07 保留 SDF 两支路的 256 通道、投影、归一化及残差，仅执行 $0^\circ$ 卷积，不与旧 128 通道版本比较。
+
+T08 仅将参考蒸馏权重设零，T09 仅将忽略区域抑制权重设零，其他监督保持不变。它们回答监督约束的贡献，不扩展为大量损失权重扫描。所有开关定义和执行状态记录于实验计划；未实现变体不生成伪配置，所有成绩均待测。
+\input{tables/ablation_core}
+\input{tables/ablation_losses}
+
+\subsection{推理后处理分析}
+推理双门采用同一 checkpoint 的四组评测，见表~\ref{tab:postprocess_gates}：P00 两门关闭，P10 仅开启原始 SAM 3 reference 门，P01 仅开启学生 prediction 门，P11 两门均开启。关闭使用实际代码的 None 语义；开启阈值、背景回填阈值、测试时增强（TTA）、权重哈希与实际推理时间单独登记。reference 门需要额外原始 SAM 3 解码，其成本计入端到端时间；四组不增加训练次数。
+
+主训练消融采用同一预先锁定的推理方案；阈值若需选择，只在开发划分确定，不针对每个正式目标集取最优值。\TODO{为 Full 与 T02 补充未过滤输出，检查结构差异是否被后处理掩盖；尚无该证据，不预写收益结论。本轮不增加阈值扫描曲线。}
+\input{tables/postprocess_gates}
+
+\subsection{定性比较与计算开销}
+图~\ref{fig:qualitative_comparison} 规划在相同样本、色表和局部放大区域展示图像、真值及实际预测，同时包含成功与失败案例。只有确实获得本地输出的方法才展示像素预测，不能根据文献表格生成他人的预测图，也不将原论文示意图冒充本地结果。
 \begin{figure}[t]
 \centering
-\fbox{\begin{minipage}[c][2.5cm][c]{0.93\columnwidth}
-\centering 定性比较图占位\\[0.5em]
-图像／真值／SAM 3／简单 adapter／ReCA-SAM3\\
-道路与裸地误响应、边界及跨数据集失败案例\\
-样本编号、相同色表和局部放大区域待补
+\fbox{\begin{minipage}[c][2.4cm][c]{0.92\columnwidth}
+\centering
+Qualitative Comparison Placeholder\\[0.4em]
+Image / Ground Truth / SAM 3\\
+Adapter / ReCA-SAM3\\[0.4em]
+Matched Samples, Insets, and Failure Cases
 \end{minipage}}
-\caption{定性比较占位。样本来自最终指定的评测划分，同时展示成功与失败案例。当前未载入预测或真值图。}
-\label{fig:qualitative}
+\caption{定性比较规划占位。正式图内使用英文标注；样本、局部放大和失败案例在获得真实预测后固定，当前无预测结果。}
+\label{fig:qualitative_comparison}
 \end{figure}
-\TODO{减少类别误响应：预先定义类别混淆与假阳性分析；改善边界：预先定义边界指标和容差；增强迁移：在独立目标划分上比较且不使用其标签调参。仅凭主表 mIoU 或精选图像不能分别证明这些主张。}
+表~\ref{tab:efficiency} 分列总参数、可训练参数、端到端时间与峰值显存。固定 GPU、精度、输入、batch、提示数量、chunk、缓存状态和双门，并记录原始 SAM 3 reference 解码的额外成本；不能用不同文献硬件上的耗时作公平排名。本轮尚无确认的成本测量。
+\input{tables/efficiency}
+
+\subsection{进一步分析}
+优先诊断 Full 与 T02 对上下文提示集合的响应：固定最终输出类别，额外上下文仅参与聚合时单列诊断协议，避免改变 argmax 候选数造成混淆；该模式尚待实现。小目标分析拟在 iSAID 按实例面积诊断语义召回，它不是实例 AP；LoveDA/Potsdam 的混淆矩阵需匹配类别本体，忽略区域不当作完整负例。旋转一致性、边界和严格 adaptation-unseen 类别评测仅为可选后续，需显式类别划分和监督隔离后再作结论。
+\FloatBarrier

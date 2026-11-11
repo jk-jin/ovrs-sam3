@@ -1,0 +1,32 @@
+% Generated from paper/data; do not hand-edit numeric cells.
+\begin{table*}[t]
+\centering
+\caption{八数据集 mIoU（\%）框架与文献参考结果。iSAID 为本文源域；其余列为目标数据集。-- 表示未完成、未报告或口径未核实，所有数值均不排名。}
+\label{tab:main_rskt8}
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{L{0.245\textwidth}cccccccccc}
+\toprule
+方法 & DLRSD & iSAID & LoveDA & Potsdam & Vaihingen & UAVid & UDD5 & VDD & Avg-8 & Target Avg\\
+\midrule
+
+\multicolumn{11}{l}{本文计划结果（尚未完成）}\\
+ReCA-SAM3$^{N}$ & -- & -- & -- & -- & -- & -- & -- & -- & -- & --\\
+简单 SAM 3 adapter$^{N}$ & -- & -- & -- & -- & -- & -- & -- & -- & -- & --\\
+\midrule
+\multicolumn{11}{l}{文献参考结果（资源或协议尚未匹配，不参与排名）}\\
+SAM 3 Semantic-only~\cite{carionSAM3Segment2026}$^{S}$ & -- & -- & -- & -- & -- & 47.1 & -- & -- & -- & --\\
+SegEarth-OV~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025}$^{E}$ & -- & 21.7 & 36.9 & 47.1 & 29.1 & 42.5 & 50.6 & 45.3 & -- & --\\
+SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026}$^{S}$ & -- & 27.6 & -- & 57.8 & 60.8 & 54.7 & 71.7 & 64.5 & -- & --\\
+ProC-SAM3~\cite{songPromptCalibratedSAM32026}$^{P}$ & -- & 29.5 & -- & 58.8 & 64.5 & 60.0 & 73.4 & 67.5 & -- & --\\
+CAT-Seg / iSAID~\cite{choCATSegCostAggregation2024}$^{R}$ & 28.80 & 94.77 & -- & 23.90 & 21.74 & 16.10 & 24.32 & 30.16 & -- & --\\
+RSKT-Seg / iSAID~\cite{liExploringEfficientOpenVocabulary2026}$^{R}$ & 31.57 & 93.96 & -- & 28.57 & 25.55 & 17.36 & 34.01 & 33.40 & -- & --\\
+Pi-Seg / iSAID~\cite{liPerturbationRegularizedOpenVocabularyRemote2026}$^{I}$ & 33.67 & -- & -- & 28.14 & 23.83 & 12.34 & 37.24 & 38.24 & -- & --\\
+GSNet / iSAID re-eval.~\cite{yeOpenVocabularyRemoteSensing2025}$^{R}$ & 31.50 & 93.11 & -- & 28.50 & 25.10 & 15.98 & 32.24 & 32.07 & -- & --\\
+\bottomrule
+\end{tabular}
+\par\vspace{3pt}
+\begin{minipage}{\textwidth}
+\footnotesize N：本文待测；S、E、P、R、I 为表~\ref{tab:resource_settings} 的资源/来源标记。R 的数值来自 RSKT-Seg~\cite{liExploringEfficientOpenVocabulary2026} Table~1 的 iSAID/ViT-L 区；S 的数值来自 SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026} Table~1 或 Table~4；E 为 SegEarth-OV 本地 arXiv v2 Table~1；P 为 ProC-SAM3 本地 arXiv v2 Table~I；I 为 Pi-Seg arXiv v3 Table~1 的 iSAID/ViT-L 区。LoveDA 仅展示已确认的含背景七类成绩。平均集合与协议未锁定，均值保留 --，不复制源论文的平均。
+\end{minipage}
+\end{table*}

@@ -1,0 +1,22 @@
+% Generated from paper/data; do not hand-edit numeric cells.
+\begin{table}[t]
+\centering
+\caption{计算开销计划。总参数与可训练参数分列，时间和峰值显存采用统一测量设置。}
+\label{tab:efficiency}
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{L{0.31\columnwidth}cccc}
+\toprule
+方法 & \shortstack{总参数\\(M)} & \shortstack{可训练\\(M)} & \shortstack{时间\\(ms)} & \shortstack{显存\\(GB)}\\
+\midrule
+SAM 3 Semantic-only & -- & -- & -- & --\\
+简单 adapter & -- & -- & -- & --\\
+T00 Full & -- & -- & -- & --\\
+T07 SDF 单方向 & -- & -- & -- & --\\
+\bottomrule
+\end{tabular}
+\par\vspace{3pt}
+\begin{minipage}{\columnwidth}
+\footnotesize 固定 GPU、精度、输入、batch、提示数、chunk、缓存状态与双门。Reference 解码成本计入端到端时间；不将异硬件文献耗时用于公平排名。
+\end{minipage}
+\end{table}

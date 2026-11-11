@@ -10,4 +10,4 @@ CLIP 通过图文对比学习建立图像与文本的对应关系，为使用文
 
 \subsection{空间与类别聚合}
 
-CAT-Seg 将局部图像特征与类别文本特征的余弦相似度组织为代价体，交替进行空间聚合和类别聚合，分别建模类别内部的空间联系与同一位置的类别关系~\cite{choCATSegCostAggregation2024}。PCA-Seg 将两种聚合并行处理，再融合两路结果~\cite{yinPCASegRevisitingCost2026}。在遥感场景中，RSKT-Seg 和 ROSS 也在代价图上进行空间和类别聚合~\cite{liExploringEfficientOpenVocabulary2026,zhangOpenvocabularySemanticSegmentation2026}。本文将交互引入 SAM 3 的解码前特征。ReCA-SAM3 将 RemoteCLIP 的局部图文相似度编码为分数嵌入，以此引导不同提示的 SAM 3 类别条件特征交换信息，并在单个提示内部建模空间关系。更新后的特征随后送入冻结的 SAM 3 解码路径。
+CAT-Seg 将局部图像特征与类别文本特征的余弦相似度组织为代价体，交替进行空间聚合和类别聚合，分别建模类别内部的空间联系与同一位置的类别关系~\cite{choCATSegCostAggregation2024}。PCA-Seg 将两种聚合并行处理，再融合两路结果~\cite{yinPCASegRevisitingCost2026}。在遥感场景中，RSKT-Seg 也在代价图上进行空间和类别聚合~\cite{liExploringEfficientOpenVocabulary2026}。本文将交互引入 SAM 3 的解码前特征。ReCA-SAM3 将 RemoteCLIP 的局部图文相似度编码为分数嵌入，以此引导不同提示的 SAM 3 类别条件特征交换信息，并在单个提示内部建模空间关系。更新后的特征随后送入冻结的 SAM 3 解码路径。

@@ -1,0 +1,17 @@
+\begin{table}[t]
+\centering
+\caption{数据版本、波段与处理核对状态。表中为当前本地读取与评测设置，正式基准对应关系仍待确认。}
+\label{tab:dataset_processing}
+\small
+\begin{tabular}{lL{0.66\columnwidth}}
+\toprule
+项目 & 当前依据及限制\\
+\midrule
+评测版本 & 八项均为本地预处理数据；与 RSKT-Seg 版本逐项匹配 TODO\\
+读取波段 & 八项均由本地读取器转换为 RGB；Potsdam/Vaihingen 等源波段和通道选择 TODO，不能仅凭转换推断原始波段\\
+图像处理 & 本地验证统一缩放至 $1008\times1008$、不保持比例；裁块、重叠与原始大图清单 TODO\\
+标签处理 & 各数据集依其配置处理背景与忽略标签；不得统一删背景或重复平移\\
+数据数量 & 原始大图、裁块、序列及完整评测样本数均待真实清单核实，不从代码默认值推断\\
+\bottomrule
+\end{tabular}
+\end{table}

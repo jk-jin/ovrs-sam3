@@ -2,53 +2,248 @@
   "schema_version": 1,
   "tables": [
     {
-      "name": "main_loveda",
+      "name": "native_dlrsd",
       "filter": {
-        "evaluation.dataset": "loveda",
-        "evaluation.split": "val"
+        "evaluation.dataset": "dlrsd"
       },
       "rows": [
         {
           "label": "ReCA-SAM3",
           "match": {
-            "experiment.variant_id": "full",
-            "experiment.method_id": "reca_sam3"
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "full"
           }
         }
       ],
       "metrics": [
         "miou",
-        "macc",
-        "pixel_acc"
+        "macc"
       ],
-      "allowed_varying_fields": [
-        "training.regime"
-      ],
-      "factor_columns": [
-        "experiment.factors.num_blocks",
-        "experiment.factors.directional_fusion"
-      ],
+      "allowed_varying_fields": [],
+      "factor_columns": [],
       "display_unit": "percent",
       "decimals": 2,
       "aggregate_seeds": true,
       "std_ddof": 1,
       "layout": "column",
-      "caption": "LoveDA 七类语义分割主结果",
-      "label": "tab:main_loveda",
+      "caption": "dlrsd 自测结果（协议待锁定）",
+      "label": "tab:native_dlrsd",
       "bold_best": false
     },
     {
-      "name": "per_class_loveda",
+      "name": "native_isaid",
       "filter": {
-        "evaluation.dataset": "loveda",
-        "evaluation.split": "val"
+        "evaluation.dataset": "isaid"
       },
       "rows": [
         {
           "label": "ReCA-SAM3",
           "match": {
-            "experiment.variant_id": "full",
-            "experiment.method_id": "reca_sam3"
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "full"
+          }
+        }
+      ],
+      "metrics": [
+        "miou",
+        "macc"
+      ],
+      "allowed_varying_fields": [],
+      "factor_columns": [],
+      "display_unit": "percent",
+      "decimals": 2,
+      "aggregate_seeds": true,
+      "std_ddof": 1,
+      "layout": "column",
+      "caption": "isaid 自测结果（协议待锁定）",
+      "label": "tab:native_isaid",
+      "bold_best": false
+    },
+    {
+      "name": "native_loveda",
+      "filter": {
+        "evaluation.dataset": "loveda"
+      },
+      "rows": [
+        {
+          "label": "ReCA-SAM3",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "full"
+          }
+        }
+      ],
+      "metrics": [
+        "miou",
+        "macc"
+      ],
+      "allowed_varying_fields": [],
+      "factor_columns": [],
+      "display_unit": "percent",
+      "decimals": 2,
+      "aggregate_seeds": true,
+      "std_ddof": 1,
+      "layout": "column",
+      "caption": "loveda 自测结果（协议待锁定）",
+      "label": "tab:native_loveda",
+      "bold_best": false
+    },
+    {
+      "name": "native_potsdam",
+      "filter": {
+        "evaluation.dataset": "potsdam"
+      },
+      "rows": [
+        {
+          "label": "ReCA-SAM3",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "full"
+          }
+        }
+      ],
+      "metrics": [
+        "miou",
+        "macc"
+      ],
+      "allowed_varying_fields": [],
+      "factor_columns": [],
+      "display_unit": "percent",
+      "decimals": 2,
+      "aggregate_seeds": true,
+      "std_ddof": 1,
+      "layout": "column",
+      "caption": "potsdam 自测结果（协议待锁定）",
+      "label": "tab:native_potsdam",
+      "bold_best": false
+    },
+    {
+      "name": "native_vaihingen",
+      "filter": {
+        "evaluation.dataset": "vaihingen"
+      },
+      "rows": [
+        {
+          "label": "ReCA-SAM3",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "full"
+          }
+        }
+      ],
+      "metrics": [
+        "miou",
+        "macc"
+      ],
+      "allowed_varying_fields": [],
+      "factor_columns": [],
+      "display_unit": "percent",
+      "decimals": 2,
+      "aggregate_seeds": true,
+      "std_ddof": 1,
+      "layout": "column",
+      "caption": "vaihingen 自测结果（协议待锁定）",
+      "label": "tab:native_vaihingen",
+      "bold_best": false
+    },
+    {
+      "name": "native_uavid",
+      "filter": {
+        "evaluation.dataset": "uavid"
+      },
+      "rows": [
+        {
+          "label": "ReCA-SAM3",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "full"
+          }
+        }
+      ],
+      "metrics": [
+        "miou",
+        "macc"
+      ],
+      "allowed_varying_fields": [],
+      "factor_columns": [],
+      "display_unit": "percent",
+      "decimals": 2,
+      "aggregate_seeds": true,
+      "std_ddof": 1,
+      "layout": "column",
+      "caption": "uavid 自测结果（协议待锁定）",
+      "label": "tab:native_uavid",
+      "bold_best": false
+    },
+    {
+      "name": "native_udd",
+      "filter": {
+        "evaluation.dataset": "udd"
+      },
+      "rows": [
+        {
+          "label": "ReCA-SAM3",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "full"
+          }
+        }
+      ],
+      "metrics": [
+        "miou",
+        "macc"
+      ],
+      "allowed_varying_fields": [],
+      "factor_columns": [],
+      "display_unit": "percent",
+      "decimals": 2,
+      "aggregate_seeds": true,
+      "std_ddof": 1,
+      "layout": "column",
+      "caption": "udd 自测结果（协议待锁定）",
+      "label": "tab:native_udd",
+      "bold_best": false
+    },
+    {
+      "name": "native_vdd",
+      "filter": {
+        "evaluation.dataset": "vdd"
+      },
+      "rows": [
+        {
+          "label": "ReCA-SAM3",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "full"
+          }
+        }
+      ],
+      "metrics": [
+        "miou",
+        "macc"
+      ],
+      "allowed_varying_fields": [],
+      "factor_columns": [],
+      "display_unit": "percent",
+      "decimals": 2,
+      "aggregate_seeds": true,
+      "std_ddof": 1,
+      "layout": "column",
+      "caption": "vdd 自测结果（协议待锁定）",
+      "label": "tab:native_vdd",
+      "bold_best": false
+    },
+    {
+      "name": "native_loveda_per_class",
+      "filter": {
+        "evaluation.dataset": "loveda"
+      },
+      "rows": [
+        {
+          "label": "ReCA-SAM3",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "full"
           }
         }
       ],
@@ -61,57 +256,15 @@
         "iou.forest",
         "iou.agricultural"
       ],
-      "allowed_varying_fields": [
-        "training.regime"
-      ],
+      "allowed_varying_fields": [],
       "factor_columns": [],
       "display_unit": "percent",
       "decimals": 2,
       "aggregate_seeds": true,
       "std_ddof": 1,
       "layout": "wide",
-      "caption": "LoveDA 七类逐类 IoU",
-      "label": "tab:per_class_loveda",
-      "bold_best": false
-    },
-    {
-      "name": "ablation_distill",
-      "filter": {
-        "evaluation.dataset": "loveda",
-        "evaluation.split": "val",
-        "experiment.method_id": "reca_sam3"
-      },
-      "rows": [
-        {
-          "label": "蒸馏权重 0.5",
-          "match": {
-            "experiment.variant_id": "full"
-          }
-        },
-        {
-          "label": "蒸馏权重 0.25",
-          "match": {
-            "experiment.variant_id": "distill_0.25"
-          }
-        }
-      ],
-      "metrics": [
-        "miou",
-        "macc"
-      ],
-      "allowed_varying_fields": [
-        "experiment.factors.reference_distill_weight"
-      ],
-      "factor_columns": [
-        "experiment.factors.reference_distill_weight"
-      ],
-      "display_unit": "percent",
-      "decimals": 2,
-      "aggregate_seeds": true,
-      "std_ddof": 1,
-      "layout": "column",
-      "caption": "Reference 蒸馏权重参数消融",
-      "label": "tab:ablation_distill",
+      "caption": "LoveDA 七类逐类 IoU（自测）",
+      "label": "tab:native_loveda_per_class",
       "bold_best": false
     }
   ],

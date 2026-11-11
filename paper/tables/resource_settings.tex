@@ -1,0 +1,20 @@
+\begin{table*}[t]
+\centering
+\caption{方法资源与数值来源登记。标签“未报告/待核实”不等于确认未使用。所有文献行当前仅作参考，方法原论文和实际数字来源分别登记。}
+\label{tab:resource_settings}
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{L{0.12\textwidth}L{0.18\textwidth}L{0.25\textwidth}L{0.16\textwidth}L{0.22\textwidth}}
+\toprule
+标记/方法 & 骨干与基础预训练 & 本轮适配或其他训练资源 & 目标标注使用 & 数字来源与性质\\
+\midrule
+S / SAM 3 系 & SAM 3，OV3 报告 PE-L+；基础预训练见 SAM 3 原文 & 无下游参数训练；完整 OV3 与仅语义头分开 & OV3 不描述目标监督训练；选择/阈值协议 TODO & OV3 本地 arXiv v2 Table 1（自身报告）、Table 4（Semantic Only 实验）\\
+E / SegEarth-OV & CLIP ViT-B/16；通用图文预训练 & 用 16k 无标签 Million-AID 图像训练 SimFeatUp；不称无任何遥感训练 & 未使用下游分割标注训练；完整选择协议 TODO & 自身 arXiv v2 Table 1；不是已核实 CVPR 版\\
+P / ProC-SAM3 & SAM 3；Qwen3-VL-8B 离线提示生成 & 无下游分割训练；图像条件提示生成另披露 & 正文称 GT-free；完整池构建/划分独立性 TODO & 自身 arXiv v2 Table I；OV3 星号行另记为复现，不混合\\
+R / CAT、GSNet、RSKT & 表中 ViT-L；RSKT 结合 CLIP、遥感 DINO 与 RemoteCLIP 知识 & 仅取 RSKT-Seg Table 1 的 iSAID 单源 panel & 源域标注训练；目标选择与详细附录 TODO & RSKT-Seg AAAI 正式版：前两者为重评，自身为原报告\\
+I / Pi-Seg & ViT-L；VLM 预训练 & 仅取自身 Table 1 的 iSAID 单源 panel；GlobalRSOV95K 多源 panel 不混入 & 源域监督；目标选择细节 TODO & 自身 arXiv v3 Table 1；不复制 Mean w/o iSAID\\
+GSNet 原始设置 & CLIP ViT-B/16、遥感专用 DINO & LandDiscover50K 训练；原文另有 COCO 初始化设置 & 不能改称同 iSAID 训练；独立性待逐项核实 & 方法/资源见自身 AAAI 原文，原始成绩未混入本表 R 行\\
+N / 本文与 adapter & 冻结 SAM 3；Full 部分微调 RemoteCLIP，adapter 不用该分支 & iSAID 单源监督适配，待执行；基础预训练覆盖另核实 & 当前 LoveDA val 参与模型选择；正式方案 TODO & 本地标准结果尚未确认，全部占位\\
+\bottomrule
+\end{tabular}
+\end{table*}

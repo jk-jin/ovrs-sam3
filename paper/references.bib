@@ -1,3 +1,19 @@
+@article{caiVDDVariedDrone2025,
+  title = {{{VDD}}: {{Varied Drone Dataset}} for Semantic Segmentation},
+  shorttitle = {{{VDD}}},
+  author = {Cai, Wenxiao and Jin, Ke and Hou, Jinyan and Guo, Cong and Wu, Letian and Yang, Wankou},
+  year = 2025,
+  month = jun,
+  journal = {Journal of Visual Communication and Image Representation},
+  volume = {109},
+  pages = {104429},
+  issn = {1047-3203},
+  doi = {10.1016/j.jvcir.2025.104429},
+  urldate = {2026-11-11},
+  abstract = {Semantic segmentation of drone images is critical for various aerial vision tasks as it provides essential semantic details to understand scenes on the ground. Ensuring high accuracy of semantic segmentation models for drones requires access to diverse, large-scale, and high-resolution datasets, which are often scarce in the field of aerial image processing. While existing datasets typically focus on urban scenes and are relatively small, our Varied Drone Dataset (VDD) addresses these limitations by offering a large-scale, densely labeled collection of 400 high-resolution images spanning 7 classes. This dataset features various scenes in urban, industrial, rural, and natural areas, captured from different camera angles and under diverse lighting conditions. We also make new annotations to UDD (Chen et al., 2018) and UAVid (Lyu et al., 2018), integrating them under VDD annotation standards, to create the Integrated Drone Dataset (IDD). We train seven state-of-the-art models on drone datasets as baselines. It is expected that our dataset will generate considerable interest in drone image segmentation and serve as a foundation for other drone vision tasks. Datasets are publicly available at https://github.com/RussRobin/VDD.},
+  keywords = {Drone datasets,Low-altitude Aerial Photography,Semantic segmentation}
+}
+
 @misc{carionSAM3Segment2026,
   title = {{{SAM}} 3: {{Segment Anything}} with {{Concepts}}},
   shorttitle = {{{SAM}} 3},
@@ -14,6 +30,23 @@
   archiveprefix = {arXiv},
   keywords = {Computer Science - Artificial Intelligence,Computer Science - Computer Vision and Pattern Recognition},
   file = {/home/joker/Zotero/storage/T9LW9XLF/Carion 等 - 2026 - SAM 3 Segment Anything with Concepts.pdf;/home/joker/Zotero/storage/7QTHKDH7/2511.html}
+}
+
+@inproceedings{chenLargeScaleStructureMotion2018,
+  title = {Large-{{Scale Structure}} from {{Motion}} with {{Semantic Constraints}} of {{Aerial Images}}},
+  booktitle = {Pattern {{Recognition}} and {{Computer Vision}}},
+  author = {Chen, Yu and Wang, Yao and Lu, Peng and Chen, Yisong and Wang, Guoping},
+  editor = {Lai, Jian-Huang and Liu, Cheng-Lin and Chen, Xilin and Zhou, Jie and Tan, Tieniu and Zheng, Nanning and Zha, Hongbin},
+  year = 2018,
+  pages = {347--359},
+  publisher = {Springer International Publishing},
+  address = {Cham},
+  doi = {10.1007/978-3-030-03398-9_30},
+  abstract = {Structure from Motion (SfM) and semantic segmentation are two branches of computer vision. However, few previous methods integrate the two branches together. SfM is limited by the precision of traditional feature detecting method, especially in complicated scenes. As the research field of semantic segmentation thrives, we could gain semantic information of high confidence in each specific task with little effort. By utilizing semantic segmentation information, our paper presents a new way to boost the accuracy of feature point matching. Besides, with the semantic constraints taken from the result of semantic segmentation, a new bundle adjustment method with equality constraint is proposed. By exploring the sparsity of equality constraint, it indicates that constrained bundle adjustment can be solved by Sequential Quadratic Programming (SQP) efficiently. The proposed approach achieves state of the art accuracy, and, by grouping the descriptors together by their semantic labels, the speed of putative matches is slightly boosted. Moreover, our approach demonstrates a potential of automatic labeling of semantic segmentation. In a nutshell, our work strongly verifies that SfM and semantic segmentation benefit from each other.},
+  isbn = {978-3-030-03398-9},
+  langid = {english},
+  keywords = {Equality bundle adjustment,Semantic segmentation,Sequential Quadratic Programming,Structure from Motion},
+  file = {/home/joker/Zotero/storage/24ZVNVEI/Chen 等 - 2018 - Large-Scale Structure from Motion with Semantic Constraints of Aerial Images.pdf}
 }
 
 @inproceedings{choCATSegCostAggregation2024,
@@ -48,6 +81,23 @@
   copyright = {Copyright (c) 2026 Association for the Advancement of Artificial Intelligence},
   langid = {english},
   file = {/home/joker/Zotero/storage/9YXMHG8G/Li 等 - 2026 - Exploring Efficient Open-Vocabulary Segmentation in the Remote Sensing.pdf}
+}
+
+@misc{liPerturbationRegularizedOpenVocabularyRemote2026,
+  title = {Perturbation-{{Regularized Open-Vocabulary Remote Sensing Segmentation}} with {{Unified Multi-Domain Evaluation}}},
+  author = {Li, Bingyu and Huo, Tao and Dong, Haocheng and Zhang, Da and Zhao, Zhiyuan and Gao, Junyu and Li, Xuelong},
+  year = 2026,
+  month = oct,
+  number = {arXiv:2604.15652},
+  eprint = {2604.15652},
+  primaryclass = {cs.CV},
+  publisher = {arXiv},
+  doi = {10.48550/arXiv.2604.15652},
+  urldate = {2026-11-11},
+  abstract = {Open-vocabulary remote sensing image segmentation (OVRSIS) aims to segment text-specified categories beyond a fixed label space. Its key challenge is to maintain reliable pixel--text correspondence under substantial appearance variation in remote-sensing imagery. Existing methods often rely on specialized vision--language representations or complex adaptation mechanisms, yet still perform deterministic matching between fixed text prototypes and individual visual features. We instead formulate OVRSIS as a \textbackslash emph\textbraceleft distributional pixel--text alignment\textbraceright{} problem and propose \textbackslash textbf\textbraceleft Pi-Seg\textbraceright, a lightweight perturbation-based framework. Pi-Seg introduces learnable variations into textual prototypes and dense visual features before alignment. Segmentation supervision encourages perturbations that enlarge the target-to-distractor margin while suppressing harmful feature shifts. Pi-Seg consistently improves performance under the existing \textbackslash textit\textbraceleft single-source\textbraceright{} OVRSISBench protocols. To evaluate OVRSIS beyond source-specific training settings, we further introduce a unified \textbackslash textit\textbraceleft multi-source\textbraceright{} protocol and construct \textbackslash textbf\textbraceleft GlobalRSOV95K\textbraceright, containing approximately 95K densely annotated images and 35 semantic categories. Models are trained on this shared dataset and evaluated on an image-disjoint suite of 10 downstream datasets. The complete benchmark covers more than 170K images and 122 categories. Experiments under both single-source and multi-source protocols show that Pi-Seg improves cross-dataset transfer and generalizes effectively to practical geospatial segmentation tasks, while GlobalRSOV95K provides a common foundation for transferable OVRSIS research. \textbackslash footnote\textbraceleft\textbackslash url\textbraceleft https://github.com/LiBingyu01/Pi-Seg\textbraceright\textbraceright},
+  archiveprefix = {arXiv},
+  keywords = {Computer Science - Computer Vision and Pattern Recognition},
+  file = {/home/joker/Zotero/storage/Z7P72NU8/Li 等 - 2026 - Perturbation-Regularized Open-Vocabulary Remote Sensing Segmentation with Unified Multi-Domain Evalu.pdf;/home/joker/Zotero/storage/XVUIYPUB/2604.html}
 }
 
 @misc{liSegEarthOV3ExploringSAM2026,
@@ -100,6 +150,23 @@
   file = {/home/joker/Zotero/storage/7PUSNKG7/Liu 等 - 2024 - RemoteCLIP A Vision Language Foundation Model for Remote Sensing.pdf}
 }
 
+@article{lyuUAVidSemanticSegmentation2020,
+  title = {{{UAVid}}: {{A}} Semantic Segmentation Dataset for {{UAV}} Imagery},
+  shorttitle = {{{UAVid}}},
+  author = {Lyu, Ye and Vosselman, George and Xia, Gui-Song and Yilmaz, Alper and Yang, Michael Ying},
+  year = 2020,
+  month = jul,
+  journal = {ISPRS Journal of Photogrammetry and Remote Sensing},
+  volume = {165},
+  pages = {108--119},
+  issn = {0924-2716},
+  doi = {10.1016/j.isprsjprs.2020.05.009},
+  urldate = {2026-11-11},
+  abstract = {Semantic segmentation has been one of the leading research interests in computer vision recently. It serves as a perception foundation for many fields, such as robotics and autonomous driving. The fast development of semantic segmentation attributes enormously to the large scale datasets, especially for the deep learning related methods. There already exist several semantic segmentation datasets for comparison among semantic segmentation methods in complex urban scenes, such as the Cityscapes and CamVid datasets, where the side views of the objects are captured with a camera mounted on the driving car. There also exist semantic labeling datasets for the airborne images and the satellite images, where the nadir views of the objects are captured. However, only a few datasets capture urban scenes from an oblique Unmanned Aerial Vehicle (UAV) perspective, where both of the top view and the side view of the objects can be observed, providing more information for object recognition. In this paper, we introduce our UAVid dataset, a new high-resolution UAV semantic segmentation dataset as a complement, which brings new challenges, including large scale variation, moving object recognition and temporal consistency preservation. Our UAV dataset consists of 30 video sequences capturing high-resolution images in oblique views. In total, 300 images have been densely labeled with 8 classes for the semantic labeling task. We have provided several deep learning baseline methods with pre-training, among which the proposed Multi-Scale-Dilation net performs the best via multi-scale feature extraction, reaching a mean intersection-over-union (IoU) score around 50\%. We have also explored the influence of spatial-temporal regularization for sequence data by leveraging on feature space optimization (FSO) and 3D conditional random field (CRF). Our UAVid website and the labeling tool have been published online (https://uavid.nl/).},
+  keywords = {Dataset,Deep learning,Semantic segmentation,UAV},
+  file = {/home/joker/Zotero/storage/NSJA25HZ/Lyu 等 - 2020 - UAVid A semantic segmentation dataset for UAV imagery.pdf;/home/joker/Zotero/storage/YMFFZD7H/S0924271620301295.html}
+}
+
 @misc{peiTamingSAM3Wild2026,
   title = {Taming {{SAM3}} in the {{Wild}}: {{A Concept Bank}} for {{Open-Vocabulary Segmentation}}},
   shorttitle = {Taming {{SAM3}} in the {{Wild}}},
@@ -116,6 +183,13 @@
   archiveprefix = {arXiv},
   keywords = {Computer Science - Computer Vision and Pattern Recognition},
   file = {/home/joker/Zotero/storage/V49EHQML/Pei 等 - 2026 - Taming SAM3 in the Wild A Concept Bank for Open-Vocabulary Segmentation.pdf}
+}
+
+@misc{PerformanceEvaluationSingleLabel,
+  title = {Performance {{Evaluation}} of {{Single-Label}} and {{Multi-Label Remote Sensing Image Retrieval Using}} a {{Dense Labeling Dataset}}},
+  urldate = {2026-11-11},
+  howpublished = {https://www.mdpi.com/2072-4292/10/6/964},
+  file = {/home/joker/Zotero/storage/ULAGT2QT/Performance Evaluation of Single-Label and Multi-Label Remote Sensing Image Retrieval Using a Dense.pdf;/home/joker/Zotero/storage/22FND62X/964.html}
 }
 
 @inproceedings{radfordLearningTransferableVisual2021,
@@ -146,6 +220,24 @@
   abstract = {Open-vocabulary semantic segmentation (OVSS) in remote-sensing images aims to segment categories beyond a fixed label space. Recent SAM3-based methods provide a promising training-free foundation; yet, three key issues remain: 1) a single class-name prompt lacks sufficient semantic coverage for complex remote-sensing categories; 2) expanding each category into multiple prompts introduces redundant online text encoding; and 3) directly aggregating multiple prompt responses propagates noisy activations into the final prediction. To address these issues, we propose ProC-SAM3, which calibrates SAM3's prompt interface for remote-sensing OVSS from three complementary aspects. First, we construct an offline prompt pool where a category matcher (CM) groups MLLM-generated candidates into per-category sets, and expansion constraints further refine each set using category-specific prior knowledge. Second, the resulting text embeddings are cached and reused across all test images, eliminating repeated text encoding. Third, we introduce presence-guided residual fusion (PGRF) to gate unreliable decoder outputs by prompt presence and confidence, followed by peak-preserving class aggregation that retains fine-grained activations for small and sparse objects. Experiments on eight benchmarks show that ProC-SAM3 achieves an average mIoU of 56.1\%, outperforming the previous best training-free method by 3.9 percentage points. Code will be available at https://github.com/YanghuiSong/ProC-SAM3},
   keywords = {Computers,Conferences,Construction,Decoding,Encoding,Gain,MLLMs,open-vocabulary semantic segmentation (OVSS),prompt calibration,Remote sensing,remote-sensing,Roads,SAM3,Training,Vocabulary},
   file = {/home/joker/Zotero/storage/BLYA4UY8/Song 等 - 2026 - Prompt-Calibrated SAM 3 for Open-Vocabulary Remote-Sensing Semantic Segmentation.pdf}
+}
+
+@misc{wangLoveDARemoteSensing2022,
+  title = {{{LoveDA}}: {{A Remote Sensing Land-Cover Dataset}} for {{Domain Adaptive Semantic Segmentation}}},
+  shorttitle = {{{LoveDA}}},
+  author = {Wang, Junjue and Zheng, Zhuo and Ma, Ailong and Lu, Xiaoyan and Zhong, Yanfei},
+  year = 2022,
+  month = may,
+  number = {arXiv:2110.08733},
+  eprint = {2110.08733},
+  primaryclass = {cs.CV},
+  publisher = {arXiv},
+  doi = {10.48550/arXiv.2110.08733},
+  urldate = {2026-11-11},
+  abstract = {Deep learning approaches have shown promising results in remote sensing high spatial resolution (HSR) land-cover mapping. However, urban and rural scenes can show completely different geographical landscapes, and the inadequate generalizability of these algorithms hinders city-level or national-level mapping. Most of the existing HSR land-cover datasets mainly promote the research of learning semantic representation, thereby ignoring the model transferability. In this paper, we introduce the Land-cOVEr Domain Adaptive semantic segmentation (LoveDA) dataset to advance semantic and transferable learning. The LoveDA dataset contains 5987 HSR images with 166768 annotated objects from three different cities. Compared to the existing datasets, the LoveDA dataset encompasses two domains (urban and rural), which brings considerable challenges due to the: 1) multi-scale objects; 2) complex background samples; and 3) inconsistent class distributions. The LoveDA dataset is suitable for both land-cover semantic segmentation and unsupervised domain adaptation (UDA) tasks. Accordingly, we benchmarked the LoveDA dataset on eleven semantic segmentation methods and eight UDA methods. Some exploratory studies including multi-scale architectures and strategies, additional background supervision, and pseudo-label analysis were also carried out to address these challenges. The code and data are available at https://github.com/Junjue-Wang/LoveDA.},
+  archiveprefix = {arXiv},
+  keywords = {Computer Science - Computer Vision and Pattern Recognition},
+  file = {/home/joker/Zotero/storage/P7ZY8T4I/Wang 等 - 2022 - LoveDA A Remote Sensing Land-Cover Dataset for Domain Adaptive Semantic Segmentation.pdf;/home/joker/Zotero/storage/BA9LQL8J/2110.html}
 }
 
 @article{yeOpenVocabularyRemoteSensing2025,
@@ -184,18 +276,32 @@
   file = {/home/joker/Zotero/storage/ANGI4VS6/Yin 等 - 2026 - PCA-Seg Revisiting Cost Aggregation for Open-Vocabulary Semantic and Part Segmentation.pdf;/home/joker/Zotero/storage/65ET46Q7/2603.html}
 }
 
-@article{zhangOpenvocabularySemanticSegmentation2026,
-  title = {Towards Open-Vocabulary Semantic Segmentation for Remote Sensing Images},
-  author = {Zhang, Da and Zeng, Mingmin and Li, Xuelong},
-  year = 2026,
-  month = jul,
-  journal = {Pattern Recognition},
-  volume = {175},
-  pages = {113120},
-  issn = {0031-3203},
-  doi = {10.1016/j.patcog.2026.113120},
-  urldate = {2026-11-09},
-  abstract = {Open-vocabulary semantic segmentation (OVSS) for remote sensing images (RSI) aims to achieve precise segmentation of arbitrary semantic categories specified within RSI. However, existing mainstream OVSS models are mostly trained on natural images and struggle to handle the rotational diversity and unique characteristics of RSI, resulting in insufficient feature representation and category discrimination capabilities. To ameliorate this challenge, we propose ROSS, an open vocabulary semantic segmentation framework that combines effective feature fusion with dedicated modeling of RSI characteristics. Specifically, ROSS employs a dual-branch image encoder (DBIE): one branch leverages multi-directional augmentation to enhance the representation of rotation-invariant features, while the other incorporates remote sensing (RS) specific knowledge via an encoder pretrained on large-scale RSI data. During feature fusion, ROSS generates cost maps from both branches and designs a spatial-class dual-level cost aggregation (SDCA) module based on spatial and category information, thereby fully integrating global spatial context and category discriminability. Finally, we introduce a RS knowledge transfer upsampling module that efficiently fuses and reconstructs multi-scale features to achieve high-resolution and fine-grained segmentation. Experiments on four open-vocabulary RS datasets demonstrate that ROSS consistently outperforms current state-of-the-art (SOTA) models. This robust performance across different training and evaluation configurations verifies its effectiveness and broad applicability.},
-  keywords = {Domain knowledge adaptation,Open vocabulary,Remote sensing images,Rotation invariance,Semantic segmentation},
-  file = {/home/joker/Zotero/storage/KT4JN7SH/S003132032600083X.html}
+@misc{zamirISAIDLargescaleDataset2019,
+  title = {{{iSAID}}: {{A Large}}-Scale {{Dataset}} for {{Instance Segmentation}} in {{Aerial Images}}},
+  shorttitle = {{{iSAID}}},
+  author = {Zamir, Syed Waqas and Arora, Aditya and Gupta, Akshita and Khan, Salman and Sun, Guolei and Khan, Fahad Shahbaz and Zhu, Fan and Shao, Ling and Xia, Gui-Song and Bai, Xiang},
+  year = 2019,
+  month = aug,
+  number = {arXiv:1905.12886},
+  eprint = {1905.12886},
+  primaryclass = {cs.CV},
+  publisher = {arXiv},
+  doi = {10.48550/arXiv.1905.12886},
+  urldate = {2026-11-11},
+  abstract = {Existing Earth Vision datasets are either suitable for semantic segmentation or object detection. In this work, we introduce the first benchmark dataset for instance segmentation in aerial imagery that combines instance-level object detection and pixel-level segmentation tasks. In comparison to instance segmentation in natural scenes, aerial images present unique challenges e.g., a huge number of instances per image, large object-scale variations and abundant tiny objects. Our large-scale and densely annotated Instance Segmentation in Aerial Images Dataset (iSAID) comes with 655,451 object instances for 15 categories across 2,806 high-resolution images. Such precise per-pixel annotations for each instance ensure accurate localization that is essential for detailed scene analysis. Compared to existing small-scale aerial image based instance segmentation datasets, iSAID contains 15\$\textbackslash times\$ the number of object categories and 5\$\textbackslash times\$ the number of instances. We benchmark our dataset using two popular instance segmentation approaches for natural images, namely Mask R-CNN and PANet. In our experiments we show that direct application of off-the-shelf Mask R-CNN and PANet on aerial images provide suboptimal instance segmentation results, thus requiring specialized solutions from the research community. The dataset is publicly available at: https://captain-whu.github.io/iSAID/index.html},
+  archiveprefix = {arXiv},
+  keywords = {Computer Science - Computer Vision and Pattern Recognition,Computer Science - Machine Learning},
+  file = {/home/joker/Zotero/storage/LI557VAG/Zamir 等 - 2019 - iSAID A Large-scale Dataset for Instance Segmentation in Aerial Images.pdf;/home/joker/Zotero/storage/BUY3NWGK/1905.html}
+}
+
+@inproceedings{zhuSkySenseOOpenWorldRemote2025a,
+  title = {{{SkySense-O}}: {{Towards Open-World Remote Sensing Interpretation}} with {{Vision-Centric Visual-Language Modeling}}},
+  shorttitle = {{{SkySense-O}}},
+  booktitle = {Proceedings of the {{IEEE}}/{{CVF Conference}} on {{Computer Vision}} and {{Pattern Recognition}}},
+  author = {Zhu, Qi and Lao, Jiangwei and Ji, Deyi and Luo, Junwei and Wu, Kang and Zhang, Yingying and Ru, Lixiang and Wang, Jian and Chen, Jingdong and Yang, Ming and Liu, Dong and Zhao, Feng},
+  year = 2025,
+  pages = {14733--14744},
+  urldate = {2026-11-11},
+  langid = {english},
+  file = {/home/joker/Zotero/storage/823XXN4Z/Zhu 等 - 2025 - SkySense-O Towards Open-World Remote Sensing Interpretation with Vision-Centric Visual-Language Mod.pdf}
 }

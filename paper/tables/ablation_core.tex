@@ -1,0 +1,26 @@
+% Generated from paper/data; do not hand-edit numeric cells.
+\begin{table*}[t]
+\centering
+\caption{核心结构消融计划。所有成绩待测；每行定义见正文，结构变体需重新训练。}
+\label{tab:ablation_core}
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{L{0.30\textwidth}ccc}
+\toprule
+变体 & LoveDA & Potsdam & UAVid\\
+\midrule
+T00 完整 ReCA-SAM3 & -- & -- & --\\
+T01 简单 SAM 3 adapter & -- & -- & --\\
+T02 阻断跨类别交换 & -- & -- & --\\
+T03 无类内聚合 & -- & -- & --\\
+T04 通用 CLIP & -- & -- & --\\
+T05 无初始模板分数先验 & -- & -- & --\\
+T06 简单拼接融合 & -- & -- & --\\
+T07 SDF 单方向 & -- & -- & --\\
+\bottomrule
+\end{tabular}
+\par\vspace{3pt}
+\begin{minipage}{\textwidth}
+\footnotesize mIoU 单位为百分比；当前 LoveDA 为开发选择域，独立正式划分仍待确认；种子计划未锁定，不生成标准差。
+\end{minipage}
+\end{table*}

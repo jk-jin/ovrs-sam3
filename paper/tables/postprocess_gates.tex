@@ -1,0 +1,22 @@
+% Generated from paper/data; do not hand-edit numeric cells.
+\begin{table*}[t]
+\centering
+\caption{推理双门四组计划。同一 checkpoint、数据和提示，不增加训练次数。}
+\label{tab:postprocess_gates}
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lcccccc}
+\toprule
+组别 & Reference 门 & Prediction 门 & LoveDA & Potsdam & UAVid & 时间（ms）\\
+\midrule
+P00 & 关 & 关 & -- & -- & -- & --\\
+P10 & 开 & 关 & -- & -- & -- & --\\
+P01 & 关 & 开 & -- & -- & -- & --\\
+P11 & 开 & 开 & -- & -- & -- & --\\
+\bottomrule
+\end{tabular}
+\par\vspace{3pt}
+\begin{minipage}{\textwidth}
+\footnotesize mIoU（\%）与端到端时间均待测。关采用代码 None 语义；开启 Reference 门需额外原始 SAM 3 解码，其开销计入总时间。时间须来自实际统一硬件测量，当前不从 mIoU 长表推断。
+\end{minipage}
+\end{table*}

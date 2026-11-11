@@ -1,0 +1,21 @@
+% Generated from paper/data; do not hand-edit numeric cells.
+\begin{table*}[t]
+\centering
+\caption{监督目标消融计划。Full 为同一共享 T00；其余每行仅关闭一个损失项。}
+\label{tab:ablation_losses}
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{L{0.30\textwidth}ccccc}
+\toprule
+变体 & 蒸馏 & 抑制 & LoveDA & Potsdam & UAVid\\
+\midrule
+T00 完整 ReCA-SAM3 & 开 & 开 & -- & -- & --\\
+T08 无参考蒸馏 & 关 & 开 & -- & -- & --\\
+T09 无忽略区域抑制 & 开 & 关 & -- & -- & --\\
+\bottomrule
+\end{tabular}
+\par\vspace{3pt}
+\begin{minipage}{\textwidth}
+\footnotesize mIoU 单位为百分比；当前 LoveDA 为开发选择域，独立正式划分仍待确认；种子计划未锁定，不生成标准差。
+\end{minipage}
+\end{table*}

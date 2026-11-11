@@ -1,0 +1,25 @@
+\begin{table*}[t]
+\centering
+\caption{八数据集协议登记。类别数和背景规则来自本地配置，并不表示已与 RSKT-Seg 重处理版本一致。所有本地 ignore 值为 255；样本清单及原始场景独立性待核实。}
+\label{tab:datasets_protocol}
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lL{0.11\textwidth}L{0.17\textwidth}L{0.19\textwidth}L{0.27\textwidth}}
+\toprule
+数据集 & 本地类别数 & 本地评测划分 & 背景规则／角色 & 原始数据来源与基准状态\\
+\midrule
+DLRSD & 17 & val & 无背景类／目标 & \cite{PerformanceEvaluationSingleLabel}；基准类别与划分 TODO\\
+iSAID & 15 & val & 原始零标签忽略／源域 & \cite{zamirISAIDLargescaleDataset2019}；训练为 train，基准版本 TODO\\
+LoveDA & 7 & val & 含背景／开发选择域 & \cite{wangLoveDARemoteSensing2022}；主指标固定含背景七类，独立正式划分 TODO\\
+Potsdam & 6 & val & clutter 保留评测／目标 & 原始官方资源条目 TODO；RSKT-Seg 具体重处理 TODO\\
+Vaihingen & 6 & val & clutter 保留评测／目标 & 原始官方资源条目 TODO；RSKT-Seg 具体重处理 TODO\\
+UAVid & 8 & val & 含背景／目标 & \cite{lyuUAVidSemanticSegmentation2020}；需核对车辆合并及序列独立性\\
+UDD5 & 5 & val & 含背景／目标 & \cite{chenLargeScaleStructureMotion2018}；UDD5 版本与标签映射 TODO\\
+VDD & 7 & val & 含背景／目标 & \cite{caiVDDVariedDrone2025} 原始全文缺失；基准版本 TODO\\
+\bottomrule
+\end{tabular}
+\par\vspace{3pt}
+\begin{minipage}{\textwidth}\footnotesize
+八数据集集合来源为 RSKT-Seg~\cite{liExploringEfficientOpenVocabulary2026}，原始数据引用用于数据介绍，不能代替基准划分证据。本地 iSAID 排除背景，而 SegEarth-OV 本地版本使用含背景定义；UAVid 与 UDD5 在其他文献中存在类别合并或删背景设置，不能直接认作同协议。LoveDA 为待定的独立性例外，不标成独立目标评测。
+\end{minipage}
+\end{table*}
