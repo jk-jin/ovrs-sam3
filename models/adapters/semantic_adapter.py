@@ -212,10 +212,13 @@ class SemanticSegAdapter(nn.Module):
         self,
         student_score: torch.Tensor,
         reference_score: Optional[torch.Tensor],
+        background_enabled: bool,
     ) -> torch.Tensor:
         keep = torch.ones_like(student_score, dtype=torch.bool)
 
-        if self.prediction_prob_threshold is not None:
+        # Without a background class, zeroing every channel would make
+        # argmax assign uncertain pixels to the first foreground class.
+        if background_enabled and self.prediction_prob_threshold is not None:
             keep &= student_score >= self.prediction_prob_threshold
 
         if self.reference_prob_threshold is not None:
@@ -295,6 +298,7 @@ class SemanticSegAdapter(nn.Module):
         final_score_map = self._apply_prob_filters(
             raw_final_score_map,
             raw_reference_score_map,
+            background_enabled=bool(metadata.background_enabled),
         )
 
         outputs = {

@@ -234,9 +234,11 @@ total_loss = (
 | 参数 | 判定数据 | 低于阈值 | 关闭 |
 | --- | --- | --- | --- |
 | `reference_prob_threshold` | 原始 SAM3 reference 概率 | 学生最终分数置 0 | `None` |
-| `prediction_prob_threshold` | 学生原始 sigmoid 概率 | 学生最终分数置 0 | `None` |
+| `prediction_prob_threshold` | 学生原始 sigmoid 概率，仅当前数据集启用背景时生效 | 学生最终分数置 0 | `None` 或 `background_cfg.enabled=False` |
 
 保留条件是两道已启用的门都通过；等于阈值保留。所有提示先合并到原始类别，再统一过滤。
+
+学生预测概率门从当前 batch metadata 的 `background_enabled` 判断是否生效。无背景数据集即使配置了 `prediction_prob_threshold` 也跳过此门，避免所有通道归零后被 argmax 归入第一个真实类别。普通推理与 TTA 合并结果共用此规则；reference 门仍独立按其阈值执行。
 
 ### 8.1 LoveDA 七类口径
 
@@ -316,7 +318,9 @@ work_dirs/<experiment>/
 | `configs/_base_/visualization.py` | 固定样本可视化 |
 | `configs/datasets/` | 数据路径、类别、标签空间 |
 | `configs/protocols/isaid_loveda_semantic.py` | 训练/评测完整协议 |
+| `configs/protocols/dlrsd_loveda_semantic.py` | DLRSD train → LoveDA val 协议，关闭忽略区域抑制 |
 | `configs/experiments/main/isaid_loveda_full.py` | 论文主实验入口 |
+| `configs/experiments/main/dlrsd_loveda_full.py` | DLRSD 训练、LoveDA 七类验证入口 |
 | `configs/experiments/dev/isaid_loveda_4k.py` | 短调试入口（partial 验证） |
 | `configs/experiments/ablation/` | 已支持的参数消融入口 |
 | `configs/test/` | 各数据集独立评测 |
@@ -338,6 +342,8 @@ work_dirs/<experiment>/
 ```bash
 python tools/train.py configs/experiments/main/isaid_loveda_full.py
 python tools/train.py configs/experiments/main/isaid_loveda_full.py --print-config
+python tools/train.py configs/experiments/main/dlrsd_loveda_full.py
+python tools/train.py configs/experiments/main/dlrsd_loveda_full.py --print-config
 python tools/train.py configs/experiments/main/isaid_loveda_full.py \
   --resume-from work_dirs/main/isaid_loveda_full/latest.pth
 python tools/train.py configs/test/loveda.py --eval-only \
@@ -353,6 +359,8 @@ python tools/export_paper_results.py --root work_dirs/paper \
 python tools/export_paper_results.py --root work_dirs/paper \
   --spec paper/export_config.json --output paper/generated --tables-only
 ```
+
+DLRSD → LoveDA 实验读取 `data/datasets/DLRSD/{img_dir,ann_dir}/train`，对应自定义按场景分层的 80/20 划分（默认 seed 42）。训练使用 DLRSD 的 17 类且不启用背景；验证复用现有 LoveDA 配置。`present_ignore_suppression_weight=0.0`，其余损失、模型、优化器和 20K 训练计划沿用 iSAID → LoveDA 主实验，输出目录为 `work_dirs/main/dlrsd_loveda_full`。
 
 ## 11. 主要实现文件
 

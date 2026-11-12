@@ -64,6 +64,43 @@ class TestEffectiveConfig(unittest.TestCase):
             len(templates_mod.REMOTECLIP_PROMPT_TEMPLATES), 64
         )
 
+    def test_dlrsd_loveda_entry_values(self):
+        cfg, fingerprint = config_mod.build_effective_config(
+            REPO_ROOT / "configs/experiments/main/dlrsd_loveda_full.py"
+        )
+        baseline, _ = self._load()
+        self.assertEqual(cfg["training"]["dataset"], "dlrsd")
+        self.assertEqual(cfg["training"]["split"], "train")
+        dataset = cfg["train_dataloader"]["dataset"]
+        self.assertEqual(len(dataset["classes"]), 17)
+        self.assertEqual(
+            dataset["img_dir"], "data/datasets/DLRSD/img_dir/train"
+        )
+        self.assertEqual(
+            dataset["ann_dir"], "data/datasets/DLRSD/ann_dir/train"
+        )
+        self.assertFalse(dataset["background_cfg"]["enabled"])
+        self.assertFalse(dataset["reduce_zero_label"])
+        self.assertEqual(
+            cfg["loss"]["present_ignore_suppression_weight"], 0.0
+        )
+        expected_loss = dict(
+            baseline["loss"], present_ignore_suppression_weight=0.0
+        )
+        self.assertEqual(cfg["loss"], expected_loss)
+        for key in (
+            "model", "optimizer", "param_scheduler", "train_cfg",
+            "val_dataloader", "evaluation",
+        ):
+            self.assertEqual(cfg[key], baseline[key], key)
+        self.assertEqual(
+            cfg["runtime"]["work_dir"], "./work_dirs/main/dlrsd_loveda_full"
+        )
+        self.assertEqual(
+            cfg["logging"]["wandb"]["tags"][1], "dlrsd-train"
+        )
+        self.assertEqual(len(fingerprint), 64)
+
     def test_dedicated_cli_precedence(self):
         cfg, _ = config_mod.build_effective_config(
             self.main_config,
