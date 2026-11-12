@@ -1,527 +1,400 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-DLRSD dataset converter for MMSegmentation-style projects.
+"""Prepare ORIGINAL DLRSD.zip for ReCA-SAM3 (no mmseg/mmcv dependency).
 
-What this script does:
-1) Lets you place one or more DLRSD zip files under the dataset root
-   (or dataset_root/raw/) and extracts them in place.
-2) Collects RGB images and semantic masks from the extracted contents.
-3) Converts DLRSD annotations to contiguous MMSeg labels in {0..16, 255}.
-4) Creates a deterministic train/val split plus an `all` split.
-5) Organizes the output as:
-      out_dir/
-        img_dir/{train,val,all}/*
-        ann_dir/{train,val,all}/*.png
-        splits/{train,val,all}.txt
+Run from the project root:
+    python tools/datasets_converters/dlrsd.py data/datasets/DLRSD --overwrite
 
-Class order / palette are aligned with OVRS's DLRSD registration.
-Reference:
+Input: DLRSD/Images/<scene>/*.tif and DLRSD/Labels/<scene>/*.png
+Output: img_dir/{train,val,all}/*.jpg, ann_dir/{train,val,all}/*.png,
+        splits/{train,val,all}.txt and processing_metadata.json.
+
+CUSTOM protocol, NOT an RSKT-Seg split: within each of the 21 scene folders,
+rank stable scene/stem IDs by SHA256("seed:scene/stem"); take the first
+round-half-up(scene_size * val_ratio) for validation and the rest for training.
+Default seed=42 and val_ratio=0.2 give 1680 train / 420 val / 2100 all.
+There is no independent test set. "all" includes the training images.
+
+Original indexed labels are ALWAYS 1..17 -> 0..16, with 0/255 -> ignore 255.
+Palette PNGs are checked against the original class/color table. RGB/RGBA
+annotations use exact RGB matching. Already-converted zero-based indexed
+masks are NOT supported as input; use the original archive.
+
+Dependencies: numpy, Pillow. Worker and PNG compression environment settings
+match the other converters: RECA_CONVERTER_WORKERS, RECA_CONVERTER_PNG_COMPRESS.
+Original data: https://sites.google.com/view/zhouwx/dataset
+Class/color reference:
 https://github.com/caoql98/OVRS/blob/main/cat_seg/data/datasets/register_DLRSD.py
 """
 
 import argparse
-import glob
 import hashlib
+import json
+import math
 import multiprocessing as mp
 import os
-import os.path as osp
-import re
 import shutil
+import stat
+import tempfile
 import zipfile
-from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from pathlib import Path
+from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
+from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
 
 import numpy as np
 from PIL import Image
 
-Image.MAX_IMAGE_PIXELS = None
 
-ORIGINAL_REFERENCE = (
-    'https://github.com/caoql98/OVRS/blob/main/'
-    'cat_seg/data/datasets/register_DLRSD.py'
+CLASSES = (
+    'airplane', 'bare soil', 'buildings', 'cars', 'chaparral', 'court',
+    'dock', 'field', 'grass', 'mobile home', 'pavement', 'sand', 'sea',
+    'ship', 'tanks', 'trees', 'water',
 )
-
-# ids in the public OVRS registration are 1..17.
-DLRSD_CATEGORIES = [
-    {"color": (166, 202, 240), "id": 1, "name": "airplane"},
-    {"color": (128, 128, 0), "id": 2, "name": "bare soil"},
-    {"color": (0, 0, 128), "id": 3, "name": "buildings"},
-    {"color": (255, 0, 0), "id": 4, "name": "cars"},
-    {"color": (0, 128, 0), "id": 5, "name": "chaparral"},
-    {"color": (128, 0, 0), "id": 6, "name": "court"},
-    {"color": (255, 233, 233), "id": 7, "name": "dock"},
-    {"color": (160, 160, 164), "id": 8, "name": "field"},
-    {"color": (0, 128, 128), "id": 9, "name": "grass"},
-    {"color": (90, 87, 255), "id": 10, "name": "mobile home"},
-    {"color": (255, 255, 0), "id": 11, "name": "pavement"},
-    {"color": (255, 192, 0), "id": 12, "name": "sand"},
-    {"color": (0, 0, 255), "id": 13, "name": "sea"},
-    {"color": (255, 0, 192), "id": 14, "name": "ship"},
-    {"color": (128, 0, 128), "id": 15, "name": "tanks"},
-    {"color": (0, 255, 0), "id": 16, "name": "trees"},
-    {"color": (0, 255, 255), "id": 17, "name": "water"},
-]
-
-# contiguous MMSeg labels are 0..16.
-DLRSD_PALETTE = {cat["id"] - 1: cat["color"] for cat in DLRSD_CATEGORIES}
-VALID_LABELS = set(DLRSD_PALETTE.keys()) | {255}
-IGNORE_INDEX = 255
-PNG_COMPRESS_LEVEL = max(0, min(9, int(os.environ.get('RECA_CONVERTER_PNG_COMPRESS', '1'))))
-IMAGE_EXTS = {'.jpg', '.jpeg', '.png', '.tif', '.tiff', '.bmp'}
-MASK_EXTS = {'.png', '.tif', '.tiff', '.bmp', '.jpg', '.jpeg'}
+PALETTE = (
+    (166, 202, 240), (128, 128, 0), (0, 0, 128), (255, 0, 0),
+    (0, 128, 0), (128, 0, 0), (255, 233, 233), (160, 160, 164),
+    (0, 128, 128), (90, 87, 255), (255, 255, 0), (255, 192, 0),
+    (0, 0, 255), (255, 0, 192), (128, 0, 128), (0, 255, 0),
+    (0, 255, 255),
+)
+SCENES = (
+    'agricultural', 'airplane', 'baseballdiamond', 'beach', 'buildings',
+    'chaparral', 'denseresidential', 'forest', 'freeway', 'golfcourse',
+    'harbor', 'intersection', 'mediumresidential', 'mobilehomepark',
+    'overpass', 'parkinglot', 'river', 'runway', 'sparseresidential',
+    'storagetanks', 'tenniscourt',
+)
+MANAGED_OUTPUTS = ('img_dir', 'ann_dir', 'splits', 'processing_metadata.json')
+IMAGE_EXTENSIONS = {'.tif', '.tiff', '.png', '.jpg', '.jpeg'}
+PROTOCOL = 'dlrsd_custom_scene_sha256_v1'
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description='Convert DLRSD dataset to mmsegmentation-style layout with validation')
-    parser.add_argument('dataset_path', help='DLRSD root folder path')
-    parser.add_argument('-o', '--out_dir', help='Output path')
-    parser.add_argument('--seed', default=42, type=int,
-                        help='Deterministic seed for train/val split')
-    parser.add_argument('--val_ratio', default=0.2, type=float,
-                        help='Validation ratio inside each source group')
-    parser.add_argument('--strict', action='store_true',
-                        help='Raise an error when an unknown mask color/value is found.')
-    parser.add_argument('--skip_output_validation', action='store_true',
-                        help='Skip scanning converted masks after conversion.')
-    parser.add_argument('--force_extract', action='store_true',
-                        help='Re-extract zip archives even if extracted folders already exist.')
-    return parser.parse_args()
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('dataset_path', help='Folder containing DLRSD.zip, or the ZIP itself')
+    parser.add_argument('-o', '--out_dir', help='Default: the folder containing the archive')
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--val_ratio', type=float, default=0.2)
+    parser.add_argument('--overwrite', action='store_true',
+                        help='Replace only generated outputs after the new conversion validates')
+    parser.add_argument('--workers', type=int, default=int(
+        os.environ.get('RECA_CONVERTER_WORKERS', min(os.cpu_count() or 1, 8))))
+    args = parser.parse_args()
+    if not math.isfinite(args.val_ratio) or not 0 < args.val_ratio < 1:
+        parser.error('--val_ratio must be finite and strictly between 0 and 1')
+    if args.workers < 1:
+        parser.error('--workers must be positive')
+    return args
 
 
-def ensure_dir(path):
-    Path(path).mkdir(parents=True, exist_ok=True)
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
-def _pack_color(color):
-    return (np.uint32(color[0]) << 16) | (np.uint32(color[1]) << 8) | np.uint32(color[2])
+def find_archive(path):
+    path = Path(path).expanduser().resolve()
+    if path.is_file() and path.suffix.lower() == '.zip':
+        return path
+    if not path.is_dir():
+        raise FileNotFoundError(f'Dataset folder or ZIP not found: {path}')
+    candidates = [p for folder in (path, path / 'raw') if folder.is_dir()
+                  for p in folder.iterdir()
+                  if p.is_file() and p.name.lower() == 'dlrsd.zip']
+    if len(candidates) != 1:
+        raise ValueError(f'Expected one DLRSD.zip in {path} or its raw/ folder; '
+                         f'found {len(candidates)}. Pass the ZIP path explicitly.')
+    return candidates[0]
 
 
-_DLRSD_PACKED_KEYS = np.array(sorted(_pack_color(c) for c in DLRSD_PALETTE.values()), dtype=np.uint32)
-_DLRSD_PACKED_VALS = np.array(
-    [
-        next(idx for idx, rgb in DLRSD_PALETTE.items() if _pack_color(rgb) == key)
-        for key in _DLRSD_PACKED_KEYS
-    ],
-    dtype=np.uint8,
-)
+def extract_archive(archive, destination):
+    """Fresh extraction; never reuse an old extraction or scan old outputs."""
+    with zipfile.ZipFile(archive) as source:
+        seen = set()
+        for item in source.infolist():
+            name = PurePosixPath(item.filename)
+            if (name.is_absolute() or '..' in name.parts or '\\' in item.filename
+                    or (name.parts and ':' in name.parts[0])
+                    or stat.S_ISLNK(item.external_attr >> 16)):
+                raise ValueError(f'Unsafe archive member: {item.filename}')
+            if item.is_dir():
+                continue
+            key = str(name).casefold()
+            if key in seen:
+                raise ValueError(f'Duplicate archive member: {item.filename}')
+            seen.add(key)
+            source.extract(item, destination)
 
 
-def _extract_dir_for_archive(archive_path):
-    parent = osp.dirname(archive_path)
-    stem = osp.splitext(osp.basename(archive_path))[0]
-    return osp.join(parent, f'{stem}_extracted')
+def find_source_root(extracted):
+    roots = []
+    for folder in [extracted, *sorted(p for p in extracted.rglob('*') if p.is_dir())]:
+        children = {p.name.lower(): p for p in folder.iterdir() if p.is_dir()}
+        if 'images' in children and 'labels' in children:
+            roots.append((folder, children['images'], children['labels']))
+    if len(roots) != 1:
+        raise ValueError('Expected exactly one original DLRSD root with Images/ and Labels/; '
+                         f'found {len(roots)}. This converter does not consume D2masks or old outputs.')
+    return roots[0]
 
 
-def _extract_archive_to_sibling(archive_path, force_extract=False):
-    extract_root = _extract_dir_for_archive(archive_path)
-    if osp.isdir(extract_root) and any(True for _ in os.scandir(extract_root)) and not force_extract:
-        return extract_root
-    if osp.isdir(extract_root):
-        shutil.rmtree(extract_root)
-    ensure_dir(extract_root)
-    print(f'[Info] Extracting {osp.basename(archive_path)} -> {extract_root}')
-    with zipfile.ZipFile(archive_path) as zf:
-        zf.extractall(extract_root)
-    return extract_root
+def collect_pairs(images_root, labels_root):
+    def index_files(root, extensions):
+        files = {}
+        for path in sorted(root.rglob('*')):
+            if not path.is_file() or path.suffix.lower() not in extensions:
+                continue
+            relative = path.relative_to(root)
+            if len(relative.parts) != 2:
+                raise ValueError(f'Expected <scene>/<filename>: {path}')
+            sample_id = f'{relative.parts[0].lower()}/{path.stem.lower()}'
+            if sample_id in files:
+                raise ValueError(f'Duplicate sample ID: {sample_id}')
+            files[sample_id] = path
+        return files
+
+    images = index_files(images_root, IMAGE_EXTENSIONS)
+    labels = index_files(labels_root, {'.png'})
+    if images.keys() != labels.keys():
+        raise ValueError(f'Image/mask mismatch. Missing masks: {sorted(images.keys()-labels.keys())[:5]}; '
+                         f'missing images: {sorted(labels.keys()-images.keys())[:5]}')
+    counts = Counter(sample_id.split('/')[0] for sample_id in images)
+    if set(counts) != set(SCENES) or any(n != 100 for n in counts.values()):
+        raise ValueError('Expected the complete ORIGINAL dataset: 21 scenes x 100 pairs. '
+                         f'Found {len(images)} pairs with scene counts {dict(sorted(counts.items()))}. '
+                         'Do not mix the original dataset with processed/expanded versions.')
+    stems = [path.stem for path in images.values()]
+    if len({stem.casefold() for stem in stems}) != len(stems):
+        raise ValueError('Duplicate output filenames across scenes; refusing to overwrite samples.')
+    return [{'id': key, 'stem': images[key].stem, 'image': str(images[key]),
+             'mask': str(labels[key]), 'scene': key.split('/')[0]}
+            for key in sorted(images)]
 
 
-def _find_archives(dataset_path):
-    candidates = []
-    for root in [dataset_path, osp.join(dataset_path, 'raw')]:
-        if osp.isdir(root):
-            candidates.extend(sorted(glob.glob(osp.join(root, '*.zip'))))
-            candidates.extend(sorted(glob.glob(osp.join(root, '**', '*.zip'), recursive=True)))
-    seen = set()
-    out = []
-    for path in candidates:
-        real = osp.realpath(path)
-        if real not in seen:
-            seen.add(real)
-            out.append(path)
-    return out
+def assign_splits(records, seed, val_ratio):
+    """The rank depends ONLY on seed and relative scene/stem, never paths."""
+    for scene in SCENES:
+        group = [row for row in records if row['scene'] == scene]
+        ranked = sorted(group, key=lambda row: (
+            hashlib.sha256(f"{seed}:{row['id']}".encode('utf-8')).hexdigest(), row['id']))
+        n_val = int(math.floor(len(group) * val_ratio + 0.5))
+        if not 0 < n_val < len(group):
+            raise ValueError(f'val_ratio produces an empty train/val subset in {scene}')
+        for i, row in enumerate(ranked):
+            row['split'] = 'val' if i < n_val else 'train'
+        print(f'[Split] {scene:<20} train={len(group)-n_val} val={n_val}')
 
 
-def _normalized_stem(path):
-    stem = Path(path).stem
-    stem = re.sub(r'(_mask|_label|_labels|_gt|_seg|_annotation|_annot|_ann)$', '', stem, flags=re.IGNORECASE)
-    return stem.lower()
+def decode_mask(path):
+    with Image.open(path) as image:
+        arr = np.array(image)
+        if image.mode == 'P' or arr.ndim == 2:
+            if arr.ndim != 2 or arr.dtype.kind not in 'uib':
+                raise ValueError(f'Unsupported indexed annotation: {path}')
+            values = set(map(int, np.unique(arr)))
+            if not values <= set(range(18)) | {255}:
+                raise ValueError(f'Unknown original label IDs in {path}: {sorted(values)}')
+            # The encoding is a DATASET contract, not guessed from this image's maximum.
+            if image.mode == 'P':
+                palette = image.getpalette()
+                for value in sorted(values - {0, 255}):
+                    color = tuple(palette[3*value:3*value+3]) if palette else ()
+                    if color != PALETTE[value - 1]:
+                        raise ValueError(f'{path}: palette index {value} has RGB {color}, '
+                                         f'expected {PALETTE[value-1]}. Use ORIGINAL 1-based masks.')
+            out = np.full(arr.shape, 255, dtype=np.uint8)
+            valid = (arr >= 1) & (arr <= 17)
+            out[valid] = arr[valid] - 1
+            return out
+
+        if image.mode not in ('RGB', 'RGBA'):
+            raise ValueError(f'Unsupported annotation mode {image.mode}: {path}')
+        rgb = np.asarray(image.convert('RGB'))
+        out = np.full(rgb.shape[:2], 255, dtype=np.uint8)
+        known = np.all(rgb == (0, 0, 0), axis=-1)  # Unlabeled black -> ignore.
+        if image.mode == 'RGBA':
+            known |= arr[..., 3] == 0
+        for label_id, color in enumerate(PALETTE):
+            matches = np.all(rgb == color, axis=-1)
+            if image.mode == 'RGBA':
+                matches &= arr[..., 3] != 0
+            out[matches] = label_id
+            known |= matches
+        if not known.all():
+            colors = np.unique(rgb[~known], axis=0)[:10].tolist()
+            raise ValueError(f'Unknown RGB mask colors in {path}: {colors}')
+        return out
 
 
-def _is_mask_like(path):
-    lower = path.lower()
-    parent_tokens = set(re.split(r'[^a-z0-9]+', lower))
-    return any(tok in parent_tokens for tok in ['mask', 'masks', 'label', 'labels', 'gt', 'ann', 'annotation', 'annotations'])
-
-
-def _is_image_like(path):
-    lower = path.lower()
-    parent_tokens = set(re.split(r'[^a-z0-9]+', lower))
-    return any(tok in parent_tokens for tok in ['image', 'images', 'img', 'imgs', 'jpegimages', 'rgb'])
-
-
-def _collect_files(extracted_dirs):
-    all_files = []
-    for root in extracted_dirs:
-        for path in glob.glob(osp.join(root, '**', '*'), recursive=True):
-            if osp.isfile(path):
-                all_files.append(path)
-
-    images = []
-    masks = []
-    for path in all_files:
-        suffix = Path(path).suffix.lower()
-        if suffix in IMAGE_EXTS:
-            if _is_mask_like(path) and suffix not in {'.jpg', '.jpeg'}:
-                masks.append(path)
-            elif _is_image_like(path):
-                images.append(path)
-            else:
-                if suffix in {'.jpg', '.jpeg'}:
-                    images.append(path)
-                else:
-                    masks.append(path)
-    return sorted(images), sorted(masks)
-
-
-def _build_best_match_dict(paths):
-    by_stem = defaultdict(list)
-    by_name = defaultdict(list)
-    for path in paths:
-        by_stem[_normalized_stem(path)].append(path)
-        by_name[Path(path).name.lower()].append(path)
-    return by_stem, by_name
-
-
-def _score_path(path):
-    lower = path.lower()
-    score = 0
-    if _is_image_like(lower):
-        score += 3
-    if _is_mask_like(lower):
-        score += 2
-    score -= lower.count('multilabel') * 5
-    score -= lower.count('thumbnail') * 5
-    score -= lower.count('preview') * 5
-    return score
-
-
-def _pair_images_and_masks(image_paths, mask_paths):
-    if not image_paths:
-        raise FileNotFoundError('No candidate images found in extracted DLRSD archives.')
-    if not mask_paths:
-        raise FileNotFoundError('No candidate masks found in extracted DLRSD archives.')
-
-    mask_by_stem, mask_by_name = _build_best_match_dict(mask_paths)
-    pairs = {}
-    missing = []
-    for img_path in image_paths:
-        stem = _normalized_stem(img_path)
-        candidates = list(mask_by_stem.get(stem, []))
-        if not candidates:
-            base = Path(img_path).stem.lower()
-            candidates = list(mask_by_name.get(base + '.png', [])) + list(mask_by_name.get(base + '.tif', []))
-        if not candidates:
-            missing.append(img_path)
-            continue
-        candidates = sorted(candidates, key=lambda p: (_score_path(p), p), reverse=True)
-        pairs[img_path] = candidates[0]
-
-    if not pairs:
-        raise RuntimeError('Failed to pair any DLRSD images with masks from the extracted contents.')
-
-    if missing:
-        print(f'[Warn] {len(missing)} image(s) could not be paired with masks. Example: {missing[:5]}')
-    print(f'[Check] Paired {len(pairs)} image/mask files.')
-    return pairs
-
-
-def _safe_group_name_from_parent(path):
-    parent = Path(path).parent.name.strip().lower()
-    if parent and parent not in {'images', 'image', 'imgs', 'img', 'jpegimages', 'labels', 'label', 'masks', 'mask'}:
-        return re.sub(r'[^a-z0-9]+', '_', parent).strip('_') or 'default'
-    stem = Path(path).stem.lower()
-    m = re.match(r'([a-z_\-]+?)(?:\d+.*)?$', stem)
-    if m:
-        prefix = re.sub(r'[^a-z0-9]+', '_', m.group(1)).strip('_')
-        if prefix:
-            return prefix
-    return 'default'
-
-
-def _deterministic_shuffle(items, seed):
-    def key_fn(x):
-        digest = hashlib.sha1(f'{seed}:{x}'.encode('utf-8')).hexdigest()
-        return digest
-    return sorted(items, key=key_fn)
-
-
-def build_split(pairs, val_ratio, seed):
-    grouped = defaultdict(list)
-    for img_path in pairs:
-        grouped[_safe_group_name_from_parent(img_path)].append(img_path)
-
-    train, val = [], []
-    for group, paths in sorted(grouped.items()):
-        ordered = _deterministic_shuffle(paths, seed)
-        n_total = len(ordered)
-        n_val = int(round(n_total * val_ratio))
-        if n_total > 1:
-            n_val = max(1, min(n_total - 1, n_val))
+def convert_one(task):
+    row, stage, compress_level = task
+    stage = Path(stage)
+    stem = row['stem']
+    label = decode_mask(row['mask'])
+    image_dst = stage / 'img_dir' / 'all' / f'{stem}.jpg'
+    mask_dst = stage / 'ann_dir' / 'all' / f'{stem}.png'
+    with Image.open(row['image']) as image:
+        if image.size != (256, 256) or label.shape != (256, 256):
+            raise ValueError(f"{row['id']}: expected aligned 256x256 image/mask; "
+                             f'got image={image.size}, mask={label.shape}')
+        if image.format == 'JPEG' and image.mode == 'RGB':
+            shutil.copy2(row['image'], image_dst)
         else:
-            n_val = 0
-        val_part = ordered[:n_val]
-        train_part = ordered[n_val:]
-        val.extend(val_part)
-        train.extend(train_part)
-        print(f'[Split] group={group:<24} total={n_total:<4} train={len(train_part):<4} val={len(val_part):<4}')
-
-    train = sorted(train)
-    val = sorted(val)
-    all_items = sorted(pairs)
-    if not train:
-        raise RuntimeError('Empty train split after DLRSD split generation.')
-    if not val:
-        print('[Warn] Validation split is empty. This can happen if the dataset is extremely small.')
-    return {'train': train, 'val': val, 'all': all_items}
-
-
-def _unique_nonzero_rows(arr):
-    if arr.size == 0:
-        return np.empty((0, arr.shape[1]), dtype=arr.dtype)
-    arr = np.ascontiguousarray(arr)
-    view = arr.view(np.dtype((np.void, arr.dtype.itemsize * arr.shape[1])))
-    uniq = np.unique(view)
-    return uniq.view(arr.dtype).reshape(-1, arr.shape[1])
-
-
-def color_mask_to_index(arr, treat_alpha_zero_as_ignore=True):
-    if arr.ndim == 2:
-        label = arr.astype(np.int32, copy=False)
-        uniques = set(int(v) for v in np.unique(label).tolist())
-        if uniques.issubset(set(range(17)) | {255}):
-            return label.astype(np.uint8), []
-        if uniques.issubset(set(range(1, 18)) | {255}):
-            label = np.where(label == 255, 255, label - 1)
-            return label.astype(np.uint8), []
-        if uniques.issubset(set(range(18)) | {255}):
-            label = label.copy()
-            label[label == 0] = 255
-            valid = (label >= 1) & (label <= 17)
-            label[valid] = label[valid] - 1
-            label[(label > 16) & (label != 255)] = 255
-            return label.astype(np.uint8), []
-        bad = sorted(v for v in uniques if v not in set(range(17)) | set(range(1, 18)) | {255})
-        return np.where((label >= 0) & (label < 17), label, 255).astype(np.uint8), bad
-
-    if arr.ndim != 3:
-        raise ValueError(f'Unsupported annotation shape: {arr.shape}')
-
-    alpha = None
-    if arr.shape[2] >= 4:
-        alpha = arr[:, :, 3]
-        arr = arr[:, :, :3]
-    elif arr.shape[2] > 3:
-        arr = arr[:, :, :3]
-
-    flat = arr.reshape(-1, 3).astype(np.uint32, copy=False)
-    packed = (flat[:, 0] << 16) | (flat[:, 1] << 8) | flat[:, 2]
-    pos = np.searchsorted(_DLRSD_PACKED_KEYS, packed)
-
-    out = np.full((packed.shape[0],), IGNORE_INDEX, dtype=np.uint8)
-    in_range = pos < _DLRSD_PACKED_KEYS.size
-    matched = in_range.copy()
-    matched[in_range] = _DLRSD_PACKED_KEYS[pos[in_range]] == packed[in_range]
-    out[matched] = _DLRSD_PACKED_VALS[pos[matched]]
-
-    if alpha is not None and treat_alpha_zero_as_ignore:
-        alpha_flat = alpha.reshape(-1)
-        out[alpha_flat == 0] = IGNORE_INDEX
-        matched[alpha_flat == 0] = True
-
-    unknown = flat[~matched]
-    unknown_colors = [tuple(int(x) for x in row.tolist()) for row in _unique_nonzero_rows(unknown)]
-    label = out.reshape(arr.shape[0], arr.shape[1])
-    return label, unknown_colors
-
-
-def validate_label_values(label, file_hint):
-    uniques = np.unique(label)
-    invalid = [int(v) for v in uniques.tolist() if int(v) not in VALID_LABELS]
-    if invalid:
-        raise ValueError(
-            f'Invalid label ids in {file_hint}: {invalid}. '
-            f'Valid ids must be 0..16 or 255(ignore_index).'
-        )
-    return [int(v) for v in uniques.tolist()]
-
-
-def _save_mask(arr, path):
-    Image.fromarray(arr.astype(np.uint8)).save(path, compress_level=PNG_COMPRESS_LEVEL)
-
-
-def _worker_copy_and_convert(task):
-    img_path, mask_path, out_dir, split, strict = task
-    stem = Path(img_path).stem
-    img_ext = Path(img_path).suffix.lower()
-    if img_ext not in {'.jpg', '.jpeg'}:
-        img_ext = '.jpg'
-
-    img_dst = osp.join(out_dir, 'img_dir', split, stem + img_ext)
-    ann_dst = osp.join(out_dir, 'ann_dir', split, stem + '.png')
-
-    img = Image.open(img_path).convert('RGB')
-    img.save(img_dst, quality=95)
-
-    raw = np.asarray(Image.open(mask_path))
-    label, unknown = color_mask_to_index(raw)
-    if strict and unknown:
-        raise ValueError(
-            f'Unknown values/colors found in {mask_path}: {unknown[:10]}'
-            + (' ...' if len(unknown) > 10 else '')
-        )
-    uniques = validate_label_values(label, mask_path)
-    _save_mask(label, ann_dst)
+            image.convert('RGB').save(image_dst, quality=95, subsampling=0)
+    Image.fromarray(label).save(mask_dst, compress_level=compress_level)
+    for src, kind in ((image_dst, 'img_dir'), (mask_dst, 'ann_dir')):
+        shutil.copy2(src, stage / kind / row['split'] / src.name)
     return {
-        'file': Path(img_path).name,
-        'split': split,
-        'saved': 1,
-        'unknown': unknown,
-        'uniques': uniques,
+        'id': row['id'], 'stem': stem, 'scene': row['scene'], 'split': row['split'],
+        'source_image_sha256': sha256_file(row['image']),
+        'source_mask_sha256': sha256_file(row['mask']),
+        'output_image_sha256': sha256_file(image_dst),
+        'output_mask_sha256': sha256_file(mask_dst),
+        'class_pixel_counts': np.bincount(label.ravel(), minlength=256).tolist(),
     }
 
 
-def _get_num_workers():
-    env = os.environ.get('RECA_CONVERTER_WORKERS')
-    if env:
-        try:
-            return max(1, int(env))
-        except ValueError:
-            pass
-    cpu = os.cpu_count() or 1
-    return max(1, min(cpu, 8))
+def validate_outputs(stage, records):
+    """Check the ACTUAL scanned directories, not just the manifest lists."""
+    members = {}
+    for split in ('train', 'val', 'all'):
+        expected = {row['stem'] for row in records if split == 'all' or row['split'] == split}
+        images = stage / 'img_dir' / split
+        masks = stage / 'ann_dir' / split
+        if {p.name for p in images.iterdir()} != {f'{s}.jpg' for s in expected}:
+            raise ValueError(f'Unexpected image files in {split}')
+        if {p.name for p in masks.iterdir()} != {f'{s}.png' for s in expected}:
+            raise ValueError(f'Unexpected mask files in {split}')
+        for stem in sorted(expected):
+            with Image.open(images / f'{stem}.jpg') as image:
+                if image.mode != 'RGB' or image.size != (256, 256):
+                    raise ValueError(f'Invalid output image: {split}/{stem}')
+                image.load()
+            with Image.open(masks / f'{stem}.png') as mask:
+                arr = np.array(mask)
+                if mask.mode != 'L' or arr.shape != (256, 256):
+                    raise ValueError(f'Invalid output mask: {split}/{stem}')
+                if not np.all((arr < 17) | (arr == 255)):
+                    raise ValueError(f'Invalid output IDs: {split}/{stem}')
+        members[split] = expected
+    if members['train'] & members['val'] or members['train'] | members['val'] != members['all']:
+        raise ValueError('Train/val overlap or incomplete coverage')
+    return {split: len(names) for split, names in members.items()}
 
 
-def _run_tasks(tasks, worker_fn, prefix):
-    results = []
-    if not tasks:
-        return results
-    workers = _get_num_workers()
-    print(f'  {prefix}: {len(tasks)} files, workers={workers}')
-    if workers <= 1 or len(tasks) == 1:
-        for i, task in enumerate(tasks, start=1):
-            res = worker_fn(task)
-            results.append(res)
-            print(f"    [{i}/{len(tasks)}] {res['file']}")
-        return results
-    with ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context('spawn')) as executor:
-        future_map = {executor.submit(worker_fn, task): task for task in tasks}
-        for idx, future in enumerate(as_completed(future_map), start=1):
-            res = future.result()
-            results.append(res)
-            print(f"    [{idx}/{len(tasks)}] {res['file']}")
-    return results
-
-
-def _summarize_results(results, split):
-    split_uniques = set()
-    unknown_by_file = {}
-    for res in results:
-        split_uniques.update(res.get('uniques', []))
-        if res.get('unknown'):
-            unknown_by_file[res['file']] = res['unknown']
-    print(f'[Check] {split} converted label ids: {sorted(split_uniques)}')
-    if unknown_by_file:
-        print(f'[Warn] {split} has unknown source values/colors in {len(unknown_by_file)} file(s).')
-        for idx, (fname, colors) in enumerate(sorted(unknown_by_file.items())[:10], start=1):
-            preview = colors[:5]
-            suffix = ' ...' if len(colors) > 5 else ''
-            print(f'  [{idx}] {fname}: {preview}{suffix}')
-        print('[Warn] Unknown source values/colors were converted to 255(ignore_index).')
-
-
-def _validate_converted_output(out_dir, split):
-    ann_paths = sorted(glob.glob(osp.join(out_dir, 'ann_dir', split, '*.png')))
-    if not ann_paths:
-        raise FileNotFoundError(f'No converted annotations found under {out_dir}/ann_dir/{split}')
-    all_uniques = set()
-    for path in ann_paths:
-        label = np.asarray(Image.open(path))
-        uniques = validate_label_values(label, path)
-        all_uniques.update(uniques)
-    print(f'[Check] output ann_dir/{split} unique ids: {sorted(all_uniques)}')
-
-
-def _check_pairing(out_dir, split):
-    img_paths = sorted(glob.glob(osp.join(out_dir, 'img_dir', split, '*')))
-    ann_paths = sorted(glob.glob(osp.join(out_dir, 'ann_dir', split, '*.png')))
-    img_keys = {Path(p).stem for p in img_paths}
-    ann_keys = {Path(p).stem for p in ann_paths}
-    missing_ann = sorted(img_keys - ann_keys)
-    missing_img = sorted(ann_keys - img_keys)
-    if missing_ann:
-        raise RuntimeError(f'{split}: {len(missing_ann)} images do not have matching annotations. Example: {missing_ann[:5]}')
-    if missing_img:
-        raise RuntimeError(f'{split}: {len(missing_img)} annotations do not have matching images. Example: {missing_img[:5]}')
-    print(f'[Check] {split} image/annotation pairing is OK: {len(img_keys)} pairs')
-
-
-def _write_split_file(stems, path):
-    ensure_dir(osp.dirname(path))
-    with open(path, 'w', encoding='utf-8') as f:
-        for stem in stems:
-            f.write(stem + '\n')
+def publish_outputs(stage, output, backup):
+    """Replace only generated entries, and roll back if publication fails."""
+    backup.mkdir()
+    installed, moved = [], []
+    try:
+        for name in MANAGED_OUTPUTS:
+            target = output / name
+            if target.exists():
+                target.rename(backup / name)
+                moved.append(name)
+            (stage / name).rename(target)
+            installed.append(name)
+    except BaseException:
+        for name in reversed(installed):
+            (output / name).rename(stage / name)
+        for name in reversed(moved):
+            (backup / name).rename(output / name)
+        raise
 
 
 def main():
     args = parse_args()
-    dataset_path = args.dataset_path
-    out_dir = args.out_dir or osp.join('data', 'DLRSD')
+    compress_level = int(os.environ.get('RECA_CONVERTER_PNG_COMPRESS', '1'))
+    if not 0 <= compress_level <= 9:
+        raise ValueError('RECA_CONVERTER_PNG_COMPRESS must be in 0..9')
+    archive = find_archive(args.dataset_path)
+    input_path = Path(args.dataset_path).expanduser().resolve()
+    output = Path(args.out_dir).expanduser().resolve() if args.out_dir else (
+        input_path if input_path.is_dir() else archive.parent)
+    output.mkdir(parents=True, exist_ok=True)
+    for name in MANAGED_OUTPUTS:
+        target = output / name
+        if target.is_symlink():
+            raise ValueError(f'Refusing to replace an output symlink: {target}')
+        if target.exists() and not args.overwrite:
+            raise FileExistsError(f'{target} already exists. Use --overwrite to replace generated outputs.')
+    # Do not publish over a source archive stored inside generated subdirectories.
+    for name in MANAGED_OUTPUTS:
+        if output / name in archive.parents:
+            raise ValueError('The source ZIP must not be stored inside a managed output directory.')
 
-    if not osp.isdir(dataset_path):
-        raise FileNotFoundError(f'dataset_path does not exist: {dataset_path}')
-
-    print(f'[Source] Reference metadata from: {ORIGINAL_REFERENCE}')
-    print(f'[Input]  {dataset_path}')
-    print(f'[Output] {out_dir}')
-    print('[Info] DLRSD target setting: 17 classes -> contiguous ids 0..16, ignore_index=255')
-    print('[Info] Place official DLRSD zip file(s) under dataset_path/ or dataset_path/raw/.')
-
-    for split in ['train', 'val', 'all']:
-        ensure_dir(osp.join(out_dir, 'img_dir', split))
-        ensure_dir(osp.join(out_dir, 'ann_dir', split))
-    ensure_dir(osp.join(out_dir, 'splits'))
-
-    archives = _find_archives(dataset_path)
-    if not archives:
-        raise FileNotFoundError(
-            f'No zip archives found under {dataset_path} or {osp.join(dataset_path, "raw")}. '
-            'Please place the downloaded DLRSD zip file(s) there first.'
-        )
-    print(f'[Info] Found {len(archives)} archive(s).')
-    extract_roots = [_extract_archive_to_sibling(p, force_extract=args.force_extract) for p in archives]
-
-    image_paths, mask_paths = _collect_files(extract_roots)
-    print(f'[Info] Candidate images: {len(image_paths)} | candidate masks: {len(mask_paths)}')
-    pairs = _pair_images_and_masks(image_paths, mask_paths)
-
-    split_map = build_split(pairs, val_ratio=args.val_ratio, seed=args.seed)
-
-    for split, img_list in split_map.items():
-        print(f'Processing split: {split}')
-        tasks = [(img_path, pairs[img_path], out_dir, split, args.strict) for img_path in img_list]
-        results = _run_tasks(tasks, _worker_copy_and_convert, f'{split} files')
-        _summarize_results(results, split)
-        _check_pairing(out_dir, split)
-        stems = [Path(p).stem for p in img_list]
-        _write_split_file(stems, osp.join(out_dir, 'splits', f'{split}.txt'))
-
-    if not args.skip_output_validation:
-        for split in ['train', 'val', 'all']:
-            _validate_converted_output(out_dir, split)
-
-    print('Done!')
+    print(f'[Input] {archive}')
+    print(f'[Output] {output}')
+    print(f'[Protocol] CUSTOM split: {PROTOCOL}; seed={args.seed}, val_ratio={args.val_ratio}')
+    print('[Info] No independent test split. Fresh extraction; existing outputs are not used as input.')
+    archive_sha256 = sha256_file(archive)
+    with tempfile.TemporaryDirectory(prefix='.dlrsd-build-', dir=output) as tmp:
+        work = Path(tmp)
+        extracted, stage = work / 'raw', work / 'prepared'
+        print('[Info] Extracting the original archive...')
+        extract_archive(archive, extracted)
+        _, images_root, labels_root = find_source_root(extracted)
+        records = collect_pairs(images_root, labels_root)
+        assign_splits(records, args.seed, args.val_ratio)
+        for kind in ('img_dir', 'ann_dir'):
+            for split in ('train', 'val', 'all'):
+                (stage / kind / split).mkdir(parents=True)
+        (stage / 'splits').mkdir()
+        tasks = [(row, str(stage), compress_level) for row in records]
+        results = []
+        if args.workers == 1:
+            iterator = map(convert_one, tasks)
+            for i, result in enumerate(iterator, 1):
+                results.append(result)
+                if i % 100 == 0 or i == len(tasks):
+                    print(f'[Convert] {i}/{len(tasks)}')
+        else:
+            with ProcessPoolExecutor(max_workers=args.workers,
+                                     mp_context=mp.get_context('spawn')) as pool:
+                for i, result in enumerate(pool.map(convert_one, tasks, chunksize=8), 1):
+                    results.append(result)
+                    if i % 100 == 0 or i == len(tasks):
+                        print(f'[Convert] {i}/{len(tasks)}')
+        results.sort(key=lambda row: row['id'])
+        counts = validate_outputs(stage, records)
+        split_hashes = {}
+        for split in ('train', 'val', 'all'):
+            stems = sorted(row['stem'] for row in records if split == 'all' or row['split'] == split)
+            text = ''.join(stem + '\n' for stem in stems)
+            path = stage / 'splits' / f'{split}.txt'
+            path.write_text(text, encoding='utf-8')
+            split_hashes[split] = sha256_file(path)
+        histogram = np.sum([row.pop('class_pixel_counts') for row in results], axis=0)
+        metadata = {
+            'schema_version': 1, 'protocol_id': PROTOCOL, 'official_split': False,
+            'created_at_utc': datetime.now(timezone.utc).isoformat(),
+            'source_archive': archive.name, 'source_archive_sha256': archive_sha256,
+            'seed': args.seed, 'val_ratio': args.val_ratio,
+            'split_rule': 'per scene; ascending SHA256(UTF8(f"{seed}:{lowercase_scene}/{lowercase_stem}")); '
+                          'tie-break by sample ID; first floor(N*val_ratio+0.5) are validation',
+            'counts': counts, 'independent_test_set': False,
+            'scene_counts': dict(sorted(Counter(row['scene'] for row in records).items())),
+            'classes': list(CLASSES), 'palette': list(PALETTE),
+            'indexed_source_encoding': '1..17; 0/255 are ignored',
+            'output_encoding': '0..16; ignore=255; reduce_zero_label=False; background disabled',
+            'image_size': [256, 256], 'conversion_geometry': 'none',
+            'image_encoding': 'RGB JPEG; preserve input JPEG bytes, otherwise quality=95/subsampling=0',
+            'split_file_sha256': split_hashes,
+            'class_pixel_counts': {name: int(histogram[i]) for i, name in enumerate(CLASSES)},
+            'ignored_pixel_count': int(histogram[255]),
+            'source_url': 'https://sites.google.com/view/zhouwx/dataset',
+            'samples': results,
+        }
+        (stage / 'processing_metadata.json').write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+        publish_outputs(stage, output, work / 'previous_outputs')
+    print(f'[Check] Passed: {counts}; train/val disjoint, complete coverage, valid label IDs.')
+    print('[Done] Archive preserved. Split lists and processing_metadata.json saved.')
 
 
 if __name__ == '__main__':

@@ -14,6 +14,6 @@ evaluation = dict(
     ),
     postprocess=dict(
         reference_prob_threshold=0.1,
-        prediction_prob_threshold=0.5,
+        prediction_prob_threshold=0.0,
     ),
 )
