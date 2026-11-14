@@ -80,23 +80,6 @@ class TestPredictionProbabilityFilter(unittest.TestCase):
             outputs[OUTPUT_KEYS.final_score_map], self.scores,
         )
 
-    def test_reference_filter_remains_active_without_background(self):
-        adapter = adapter_mod.SemanticSegAdapter(
-            prediction_prob_threshold=0.5,
-            reference_prob_threshold=0.5,
-        )
-        outputs = adapter.build_infer_score_outputs(
-            self.scores,
-            make_metadata(False),
-            raw_reference_prompt_score_map=torch.tensor(
-                [[[[0.8, 0.1]], [[0.3, 0.8]]]],
-            ),
-        )
-        torch.testing.assert_close(
-            outputs[OUTPUT_KEYS.final_score_map],
-            torch.tensor([[[[0.1, 0.0]], [[0.0, 0.2]]]]),
-        )
-
     def test_tta_uses_current_dataset_background_setting(self):
         adapter = self.adapter
 

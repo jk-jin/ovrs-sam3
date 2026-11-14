@@ -364,8 +364,6 @@ class Trainer:
                 "loss_seg_dice",
                 "loss_reference_distill_bce",
                 "loss_reference_distill_weighted",
-                "loss_present_ignore_suppression_bce",
-                "loss_present_ignore_suppression_weighted",
                 "total_loss",
             ):
                 val = chunk_loss_dict.get(key)

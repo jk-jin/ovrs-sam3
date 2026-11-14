@@ -13,8 +13,8 @@ Aggregation & Four blocks; eight heads; window/shift 12/6\\
 Fusion & Two 256-channel branches; four orientations\\
 Optimizer & AdamW; base learning rate $10^{-4}$\\
 Training & Batch size 2; 20,000 steps; 1,000 warmup steps\\
-Loss weights & Segmentation 1; distillation 0.5; suppression 0.01\\
-Inference & Prompt chunk size 4; no test-time augmentation\\
+Loss weights & Segmentation 1; distillation 0.5\\
+Inference & Student-only decoding; prompt chunk size 4; no TTA\\
 \bottomrule
 \end{tabular}
 \end{table}

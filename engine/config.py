@@ -436,7 +436,6 @@ def _validate_loss_section(loss: dict) -> dict:
         "seg_bce_weight",
         "seg_dice_weight",
         "reference_distill_weight",
-        "present_ignore_suppression_weight",
     ):
         value = getattr(cfg, name)
         if not _is_finite_number(value) or float(value) < 0.0:
@@ -548,12 +547,8 @@ def _validate_evaluation(evaluation: dict, loss: dict) -> dict:
     )
     _reject_unknown(
         postprocess,
-        {"reference_prob_threshold", "prediction_prob_threshold"},
+        {"prediction_prob_threshold"},
         "evaluation.postprocess",
-    )
-    _validate_threshold(
-        postprocess.get("reference_prob_threshold"),
-        "evaluation.postprocess.reference_prob_threshold",
     )
     _validate_threshold(
         postprocess.get("prediction_prob_threshold"),
@@ -706,10 +701,6 @@ def _validate_visualization(visualization: dict) -> dict:
         raise ValueError(
             "visualization.max_samples_per_epoch must be None or >= 0."
         )
-    _validate_threshold(
-        cfg.reference_seg_threshold,
-        "visualization.reference_seg_threshold",
-    )
     return asdict(cfg)
 
 

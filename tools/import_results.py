@@ -59,7 +59,6 @@ _FLOAT_PATHS = {
     "metrics.pixel_acc",
     "checkpoint.selection.value",
     "evaluation.background_prob_threshold",
-    "evaluation.postprocess.reference_prob_threshold",
     "evaluation.postprocess.prediction_prob_threshold",
 }
 
@@ -281,7 +280,6 @@ def _apply_defaults(
             "geometry": None,
             "background_prob_threshold": None,
             "postprocess": {
-                "reference_prob_threshold": None,
                 "prediction_prob_threshold": None,
             },
             "tta": {

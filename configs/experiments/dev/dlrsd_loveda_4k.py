@@ -1,10 +1,10 @@
 _base_ = [
-    "../../protocols/isaid_loveda_semantic.py",
+    "../../protocols/dlrsd_loveda_semantic.py",
     "../../_base_/schedule/exp_4k.py",
 ]
 
 experiment = dict(
-    name="isaid_loveda_dev_4k",
+    name="dlrsd_loveda_dev_4k",
     method_id="reca_sam3",
     method_name="ReCA-SAM3",
     variant_id="full",
@@ -21,7 +21,7 @@ experiment = dict(
 )
 
 runtime = dict(
-    work_dir="./work_dirs/dev/isaid_loveda_4k",
+    work_dir="./work_dirs/dev/dlrsd_loveda_4k",
 )
 
 train_dataloader = dict(
@@ -38,7 +38,7 @@ logging = dict(
         tags=[
             "reca-sam3",
             "debug",
-            "isaid-train",
+            "dlrsd-train",
             "loveda-val",
         ],
     ),

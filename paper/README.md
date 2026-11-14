@@ -8,7 +8,7 @@
 
 - 本轮重建核对日期：2026-11-11；分支：master。
 - 当前基线 commit：`ba7054285e10bda9f033c2561e06179156279f5f`；开始时已有用户修改 `references.bib`、`sections/related_work.tex`，本轮保持其字节不变。
-- 历史工程整理基线（2026-11-11早前）：`07b2f5de15d6a8bec2de097022da1759548c9fa5`；旧 source_snapshot.json 保留为历史追踪，不作为本轮实际运行证据。
+- 历史工程整理基线（2026-11-11早前）：`07b2f5de15d6a8bec2de097022da1759548c9fa5`；最新 source_snapshot.json 已按 2026-11-14 重构更新，不作为实际训练证据。
 - 本轮只重建论文实验章节、来源记录和组表；未训练、未修改模型或训练配置、未提交Git。
 - 模型描述依据当前本地工作区；本轮核对配置见实现表与 evaluation_protocol.md，历史散列快照见 [source_snapshot.json](notes/source_snapshot.json)。
 - 已读根 AGENTS.md、DESIGN.md；已核对 SAM 3 特征/解码调用、特征聚合、注意力轴、RemoteCLIP guidance、Semantic–Detail Fusion、冻结构建、提示合并、损失与评测逻辑，以及训练/评测配置及其继承项。细节入口见下表。
@@ -20,9 +20,9 @@
 | 特征聚合 | `models/feature_aggregation.py`, `models/aggregation_attention.py` | 类间沿展开提示轴；类内普通/移位窗口；固定 RemoteCLIP 中间层与 FPN 指导；无 FFN |
 | Semantic–Detail Fusion | `models/semantic_detail_fusion.py` | 单尺度语义/细节支路，独立支路参数，各支路四方向共享卷积后逆旋转平均残差 |
 | 冻结与部分微调 | `model_builder.py`, `engine/optimizer_builder.py` | SAM 3 冻结，`core.feature_aggregation` 全部可训练，RemoteCLIP 图文 Q/V 与位置参数部分微调；融合 QKV 的 K 梯度屏蔽及权重衰减处理 |
-| 提示与损失 | `data/collate.py`, `models/adapters/semantic_adapter.py`, `losses/semantic_criterion.py` | 同义提示共享原始标签，推理最大值合并；主 BCE、蒸馏、忽略区域抑制及关闭的 Dice |
+| 提示与损失 | `data/collate.py`, `models/adapters/semantic_adapter.py`, `losses/semantic_criterion.py` | 同义提示共享原始标签，推理最大值合并；主 BCE、训练教师蒸馏及关闭的 Dice |
 | 标签与指标 | `data/dataset.py`, `engine/evaluator.py` | 背景单独映射；全类、前景组、逐类指标分开保存；零并集类别从均值排除 |
-| 训练/评测 | `configs/experiments/main/isaid_loveda_full.py`, `configs/test/loveda.py` 及继承配置 | iSAID train → LoveDA val；七类 `semantic.miou` 选择 checkpoint，正式入口完整验证；正式独立评测协议尚未确定 |
+| 训练/评测 | `configs/experiments/main/dlrsd_loveda_full.py`, `configs/test/loveda.py` 及继承配置 | DLRSD train → LoveDA val；七类 `semantic.miou` 选择 checkpoint，正式入口完整验证；正式独立评测协议尚未确定 |
 
 ## 配置快照与待定边界
 
@@ -35,8 +35,8 @@
 | 模板与相似度 | 64 模板；余弦分数乘 20；中间层索引 7、15 指导 score 类内 Q/K | TODO：固定模板、确认设计 |
 | Semantic–Detail Fusion | 72×72，256 通道，语义/细节双支路，各自四方向共享卷积 | TODO：选择最终变体，验证成本和效果 |
 | 冻结 | SAM 3 全冻结；core.feature_aggregation 全训练；RemoteCLIP 图文 attention 模式 | TODO：确认最终微调范围 |
-| 损失 | 主 BCE 1.0；Dice 0；蒸馏 0.5，忽略边界外环宽 3；忽略区域抑制 0.01 | TODO：确认目标、权重和监督范围 |
-| 推理 | SAM 3 门 0.1；学生门 0.5；评测 prob_thd 0；TTA 关闭；prompt chunk 4 | TODO：固定阈值选择数据和后处理 |
+| 损失 | 主 BCE 1.0；Dice 0；蒸馏 0.5，忽略边界外环宽 3 | TODO：确认目标、权重和监督范围 |
+| 推理 | 仅学生解码；学生门 0.0（有背景时生效）；评测 prob_thd 0；TTA 关闭；prompt chunk 4 | TODO：固定阈值选择数据和后处理 |
 | 优化与预算 | AdamW 1e-4，RemoteCLIP 乘 0.01；批量 2；20k 步；1k warmup；每 2k 评测 | TODO：统一各对照预算 |
 | 梯度裁剪 | 合并训练配置为 0.01，当前 DESIGN.md 已一致 | 最终值 TODO |
 | 日志与追踪 | 本地 JSONL 完整；W&B 默认离线，只记录主要曲线字段 | TODO：正式实验锁定 group/tags |
@@ -129,3 +129,7 @@ cd paper && latexmk -g -xelatex -halt-on-error -file-line-error -outdir=build ma
 按用户明确决定，LoveDA参考区补入CAT-Seg25.11、GSNet27.21、RSKT-Seg29.62（均来自RSKT-Seg Table1 iSAID/ViT-L）和Pi-Seg31.45（自身arXiv v3 Table1 iSAID/ViT-L）。SegEarth-OV3继续使用原报告47.4，不换成他文复现41.6。
 
 四项附来源协议标记，底层protocol_status保持unresolved，不虚构七类已核实元数据。主表现显示54个文献参考数值；既有待确认清单中这四项的“是否展示”已由用户决定，协议限制仍是事实记录。数字来源和选择许可见literature_fill_audit.md及table_spec.json。
+
+## 2026-11-14 当前实现更新
+
+本次工程重构将训练统一为 DLRSD，并删除忽略区域抑制与参考概率过滤；教师只用于训练蒸馏，验证与推理只解码学生。方法、实验、协议、计划与组表已同步；此前日期的叙述作为历史记录。当前代码快照见 notes/source_snapshot.json。本轮未执行真实模型训练；既有文献数值与引用保持原样。

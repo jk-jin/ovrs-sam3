@@ -113,3 +113,15 @@
 按用户明确决定，LoveDA参考区补入CAT-Seg25.11、GSNet27.21、RSKT-Seg29.62（均来自RSKT-Seg Table1 iSAID/ViT-L）和Pi-Seg31.45（自身arXiv v3 Table1 iSAID/ViT-L）。SegEarth-OV3继续使用原报告47.4，不换成他文复现41.6。
 
 四项附来源协议标记，底层protocol_status保持unresolved，不虚构七类已核实元数据。主表现显示54个文献参考数值；既有待确认清单中这四项的“是否展示”已由用户决定，协议限制仍是事实记录。数字来源和选择许可见literature_fill_audit.md及table_spec.json。
+
+## 2026-11-14：DLRSD 与单路径推理重构
+
+本次更新覆盖方法训练目标、推理路径、训练来源、损失消融、预测过滤和计算开销。历史段落保留为追踪，以本节及当前协议为准。
+
+| 主张 | 证据 | 状态 |
+| --- | --- | --- |
+| 当前以 DLRSD 训练、LoveDA 七类验证 | DLRSD 主入口及其有效配置 | 代码事实；未在本轮训练 |
+| 忽略区域抑制已移除 | SemanticCriterion 与配置、日志 | 代码事实 |
+| 推理仅解码学生；教师仅用于训练蒸馏 | Sam3Image、ReCASAM3、adapter、evaluator | CPU 合成路径检查；非真实模型性能证据 |
+
+五维自审：贡献不变且不新增性能主张；写作已同步训练来源与路径；实验强度仍待真实运行；目标域平均排除 DLRSD，独立目标平均另排除 LoveDA；方法开销需按单路径推理重新测量。

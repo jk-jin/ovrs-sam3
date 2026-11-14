@@ -433,10 +433,6 @@ def _validate_evaluation_block(
         "evaluation.postprocess must be an object.",
     )
     _validate_threshold(
-        postprocess.get("reference_prob_threshold", None),
-        "evaluation.postprocess.reference_prob_threshold",
-    )
-    _validate_threshold(
         postprocess.get("prediction_prob_threshold", None),
         "evaluation.postprocess.prediction_prob_threshold",
     )
@@ -907,11 +903,6 @@ def record_to_long_row(record: dict) -> dict:
         "class_names": _json_cell(evaluation.get("class_names", [])),
         "background_prob_threshold": evaluation.get(
             "background_prob_threshold"
-        ),
-        "reference_prob_threshold": get_path(
-            record,
-            "evaluation.postprocess.reference_prob_threshold",
-            None,
         ),
         "prediction_prob_threshold": get_path(
             record,

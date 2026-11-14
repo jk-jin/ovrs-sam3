@@ -11,9 +11,8 @@ experiment = dict(
         num_blocks=4,
         directional_fusion=True,
         reference_distill_weight=0.5,
-        present_ignore_suppression_weight=0.0,
     ),
-    note="DLRSD train -> LoveDA val; seven-class semantic evaluation; no ignore suppression.",
+    note="DLRSD train -> LoveDA val; seven-class semantic evaluation.",
 )
 
 runtime = dict(
@@ -45,7 +44,6 @@ visualization = dict(
     save_raw_final_prediction=False,
     save_score_summary=False,
     save_score_heatmaps=False,
-    save_reference_segmentation=False,
     vis_prob=0.02,
     max_samples_per_epoch=100,
 )

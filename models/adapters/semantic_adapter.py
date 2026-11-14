@@ -13,15 +13,10 @@ from ..task_modes import OUTPUT_KEYS
 class SemanticSegAdapter(nn.Module):
     def __init__(
         self,
-        reference_prob_threshold: Optional[float] = None,
         prediction_prob_threshold: Optional[float] = None,
     ):
         super().__init__()
 
-        self.reference_prob_threshold = self._validate_threshold(
-            reference_prob_threshold,
-            "reference_prob_threshold",
-        )
         self.prediction_prob_threshold = self._validate_threshold(
             prediction_prob_threshold,
             "prediction_prob_threshold",
@@ -208,36 +203,22 @@ class SemanticSegAdapter(nn.Module):
             dim=1,
         )
 
-    def _apply_prob_filters(
+    def _apply_prediction_filter(
         self,
         student_score: torch.Tensor,
-        reference_score: Optional[torch.Tensor],
         background_enabled: bool,
     ) -> torch.Tensor:
-        keep = torch.ones_like(student_score, dtype=torch.bool)
-
-        # Without a background class, zeroing every channel would make
-        # argmax assign uncertain pixels to the first foreground class.
-        if background_enabled and self.prediction_prob_threshold is not None:
-            keep &= student_score >= self.prediction_prob_threshold
-
-        if self.reference_prob_threshold is not None:
-            if reference_score is None:
-                raise ValueError(
-                    "reference_prob_threshold is enabled but the raw "
-                    "reference score map is missing."
-                )
-            keep &= reference_score >= self.reference_prob_threshold
-
-        return student_score.masked_fill(~keep, 0.0)
+        # Without background, keep all scores so argmax can choose a real class.
+        if not background_enabled or self.prediction_prob_threshold is None:
+            return student_score
+        return student_score.masked_fill(
+            student_score < self.prediction_prob_threshold, 0.0
+        )
 
     def build_infer_score_outputs(
         self,
         raw_prompt_score_map: torch.Tensor,
         metadata,
-        raw_reference_prompt_score_map: Optional[
-            torch.Tensor
-        ] = None,
     ) -> Dict[str, torch.Tensor]:
         raw_prompt_score_map = self._as_4d_map(
             raw_prompt_score_map,
@@ -267,37 +248,8 @@ class SemanticSegAdapter(nn.Module):
             num_classes=num_classes,
         )
 
-        raw_reference_score_map = None
-        if raw_reference_prompt_score_map is not None:
-            raw_reference_prompt_score_map = self._as_4d_map(
-                raw_reference_prompt_score_map,
-                OUTPUT_KEYS.raw_reference_prompt_score_map,
-            )
-            if tuple(raw_reference_prompt_score_map.shape) != tuple(
-                raw_prompt_score_map.shape
-            ):
-                raise ValueError(
-                    "raw_reference_prompt_score_map must match "
-                    "raw_prompt_score_map in batch, prompt count "
-                    "and spatial size, got "
-                    f"{tuple(raw_reference_prompt_score_map.shape)} vs "
-                    f"{tuple(raw_prompt_score_map.shape)}."
-                )
-            if raw_reference_prompt_score_map.device != raw_prompt_score_map.device:
-                raise ValueError(
-                    "raw_reference_prompt_score_map and "
-                    "raw_prompt_score_map must be on the same device."
-                )
-
-            raw_reference_score_map = self._merge_prompt_channels(
-                prompt_map=raw_reference_prompt_score_map,
-                prompt_to_class_id=prompt_to_class_id,
-                num_classes=num_classes,
-            )
-
-        final_score_map = self._apply_prob_filters(
+        final_score_map = self._apply_prediction_filter(
             raw_final_score_map,
-            raw_reference_score_map,
             background_enabled=bool(metadata.background_enabled),
         )
 
@@ -311,13 +263,6 @@ class SemanticSegAdapter(nn.Module):
             OUTPUT_KEYS.final_pred:
                 final_score_map.argmax(dim=1),
         }
-        if raw_reference_score_map is not None:
-            outputs[OUTPUT_KEYS.raw_reference_prompt_score_map] = (
-                raw_reference_prompt_score_map
-            )
-            outputs[OUTPUT_KEYS.raw_reference_score_map] = (
-                raw_reference_score_map
-            )
         return outputs
 
     def forward(
@@ -374,23 +319,6 @@ class SemanticSegAdapter(nn.Module):
 
         raw_prompt_score_map = prompt_logits.sigmoid()
 
-        raw_reference_prompt_score_map = None
-        if self.reference_prob_threshold is not None:
-            reference_logits = raw_outputs.get(
-                OUTPUT_KEYS.sam3_reference_logits,
-                None,
-            )
-            if reference_logits is None:
-                raise ValueError(
-                    "reference_prob_threshold is enabled but "
-                    f"{OUTPUT_KEYS.sam3_reference_logits!r} is "
-                    "missing from the raw outputs."
-                )
-            raw_reference_prompt_score_map = self._as_4d_map(
-                reference_logits,
-                OUTPUT_KEYS.sam3_reference_logits,
-            ).sigmoid()
-
         outputs = dict(raw_outputs)
         outputs[OUTPUT_KEYS.prompt_logits] = prompt_logits
         outputs[OUTPUT_KEYS.final_logits] = class_logits
@@ -400,8 +328,6 @@ class SemanticSegAdapter(nn.Module):
                 raw_prompt_score_map=
                     raw_prompt_score_map,
                 metadata=metadata,
-                raw_reference_prompt_score_map=
-                    raw_reference_prompt_score_map,
             )
         )
 

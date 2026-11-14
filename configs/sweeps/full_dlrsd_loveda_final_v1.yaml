@@ -1,5 +1,5 @@
 program: tools/train.py
-name: full_isaid_loveda_final_v1
+name: full_dlrsd_loveda_final_v1
 method: grid
 
 metric:
@@ -20,12 +20,12 @@ parameters:
     value: main
 
   logging.wandb.name:
-    value: isaid_loveda_full
+    value: dlrsd_loveda_full
 
   logging.wandb.tags:
     value:
       - reca-sam3
-      - isaid-train
+      - dlrsd-train
       - loveda-val
       - 64-templates
 
@@ -36,10 +36,10 @@ command:
   - ${env}
   - ${interpreter}
   - ${program}
-  - configs/experiments/main/isaid_loveda_full.py
+  - configs/experiments/main/dlrsd_loveda_full.py
 
   - --work-dir
-  - work_dirs/protocol/main/isaid_loveda_final_v1
+  - work_dirs/protocol/main/dlrsd_loveda_final_v1
 
   - --seed
   - "42"

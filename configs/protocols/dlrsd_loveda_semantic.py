@@ -18,10 +18,6 @@ training = dict(
     protocol_id="dlrsd_scene_stratified_80_20_seed42_train_v1",
 )
 
-loss = dict(
-    present_ignore_suppression_weight=0.0,
-)
-
 evaluation = dict(
     dataset="loveda",
     split="val",

@@ -43,10 +43,10 @@ feature_state_36 + semantic_state_36
   → aggregated_features_36 [B, P, 256, 36, 36]
 
 按 prompt_chunk_size 逐提示块：
-  原始 SAM3 reference path（训练蒸馏或 reference gate 启用时，no_grad）
+  原始 SAM3 teacher path（仅训练需要蒸馏监督时，no_grad）
     prompt_conditioned_features_72
       → 冻结 Pixel Decoder + semantic head
-      → sam3_teacher_logits / sam3_reference_logits（detached）
+      → sam3_teacher_logits（detached）
 
   学生：
     aggregated_features_36_chunk
@@ -89,9 +89,6 @@ feature_state_36 + semantic_state_36
 | `decoder_features_72` | `[B×P_chunk, 256, 72, 72]` | SemanticDetailFusion 输出 |
 | `final_logits` | `[B, P_chunk, 288, 288]` | 学生 logits |
 | `sam3_teacher_logits` | `[B, P_chunk, 288, 288]` | 训练蒸馏 teacher，detached |
-| `sam3_reference_logits` | `[B, P, 288, 288]` | 推理时原始 SAM3 reference 路径 |
-| `raw_reference_prompt_score_map` | `[B, P, H, W]` | reference logits 的 sigmoid |
-| `raw_reference_score_map` | `[B, M, H, W]` | reference 概率按类别合并 |
 
 ## 3. SAM3 分支
 
@@ -175,7 +172,7 @@ feature_state_36 + semantic_state_36
 
 ### 7.1 默认超参数
 
-有效基线以 `configs/experiments/main/isaid_loveda_full.py` 合并结果为准：
+有效基线以 `configs/experiments/main/dlrsd_loveda_full.py` 合并结果为准：
 
 * AdamW 基础学习率 `1e-4`；RemoteCLIP 图文乘 `0.01`；normalization 无 weight decay。
 * 梯度裁剪 `0.01`；AMP 开启。
@@ -197,18 +194,15 @@ total_loss = (
     seg_bce_weight * loss_seg_bce
     + seg_dice_weight * loss_seg_dice
     + reference_distill_weight * loss_reference_distill_bce
-    + present_ignore_suppression_weight
-      * loss_present_ignore_suppression_bce
 )
 ```
 
-默认 `seg_bce_weight=1.0`、`seg_dice_weight=0.0`、`reference_distill_weight=0.5`、`reference_boundary_width=3`、`present_ignore_suppression_weight=0.01`。
+默认 `seg_bce_weight=1.0`、`seg_dice_weight=0.0`、`reference_distill_weight=0.5`、`reference_boundary_width=3`。
 
 * 主 BCE：所有 `label != 255` 的像素等权，全局均值。
 * Dice：只对存在的提示计算；默认关闭。
 * Reference 蒸馏：冻结 SAM3 head 的 soft probability；只监督存在提示的全部有效像素，并额外包含 GT 外侧宽度 `reference_boundary_width` 的 ignore 边界环。
-* 存在类别忽略区域抑制：只对学生未过滤 logits、目标为 0，在存在类别的 ignore 区域计算软加损失；同义提示共享类别权重。
-* 日志键：`loss_seg_bce`、`loss_seg_dice`、`loss_reference_distill_bce`、`loss_reference_distill_weighted`、`loss_present_ignore_suppression_bce`、`loss_present_ignore_suppression_weighted`、`total_loss`。
+* 日志键：`loss_seg_bce`、`loss_seg_dice`、`loss_reference_distill_bce`、`loss_reference_distill_weighted`、`total_loss`。
 
 ### 7.4 显存设计
 
@@ -224,21 +218,13 @@ total_loss = (
 * `prompt_logits`：`[B, P, H, W]` 学生提示 logits。
 * `raw_prompt_score_map`：未过滤学生提示概率。
 * `raw_final_score_map`：未过滤学生类别概率。
-* `final_score_map`：双门过滤后的学生类别概率。
+* `final_score_map`：学生预测概率过滤后的类别概率。
 * `final_pred`：`final_score_map.argmax(dim=1)`。
 * `final_logits`：未过滤模型 logits。
-* `sam3_reference_logits`、`raw_reference_prompt_score_map`、`raw_reference_score_map`：按需解码的原始 SAM3 reference 路径。
 
-双门在原始类别空间执行：
+推理仅解码学生路径，每个提示块执行一次分割头，不生成原始 SAM3 reference 掩码。教师解码仅在训练需要蒸馏监督时执行；蒸馏关闭或没有监督像素时跳过。
 
-| 参数 | 判定数据 | 低于阈值 | 关闭 |
-| --- | --- | --- | --- |
-| `reference_prob_threshold` | 原始 SAM3 reference 概率 | 学生最终分数置 0 | `None` |
-| `prediction_prob_threshold` | 学生原始 sigmoid 概率，仅当前数据集启用背景时生效 | 学生最终分数置 0 | `None` 或 `background_cfg.enabled=False` |
-
-保留条件是两道已启用的门都通过；等于阈值保留。所有提示先合并到原始类别，再统一过滤。
-
-学生预测概率门从当前 batch metadata 的 `background_enabled` 判断是否生效。无背景数据集即使配置了 `prediction_prob_threshold` 也跳过此门，避免所有通道归零后被 argmax 归入第一个真实类别。普通推理与 TTA 合并结果共用此规则；reference 门仍独立按其阈值执行。
+`prediction_prob_threshold` 在原始类别空间执行：先将全部提示按类别逐像素取最大值合并，再将低于阈值的学生概率置 0，等于阈值保留；`None` 关闭。仅当前 batch metadata 的 `background_enabled=True` 时生效，无背景数据集跳过过滤。普通推理与 TTA 共用该规则。背景回填使用独立的 `evaluation.background_prob_threshold`。
 
 ### 8.1 LoveDA 七类口径
 
@@ -254,7 +240,7 @@ LoveDA 评测类别顺序固定为 background、building、road、water、barren
 
 ### 8.2 TTA
 
-TTA 只支持 scale=1.0 与空间翻转。多个视图分别生成学生与所需的 reference 提示概率，逆翻转并对齐后分别平均 `raw_prompt_score_map` 与 `raw_reference_prompt_score_map`，再各自合并到原始类别，最后统一执行一次双门过滤。禁止平均已过滤结果。
+TTA 只支持 scale=1.0 与空间翻转。每个视图仅解码学生路径，逆翻转并对齐后平均未过滤的 `raw_prompt_score_map`，再合并到原始类别并统一执行一次预测概率过滤。禁止平均已过滤结果。
 
 ## 9. Checkpoint、日志与标准结果
 
@@ -317,11 +303,9 @@ work_dirs/<experiment>/
 | `configs/_base_/logging.py` | 控制台、JSONL、W&B |
 | `configs/_base_/visualization.py` | 固定样本可视化 |
 | `configs/datasets/` | 数据路径、类别、标签空间 |
-| `configs/protocols/isaid_loveda_semantic.py` | 训练/评测完整协议 |
-| `configs/protocols/dlrsd_loveda_semantic.py` | DLRSD train → LoveDA val 协议，关闭忽略区域抑制 |
-| `configs/experiments/main/isaid_loveda_full.py` | 论文主实验入口 |
+| `configs/protocols/dlrsd_loveda_semantic.py` | DLRSD train → LoveDA val 完整协议 |
 | `configs/experiments/main/dlrsd_loveda_full.py` | DLRSD 训练、LoveDA 七类验证入口 |
-| `configs/experiments/dev/isaid_loveda_4k.py` | 短调试入口（partial 验证） |
+| `configs/experiments/dev/dlrsd_loveda_4k.py` | 短调试入口（partial 验证） |
 | `configs/experiments/ablation/` | 已支持的参数消融入口 |
 | `configs/test/` | 各数据集独立评测 |
 | `configs/paths.local.example.py` | 机器路径覆盖示例 |
@@ -331,7 +315,7 @@ work_dirs/<experiment>/
 
 * `runtime` 是 seed/device/AMP/work_dir 的唯一权威来源；model 与 train_cfg 不保存可编辑副本。
 * 64 条模板集中在 `data/prompt_templates.py`；最终 `config.json` 展开实际字符串。
-* `evaluation.background_prob_threshold`、`evaluation.postprocess.reference_prob_threshold`、`evaluation.postprocess.prediction_prob_threshold` 语义不同，不能合并；关闭用 `None`。
+* `evaluation.background_prob_threshold` 用于背景回填，`evaluation.postprocess.prediction_prob_threshold` 用于学生预测过滤；关闭均用 `None`。
 * 解析顺序：继承 → `--cfg-options` → 专用 CLI（`--seed`、`--device`、`--work-dir`）→ 默认值 → 校验 → 打印/保存/构建。专用 CLI 优先于同名 `--cfg-options`。
 * `--print-config` 输出最终有效配置，包含实际 seed、路径、默认值和阈值。
 * 配置指纹由规范化有效配置生成；排除输出目录、设备、日志、可视化、显示名称、保存/验证间隔、workers 和数据路径等运行字段。batch size、模型、损失、优化器、调度、训练/评测协议和阈值参与指纹。
@@ -340,14 +324,12 @@ work_dirs/<experiment>/
 ### 10.2 命令
 
 ```bash
-python tools/train.py configs/experiments/main/isaid_loveda_full.py
-python tools/train.py configs/experiments/main/isaid_loveda_full.py --print-config
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py --print-config
-python tools/train.py configs/experiments/main/isaid_loveda_full.py \
-  --resume-from work_dirs/main/isaid_loveda_full/latest.pth
+python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
+  --resume-from work_dirs/main/dlrsd_loveda_full/latest.pth
 python tools/train.py configs/test/loveda.py --eval-only \
-  --load-model-from work_dirs/main/isaid_loveda_full/best.pth
+  --load-model-from work_dirs/main/dlrsd_loveda_full/best.pth
 
 python tools/collect_experiments.py work_dirs/paper \
   --output paper/generated/data/results_long.csv
@@ -360,7 +342,8 @@ python tools/export_paper_results.py --root work_dirs/paper \
   --spec paper/export_config.json --output paper/generated --tables-only
 ```
 
-DLRSD → LoveDA 实验读取 `data/datasets/DLRSD/{img_dir,ann_dir}/train`，对应自定义按场景分层的 80/20 划分（默认 seed 42）。训练使用 DLRSD 的 17 类且不启用背景；验证复用现有 LoveDA 配置。`present_ignore_suppression_weight=0.0`，其余损失、模型、优化器和 20K 训练计划沿用 iSAID → LoveDA 主实验，输出目录为 `work_dirs/main/dlrsd_loveda_full`。
+
+训练仅保留 DLRSD：使用 `data/datasets/DLRSD/{img_dir,ann_dir}/train`，自定义按场景分层的 80/20 划分（默认 seed 42），17 类且不启用背景。LoveDA 验证沿用七类口径。iSAID 保留独立评测配置与数据处理脚本。
 
 ## 11. 主要实现文件
 
@@ -373,8 +356,8 @@ DLRSD → LoveDA 实验读取 `data/datasets/DLRSD/{img_dir,ann_dir}/train`，�
 | `models/remoteclip_guidance.py` | 64 模板分数、两次 L2 融合、空间增强 |
 | `models/semantic_detail_fusion.py` | 语义—细节双支路四方向融合 |
 | `models/maskformer_segmentation.py` | SAM3 prompt attention、Pixel Decoder、semantic head |
-| `models/adapters/semantic_adapter.py` | 双门、提示合并、推理输出 |
-| `losses/semantic_criterion.py` | 主 BCE、Dice、reference 蒸馏、忽略区域抑制 |
+| `models/adapters/semantic_adapter.py` | 学生概率过滤、提示合并、推理输出 |
+| `losses/semantic_criterion.py` | 主 BCE、Dice、训练教师蒸馏 |
 | `engine/config.py` | 配置加载、默认值、校验、指纹 |
 | `engine/trainer.py` | 流式 chunk loss/backward、验证、结果写入 |
 | `engine/experiment_hooks.py` | 统一事件、JSONL、离线 W&B |

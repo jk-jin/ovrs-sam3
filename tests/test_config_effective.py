@@ -24,7 +24,7 @@ class TestEffectiveConfig(unittest.TestCase):
             / "configs"
             / "experiments"
             / "main"
-            / "isaid_loveda_full.py"
+            / "dlrsd_loveda_full.py"
         )
 
     def _load(self):
@@ -64,11 +64,32 @@ class TestEffectiveConfig(unittest.TestCase):
             len(templates_mod.REMOTECLIP_PROMPT_TEMPLATES), 64
         )
 
+    def test_all_training_entries_use_dlrsd(self):
+        entries = list((REPO_ROOT / "configs/experiments").rglob("*.py"))
+        for path in entries:
+            with self.subTest(path=path.name):
+                cfg, _ = config_mod.build_effective_config(path)
+                self.assertEqual(cfg["training"]["dataset"], "dlrsd")
+        cfg, _ = config_mod.build_effective_config(
+            REPO_ROOT / "configs/test/isaid.py"
+        )
+        self.assertEqual(cfg["evaluation"]["dataset"], "isaid")
+
+    def test_deleted_options_are_rejected(self):
+        for option in (
+            "loss.present_ignore_suppression_weight=0.0",
+            "evaluation.postprocess.reference_prob_threshold=0.1",
+            "visualization.save_reference_segmentation=True",
+        ):
+            with self.subTest(option=option), self.assertRaises(KeyError):
+                config_mod.build_effective_config(
+                    self.main_config, cfg_options=[option]
+                )
+
     def test_dlrsd_loveda_entry_values(self):
         cfg, fingerprint = config_mod.build_effective_config(
             REPO_ROOT / "configs/experiments/main/dlrsd_loveda_full.py"
         )
-        baseline, _ = self._load()
         self.assertEqual(cfg["training"]["dataset"], "dlrsd")
         self.assertEqual(cfg["training"]["split"], "train")
         dataset = cfg["train_dataloader"]["dataset"]
@@ -81,18 +102,6 @@ class TestEffectiveConfig(unittest.TestCase):
         )
         self.assertFalse(dataset["background_cfg"]["enabled"])
         self.assertFalse(dataset["reduce_zero_label"])
-        self.assertEqual(
-            cfg["loss"]["present_ignore_suppression_weight"], 0.0
-        )
-        expected_loss = dict(
-            baseline["loss"], present_ignore_suppression_weight=0.0
-        )
-        self.assertEqual(cfg["loss"], expected_loss)
-        for key in (
-            "model", "optimizer", "param_scheduler", "train_cfg",
-            "val_dataloader", "evaluation",
-        ):
-            self.assertEqual(cfg[key], baseline[key], key)
         self.assertEqual(
             cfg["runtime"]["work_dir"], "./work_dirs/main/dlrsd_loveda_full"
         )

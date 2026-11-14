@@ -25,13 +25,6 @@ class ModelOutputKeys:
     prompt_logits: str = "prompt_logits"
     raw_prompt_score_map: str = "raw_prompt_score_map"
 
-    # Frozen SAM3 reference path, decoded only when inference requests it.
-    # sam3_reference_logits is [B, P, H, W]; score maps merge prompts to
-    # original classes by pixel-wise maximum.
-    sam3_reference_logits: str = "sam3_reference_logits"
-    raw_reference_prompt_score_map: str = "raw_reference_prompt_score_map"
-    raw_reference_score_map: str = "raw_reference_score_map"
-
     # RemoteCLIP-guided aggregation outputs
     prompt_conditioned_features_72: str = "prompt_conditioned_features_72"
     aggregated_features_36: str = "aggregated_features_36"
@@ -44,8 +37,7 @@ class ModelOutputKeys:
     clip_spatial_guidance_features: str = "clip_spatial_guidance_features"
 
     # Frozen SAM3 teacher logits — per-chunk temporary output during training
-    # for distillation only. Inference writes its optional full-prompt result
-    # to sam3_reference_logits instead.
+    # for distillation only.
     sam3_teacher_logits: str = "sam3_teacher_logits"
 
 

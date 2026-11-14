@@ -284,21 +284,6 @@
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T09",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "T09",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "T09",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
       "row": "P00",
       "dataset": "LoveDA",
       "reason": "planned_or_not_reported"
@@ -319,26 +304,6 @@
       "reason": "planned_measurement"
     },
     {
-      "row": "P10",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "P10",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "P10",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "P10",
-      "metric": "time_ms",
-      "reason": "planned_measurement"
-    },
-    {
       "row": "P01",
       "dataset": "LoveDA",
       "reason": "planned_or_not_reported"
@@ -355,26 +320,6 @@
     },
     {
       "row": "P01",
-      "metric": "time_ms",
-      "reason": "planned_measurement"
-    },
-    {
-      "row": "P11",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "P11",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "P11",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "P11",
       "metric": "time_ms",
       "reason": "planned_measurement"
     },

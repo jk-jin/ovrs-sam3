@@ -2,7 +2,7 @@
 
 ReCA-SAM3：RemoteCLIP-guided cross-class feature aggregation for open-vocabulary remote sensing semantic segmentation.
 
-当前实现只支持 semantic 模式。SAM3 backbone、encoder、Pixel Decoder 和 semantic head 冻结；RemoteCLIP 图文分支默认做 attention 微调；`core.feature_aggregation` 完整训练。
+当前实现以 DLRSD 作为训练集、LoveDA 七类验证集，只支持 semantic 模式。SAM3 backbone、encoder、Pixel Decoder 和 semantic head 冻结；RemoteCLIP 图文分支默认做 attention 微调；`core.feature_aggregation` 完整训练。
 
 ## 环境与权重
 
@@ -17,29 +17,31 @@ ReCA-SAM3：RemoteCLIP-guided cross-class feature aggregation for open-vocabular
 ## 训练
 
 ```bash
-python tools/train.py configs/experiments/main/isaid_loveda_full.py
+python tools/train.py configs/experiments/main/dlrsd_loveda_full.py
 ```
 
 查看最终有效配置（包含默认值、CLI 覆盖、seed、路径、阈值）：
 
 ```bash
-python tools/train.py configs/experiments/main/isaid_loveda_full.py --print-config
+python tools/train.py configs/experiments/main/dlrsd_loveda_full.py --print-config
 ```
 
 继续训练必须使用原实验目录和原 `config.json`：
 
 ```bash
-python tools/train.py configs/experiments/main/isaid_loveda_full.py \
-  --resume-from work_dirs/main/isaid_loveda_full/latest.pth
+python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
+  --resume-from work_dirs/main/dlrsd_loveda_full/latest.pth
 ```
 
-短调试入口 `configs/experiments/dev/isaid_loveda_4k.py` 的验证是截断的（`val_max_iters=500`），只能产生 partial/draft 结果。
+短调试入口 `configs/experiments/dev/dlrsd_loveda_4k.py` 的验证是截断的（`val_max_iters=500`），只能产生 partial/draft 结果。
+
+验证与推理仅解码学生路径，每个提示块执行一次分割头。原始 SAM3 教师路径仅在训练需要蒸馏监督时执行。
 
 ## 独立评测
 
 ```bash
 python tools/train.py configs/test/loveda.py --eval-only \
-  --load-model-from work_dirs/main/isaid_loveda_full/best.pth
+  --load-model-from work_dirs/main/dlrsd_loveda_full/best.pth
 ```
 
 独立评测写出 `results/<eval_id>.json`，不会重新打开或截断训练 `metrics.jsonl`。原生评测记录需要 checkpoint step；若权重文件没有训练元数据，显式传 `--eval-iter`。
@@ -98,9 +100,9 @@ configs/_base_/runtime.py
 configs/_base_/logging.py
 configs/_base_/visualization.py
 configs/datasets/
-configs/protocols/isaid_loveda_semantic.py
-configs/experiments/main/isaid_loveda_full.py
-configs/experiments/dev/isaid_loveda_4k.py
+configs/protocols/dlrsd_loveda_semantic.py
+configs/experiments/main/dlrsd_loveda_full.py
+configs/experiments/dev/dlrsd_loveda_4k.py
 configs/experiments/ablation/
 configs/test/
 configs/paths.local.example.py

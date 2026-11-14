@@ -419,9 +419,6 @@ class ResultWriter:
                     "background_prob_threshold", None
                 ),
                 "postprocess": {
-                    "reference_prob_threshold": postprocess.get(
-                        "reference_prob_threshold", None
-                    ),
                     "prediction_prob_threshold": postprocess.get(
                         "prediction_prob_threshold", None
                     ),

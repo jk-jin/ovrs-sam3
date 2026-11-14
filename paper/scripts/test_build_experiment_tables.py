@@ -42,9 +42,9 @@ class RendererBoundaries(unittest.TestCase):
     def test_native_conversion_and_duplicate_seed(self):
         h='a'*64
         names=['background','building','road','water','barren','forest','agricultural']
-        r=dict(eval_id='e1',source='native',record_type='single_run',role='evaluation',status='completed',is_full='true',result_path='/tmp/synthetic/result.json',seed='9',evaluated_samples='2',expected_samples='2',checkpoint_sha256=h,method_id='reca_sam3',variant_id='full',training_dataset='isaid',eval_dataset='loveda',eval_protocol_id='p',eval_split='test',miou_fraction='0',class_names=json.dumps(names),per_class=json.dumps([dict(class_id=i,class_name=n,iou=0,union=1) for i,n in enumerate(names)]))
+        r=dict(eval_id='e1',source='native',record_type='single_run',role='evaluation',status='completed',is_full='true',result_path='/tmp/synthetic/result.json',seed='9',evaluated_samples='2',expected_samples='2',checkpoint_sha256=h,method_id='reca_sam3',variant_id='full',training_dataset='dlrsd',eval_dataset='loveda',eval_protocol_id='p',eval_split='test',miou_fraction='0',class_names=json.dumps(names),per_class=json.dumps([dict(class_id=i,class_name=n,iou=0,union=1) for i,n in enumerate(names)]))
         selector=dict(eval_ids=['e1'],expected_seeds=[9],checkpoint_sha256_by_seed={'9':h},eval_protocol_id='p',eval_split='test')
-        config=dict(training_dataset='isaid',dataset_aliases={'loveda':'LoveDA'},native_decimals=2,std_ddof=1)
+        config=dict(training_dataset='dlrsd',dataset_aliases={'loveda':'LoveDA'},native_decimals=2,std_ddof=1)
         row=dict(method_id='reca_sam3',variant_id='full')
         def resolve():return m.native_value(selector,records,row,'LoveDA',config)
         records={'e1':r}

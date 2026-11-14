@@ -779,7 +779,6 @@ class TestNativeResultWriter(unittest.TestCase):
             "ignore_index": 255,
             "background_prob_threshold": 0.0,
             "postprocess": {
-                "reference_prob_threshold": 0.1,
                 "prediction_prob_threshold": 0.5,
             },
             "tta": {
@@ -821,9 +820,9 @@ class TestNativeResultWriter(unittest.TestCase):
                 },
                 training={
                     "regime": "supervised_adaptation",
-                    "dataset": "isaid",
+                    "dataset": "dlrsd",
                     "split": "train",
-                    "protocol_id": "isaid_train_v1",
+                    "protocol_id": "dlrsd_scene_stratified_80_20_seed42_train_v1",
                 },
                 evaluation=evaluation,
                 train_cfg={

@@ -72,8 +72,6 @@ class SemanticCriterionConfig:
     reference_distill_weight: float = 0.5
     reference_boundary_width: int = 3
 
-    present_ignore_suppression_weight: float = 0.01
-
 
 @dataclass
 class SegmentorBuildConfig:
@@ -94,7 +92,6 @@ class SegmentorBuildConfig:
         default_factory=AggregationConfig
     )
 
-    reference_prob_threshold: Optional[float] = 0.1
     prediction_prob_threshold: Optional[float] = 0.5
 
 
@@ -179,9 +176,6 @@ class VisualizerConfig:
     save_score_heatmaps: bool = True
     heatmap_colormap: str = "turbo"
 
-    save_reference_segmentation: bool = False
-    reference_seg_threshold: float = 0.5
-
     vis_prob: float = 0.05
     max_samples_per_epoch: Optional[int] = 50
     vis_seed: int = 42
@@ -265,7 +259,6 @@ class EvaluationConfig:
     )
     postprocess: Dict = field(
         default_factory=lambda: {
-            "reference_prob_threshold": 0.1,
             "prediction_prob_threshold": 0.5,
         }
     )

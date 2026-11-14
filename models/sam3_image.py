@@ -716,8 +716,7 @@ class Sam3Image(torch.nn.Module):
         Steps:
         1. Optionally decode the original SAM3 path (no_grad): original
            encoder72 → frozen Pixel Decoder → frozen semantic head →
-           detached logits. Training uses this for distillation; inference
-           reuses it unchanged for the SAM3 reference gate.
+           detached logits for training distillation only.
         2. Fuse aggregated36, prompt-conditioned encoder72 and FPN72 into 72×72.
         3. Student path (gradients enabled): fused 72×72 replaces the last
            FPN level of the same frozen Pixel Decoder and semantic head.
@@ -749,8 +748,8 @@ class Sam3Image(torch.nn.Module):
         ).repeat_interleave(num_prompts)
 
         result: Dict[str, torch.Tensor] = {}
-        if return_teacher_logits:
-            # Reference runs first so its high-resolution intermediates do not
+        if self.training and return_teacher_logits:
+            # Teacher runs first so its high-resolution intermediates do not
             # stay resident alongside the student graph.
             with torch.no_grad():
                 teacher_outputs = self.segmentation_head(
@@ -809,7 +808,6 @@ class Sam3Image(torch.nn.Module):
         aggregation_cache: Dict[str, Any],
         batch: BatchedDatapoint,
         return_debug: bool = False,
-        return_reference_logits: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """Full inference forward pass.
 
@@ -817,9 +815,8 @@ class Sam3Image(torch.nn.Module):
         streaming chunk path instead (run_aggregation_lowres_from_cache +
         decode_aggregation_chunk_from_cache per chunk).
 
-        return_reference_logits requests one original SAM3 decode per prompt
-        chunk and returns the concatenated detached logits. It is independent
-        of the distillation weight used during training.
+        Inference decodes the student once per prompt chunk. Teacher logits
+        are produced only by the training streaming path when needed.
         """
         if self.training:
             raise RuntimeError(
@@ -849,9 +846,6 @@ class Sam3Image(torch.nn.Module):
             device=aggregated_features_36.device,
             dtype=aggregated_features_36.dtype,
         )
-        reference_logits = None
-        if return_reference_logits:
-            reference_logits = torch.empty_like(final_logits)
 
         chunk_start = 0
         for num_chunk_prompts in chunk_prompt_counts:
@@ -866,16 +860,11 @@ class Sam3Image(torch.nn.Module):
                 aggregated_feature_36_chunk=aggregated_feature_36_chunk,
                 class_start=chunk_start,
                 class_end=chunk_end,
-                return_teacher_logits=return_reference_logits,
             )
 
             final_logits[:, chunk_start:chunk_end].copy_(
                 chunk_outputs[OUTPUT_KEYS.final_logits]
             )
-            if reference_logits is not None:
-                reference_logits[:, chunk_start:chunk_end].copy_(
-                    chunk_outputs[OUTPUT_KEYS.sam3_teacher_logits]
-                )
 
             chunk_start = chunk_end
 
@@ -888,10 +877,6 @@ class Sam3Image(torch.nn.Module):
         result: Dict[str, torch.Tensor] = {
             OUTPUT_KEYS.final_logits: final_logits.contiguous(),
         }
-        if reference_logits is not None:
-            result[OUTPUT_KEYS.sam3_reference_logits] = (
-                reference_logits.contiguous()
-            )
 
         if return_debug:
             prompt_conditioned_features_72 = aggregation_cache[

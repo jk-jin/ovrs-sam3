@@ -272,66 +272,6 @@ class ScoreAnalysisTask(VisualizationTask):
                 )
 
 
-class ReferenceSegmentationTask(VisualizationTask):
-    name = "reference_segmentation"
-
-    def run(self, manager: "VisualizationManager", ctx: VisualizationContext) -> None:
-        if not manager.cfg.save_reference_segmentation:
-            return
-
-        direct_logits = manager._build_reference_segmentation_for_visualization(
-            model=ctx.model,
-            batch=ctx.batch,
-        )
-        if direct_logits is None:
-            return
-
-        if direct_logits.dim() != 4:
-            raise ValueError(
-                "Expected SAM3 reference logits as [B, 1, H, W] or [B, C, H, W], "
-                f"got {tuple(direct_logits.shape)}."
-            )
-
-        for b in ctx.selected_indices:
-            image_id = manager._extract_image_id(ctx.batch, b)
-            sample_dir = manager._resolve_sample_dir(
-                image_id=image_id,
-                epoch=ctx.epoch,
-                stage=ctx.stage,
-            )
-
-            overlay_image = manager._extract_overlay_image(ctx.batch, b)
-            out_hw = overlay_image.size[::-1]
-            logits_b = direct_logits[b]
-
-            if logits_b.shape[0] == 1:
-                score_map = logits_b[0].sigmoid()
-                pred_mask = (
-                    score_map >= float(manager.cfg.reference_seg_threshold)
-                ).long()
-            else:
-                score_map = logits_b.softmax(dim=0).max(dim=0).values
-                pred_mask = logits_b.argmax(dim=0).long()
-
-            manager._to_heatmap_image(
-                score_map,
-                out_hw=out_hw,
-                normalize="prob",
-            ).save(sample_dir / "reference_score_heatmap.png")
-
-            pred_mask_out = manager._prepare_label_map(pred_mask, out_hw)
-
-            manager._colorize_label_map(
-                pred_mask_out,
-                num_classes=max(2, int(logits_b.shape[0])),
-            ).save(sample_dir / "reference_pred.png")
-
-            manager._overlay_label_map(
-                overlay_image,
-                pred_mask_out,
-                num_classes=max(2, int(logits_b.shape[0])),
-            ).save(sample_dir / "reference_overlay.png")
-
 class VisualizationManager:
     def __init__(
         self,
@@ -358,70 +298,7 @@ class VisualizationManager:
         return [
             BaseSemanticOverlayTask(),
             ScoreAnalysisTask(),
-            ReferenceSegmentationTask(),
         ]
-
-    @staticmethod
-    def _unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
-        return getattr(model, "module", model)
-
-    @classmethod
-    def _extract_core_model(cls, model: torch.nn.Module) -> Optional[torch.nn.Module]:
-        model = cls._unwrap_model(model)
-        return getattr(model, "core", None)
-
-    def _build_reference_segmentation_for_visualization(
-        self,
-        model: torch.nn.Module,
-        batch: Any,
-    ) -> Optional[torch.Tensor]:
-        core = self._extract_core_model(model)
-        if core is None:
-            return None
-
-        backbone = getattr(core, "backbone", None)
-        segmentation_head = getattr(core, "segmentation_head", None)
-        if backbone is None or segmentation_head is None:
-            return None
-
-        if not hasattr(backbone, "forward_image"):
-            return None
-
-        pixel_decoder = getattr(segmentation_head, "pixel_decoder", None)
-        semantic_seg_head = getattr(segmentation_head, "semantic_seg_head", None)
-
-        if pixel_decoder is None or semantic_seg_head is None:
-            return None
-
-        img_batch = getattr(batch, "img_batch", None)
-        if not isinstance(img_batch, torch.Tensor):
-            return None
-
-        seg_device = next(segmentation_head.parameters()).device
-
-        with torch.no_grad():
-            backbone_out = backbone.forward_image(img_batch)
-
-            if not isinstance(backbone_out, dict):
-                raise ValueError(
-                    "backbone.forward_image must return a dict for visualization."
-                )
-            if "backbone_fpn" not in backbone_out:
-                raise ValueError(
-                    "backbone.forward_image output must contain 'backbone_fpn'."
-                )
-
-            backbone_feats = backbone_out["backbone_fpn"]
-            if not isinstance(backbone_feats, (list, tuple)) or len(backbone_feats) == 0:
-                raise ValueError(
-                    "backbone_out['backbone_fpn'] must be a non-empty list/tuple."
-                )
-
-            backbone_feats = [feat.to(device=seg_device) for feat in backbone_feats]
-            pixel_embed = pixel_decoder(backbone_feats)
-            direct_logits = semantic_seg_head(pixel_embed)
-
-        return direct_logits.detach()
 
     def should_save(self, stage: str) -> bool:
         if not self.cfg.enabled:

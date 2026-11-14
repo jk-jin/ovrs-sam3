@@ -1,9 +1,9 @@
 # Copy to configs/paths.local.py and set machine-local paths.
 # Do not commit real credentials or machine-specific absolute paths.
-_base_ = ["experiments/main/isaid_loveda_full.py"]
+_base_ = ["experiments/main/dlrsd_loveda_full.py"]
 
 runtime = dict(
-    work_dir="./work_dirs/local/isaid_loveda_full",
+    work_dir="./work_dirs/local/dlrsd_loveda_full",
 )
 
 model = dict(
@@ -16,8 +16,8 @@ model = dict(
 
 train_dataloader = dict(
     dataset=dict(
-        img_dir="/path/to/iSAID/img_dir/train",
-        ann_dir="/path/to/iSAID/ann_dir/train",
+        img_dir="/path/to/DLRSD/img_dir/train",
+        ann_dir="/path/to/DLRSD/ann_dir/train",
     ),
 )
 

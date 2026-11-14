@@ -103,3 +103,7 @@
 按用户明确决定，LoveDA参考区补入CAT-Seg25.11、GSNet27.21、RSKT-Seg29.62（均来自RSKT-Seg Table1 iSAID/ViT-L）和Pi-Seg31.45（自身arXiv v3 Table1 iSAID/ViT-L）。SegEarth-OV3继续使用原报告47.4，不换成他文复现41.6。
 
 四项附来源协议标记，底层protocol_status保持unresolved，不虚构七类已核实元数据。主表现显示54个文献参考数值；既有待确认清单中这四项的“是否展示”已由用户决定，协议限制仍是事实记录。数字来源和选择许可见literature_fill_audit.md及table_spec.json。
+
+## 2026-11-14 工程同步
+
+当前训练来源改为 DLRSD（自定义按场景分层 80/20、seed 42），iSAID 仅保留评测；移除忽略区域抑制和参考概率过滤。验证、测试、TTA 与可视化均仅使用学生解码，教师仅在训练蒸馏需要时计算。已同步方法与实验描述、计划、组表及配置快照。历史记录中的双门和抑制消融不再适用。未在本轮训练或生成真实实验成绩；本环境缺少 xelatex.fmt，编译尝试未完成；论文 PDF 需在完整 LaTeX 环境重新编译检查。

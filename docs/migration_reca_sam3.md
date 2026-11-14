@@ -33,8 +33,6 @@
 | `final_dice_weight` | `loss.seg_dice_weight` |
 | `sam3_mask_distill_weight` | `loss.reference_distill_weight` |
 | `sam3_mask_distill_boundary_width` | `loss.reference_boundary_width` |
-| `present_ignore_suppress_weight` | `loss.present_ignore_suppression_weight` |
-| `sam3_mask_prob_thd` | `evaluation.postprocess.reference_prob_threshold` |
 | `final_mask_prob_thd` | `evaluation.postprocess.prediction_prob_threshold` |
 | `eval_cfg.prob_thd` | `evaluation.background_prob_threshold` |
 | `openclip_text_finetune` | `freeze.remoteclip_text_finetune` |
@@ -57,9 +55,6 @@
 | `clip_mid_36` | `clip_spatial_guidance_36` |
 | `sam_fpn_36` | `sam3_spatial_guidance_36` |
 | `fused_feature_72` | `decoder_features_72` |
-| `sam3_direct_logits` | `sam3_reference_logits` |
-| `raw_sam3_prompt_score_map` | `raw_reference_prompt_score_map` |
-| `raw_sam3_score_map` | `raw_reference_score_map` |
 
 保留：`final_logits`、`raw_prompt_score_map`、`raw_final_score_map`、`final_score_map`、`sam3_teacher_logits`。
 
@@ -71,8 +66,6 @@
 | `loss_final_dice` | `loss_seg_dice` |
 | `loss_sam3_mask_distill_bce` | `loss_reference_distill_bce` |
 | `loss_sam3_mask_distill_weighted` | `loss_reference_distill_weighted` |
-| `loss_present_ignore_suppress_bce` | `loss_present_ignore_suppression_bce` |
-| `loss_present_ignore_suppress_weighted` | `loss_present_ignore_suppression_weighted` |
 
 `total_loss` 不变。
 
@@ -80,8 +73,8 @@
 
 | 旧入口 | 新入口 |
 | --- | --- |
-| `configs/train/isaid_loveda_full.py` | `configs/experiments/main/isaid_loveda_full.py` |
-| `configs/train/isaid_loveda_exp.py` | `configs/experiments/dev/isaid_loveda_4k.py` |
+| `configs/train/isaid_loveda_full.py` | `configs/experiments/main/dlrsd_loveda_full.py` |
+| `configs/train/isaid_loveda_exp.py` | `configs/experiments/dev/dlrsd_loveda_4k.py` |
 | `configs/test/_base_/ovrs_sam3_eval.py` | `configs/test/_base_/reca_sam3_eval.py` |
 
 旧训练权重与旧结果目录不再兼容：

@@ -113,13 +113,11 @@ class ReCASAM3(nn.Module):
         aggregation_cache: Dict[str, Any],
         batch: BatchedDatapoint,
         return_debug: bool = False,
-        return_reference_logits: bool = False,
     ) -> Dict[str, torch.Tensor]:
         return self.core.run_aggregation_from_cache(
             aggregation_cache=aggregation_cache,
             batch=batch,
             return_debug=return_debug,
-            return_reference_logits=return_reference_logits,
         )
 
     def forward(self, batch: BatchedDatapoint) -> dict[str, torch.Tensor]:
@@ -134,18 +132,13 @@ class ReCASAM3(nn.Module):
 
         aggregation_cache = self.build_aggregation_cache(batch)
 
-        # The reference gate alone decides whether the original path is
-        # decoded; training distillation is irrelevant here.
+        # Inference decodes only the student path.
         raw_outputs = self.run_aggregation_from_cache(
             aggregation_cache=aggregation_cache,
             batch=batch,
-            return_reference_logits=(
-                getattr(self.adapter, "reference_prob_threshold", None)
-                is not None
-            ),
         )
 
-        # Inference: go through adapter for sigmoid, absolute gates, argmax.
+        # Inference: go through adapter for sigmoid, prediction filtering, argmax.
         return self.adapter(
             raw_outputs=raw_outputs,
             batch=batch,

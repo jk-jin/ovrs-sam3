@@ -44,7 +44,6 @@ FIXED_FIELDS = [
     "evaluation.geometry.input_hw",
     "evaluation.geometry.keep_ratio",
     "evaluation.background_prob_threshold",
-    "evaluation.postprocess.reference_prob_threshold",
     "evaluation.postprocess.prediction_prob_threshold",
     "evaluation.tta.enabled",
     "evaluation.tta.views",

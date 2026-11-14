@@ -1,7 +1,7 @@
-_base_ = ["../../protocols/isaid_loveda_semantic.py"]
+_base_ = ["../../protocols/dlrsd_loveda_semantic.py"]
 
 experiment = dict(
-    name="isaid_loveda_distill_025",
+    name="dlrsd_loveda_distill_025",
     method_id="reca_sam3",
     method_name="ReCA-SAM3",
     variant_id="distill_0.25",
@@ -20,7 +20,7 @@ loss = dict(
 )
 
 runtime = dict(
-    work_dir="./work_dirs/ablation/isaid_loveda_distill_025",
+    work_dir="./work_dirs/ablation/dlrsd_loveda_distill_025",
 )
 
 train_dataloader = dict(

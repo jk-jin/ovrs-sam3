@@ -11,12 +11,12 @@
 
 ## 本文当前开发设置
 
-- 实际入口：`configs/experiments/main/isaid_loveda_full.py`，继承 `configs/protocols/isaid_loveda_semantic.py`。
-- 训练：iSAID train，源域监督适配；iSAID val 用于源域保持诊断。正式大图独立性仍需真实清单确认。
+- 实际入口：`configs/experiments/main/dlrsd_loveda_full.py`，继承 `configs/protocols/dlrsd_loveda_semantic.py`。
+- 训练：DLRSD 自定义按场景分层的 80/20、seed 42 划分；train 用于监督适配，val 用于源域诊断。
 - 选择：LoveDA val，`semantic.miou` 七类含背景，取最大；每2000步完整验证配置，`val_max_iters=None`。实际 `is_full` 必须由样本统计确认，不能仅凭配置断言。
-- 候选正式目标集合：DLRSD、LoveDA、Potsdam、Vaihingen、UAVid、UDD5、VDD。LoveDA 当前参与选择，不能标为独立目标结果。
+- 候选正式目标集合：iSAID、LoveDA、Potsdam、Vaihingen、UAVid、UDD5、VDD。LoveDA 当前参与选择，不能标为独立目标结果。
 - 正式模型选择 TODO：优先考虑源域留出验证或预先固定步数，不使用目标标签。当前没有实施，不修改训练配置。
-- 可选 DLRSD 单源：不承诺已做，若启用另列 panel。
+- 当前工程仅保留 DLRSD 训练配置，iSAID 保留评测。
 
 ## 本地数据与原始数据/文献定义的区别
 
@@ -38,18 +38,18 @@ LoveDA 只保存七类 mIoU、mAcc 和逐类 IoU（含背景）。标准 JSON �
 ## 平均集合与排序
 
 - `Avg-8`：固定全部八项，包含源域，不叫跨域平均。
-- `Target Avg`：固定七项，即除iSAID外所有数据集；当前含被选择过的LoveDA，必须注明非全独立。
-- 若继续采用当前选择方式，`Independent Target Avg` 固定 DLRSD、Potsdam、Vaihingen、UAVid、UDD5、VDD；不能逐行按可用项平均。
+- `Target Avg`：固定七项，即除DLRSD外所有数据集；当前含被选择过的LoveDA，必须注明非全独立。
+- 若继续采用当前选择方式，`Independent Target Avg` 固定 iSAID、Potsdam、Vaihingen、UAVid、UDD5、VDD；不能逐行按可用项平均。
 - `table_spec.json` 当前 `averages_locked=false`；所有平均保留--。协议未核实的参考成绩不计算本项目平均，也不复制源论文 Mean 字段。
 - 当前没有 matched 文献记录。53条可读数值仅 reference_only；8条LoveDA口径未明是 unresolved，不进入七类列。文献区不排名或加粗。
 
 ## 训练矩阵与推理矩阵
 
-T00—T09 以 `data/experiment_plan.csv` 的稳定variant_id对齐。T01残差adapter和T06拼接融合结构由指导书定义，尚未宣称代码支持；T02沿展开提示对角屏蔽，同时去除同类别名交互；T05只清零初始语义状态，仍有CLIP中间层指导；T07保持256通道而非旧128通道。T08/T09关闭对应损失需重新训练。所有变体保持其余基准不变。
+T00—T08 以 `data/experiment_plan.csv` 的稳定variant_id对齐。T01残差adapter和T06拼接融合结构由指导书定义，尚未宣称代码支持；T02沿展开提示对角屏蔽，同时去除同类别名交互；T05只清零初始语义状态，仍有CLIP中间层指导；T07保持256通道而非旧128通道。T08关闭蒸馏损失需重新训练。所有变体保持其余基准不变。
 
 最低共同消融目标：LoveDA七类、Potsdam、UAVid；T00/T01/T02优先完整八项。正式单seed清单待预先固定，三者优先补三个预定seed，运行时默认42不等于已实施种子计划。单seed无标准差。
 
-P00/P10/P01/P11只切换reference/prediction门，共用T00同一权重，不重训。关用None；开阈值由开发集预先固定。需记录reference_prob_threshold、prediction_prob_threshold、背景回填阈值、TTA、权重哈希、提示集合、缓存与端到端时间。原始reference解码成本纳入时间。Full/T02未过滤输出是待补诊断，不预写结论。
+P00/P01只切换学生prediction过滤，共用T00同一权重，不重训。关用None；开阈值由开发集预先固定。需记录prediction_prob_threshold、背景回填阈值、TTA、权重哈希、提示集合、缓存与端到端时间。验证和推理只测量学生解码，不生成原始SAM3参考掩码。Full/T02未过滤输出是待补诊断，不预写结论。
 
 ## 原生结果接口与正式运行前清单
 

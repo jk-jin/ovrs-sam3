@@ -248,7 +248,7 @@ def build(args):
         r'Semantic segmentation results on the eight-dataset evaluation set (mIoU, \%).',
         'tab:main_rskt8', ['Method']+spec['datasets']+avg_headers, body,
         'L{0.25\\textwidth}'+'c'*10, True,
-        r'iSAID is the adaptation source for ReCA-SAM3. N: native evaluation; S: SegEarth-OV3 Tables 1 and 4; E: SegEarth-OV (CVPR 2025), Table 1; P: ProC-SAM3 (arXiv v2), Table I; R: RSKT-Seg, Table 1 (iSAID/ViT-L); I: Pi-Seg (arXiv v3), Table 1 (iSAID/ViT-L). Method citations identify the original methods; numerical sources are SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026}, SegEarth-OV~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025}, ProC-SAM3~\cite{songPromptCalibratedSAM32026}, RSKT-Seg~\cite{liExploringEfficientOpenVocabulary2026}, and Pi-Seg~\cite{liPerturbationRegularizedOpenVocabularyRemote2026}. Literature rows retain their reported settings and are not ranked. Unmarked LoveDA results use seven classes including background. $^{\dagger}$ denotes source-reported single-source results with category mappings not fully harmonized. -- denotes unavailable or unverified results.')
+        r'DLRSD is the adaptation source for ReCA-SAM3. N: native evaluation; S: SegEarth-OV3 Tables 1 and 4; E: SegEarth-OV (CVPR 2025), Table 1; P: ProC-SAM3 (arXiv v2), Table I; R: RSKT-Seg, Table 1 (iSAID/ViT-L); I: Pi-Seg (arXiv v3), Table 1 (iSAID/ViT-L). Method citations identify the original methods; numerical sources are SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026}, SegEarth-OV~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025}, ProC-SAM3~\cite{songPromptCalibratedSAM32026}, RSKT-Seg~\cite{liExploringEfficientOpenVocabulary2026}, and Pi-Seg~\cite{liPerturbationRegularizedOpenVocabularyRemote2026}. Literature rows retain their reported settings and are not ranked. Unmarked LoveDA results use seven classes including background. $^{\dagger}$ denotes source-reported single-source results with category mappings not fully harmonized. -- denotes unavailable or unverified results.')
     for section,filename,label,caption in [
         ('core_rows','ablation_core.tex','tab:ablation_core',r'Ablation of feature aggregation and fusion (mIoU, \%).'),
         ('loss_rows','ablation_losses.tex','tab:ablation_losses',r'Ablation of supervision terms (mIoU, \%).')]:
@@ -256,29 +256,29 @@ def build(args):
         for p in spec[section]:
             row=dict(row_id=p['plan_id'],method_id='reca_sam3',variant_id=p['variant_id'],native_selection=spec['ablation_native_selection'].get(p['plan_id'],{}))
             vals=[resolve(row,d,lit,native,spec,missing)[0] for d in spec['ablation_datasets']]
-            body.append([p['plan_id']+' '+latex(p['name'])]+(['On' if p['plan_id']!='T08' else 'Off','On' if p['plan_id']!='T09' else 'Off'] if section=='loss_rows' else [])+vals)
-        cols=['Variant']+(['Distill.','Suppress.'] if section=='loss_rows' else [])+spec['ablation_datasets']
+            body.append([p['plan_id']+' '+latex(p['name'])]+(['On' if p['plan_id']!='T08' else 'Off'] if section=='loss_rows' else [])+vals)
+        cols=['Variant']+(['Distill.'] if section=='loss_rows' else [])+spec['ablation_datasets']
         width='0.28' if section=='loss_rows' else '0.40'
         outputs[filename]=table(caption,label,cols,body,'L{'+width+'\\columnwidth}'+'c'*(len(cols)-1),False,
-            'All variants use iSAID adaptation and the same inference settings. LoveDA is the development domain. -- denotes unavailable results.')
+            'All variants use DLRSD adaptation and the same inference settings. LoveDA is the development domain. -- denotes unavailable results.')
     body=[]
     for p in spec['gate_rows']:
         row=dict(row_id=p['plan_id'],method_id='reca_sam3',variant_id='full',native_selection=spec['gate_native_selection'].get(p['plan_id'],{}))
         for d,sel in row['native_selection'].items():
             for rid in sel.get('eval_ids',[]):
                 r=native.get(rid,{})
-                for k,enabled in [('reference_prob_threshold',p['reference_gate']=='true'),('prediction_prob_threshold',p['prediction_gate']=='true')]:
+                for k,enabled in [('prediction_prob_threshold',p['prediction_gate']=='true')]:
                     raw=r.get(k,'');is_off=raw.strip().lower() in {'','none','null'}
                     if enabled==is_off:raise DataError(f'{rid}: gate {k} does not match {p["plan_id"]}')
-        body.append([p['plan_id'],'On' if p['reference_gate']=='true' else 'Off','On' if p['prediction_gate']=='true' else 'Off']+[resolve(row,d,lit,native,spec,missing)[0] for d in spec['ablation_datasets']]+[measurement(spec.get('gate_timing_selection',{}).get(p['plan_id']),native,p['plan_id'],'time_ms',missing)])
+        body.append([p['plan_id'],'On' if p['prediction_gate']=='true' else 'Off']+[resolve(row,d,lit,native,spec,missing)[0] for d in spec['ablation_datasets']]+[measurement(spec.get('gate_timing_selection',{}).get(p['plan_id']),native,p['plan_id'],'time_ms',missing)])
     # Gate evaluations must all use one explicitly selected checkpoint.
     gate_hashes={r.get('checkpoint_sha256') for p in spec['gate_native_selection'].values() for sel in p.values() for rid in sel.get('eval_ids',[]) for r in [native.get(rid,{})]}
     if len(gate_hashes)>1:raise DataError('Gate analysis must reuse the same checkpoint')
     outputs['postprocess_gates.tex']=table(
-        r'Effect of inference gates (mIoU, \%).', 'tab:postprocess_gates',
-        ['ID',r'\shortstack{Ref.\\gate}',r'\shortstack{Pred.\\gate}']+spec['ablation_datasets']+[r'\shortstack{Time\\(ms)}'],
-        body,'l'+'c'*6,False,
-        'All settings share one checkpoint. Ref. and Pred. denote reference and prediction gates. Latency includes reference decoding when enabled. -- denotes unavailable results.')
+        r'Effect of student prediction filtering (mIoU, \%).', 'tab:postprocess_gates',
+        ['ID',r'\shortstack{Pred.\\filter}']+spec['ablation_datasets']+[r'\shortstack{Time\\(ms)}'],
+        body,'l'+'c'*(len(spec['ablation_datasets'])+2),False,
+        'All settings share one checkpoint and decode only the student path. The prediction filter applies only to datasets with background enabled. -- denotes unavailable results.')
     outputs['efficiency.tex']=table(
         'Computational cost under a common measurement setup.', 'tab:efficiency',
         ['Method',r'\shortstack{Total\\(M)}',r'\shortstack{Trainable\\(M)}',r'\shortstack{Time\\(ms)}',r'\shortstack{Memory\\(GB)}'],

@@ -213,9 +213,6 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
         runtime = dict(cfg["runtime"])
 
         model_cfg["device"] = str(runtime["device"])
-        model_cfg["reference_prob_threshold"] = postprocess[
-            "reference_prob_threshold"
-        ]
         model_cfg["prediction_prob_threshold"] = postprocess[
             "prediction_prob_threshold"
         ]
@@ -916,7 +913,6 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
     def build_adapter(cls, cfg: SegmentorBuildConfig) -> nn.Module:
         if cfg.task_mode == TASK_MODE_SEMANTIC:
             return SemanticSegAdapter(
-                reference_prob_threshold=cfg.reference_prob_threshold,
                 prediction_prob_threshold=cfg.prediction_prob_threshold,
             )
 

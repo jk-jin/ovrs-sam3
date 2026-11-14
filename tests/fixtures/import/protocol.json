@@ -2,9 +2,9 @@
   "schema_version": 1,
   "training": {
     "regime": "supervised_adaptation",
-    "dataset": "isaid",
+    "dataset": "dlrsd",
     "split": "train",
-    "protocol_id": "synthetic-train-v1"
+    "protocol_id": "synthetic-dlrsd-train-v1"
   },
   "evaluation": {
     "dataset": "loveda",
@@ -35,7 +35,6 @@
     },
     "background_prob_threshold": 0.0,
     "postprocess": {
-      "reference_prob_threshold": 0.1,
       "prediction_prob_threshold": 0.5
     },
     "tta": {
