@@ -1,6 +1,6 @@
 \section{实验}
 \subsection{数据集与评价指标}
-本文采用 RSKT-Seg 的八数据集评测集合，包括 DLRSD、iSAID、LoveDA、Potsdam、Vaihingen、UAVid、UDD5 和 VDD~\cite{liExploringEfficientOpenVocabulary2026}。这些数据集覆盖地表覆盖、密集航空目标及无人机斜视场景。表~\ref{tab:datasets_protocol} 汇总本方法的类别设置与数据划分。DLRSD 采用按场景分层的自定义 80/20 划分，划分种子为 42；训练部分用于单源监督适配，验证部分用于源域评测，其余数据集用于跨数据集分析。LoveDA 验证集同时用于模型选择，其结果单独标识为开发域表现。
+本文采用 RSKT-Seg 的八数据集评测集合，包括 DLRSD、iSAID、LoveDA、Potsdam、Vaihingen、UAVid、UDD5 和 VDD~\cite{liExploringEfficientOpenVocabulary2026}。这些数据集覆盖地表覆盖、密集航空目标及无人机斜视场景。表~\ref{tab:datasets_protocol} 汇总本方法的类别设置与数据划分。DLRSD 采用 OVRSISBench 发布的训练与验证划分，分别包含 5601 和 1401 张图像；训练部分用于单源监督适配，验证部分用于源域评测，其余数据集用于跨数据集分析。LoveDA 验证集同时用于模型选择，其结果单独标识为开发域表现。
 \input{tables/datasets_protocol}
 \input{tables/main_rskt8}
 

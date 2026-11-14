@@ -15,6 +15,6 @@ runtime = dict(
 evaluation = dict(
     dataset="dlrsd",
     split="val",
-    data_version="prepared-v1",
-    protocol_id="dlrsd_val_resize1008_v1",
+    data_version="ovrsisbench-dlrsd-official-v1",
+    protocol_id="dlrsd_ovrsisbench_official_val_resize1008_v1",
 )

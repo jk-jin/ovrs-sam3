@@ -1,10 +1,10 @@
 {
   "date": "2026-11-14",
-  "base_commit": "4d3cae644af91431a5e60d14293422b17854dcca",
+  "base_commit": "64bd1b834b74145e38630e6acd5789c72e057acd",
   "branch": "master",
   "sha256": {
-    "DESIGN.md": "16dd2c7d0aa6f2db72440bd1a806dfcbb3d6fa7c962283c1a420e5df1c9c4621",
-    "README.md": "c838601bf18fc6e0bcd9ac79b7620b52cb412af0ad375ce37dbfba38a3dc6ebf",
+    "DESIGN.md": "949fa19747f950f45fa913bc5498257b3d10ab5fbcf39dd8d3506106bff00882",
+    "README.md": "ecd40f42fc0dcf4cbc5d9751c97149591e4527e96ccce16ec41b85e4a91e792e",
     "config_dataclasses.py": "7d38924475e17d6a1e081ed22da3c056aa1a315dfbbbec4cc5c8455ceb709f55",
     "configs/_base_/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "configs/_base_/dataloader/semantic_eval.py": "41e0463ec874da06dc5889d90d3c723a2c8e4eac24db9a6f1a9ab33192107b80",
@@ -43,10 +43,10 @@
     "configs/experiments/dev/dlrsd_loveda_4k.py": "7276120217c8d287db92e26fb1e450c3ced9c759698e5dfd3a93f47cbea4d79d",
     "configs/experiments/main/dlrsd_loveda_full.py": "6cb0cb9c2d6d8c4028d29f78a2f09c7b4fee4168998deabccaf9c8126c1705c6",
     "configs/paths.local.example.py": "f333043881ac3c736258d596f5a11f6b39a8400f9ecd1fb892fe103060885e9f",
-    "configs/protocols/dlrsd_loveda_semantic.py": "565bb66596d0546978415d9c9c1879efbf66cca511356825a7ca25abb1cb7c7b",
+    "configs/protocols/dlrsd_loveda_semantic.py": "fe6aa3eb9b1fd21b318cde803272626faaca712b19ae0dec5d5623c61dbc2983",
     "configs/test/_base_/reca_sam3_eval.py": "af43afc703d14ba607019b9b98ee8bb25997c13cf43abdfec4bd3cd7f8a1cb05",
     "configs/test/deepglobe.py": "e8b57327286a89687b8387fc8cb5ded1ff3885ffc064d73a5a304955b5763d61",
-    "configs/test/dlrsd.py": "64dc6644892775889da6b2069cc0daef5f9560c7e7ea3f158fe8dca430d325f9",
+    "configs/test/dlrsd.py": "ef37df0625f485ef12c0d50f85eff16ee715cf390bf0a4946f12bf03ce5a32e9",
     "configs/test/fast.py": "0ddcb06dc5fb2e933d7de10028bc336d6e4e7a7bb3e551c89351376c11d297f5",
     "configs/test/flair.py": "869aa8866e4eff7840a408b3d2ffc4b14b636005b0e1a1f743891bba91bf4402",
     "configs/test/floodnet.py": "d1a0586723abea100061f680c0fa0a454eb19f8746c8127d5358915c4fb76de0",
@@ -103,7 +103,7 @@
     "tools/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "tools/collect_experiments.py": "24e513df4249d3adb7277dabf08d25941517dcb5542b0f271eb47309efe0451f",
     "tools/datasets_converters/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "tools/datasets_converters/dlrsd.py": "0d6519e7a5c0e629b4790d5e87221d416e965f186d14983e2dbca32639321ece",
+    "tools/datasets_converters/dlrsd.py": "2cd089cd47fdff32b18aa682991f386b4edfc364004947d734dc18b4d31b0a56",
     "tools/datasets_converters/isaid.py": "f2669e51243344d1530a1e0405a99957d7ea5005315957606321bade239726c0",
     "tools/datasets_converters/loveda.py": "8052135159161f46e20615d42d3ecd3fc3e02b82e6935321a35c2cb4b509481a",
     "tools/datasets_converters/potsdam.py": "3daddc7f7fd89d5db203ff552766655bc88a72bb75b6ec57d2a893092ebd22ce",
@@ -537,7 +537,7 @@
         "regime": "supervised_adaptation",
         "dataset": "dlrsd",
         "split": "train",
-        "protocol_id": "dlrsd_scene_stratified_80_20_seed42_train_v1"
+        "protocol_id": "dlrsd_ovrsisbench_official_train_v1"
       },
       "experiment": {
         "name": "dlrsd_loveda_full",
@@ -852,5 +852,19 @@
       }
     }
   },
-  "note": "Current refactor working-tree source hashes and effective configurations. base_commit is the parent before this change, not an experiment run. No real-model training or evaluation was executed."
+  "note": "Current refactor working-tree source hashes and effective configurations. base_commit is the parent before this change, not an experiment run. No real-model training or evaluation was executed.",
+  "data_preparation": {
+    "dataset": "DLRSD",
+    "protocol_id": "dlrsd_ovrsisbench_official_v1",
+    "source_url": "https://huggingface.co/datasets/kkk2026/OVRSISBenchtest/blob/main/DLRSD.zip",
+    "source_archive_sha256": "4dd6c785daabce6ba2c3b886cae16d2803d4fb3af99f2639ab1634a5ebdf5f2b",
+    "official_counts": {
+      "train": 5601,
+      "val": 1401,
+      "all": 7002
+    },
+    "label_encoding": "D2masks 0..16 preserved; class zero is airplane",
+    "all_includes_training": true,
+    "validation": "complete official archive converted; all output image bytes and mask pixels compared with their source"
+  }
 }

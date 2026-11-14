@@ -15,7 +15,7 @@ training = dict(
     regime="supervised_adaptation",
     dataset="dlrsd",
     split="train",
-    protocol_id="dlrsd_scene_stratified_80_20_seed42_train_v1",
+    protocol_id="dlrsd_ovrsisbench_official_train_v1",
 )
 
 evaluation = dict(

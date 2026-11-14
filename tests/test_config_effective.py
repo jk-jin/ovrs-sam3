@@ -92,6 +92,9 @@ class TestEffectiveConfig(unittest.TestCase):
         )
         self.assertEqual(cfg["training"]["dataset"], "dlrsd")
         self.assertEqual(cfg["training"]["split"], "train")
+        self.assertEqual(
+            cfg["training"]["protocol_id"], "dlrsd_ovrsisbench_official_train_v1"
+        )
         dataset = cfg["train_dataloader"]["dataset"]
         self.assertEqual(len(dataset["classes"]), 17)
         self.assertEqual(

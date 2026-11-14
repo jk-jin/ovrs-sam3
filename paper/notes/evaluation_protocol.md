@@ -12,7 +12,7 @@
 ## 本文当前开发设置
 
 - 实际入口：`configs/experiments/main/dlrsd_loveda_full.py`，继承 `configs/protocols/dlrsd_loveda_semantic.py`。
-- 训练：DLRSD 自定义按场景分层的 80/20、seed 42 划分；train 用于监督适配，val 用于源域诊断。
+- 训练：DLRSD 采用官方 OVRSISBench 划分（5601 train / 1401 val），保留发布包中的具体样本成员；train 用于监督适配，val 用于源域诊断。
 - 选择：LoveDA val，`semantic.miou` 七类含背景，取最大；每2000步完整验证配置，`val_max_iters=None`。实际 `is_full` 必须由样本统计确认，不能仅凭配置断言。
 - 候选正式目标集合：iSAID、LoveDA、Potsdam、Vaihingen、UAVid、UDD5、VDD。LoveDA 当前参与选择，不能标为独立目标结果。
 - 正式模型选择 TODO：优先考虑源域留出验证或预先固定步数，不使用目标标签。当前没有实施，不修改训练配置。

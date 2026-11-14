@@ -14,6 +14,18 @@ ReCA-SAM3：RemoteCLIP-guided cross-class feature aggregation for open-vocabular
 
 机器本地路径可复制 `configs/paths.local.example.py` 为 `configs/paths.local.py` 后覆盖，不要把真实凭据或机器绝对路径提交。
 
+## DLRSD 数据准备
+
+将官方 OVRSISBench 的 `DLRSD.zip` 放在 `data/datasets/DLRSD/`，在项目根目录运行：
+
+```bash
+python tools/datasets_converters/dlrsd.py data/datasets/DLRSD --overwrite
+```
+
+保留压缩包内的官方划分：5601 张训练、1401 张验证；生成 `img_dir/{train,val,all}`、`ann_dir/{train,val,all}`、`splits/*.txt` 和 `processing_metadata.json`。读取 `D2masks`，直接保留 0..16 标签（0 是 airplane），不再减 1，不重新划分。原始 JPEG 字节与压缩包保留。
+
+`--overwrite` 仅替换脚本生成的目录和元数据，用于更新之前的自定义划分；转换失败时原输出保留。`all` 为 7002 张训练与验证样本的并集，不是独立测试集。压缩包也可使用绝对路径，输出目录默认与压缩包所在目录一致；`-o` 可指定输出目录。
+
 ## 训练
 
 ```bash

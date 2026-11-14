@@ -343,7 +343,9 @@ python tools/export_paper_results.py --root work_dirs/paper \
 ```
 
 
-训练仅保留 DLRSD：使用 `data/datasets/DLRSD/{img_dir,ann_dir}/train`，自定义按场景分层的 80/20 划分（默认 seed 42），17 类且不启用背景。LoveDA 验证沿用七类口径。iSAID 保留独立评测配置与数据处理脚本。
+DLRSD 预处理：`python tools/datasets_converters/dlrsd.py data/datasets/DLRSD --overwrite`。压缩包为该目录下的 `DLRSD.zip`，使用官方 `D2masks` 的 0..16 编号，不再减 1。脚本保留官方目录定义的训练与验证成员，生成训练配置可直接读取的目录、划分清单和处理元数据；`all` 包含训练样本。
+
+训练仅保留 DLRSD：使用 `data/datasets/DLRSD/{img_dir,ann_dir}/train`，保留官方 OVRSISBench 划分（5601 train / 1401 val / 7002 all），17 类且不启用背景。LoveDA 验证沿用七类口径。iSAID 保留独立评测配置与数据处理脚本。
 
 ## 11. 主要实现文件
 

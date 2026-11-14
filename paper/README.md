@@ -133,3 +133,7 @@ cd paper && latexmk -g -xelatex -halt-on-error -file-line-error -outdir=build ma
 ## 2026-11-14 当前实现更新
 
 本次工程重构将训练统一为 DLRSD，并删除忽略区域抑制与参考概率过滤；教师只用于训练蒸馏，验证与推理只解码学生。方法、实验、协议、计划与组表已同步；此前日期的叙述作为历史记录。当前代码快照见 notes/source_snapshot.json。本轮未执行真实模型训练；既有文献数值与引用保持原样。
+
+## 官方 DLRSD 数据划分
+
+2026-11-14 更新：数据预处理采用 RSKT-Seg 官方发布的 OVRSISBench DLRSD.zip，保留 5601 train / 1401 val 成员和 D2masks 的 0..16 编号。处理脚本已在完整压缩包上运行，并逐项核对图像字节与标签像素；all 为 7002 张训练和验证样本的并集。数据协议标识与快照已同步；模型选择仍为 LoveDA val，本次未改变目标域评测协议或新增训练成绩。
