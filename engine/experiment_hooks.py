@@ -15,6 +15,7 @@ WANDB_TRAIN_KEYS = {
     "loss_seg_bce",
     "loss_reference_distill_bce",
     "loss_reference_distill_weighted",
+    "reference_distill_weight",
 }
 
 

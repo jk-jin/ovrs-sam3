@@ -311,6 +311,7 @@ class Trainer:
                 prompt_to_class_id=prompt_to_class_id,
                 num_label_classes=num_label_classes,
                 target_hw=(288, 288),
+                global_iter=self.global_iter + 1,
             )
 
         effective_distill_weight = float(
@@ -399,6 +400,10 @@ class Trainer:
             grad_tensors=scaled_aggregation_grad,
         )
 
+        # The coefficient is a batch-level scalar, not a chunk contribution.
+        accum["reference_distill_weight"] = aggregated_features_36.new_tensor(
+            effective_distill_weight, dtype=torch.float32
+        )
         return accum
 
     def train_step(
@@ -582,6 +587,8 @@ class Trainer:
         avg_data_time = self._mean_of_history(self._data_time_history)
         avg_iter_time = self._mean_of_history(self._iter_time_history)
         avg_stats = self._average_stats(list(self._train_stat_history))
+        if "reference_distill_weight" in stats:
+            avg_stats["reference_distill_weight"] = stats["reference_distill_weight"]
 
         remaining_iters = max(self.cfg.max_iters - self.global_iter, 0)
         eta_seconds = avg_iter_time * remaining_iters

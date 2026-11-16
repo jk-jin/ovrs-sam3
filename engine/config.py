@@ -435,7 +435,6 @@ def _validate_loss_section(loss: dict) -> dict:
     for name in (
         "seg_bce_weight",
         "seg_dice_weight",
-        "reference_distill_weight",
     ):
         value = getattr(cfg, name)
         if not _is_finite_number(value) or float(value) < 0.0:
@@ -443,11 +442,6 @@ def _validate_loss_section(loss: dict) -> dict:
 
     if not _is_finite_number(cfg.eps) or float(cfg.eps) <= 0.0:
         raise ValueError("loss.eps must be a positive finite value.")
-    if (
-        not _is_finite_number(cfg.absent_class_weight)
-        or not 0.0 <= float(cfg.absent_class_weight) <= 1.0
-    ):
-        raise ValueError("loss.absent_class_weight must be finite and in [0, 1].")
     if (
         isinstance(cfg.reference_boundary_width, bool)
         or not isinstance(cfg.reference_boundary_width, int)

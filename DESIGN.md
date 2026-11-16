@@ -198,13 +198,31 @@ total_loss = (
 )
 ```
 
-默认 `seg_bce_weight=1.0`、`absent_class_weight=0.2`、`seg_dice_weight=0.0`、`reference_distill_weight=0.5`、`reference_boundary_width=3`。
+默认 `seg_bce_weight=1.0`、`present_class_weight=0.8`、`seg_dice_weight=0.0`、`reference_boundary_width=3`。
 
-* 主 BCE：每个图像-提示对内，所有 `label != 255` 的像素等权，不单独平衡正负区域。存在提示权重为 1，不存在提示权重为 `absent_class_weight`；所有加权像素损失求和后，除以完整 batch 的有效像素数乘全部提示数。存在/不存在两组不分别平均，分母不按权重缩放，也不按 chunk 重算。
-* 提示存在性由损失分辨率下该图的 GT 标签确定；同义提示继承原类别存在性，仍按提示通道分别计数。`absent_class_weight` 范围为 `[0,1]`：1 恢复原始全局平均 BCE，0 关闭不存在提示的主 BCE 贡献，分母始终不变。全 ignore batch 的主 BCE 为可反传的零。
+* 主 BCE：每张图的每个提示先在所有 `label != 255` 的像素上取平均，类别内部不单独平衡正负区域；存在提示与不存在提示分别在各自组内取平均，然后以 `present_class_weight` 和 `1-present_class_weight` 合并两组损失，最后在 batch 的图像间平均。
+* 提示存在性由损失分辨率下该图的 GT 标签确定；同义提示继承原类别存在性，仍按提示通道分别计数。每张图的有效像素数、存在/不存在提示数与组权重在完整提示集合上计算一次；所有 chunk 共享这些归一化统计，不能在 chunk 内重新计算组均值。
+* `present_class_weight` 范围为 `[0,1]`，默认存在组占 0.8、不存在组占 0.2。某图全部类别存在时，仅使用存在组并赋全权重；全 ignore 图的主 BCE 为可反传的零，在 batch 平均中仍计为一张图。两组均非空时，调节参数只控制组占比，不随组内提示数量变化。
 * Dice：只对存在的提示计算；默认关闭。
 * Reference 蒸馏：冻结 SAM3 head 的 soft probability；只监督存在提示的全部有效像素，并额外包含 GT 外侧宽度 `reference_boundary_width` 的 ignore 边界环。
-* 日志键：`loss_seg_bce`、`loss_seg_dice`、`loss_reference_distill_bce`、`loss_reference_distill_weighted`、`total_loss`。
+* 蒸馏系数采用独立半余弦衰减，直接替代固定系数；不再另乘一个基础蒸馏权重。`reference_distill_start_iter=1000`、`reference_distill_end_iter=12000`、`reference_distill_start_weight=0.5`、`reference_distill_end_weight=0.0`。开始步数之前及开始时保持开始权重，区间内平滑下降，结束时及以后保持结束权重，绝不周期回升。
+* 训练迭代从 1 开始编号，每次计算使用 `global_iter + 1`，与日志步数一致；同一 batch 的所有 chunk 共用一个蒸馏系数。checkpoint 恢复已完成的 `global_iter` 后，下一个 batch 自动使用下一步的权重，无独立的蒸馏 scheduler 状态。
+* 配置要求开始与结束步数为非负整数且结束大于开始；权重有限、非负且开始不小于结束。两端权重相同可保持常数，两端都为零可关闭蒸馏；实际权重为零或没有监督像素时跳过教师解码。4K 调试入口将区间改为 400～2400 步，消融入口使用 0.25→0 的权重端点。
+* 日志键：`loss_seg_bce`、`loss_seg_dice`、`loss_reference_distill_bce`、`loss_reference_distill_weighted`、`reference_distill_weight`、`total_loss`。其中 `reference_distill_weight` 为当前 batch 的真实系数，不按 chunk 累加，也不按日志窗口平滑；JSONL 与离线 W&B 均记录。
+
+损失配置入口为 `configs/_base_/loss/semantic.py`，例如：
+
+```python
+loss = dict(
+    present_class_weight=0.8,
+    reference_distill_start_iter=1000,
+    reference_distill_end_iter=12000,
+    reference_distill_start_weight=0.5,
+    reference_distill_end_weight=0.0,
+)
+```
+
+原 `absent_class_weight` 和固定配置项 `reference_distill_weight` 已删除，继续使用时会拒绝配置；后者仅作为运行时系数与日志名称保留。新损失参数参与配置指纹，不能从旧损失配置直接恢复训练。
 
 ### 7.4 显存设计
 

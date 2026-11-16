@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from typing import Dict, Optional
 
 from .data.prompt_templates import REMOTECLIP_PROMPT_TEMPLATES
@@ -65,13 +66,38 @@ class SemanticCriterionConfig:
     ignore_index: int = 255
 
     seg_bce_weight: float = 1.0
-    absent_class_weight: float = 0.2
+    present_class_weight: float = 0.8
     seg_dice_weight: float = 0.0
 
     eps: float = 1e-6
 
-    reference_distill_weight: float = 0.5
+    reference_distill_start_iter: int = 1000
+    reference_distill_end_iter: int = 12000
+    reference_distill_start_weight: float = 0.5
+    reference_distill_end_weight: float = 0.0
     reference_boundary_width: int = 3
+
+    def __post_init__(self):
+        for name in ("present_class_weight", "reference_distill_start_weight",
+                     "reference_distill_end_weight"):
+            value = getattr(self, name)
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0.0
+            ):
+                raise ValueError(f"{name} must be finite and non-negative.")
+        if self.present_class_weight > 1.0:
+            raise ValueError("present_class_weight must be in [0, 1].")
+        for name in ("reference_distill_start_iter", "reference_distill_end_iter"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer.")
+        if self.reference_distill_end_iter <= self.reference_distill_start_iter:
+            raise ValueError("reference_distill_end_iter must be greater than start_iter.")
+        if self.reference_distill_end_weight > self.reference_distill_start_weight:
+            raise ValueError("Distillation end weight must not exceed start weight.")
 
 
 @dataclass

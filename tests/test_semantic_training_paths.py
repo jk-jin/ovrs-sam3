@@ -125,11 +125,12 @@ class TestDecodePaths(unittest.TestCase):
                 model.train()
                 trainer = object.__new__(trainer_mod.Trainer)
                 trainer.model = model
+                trainer.global_iter = 0
                 trainer.cfg = SimpleNamespace(use_amp=False)
                 trainer.device = torch.device("cpu")
                 trainer.scaler = trainer_mod._build_grad_scaler("cpu", False)
                 trainer.criterion = criterion_mod.SemanticCriterion(
-                    config_mod.SemanticCriterionConfig(reference_distill_weight=weight)
+                    config_mod.SemanticCriterionConfig(reference_distill_start_weight=weight)
                 )
                 losses = trainer._compute_train_loss_streaming(batch)
                 expected = [False, True, False, True] if weight and not ignore_all else [True, True]
@@ -144,37 +145,116 @@ class TestDecodePaths(unittest.TestCase):
                 if not weight or ignore_all:
                     self.assertEqual(losses["loss_reference_distill_bce"].item(), 0)
 
+    def test_scheduled_weight_shared_by_chunks_and_teacher_skipped_at_zero(self):
+        for iteration, expected_weight in ((1, 0.6), (2, 0.6), (4, 0.3), (6, 0.0), (8, 0.0)):
+            with self.subTest(iteration=iteration):
+                model, batch = make_model_and_batch()
+                model.train()
+                trainer = object.__new__(trainer_mod.Trainer)
+                trainer.model = model
+                trainer.global_iter = iteration - 1
+                trainer.cfg = SimpleNamespace(use_amp=False)
+                trainer.device = torch.device("cpu")
+                trainer.scaler = trainer_mod._build_grad_scaler("cpu", False)
+                trainer.criterion = criterion_mod.SemanticCriterion(
+                    config_mod.SemanticCriterionConfig(
+                        reference_distill_start_iter=2, reference_distill_end_iter=6,
+                        reference_distill_start_weight=0.6, reference_distill_end_weight=0.0,
+                    )
+                )
+                losses = trainer._compute_train_loss_streaming(batch)
+                self.assertAlmostEqual(losses["reference_distill_weight"].item(), expected_weight)
+                torch.testing.assert_close(
+                    losses["loss_reference_distill_weighted"],
+                    expected_weight * losses["loss_reference_distill_bce"],
+                )
+                expected_modes = [False, True, False, True] if expected_weight else [True, True]
+                self.assertEqual(model.core.segmentation_head.grad_modes, expected_modes)
+                if not expected_weight:
+                    self.assertEqual(losses["loss_reference_distill_bce"].item(), 0.0)
+
 
 class TestStreamingLoss(unittest.TestCase):
-    def test_absent_weight_uses_original_global_denominator(self):
-        # Unequal valid areas and aliases exercise batch/prompt normalization.
-        labels = torch.tensor([[[0, 255], [0, 0]], [[1, 2], [1, 2]]])
-        mapping = torch.tensor([0, 0, 1, 2])
-        valid = (labels != 255)[:, None]
-        target = (labels[:, None] == mapping[None, :, None, None]).float()
-        present = torch.tensor([[True, True, False, False],
-                                [False, False, True, True]])
-        for weight in (0.0, 0.2, 1.0):
+    def test_group_means_and_image_means_match_reference_loss_and_gradient(self):
+        # Unequal valid areas, unequal group counts, and prompt aliases.
+        labels = torch.tensor([[[0, 255], [1, 0]], [[2, 2], [2, 2]]])
+        mapping = torch.tensor([0, 0, 1, 2, 3])
+        for weight in (0.0, 0.8, 1.0):
             with self.subTest(weight=weight):
                 criterion = criterion_mod.SemanticCriterion(
                     config_mod.SemanticCriterionConfig(
-                        absent_class_weight=weight, reference_distill_weight=0.0,
+                        present_class_weight=weight, reference_distill_start_weight=0.0,
                     )
                 )
-                logits = torch.linspace(-2, 2, 32).reshape(2, 4, 2, 2).requires_grad_()
+                logits = torch.linspace(-2, 2, 40).reshape(2, 5, 2, 2).requires_grad_()
                 loss = criterion(
                     {OUTPUT_KEYS.final_logits: logits},
-                    {"label_map": labels}, mapping, 3,
+                    {"label_map": labels}, mapping, 4,
                 )["loss_seg_bce"]
-                pixel_loss = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
-                weights = torch.where(present, 1.0, weight)[:, :, None, None]
-                expected = (pixel_loss * valid * weights).sum() / 28
+                image_losses = []
+                for image in range(2):
+                    valid = labels[image] != 255
+                    present, absent = [], []
+                    for prompt, class_id in enumerate(mapping):
+                        target = labels[image] == class_id
+                        pair_loss = F.binary_cross_entropy_with_logits(
+                            logits[image, prompt][valid], target[valid].float()
+                        )
+                        (present if target.any() else absent).append(pair_loss)
+                    image_losses.append(
+                        weight * torch.stack(present).mean()
+                        + (1 - weight) * torch.stack(absent).mean()
+                    )
+                expected = torch.stack(image_losses).mean()
                 torch.testing.assert_close(loss, expected)
+                expected_grad, = torch.autograd.grad(expected, logits, retain_graph=True)
                 loss.backward()
-                expected_grad = (logits.detach().sigmoid() - target) * valid * weights / 28
                 torch.testing.assert_close(logits.grad, expected_grad)
-                if weight == 1.0:
-                    torch.testing.assert_close(loss, pixel_loss.masked_select(valid.expand_as(pixel_loss)).mean())
+
+    def test_absent_group_count_does_not_change_total_share(self):
+        criterion = criterion_mod.SemanticCriterion(
+            config_mod.SemanticCriterionConfig(reference_distill_start_weight=0.0)
+        )
+        for prompts in (2, 17):
+            logits = torch.zeros(1, prompts, 1, 1, requires_grad=True)
+            loss = criterion(
+                {OUTPUT_KEYS.final_logits: logits},
+                {"label_map": torch.zeros(1, 1, 1, dtype=torch.long)},
+                torch.arange(prompts), prompts,
+            )["loss_seg_bce"]
+            torch.testing.assert_close(loss, torch.tensor(2.0).log())
+            loss.backward()
+            self.assertAlmostEqual(logits.grad[0, 0].abs().sum().item(), 0.4)
+            self.assertAlmostEqual(logits.grad[0, 1:].abs().sum().item(), 0.1)
+
+    def test_all_present_uses_full_weight_even_at_zero_present_share(self):
+        for weight in (0.0, 0.8, 1.0):
+            criterion = criterion_mod.SemanticCriterion(
+                config_mod.SemanticCriterionConfig(
+                    present_class_weight=weight, reference_distill_start_weight=0.0,
+                )
+            )
+            labels = torch.tensor([[[0, 1]]])
+            logits = torch.tensor([[[[-1.0, 2.0]], [[3.0, -4.0]]]], requires_grad=True)
+            loss = criterion(
+                {OUTPUT_KEYS.final_logits: logits}, {"label_map": labels},
+                torch.arange(2), 2,
+            )["loss_seg_bce"]
+            target = (labels[:, None] == torch.arange(2)[None, :, None, None]).float()
+            torch.testing.assert_close(loss, F.binary_cross_entropy_with_logits(logits, target))
+
+    def test_ignore_only_image_contributes_zero_to_image_mean(self):
+        criterion = criterion_mod.SemanticCriterion(
+            config_mod.SemanticCriterionConfig(reference_distill_start_weight=0.0)
+        )
+        logits = torch.zeros(2, 2, 1, 1, requires_grad=True)
+        loss = criterion(
+            {OUTPUT_KEYS.final_logits: logits},
+            {"label_map": torch.tensor([[[0]], [[255]]])}, torch.arange(2), 2,
+        )["loss_seg_bce"]
+        torch.testing.assert_close(loss, torch.tensor(2.0).log() / 2)
+        loss.backward()
+        torch.testing.assert_close(logits.grad[1], torch.zeros_like(logits.grad[1]))
 
     def test_ignore_only_batch_has_zero_loss_and_gradient(self):
         criterion = criterion_mod.SemanticCriterion()
@@ -187,14 +267,19 @@ class TestStreamingLoss(unittest.TestCase):
         self.assertEqual(loss.item(), 0.0)
         torch.testing.assert_close(logits.grad, torch.zeros_like(logits))
 
-    def test_invalid_absent_weights_are_rejected(self):
+    def test_invalid_present_weights_are_rejected(self):
         for weight in (-0.1, 1.1, float("nan"), float("inf"), True):
             with self.subTest(weight=weight), self.assertRaises(ValueError):
                 criterion_mod.SemanticCriterion(
-                    config_mod.SemanticCriterionConfig(absent_class_weight=weight)
+                    config_mod.SemanticCriterionConfig(present_class_weight=weight)
                 )
 
     def test_chunked_loss_matches_full_loss_and_gradients_with_aliases(self):
+        for iteration in (0, 1000, 6500, 12000, 15000):
+            with self.subTest(iteration=iteration):
+                self._check_chunk_equivalence(iteration)
+
+    def _check_chunk_equivalence(self, iteration):
         criterion = criterion_mod.SemanticCriterion()
         labels = torch.tensor([[[0, 255], [1, 0]], [[2, 2], [255, 1]]])
         mapping = torch.tensor([0, 0, 1, 2])
@@ -203,6 +288,7 @@ class TestStreamingLoss(unittest.TestCase):
         full = criterion(
             {OUTPUT_KEYS.final_logits: logits, OUTPUT_KEYS.sam3_teacher_logits: teacher},
             {"label_map": labels}, mapping, 3,
+            global_iter=iteration,
         )
         full["total_loss"].backward()
         expected_grad = logits.grad.clone()
@@ -211,6 +297,7 @@ class TestStreamingLoss(unittest.TestCase):
         chunk_logits = logits.detach().clone().requires_grad_()
         context = criterion.prepare_streaming_context(
             {"label_map": labels}, 4, mapping, 3, target_hw=(2, 2),
+            global_iter=iteration,
         )
         contributions = []
         for start, end in [(0, 1), (1, 3), (3, 4)]:
@@ -225,9 +312,10 @@ class TestStreamingLoss(unittest.TestCase):
         total.backward()
         torch.testing.assert_close(chunk_logits.grad, expected_grad)
 
+
     def test_ignore_pixels_have_no_segmentation_gradient(self):
         criterion = criterion_mod.SemanticCriterion(
-            config_mod.SemanticCriterionConfig(reference_distill_weight=0.0)
+            config_mod.SemanticCriterionConfig(reference_distill_start_weight=0.0)
         )
         logits = torch.zeros(1, 2, 1, 2, requires_grad=True)
         losses = criterion(
@@ -237,6 +325,56 @@ class TestStreamingLoss(unittest.TestCase):
         losses["total_loss"].backward()
         torch.testing.assert_close(logits.grad[..., 1], torch.zeros(1, 2, 1))
         self.assertGreater(logits.grad[..., 0].abs().sum().item(), 0)
+
+
+class TestDistillSchedule(unittest.TestCase):
+    def test_cosine_endpoints_midpoint_and_plateaus(self):
+        criterion = criterion_mod.SemanticCriterion(
+            config_mod.SemanticCriterionConfig(
+                reference_distill_start_iter=10, reference_distill_end_iter=30,
+                reference_distill_start_weight=0.6, reference_distill_end_weight=0.1,
+            )
+        )
+        for iteration, expected in ((0, 0.6), (10, 0.6), (20, 0.35), (30, 0.1), (50, 0.1)):
+            self.assertAlmostEqual(criterion.get_reference_distill_weight(iteration), expected)
+        weights = [criterion.get_reference_distill_weight(i) for i in range(51)]
+        self.assertTrue(all(a >= b for a, b in zip(weights, weights[1:])))
+        for invalid in (-1, True, 1.5):
+            with self.assertRaises(ValueError):
+                criterion.get_reference_distill_weight(invalid)
+
+    def test_equal_endpoint_weights_allow_constant_or_disabled_distillation(self):
+        for weight in (0.0, 0.5):
+            criterion = criterion_mod.SemanticCriterion(
+                config_mod.SemanticCriterionConfig(
+                    reference_distill_start_weight=weight, reference_distill_end_weight=weight,
+                )
+            )
+            for iteration in (0, 1000, 6500, 12000, 20000):
+                self.assertEqual(criterion.get_reference_distill_weight(iteration), weight)
+
+    def test_resume_uses_restored_iteration_for_next_batch(self):
+        criterion = criterion_mod.SemanticCriterion()
+        for saved_iteration in (998, 999, 1000, 6499, 11999, 12000):
+            with self.subTest(saved_iteration=saved_iteration):
+                model, batch = make_model_and_batch()
+                model.train()
+                trainer = object.__new__(trainer_mod.Trainer)
+                trainer.model = model
+                trainer.optimizer = None
+                trainer.lr_scheduler = None
+                trainer.device = torch.device("cpu")
+                trainer.cfg = SimpleNamespace(use_amp=False)
+                trainer.scaler = trainer_mod._build_grad_scaler("cpu", False)
+                trainer.criterion = criterion
+                trainer.checkpoint_manager = SimpleNamespace(
+                    load=lambda *args, **kwargs: {"global_iter": saved_iteration}
+                )
+                trainer.resume_from("synthetic_checkpoint.pth")
+                losses = trainer._compute_train_loss_streaming(batch)
+                expected = criterion.get_reference_distill_weight(saved_iteration + 1)
+                self.assertAlmostEqual(losses["reference_distill_weight"].item(), expected)
+
 
 
 if __name__ == "__main__":

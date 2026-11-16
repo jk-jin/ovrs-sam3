@@ -58,7 +58,11 @@ class TestEffectiveConfig(unittest.TestCase):
             1.0,
         )
         self.assertEqual(len(fingerprint), 64)
-        self.assertEqual(cfg["loss"]["absent_class_weight"], 0.2)
+        self.assertEqual(cfg["loss"]["present_class_weight"], 0.8)
+        self.assertEqual(cfg["loss"]["reference_distill_start_iter"], 1000)
+        self.assertEqual(cfg["loss"]["reference_distill_end_iter"], 12000)
+        self.assertEqual(cfg["loss"]["reference_distill_start_weight"], 0.5)
+        self.assertEqual(cfg["loss"]["reference_distill_end_weight"], 0.0)
         self.assertEqual(cfg["param_scheduler"][1]["min_lr_ratio"], 0.01)
         self.assertNotIn("eta_min", cfg["param_scheduler"][1])
 
@@ -81,6 +85,8 @@ class TestEffectiveConfig(unittest.TestCase):
     def test_deleted_options_are_rejected(self):
         for option in (
             "loss.present_ignore_suppression_weight=0.0",
+            "loss.absent_class_weight=0.2",
+            "loss.reference_distill_weight=0.5",
             "evaluation.postprocess.reference_prob_threshold=0.1",
             "visualization.save_reference_segmentation=True",
         ):
@@ -146,7 +152,7 @@ class TestEffectiveConfig(unittest.TestCase):
             config_mod.config_fingerprint(operational), fingerprint
         )
 
-        changed["loss"]["reference_distill_weight"] = 0.25
+        changed["loss"]["reference_distill_start_weight"] = 0.25
         self.assertNotEqual(
             config_mod.config_fingerprint(changed), fingerprint
         )
@@ -178,7 +184,7 @@ class TestEffectiveConfig(unittest.TestCase):
 
     def test_loss_and_schedule_weights_are_validated_and_fingerprinted(self):
         cfg, fingerprint = self._load()
-        for section, key in (("loss", "absent_class_weight"),
+        for section, key in (("loss", "present_class_weight"),
                              ("schedule", "min_lr_ratio")):
             changed = copy.deepcopy(cfg)
             target = changed["loss"] if section == "loss" else changed["param_scheduler"][1]
@@ -191,6 +197,44 @@ class TestEffectiveConfig(unittest.TestCase):
         cfg["param_scheduler"][1]["eta_min"] = 1e-6
         with self.assertRaises(ValueError):
             config_mod.finalize_config(cfg)
+
+    def test_distill_schedule_validation_and_fingerprint(self):
+        cfg, fingerprint = self._load()
+        for key, value in (
+            ("reference_distill_start_iter", 0),
+            ("reference_distill_end_iter", 10000),
+            ("reference_distill_start_weight", 0.25),
+            ("reference_distill_end_weight", 0.1),
+        ):
+            changed = copy.deepcopy(cfg)
+            changed["loss"][key] = value
+            config_mod.finalize_config(changed)
+            self.assertNotEqual(config_mod.config_fingerprint(changed), fingerprint)
+        invalid = [
+            ("reference_distill_start_iter", -1),
+            ("reference_distill_start_iter", True),
+            ("reference_distill_start_iter", 1.5),
+            ("reference_distill_end_iter", 1000),
+            ("reference_distill_end_iter", 500),
+            ("reference_distill_end_iter", float("inf")),
+            ("reference_distill_start_weight", -0.1),
+            ("reference_distill_start_weight", float("nan")),
+            ("reference_distill_end_weight", float("inf")),
+            ("reference_distill_end_weight", True),
+            ("reference_distill_end_weight", 0.6),
+        ]
+        for key, value in invalid:
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                changed = copy.deepcopy(cfg)
+                changed["loss"][key] = value
+                config_mod.finalize_config(changed)
+
+    def test_dev_distill_schedule_fits_short_run(self):
+        cfg, _ = config_mod.build_effective_config(
+            REPO_ROOT / "configs/experiments/dev/dlrsd_loveda_4k.py"
+        )
+        self.assertEqual(cfg["loss"]["reference_distill_start_iter"], 400)
+        self.assertEqual(cfg["loss"]["reference_distill_end_iter"], 2400)
 
     def test_inheritance_cycle_detected(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -64,6 +64,7 @@ class FakeTrainer:
                 "total_loss": 1.0,
                 "loss_seg_bce": 0.5,
                 "loss_reference_distill_weighted": 0.3,
+                "reference_distill_weight": 0.5,
             },
             "extra_log_vars": {"debug/value": 2.0},
         }
@@ -130,12 +131,54 @@ class TestLoggingHooks(unittest.TestCase):
             train = lines[1]
             self.assertEqual(train["mode"], "train")
             self.assertEqual(train["loss_seg_bce"], 0.5)
+            self.assertEqual(train["reference_distill_weight"], 0.5)
             self.assertEqual(train["lrs"], [1e-4, 1e-6])
             val = lines[2]
             self.assertEqual(val["mode"], "val")
             self.assertEqual(val["semantic.miou"], 0.5)
             self.assertEqual(val["semantic.iou_class_0"], 0.4)
             self.assertNotIn("_class_names", val)
+
+    def test_wandb_records_current_distill_coefficient(self):
+        old = sys.modules.get("wandb")
+        run = FakeRun()
+        sys.modules["wandb"] = _fake_wandb(init_run=run)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                trainer = FakeTrainer(Path(tmp))
+                hook = hooks_mod.WandbHook(enabled=True, mode="offline")
+                hook.before_run(trainer)
+                hook.after_train_iter(trainer, 20, None, {})
+                self.assertEqual(run.logged[-1]["train/reference_distill_weight"], 0.5)
+                hook.after_run(trainer)
+        finally:
+            if old is None:
+                sys.modules.pop("wandb", None)
+            else:
+                sys.modules["wandb"] = old
+
+    def test_distill_coefficient_is_not_smoothed_with_loss_window(self):
+        trainer_mod = load_module("engine.trainer")
+        config_mod = load_module("config_dataclasses")
+        with tempfile.TemporaryDirectory() as tmp:
+            trainer = trainer_mod.Trainer(
+                model=torch.nn.Linear(1, 1), optimizer=None,
+                criterion=torch.nn.Identity(), train_dataloader=None,
+                checkpoint_manager=None,
+                cfg=config_mod.TrainerConfig(
+                    device="cpu", use_amp=False, save_dir=tmp, log_window_size=2,
+                ),
+            )
+            trainer.global_iter = 1
+            trainer._update_train_log_state(
+                {"reference_distill_weight": 0.5, "total_loss": 1.0}, 0.01, 0.02,
+            )
+            trainer.global_iter = 2
+            trainer._update_train_log_state(
+                {"reference_distill_weight": 0.1, "total_loss": 0.5}, 0.01, 0.02,
+            )
+            self.assertEqual(trainer.log_state["log_vars"]["reference_distill_weight"], 0.1)
+            self.assertEqual(trainer.log_state["log_vars"]["total_loss"], 0.75)
 
     def test_eval_only_does_not_touch_training_jsonl(self):
         with tempfile.TemporaryDirectory() as tmp:

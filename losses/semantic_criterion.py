@@ -44,8 +44,8 @@ class SemanticStreamingContext:
     # Total selected distillation pixels across all present prompts.
     distill_pixel_denom: int
 
-    # Number of valid pixels multiplied by P.
-    total_valid_pixels: int
+    # [B, P], includes per-image valid pixels, group counts and batch mean.
+    seg_bce_pixel_weight: torch.Tensor
 
     reference_distill_weight: float
 
@@ -54,14 +54,13 @@ class SemanticCriterion(nn.Module):
     """Semantic segmentation criterion with streaming per-chunk support.
 
     Losses:
-        1. BCE on final_logits — pixels within each prompt are equal.
-           Present image-prompt pairs have weight 1; absent pairs use
-           absent_class_weight. Divide the weighted sum by the original
-           unweighted count of valid B × P × H × W positions.
+        1. BCE on final_logits — valid pixels within each prompt are equal.
+           Average present and absent prompts separately per image, combine
+           with present_class_weight and its complement, then average images.
 
         2. Optional Dice on final_logits (default weight 0.0)
 
-        3. SAM3 teacher mask distillation BCE (fixed weight)
+        3. SAM3 teacher mask distillation BCE (cosine-decaying weight)
            - Frozen SAM3 semantic head logits as soft targets
            - Only present image-prompt pairs
            - All valid GT pixels plus a configurable class-specific
@@ -71,22 +70,6 @@ class SemanticCriterion(nn.Module):
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
         super().__init__()
         self.cfg = cfg or SemanticCriterionConfig()
-
-        absent_weight = self.cfg.absent_class_weight
-        if (
-            isinstance(absent_weight, bool)
-            or not isinstance(absent_weight, (int, float))
-            or not math.isfinite(absent_weight)
-            or not 0.0 <= absent_weight <= 1.0
-        ):
-            raise ValueError("absent_class_weight must be finite and in [0, 1].")
-
-        distill_weight = float(self.cfg.reference_distill_weight)
-        if distill_weight < 0.0:
-            raise ValueError(
-                "reference_distill_weight must be >= 0, "
-                f"got {distill_weight}."
-            )
 
         boundary_width = (
             self.cfg.reference_boundary_width
@@ -112,6 +95,22 @@ class SemanticCriterion(nn.Module):
     # Public API
     # ------------------------------------------------------------------
 
+    def get_reference_distill_weight(self, global_iter: int) -> float:
+        """Weight for the current iteration; hold both ends outside the interval."""
+        if isinstance(global_iter, bool) or not isinstance(global_iter, int) or global_iter < 0:
+            raise ValueError("global_iter must be a non-negative integer.")
+        cfg = self.cfg
+        if global_iter <= cfg.reference_distill_start_iter:
+            return float(cfg.reference_distill_start_weight)
+        if global_iter >= cfg.reference_distill_end_iter:
+            return float(cfg.reference_distill_end_weight)
+        progress = (global_iter - cfg.reference_distill_start_iter) / (
+            cfg.reference_distill_end_iter - cfg.reference_distill_start_iter
+        )
+        return float(cfg.reference_distill_end_weight) + (
+            cfg.reference_distill_start_weight - cfg.reference_distill_end_weight
+        ) * (1.0 + math.cos(math.pi * progress)) / 2.0
+
     def forward(
         self,
         outputs: TensorDict,
@@ -119,6 +118,7 @@ class SemanticCriterion(nn.Module):
         prompt_to_class_id: torch.Tensor,
         num_label_classes: int,
         reduction: str = "mean",
+        global_iter: int = 0,
     ) -> TensorDict:
         """Full prompt-space loss forward."""
         if reduction != "mean":
@@ -147,6 +147,7 @@ class SemanticCriterion(nn.Module):
             prompt_to_class_id=prompt_to_class_id,
             num_label_classes=int(num_label_classes),
             target_hw=final_logits.shape[-2:],
+            global_iter=global_iter,
         )
 
         target_full, _ = self._build_binary_targets(
@@ -170,6 +171,7 @@ class SemanticCriterion(nn.Module):
         prompt_to_class_id: torch.Tensor,
         num_label_classes: int,
         target_hw: tuple[int, int] = (288, 288),
+        global_iter: int = 0,
     ) -> SemanticStreamingContext:
         """Build full-batch statistics before the prompt chunk loop."""
         label_map = self._extract_label_map(targets)
@@ -254,11 +256,6 @@ class SemanticCriterion(nn.Module):
                     f"max={max_label}."
                 )
 
-        total_valid_pixels = (
-            int(valid_mask.sum().item())
-            * num_prompt_channels
-        )
-
         class_ids = torch.arange(
             num_label_classes,
             device=label_map.device,
@@ -310,6 +307,20 @@ class SemanticCriterion(nn.Module):
             .sum(dim=1)
         )
 
+        # Each image normalizes its two groups independently across ALL
+        # prompts. A single nonempty group receives full weight.
+        present_count = presence_target.sum(dim=1)
+        absent_count = num_prompt_channels - present_count
+        present_weight = torch.where(
+            absent_count > 0, float(self.cfg.present_class_weight), 1.0
+        ) / present_count.clamp_min(1)
+        absent_weight = torch.where(
+            present_count > 0, 1.0 - float(self.cfg.present_class_weight), 1.0
+        ) / absent_count.clamp_min(1)
+        seg_bce_pixel_weight = torch.where(
+            presence_target, present_weight[:, None], absent_weight[:, None]
+        ) / (valid_pixel_count.clamp_min(1)[:, None] * label_map.shape[0])
+
         # Each original class additionally owns its own outer boundary.
         # [B, M]
         outer_boundary_pixel_count_by_class = (
@@ -359,10 +370,8 @@ class SemanticCriterion(nn.Module):
             num_label_classes=num_label_classes,
             num_present_pairs=num_present_pairs,
             distill_pixel_denom=distill_pixel_denom,
-            total_valid_pixels=total_valid_pixels,
-            reference_distill_weight=float(
-                self.cfg.reference_distill_weight
-            ),
+            seg_bce_pixel_weight=seg_bce_pixel_weight,
+            reference_distill_weight=self.get_reference_distill_weight(global_iter),
         )
 
     def forward_chunk(
@@ -437,7 +446,7 @@ class SemanticCriterion(nn.Module):
             :, class_start:class_end
         ].to(device=device)
 
-        # ---- Presence-weighted BCE, original global denominator ----
+        # ---- Per-image group-balanced BCE, full-prompt statistics ----
         bce_per_pixel = F.binary_cross_entropy_with_logits(
             final_logits_chunk,
             target_chunk,
@@ -445,16 +454,16 @@ class SemanticCriterion(nn.Module):
         )  # [B, C_chunk, H, W]
 
         valid_float = valid_mask.to(
-            device=device, dtype=bce_per_pixel.dtype
+            device=device, dtype=torch.float32
         )[:, None, :, :]  # [B, 1, H, W]
 
-        pair_weight = torch.where(
-            present_mask, 1.0, float(self.cfg.absent_class_weight)
-        ).to(dtype=bce_per_pixel.dtype)[:, :, None, None]
+        pixel_weight = context.seg_bce_pixel_weight[
+            :, class_start:class_end
+        ].to(device=device)[:, :, None, None]
 
         bce_contribution = (
-            bce_per_pixel * valid_float * pair_weight
-        ).sum() / max(context.total_valid_pixels, 1)
+            bce_per_pixel.float() * valid_float * pixel_weight
+        ).sum()
 
         # ---- Dice (optional) ----
         dice_weight = float(self.cfg.seg_dice_weight)
@@ -525,6 +534,9 @@ class SemanticCriterion(nn.Module):
             "loss_seg_dice": dice_contribution,
             "loss_reference_distill_bce": distill_contribution,
             "loss_reference_distill_weighted": weighted_distill_contribution,
+            "reference_distill_weight": final_logits_chunk.new_tensor(
+                distill_weight, dtype=torch.float32
+            ),
             "total_loss": chunk_total,
         }
 
