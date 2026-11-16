@@ -1,12 +1,42 @@
 from __future__ import annotations
 
 import importlib
+import math
 from typing import Any, Dict, Iterable, Optional
 
 import torch
 
 
 ConfigDict = Dict[str, Any]
+
+
+class RelativeCosineAnnealingLR(torch.optim.lr_scheduler.LRScheduler):
+    """Apply one cosine multiplier to every group's pre-warmup base LR."""
+
+    def __init__(self, optimizer, T_max: int, min_lr_ratio: float = 0.01,
+                 last_epoch: int = -1):
+        if isinstance(T_max, bool) or not isinstance(T_max, int) or T_max <= 0:
+            raise ValueError("T_max must be a positive integer.")
+        if (
+            isinstance(min_lr_ratio, bool)
+            or not isinstance(min_lr_ratio, (int, float))
+            or not math.isfinite(min_lr_ratio)
+            or not 0.0 <= min_lr_ratio <= 1.0
+        ):
+            raise ValueError("min_lr_ratio must be finite and in [0, 1].")
+        self.T_max = T_max
+        self.min_lr_ratio = float(min_lr_ratio)
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        progress = min(max(self.last_epoch, 0), self.T_max) / self.T_max
+        factor = self.min_lr_ratio + (1.0 - self.min_lr_ratio) * (
+            1.0 + math.cos(math.pi * progress)
+        ) / 2.0
+        return [base_lr * factor for base_lr in self.base_lrs]
+
+    def _get_closed_form_lr(self):
+        return self.get_lr()
 
 
 def _get_obj_from_string(path: str):
@@ -25,6 +55,7 @@ class OptimizerBuilder:
     - fully-qualified import path, e.g. `torch.optim.AdamW`
 
     Supported scheduler `type` values:
+    - RelativeCosineAnnealingLR
     - CosineAnnealingLR
     - MultiStepLR
     - StepLR
@@ -147,11 +178,15 @@ class OptimizerBuilder:
     @classmethod
     def _build_single_scheduler(cls, optimizer: torch.optim.Optimizer, cfg: ConfigDict):
         sched_cfg = dict(cfg)
-        sched_type = sched_cfg.pop('type', 'CosineAnnealingLR')
+        sched_type = sched_cfg.pop('type', 'RelativeCosineAnnealingLR')
         sched_cfg.pop('by_epoch', None)
         sched_cfg.pop('begin', None)
         sched_cfg.pop('end', None)
-        scheduler_cls = cls._resolve_cls(sched_type, 'torch.optim.lr_scheduler')
+        scheduler_cls = (
+            RelativeCosineAnnealingLR
+            if sched_type == 'RelativeCosineAnnealingLR'
+            else cls._resolve_cls(sched_type, 'torch.optim.lr_scheduler')
+        )
         return scheduler_cls(optimizer, **sched_cfg)
 
 

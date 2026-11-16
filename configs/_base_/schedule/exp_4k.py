@@ -19,9 +19,9 @@ param_scheduler = [
         end=400,
     ),
     dict(
-        type="CosineAnnealingLR",
+        type="RelativeCosineAnnealingLR",
         T_max=3600,
-        eta_min=1e-6,
+        min_lr_ratio=0.01,
         end=4000,
     ),
 ]

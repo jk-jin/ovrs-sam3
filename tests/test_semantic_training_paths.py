@@ -146,6 +146,54 @@ class TestDecodePaths(unittest.TestCase):
 
 
 class TestStreamingLoss(unittest.TestCase):
+    def test_absent_weight_uses_original_global_denominator(self):
+        # Unequal valid areas and aliases exercise batch/prompt normalization.
+        labels = torch.tensor([[[0, 255], [0, 0]], [[1, 2], [1, 2]]])
+        mapping = torch.tensor([0, 0, 1, 2])
+        valid = (labels != 255)[:, None]
+        target = (labels[:, None] == mapping[None, :, None, None]).float()
+        present = torch.tensor([[True, True, False, False],
+                                [False, False, True, True]])
+        for weight in (0.0, 0.2, 1.0):
+            with self.subTest(weight=weight):
+                criterion = criterion_mod.SemanticCriterion(
+                    config_mod.SemanticCriterionConfig(
+                        absent_class_weight=weight, reference_distill_weight=0.0,
+                    )
+                )
+                logits = torch.linspace(-2, 2, 32).reshape(2, 4, 2, 2).requires_grad_()
+                loss = criterion(
+                    {OUTPUT_KEYS.final_logits: logits},
+                    {"label_map": labels}, mapping, 3,
+                )["loss_seg_bce"]
+                pixel_loss = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
+                weights = torch.where(present, 1.0, weight)[:, :, None, None]
+                expected = (pixel_loss * valid * weights).sum() / 28
+                torch.testing.assert_close(loss, expected)
+                loss.backward()
+                expected_grad = (logits.detach().sigmoid() - target) * valid * weights / 28
+                torch.testing.assert_close(logits.grad, expected_grad)
+                if weight == 1.0:
+                    torch.testing.assert_close(loss, pixel_loss.masked_select(valid.expand_as(pixel_loss)).mean())
+
+    def test_ignore_only_batch_has_zero_loss_and_gradient(self):
+        criterion = criterion_mod.SemanticCriterion()
+        logits = torch.ones(2, 3, 2, 2, requires_grad=True)
+        loss = criterion(
+            {OUTPUT_KEYS.final_logits: logits},
+            {"label_map": torch.full((2, 2, 2), 255)}, torch.arange(3), 3,
+        )["total_loss"]
+        loss.backward()
+        self.assertEqual(loss.item(), 0.0)
+        torch.testing.assert_close(logits.grad, torch.zeros_like(logits))
+
+    def test_invalid_absent_weights_are_rejected(self):
+        for weight in (-0.1, 1.1, float("nan"), float("inf"), True):
+            with self.subTest(weight=weight), self.assertRaises(ValueError):
+                criterion_mod.SemanticCriterion(
+                    config_mod.SemanticCriterionConfig(absent_class_weight=weight)
+                )
+
     def test_chunked_loss_matches_full_loss_and_gradients_with_aliases(self):
         criterion = criterion_mod.SemanticCriterion()
         labels = torch.tensor([[[0, 255], [1, 0]], [[2, 2], [255, 1]]])

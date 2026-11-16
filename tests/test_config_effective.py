@@ -58,6 +58,9 @@ class TestEffectiveConfig(unittest.TestCase):
             1.0,
         )
         self.assertEqual(len(fingerprint), 64)
+        self.assertEqual(cfg["loss"]["absent_class_weight"], 0.2)
+        self.assertEqual(cfg["param_scheduler"][1]["min_lr_ratio"], 0.01)
+        self.assertNotIn("eta_min", cfg["param_scheduler"][1])
 
     def test_prompt_templates_are_64(self):
         self.assertEqual(
@@ -170,6 +173,22 @@ class TestEffectiveConfig(unittest.TestCase):
     def test_scheduler_matches_max_iters(self):
         cfg = config_mod.Config.fromfile(self.main_config)
         cfg["param_scheduler"][1]["T_max"] = 18000
+        with self.assertRaises(ValueError):
+            config_mod.finalize_config(cfg)
+
+    def test_loss_and_schedule_weights_are_validated_and_fingerprinted(self):
+        cfg, fingerprint = self._load()
+        for section, key in (("loss", "absent_class_weight"),
+                             ("schedule", "min_lr_ratio")):
+            changed = copy.deepcopy(cfg)
+            target = changed["loss"] if section == "loss" else changed["param_scheduler"][1]
+            target[key] = 0.5
+            self.assertNotEqual(config_mod.config_fingerprint(changed), fingerprint)
+            for value in (-0.1, 1.1, float("nan"), float("inf"), True):
+                with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                    target[key] = value
+                    config_mod.finalize_config(changed)
+        cfg["param_scheduler"][1]["eta_min"] = 1e-6
         with self.assertRaises(ValueError):
             config_mod.finalize_config(cfg)
 

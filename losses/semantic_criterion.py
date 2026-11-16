@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Dict, Optional
 
 import torch
@@ -53,9 +54,10 @@ class SemanticCriterion(nn.Module):
     """Semantic segmentation criterion with streaming per-chunk support.
 
     Losses:
-        1. Plain BCE on final_logits — every valid pixel (label ≠ 255)
-           contributes equally regardless of class presence or pixel sign.
-           Global mean over all B × P × H × W valid pixel positions.
+        1. BCE on final_logits — pixels within each prompt are equal.
+           Present image-prompt pairs have weight 1; absent pairs use
+           absent_class_weight. Divide the weighted sum by the original
+           unweighted count of valid B × P × H × W positions.
 
         2. Optional Dice on final_logits (default weight 0.0)
 
@@ -69,6 +71,15 @@ class SemanticCriterion(nn.Module):
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
         super().__init__()
         self.cfg = cfg or SemanticCriterionConfig()
+
+        absent_weight = self.cfg.absent_class_weight
+        if (
+            isinstance(absent_weight, bool)
+            or not isinstance(absent_weight, (int, float))
+            or not math.isfinite(absent_weight)
+            or not 0.0 <= absent_weight <= 1.0
+        ):
+            raise ValueError("absent_class_weight must be finite and in [0, 1].")
 
         distill_weight = float(self.cfg.reference_distill_weight)
         if distill_weight < 0.0:
@@ -422,7 +433,11 @@ class SemanticCriterion(nn.Module):
 
         zero = self._zero_loss(final_logits_chunk)
 
-        # ---- Plain BCE (every valid pixel equal, global mean) ----
+        present_mask = context.presence_target[
+            :, class_start:class_end
+        ].to(device=device)
+
+        # ---- Presence-weighted BCE, original global denominator ----
         bce_per_pixel = F.binary_cross_entropy_with_logits(
             final_logits_chunk,
             target_chunk,
@@ -433,15 +448,15 @@ class SemanticCriterion(nn.Module):
             device=device, dtype=bce_per_pixel.dtype
         )[:, None, :, :]  # [B, 1, H, W]
 
-        plain_bce_contribution = (
-            bce_per_pixel * valid_float
+        pair_weight = torch.where(
+            present_mask, 1.0, float(self.cfg.absent_class_weight)
+        ).to(dtype=bce_per_pixel.dtype)[:, :, None, None]
+
+        bce_contribution = (
+            bce_per_pixel * valid_float * pair_weight
         ).sum() / max(context.total_valid_pixels, 1)
 
         # ---- Dice (optional) ----
-        present_mask = context.presence_target[
-            :, class_start:class_end
-        ].to(device=device)
-
         dice_weight = float(self.cfg.seg_dice_weight)
         if dice_weight > 0.0 and context.num_present_pairs > 0:
             if target_full is not None:
@@ -500,13 +515,13 @@ class SemanticCriterion(nn.Module):
 
         # ---- Total ----
         chunk_total = (
-            float(self.cfg.seg_bce_weight) * plain_bce_contribution
+            float(self.cfg.seg_bce_weight) * bce_contribution
             + dice_weight * dice_contribution
             + weighted_distill_contribution
         )
 
         return {
-            "loss_seg_bce": plain_bce_contribution,
+            "loss_seg_bce": bce_contribution,
             "loss_seg_dice": dice_contribution,
             "loss_reference_distill_bce": distill_contribution,
             "loss_reference_distill_weighted": weighted_distill_contribution,

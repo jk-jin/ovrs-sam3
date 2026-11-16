@@ -65,6 +65,7 @@ class SemanticCriterionConfig:
     ignore_index: int = 255
 
     seg_bce_weight: float = 1.0
+    absent_class_weight: float = 0.2
     seg_dice_weight: float = 0.0
 
     eps: float = 1e-6

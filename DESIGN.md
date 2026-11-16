@@ -177,6 +177,7 @@ feature_state_36 + semantic_state_36
 * AdamW 基础学习率 `1e-4`；RemoteCLIP 图文乘 `0.01`；normalization 无 weight decay。
 * 梯度裁剪 `0.01`；AMP 开启。
 * warmup 1000 步（0.1 → 1.0），余弦衰减 19000 步，总计 20000 步。
+* 余弦使用 `RelativeCosineAnnealingLR`，`min_lr_ratio=0.01`；下限按各参数组预热目标学习率独立计算，保持组间比例。主模块从 `1e-4` 降至 `1e-6`，RemoteCLIP 图文从 `1e-6` 降至 `1e-8`。预热分别从目标学习率的 0.1 倍开始，预热结束衔接目标学习率；4K 调试计划采用相同规则。
 * 每 2000 步保存与验证；`val_max_iters=None` 表示完整验证。
 * batch size 2；训练 workers 8；验证 workers 2。
 * 64 个固定 RemoteCLIP 文本模板。
@@ -197,9 +198,10 @@ total_loss = (
 )
 ```
 
-默认 `seg_bce_weight=1.0`、`seg_dice_weight=0.0`、`reference_distill_weight=0.5`、`reference_boundary_width=3`。
+默认 `seg_bce_weight=1.0`、`absent_class_weight=0.2`、`seg_dice_weight=0.0`、`reference_distill_weight=0.5`、`reference_boundary_width=3`。
 
-* 主 BCE：所有 `label != 255` 的像素等权，全局均值。
+* 主 BCE：每个图像-提示对内，所有 `label != 255` 的像素等权，不单独平衡正负区域。存在提示权重为 1，不存在提示权重为 `absent_class_weight`；所有加权像素损失求和后，除以完整 batch 的有效像素数乘全部提示数。存在/不存在两组不分别平均，分母不按权重缩放，也不按 chunk 重算。
+* 提示存在性由损失分辨率下该图的 GT 标签确定；同义提示继承原类别存在性，仍按提示通道分别计数。`absent_class_weight` 范围为 `[0,1]`：1 恢复原始全局平均 BCE，0 关闭不存在提示的主 BCE 贡献，分母始终不变。全 ignore batch 的主 BCE 为可反传的零。
 * Dice：只对存在的提示计算；默认关闭。
 * Reference 蒸馏：冻结 SAM3 head 的 soft probability；只监督存在提示的全部有效像素，并额外包含 GT 外侧宽度 `reference_boundary_width` 的 ignore 边界环。
 * 日志键：`loss_seg_bce`、`loss_seg_dice`、`loss_reference_distill_bce`、`loss_reference_distill_weighted`、`total_loss`。
@@ -210,6 +212,7 @@ total_loss = (
 * 高分辨率按提示块计算；每块立即 loss/backward。
 * detached leaf proxy 累积高分辨率梯度，全部块完成后一次回传聚合图。
 * optimizer/scaler/scheduler 每 batch 只更新一次；不使用 `retain_graph=True`。
+* 新损失与相对调度参数参与配置指纹。使用新设计需启动新实验目录；相同新配置的 checkpoint 可完整恢复 optimizer 和 scheduler 状态，包括预热切换前后。
 
 ## 8. 推理与评测
 

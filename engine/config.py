@@ -444,6 +444,11 @@ def _validate_loss_section(loss: dict) -> dict:
     if not _is_finite_number(cfg.eps) or float(cfg.eps) <= 0.0:
         raise ValueError("loss.eps must be a positive finite value.")
     if (
+        not _is_finite_number(cfg.absent_class_weight)
+        or not 0.0 <= float(cfg.absent_class_weight) <= 1.0
+    ):
+        raise ValueError("loss.absent_class_weight must be finite and in [0, 1].")
+    if (
         isinstance(cfg.reference_boundary_width, bool)
         or not isinstance(cfg.reference_boundary_width, int)
         or cfg.reference_boundary_width < 0
@@ -500,13 +505,19 @@ def _validate_scheduler(scheduler, max_iters: int) -> None:
     for idx, entry in enumerate(entries):
         duration = int(ends[idx]) - previous_end
         sched_type = str(entry.get("type"))
-        if sched_type == "CosineAnnealingLR":
+        if sched_type in ("CosineAnnealingLR", "RelativeCosineAnnealingLR"):
             if int(entry.get("T_max", -1)) != duration:
                 raise ValueError(
-                    f"param_scheduler[{idx}] CosineAnnealingLR.T_max must "
+                    f"param_scheduler[{idx}] {sched_type}.T_max must "
                     f"equal its active duration {duration}, got "
                     f"{entry.get('T_max')}."
                 )
+            if sched_type == "RelativeCosineAnnealingLR":
+                ratio = entry.get("min_lr_ratio", 0.01)
+                if not _is_finite_number(ratio) or not 0.0 <= float(ratio) <= 1.0:
+                    raise ValueError("min_lr_ratio must be finite and in [0, 1].")
+                if "eta_min" in entry:
+                    raise ValueError("Use min_lr_ratio instead of eta_min for relative cosine.")
         elif sched_type == "LinearLR":
             if int(entry.get("total_iters", -1)) != duration:
                 raise ValueError(
