@@ -43,7 +43,7 @@ UAVid 独立评测入口仍为 `configs/test/uavid.py`，数据版本与协议�
 
 ## 论文实验批量运行
 
-公共训练设置为 batch size 4、10000 步、基础学习率 `2e-6`（RemoteCLIP 保留 0.01 倍率）。先完成 11 项训练，再手选每项权重并批量验证。完整说明与配置项见 [批量实验指南](docs/experiment_suites.md)。
+公共训练设置为 batch size 4、10000 步、基础学习率 `2e-6`（RemoteCLIP 保留 0.01 倍率）。先完成 12 项训练，再手选每项权重并批量验证。完整说明与配置项见 [批量实验指南](docs/experiment_suites.md)。
 
 ```bash
 python tools/train_experiments.py configs/suites/paper_train.py --dry-run

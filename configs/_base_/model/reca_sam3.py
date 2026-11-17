@@ -26,6 +26,7 @@ model = dict(
         cross_class_mode="full",
         intra_class_enabled=True,
         semantic_init="remoteclip",
+        update_streams="both",
         num_blocks=4,  # cross -> intra -> cross -> intra; total blocks.
         num_heads=8,
         dropout=0.1,

@@ -444,9 +444,16 @@ CPU 回归测试：`python -m unittest discover -s tests -v`。测试覆盖有�
 * `model.aggregation.cross_class_mode`：`full` 或 `diagonal`；对角掩码同时作用于两次类间注意力，轴为展开提示，包含别名。
 * `model.aggregation.intra_class_enabled=False` 绕过全部类内块；`semantic_init="zeros"` 仅清零语义初始化，保留 RemoteCLIP 中间层视觉指导。
 * `model.fusion.type`：`sdf` 或 `concat`；`orientations=[0]` 保持 SDF 参数结构，仅使用原方向。
-* 完整模型及十个变体分别重训练。当前 Full 在多张表共享一份选择的权重。无 T04；两项原始 SAM3 对比仅进入独立验证队列。
+* 完整模型及十一个变体分别重训练。当前 Full 在多张表共享一份选择的权重。无 T04；两项原始 SAM3 对比仅进入独立验证队列。
 * `aggregated_features` 为流式训练的桥接张量键：完整聚合为 36×36，简单 adapter 为原始 72×72；adapter 在每个解码块执行，避免构建全提示的高分辨率卷积图。无聚合图时不执行最后一次代理梯度回传，adapter 仍正常反向更新。
 * 验证从权重旁的训练 `config.json` 恢复结构，只替换目标数据与协议，严格加载参数并核对权重/快照指纹。`None` 选择保持待选，不自动挑 best/latest。原始预训练结果记录实际 SAM3 文件及哈希、training-free、step 0。
 * 默认单卡顺序运行，多卡每卡一个独立进程任务。失败继续其他任务，状态、日志与结果按变体/seed/数据集隔离；`--resume` 只复用配置一致的目录。
 
 当前已实现入口及 CPU 合成回归；尚未使用正式预训练权重和用户数据执行 GPU 训练或八域评测，不产生论文成绩或效率估算。
+
+
+## 15. 仅更新encoder feature的消融
+
+`model.aggregation.update_streams`取`both`（默认完整模型）或`feature_only`。后者在所有类间和类内块均跳过score embed更新，只执行encoder feature更新；类内仍保留普通与移位窗口。score embed保持RemoteCLIP产生的初始值并参与每层Q/K，梯度仍可回到score embedding及RemoteCLIP，不进行detach或冻结。仅用于score embed类内更新的RemoteCLIP中间层引导及其投影在该变体中不参与计算；encoder feature的SAM3 FPN引导不变。
+
+对应配置`configs/experiments/ablation/encoder_only_update.py`，加入12项批量训练及手选权重验证清单，验证组为LoveDA/Potsdam/UAVid。四块交替顺序、SDF、损失及batch 4/10000步/LR 2e-6保持公共设置。新变体单独训练与存储，检验动态语义更新及附属指导路径的联合贡献。默认both不改变原完整模型的参数注册/执行顺序，指纹省略等价默认字段；feature_only参与指纹。

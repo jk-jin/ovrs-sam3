@@ -229,6 +229,21 @@
       "reason": "planned_or_not_reported"
     },
     {
+      "row": "encoder_only_update",
+      "dataset": "LoveDA",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "encoder_only_update",
+      "dataset": "Potsdam",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "encoder_only_update",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
       "row": "no_intra_class",
       "dataset": "LoveDA",
       "reason": "planned_or_not_reported"

@@ -4,6 +4,7 @@ _base_ = ["./_paper.py"]
 suite = dict(validation_name="selected_weights", selections=[{'variant': 'full', 'seed': 42, 'checkpoint': None},
  {'variant': 'simple_adapter', 'seed': 42, 'checkpoint': None},
  {'variant': 'diagonal_cross_class', 'seed': 42, 'checkpoint': None},
+ {'variant': 'encoder_only_update', 'seed': 42, 'checkpoint': None},
  {'variant': 'no_intra_class', 'seed': 42, 'checkpoint': None},
  {'variant': 'no_score_prior', 'seed': 42, 'checkpoint': None},
  {'variant': 'simple_fusion', 'seed': 42, 'checkpoint': None},

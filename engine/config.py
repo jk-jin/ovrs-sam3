@@ -363,6 +363,8 @@ def _validate_model_section(model: dict) -> dict:
         raise ValueError("remoteclip.enabled must match pipeline='reca'.")
     if aggregation.cross_class_mode not in {"full", "diagonal"}:
         raise ValueError("cross_class_mode must be full or diagonal.")
+    if aggregation.update_streams not in {"both", "feature_only"}:
+        raise ValueError("update_streams must be both or feature_only.")
     if aggregation.semantic_init not in {"remoteclip", "zeros"}:
         raise ValueError("semantic_init must be remoteclip or zeros.")
     if not isinstance(aggregation.intra_class_enabled, bool):
@@ -938,6 +940,9 @@ def finalize_config(raw_cfg: dict) -> dict:
 
 def config_fingerprint(cfg: dict) -> str:
     semantic = copy.deepcopy(cfg)
+    aggregation = semantic.get("model", {}).get("aggregation", {})
+    if aggregation.get("update_streams") == "both":
+        aggregation.pop("update_streams")
     for path in SEMANTIC_FINGERPRINT_EXCLUDE:
         parts = path.split(".")
         obj = semantic

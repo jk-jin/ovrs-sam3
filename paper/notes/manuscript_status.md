@@ -133,3 +133,8 @@ DLRSD 处理脚本改为消费 RSKT-Seg README 链接的 OVRSISBench DLRSD.zip�
 ## 批量训练与独立验证工程版本
 
 已实现完整模型加10个训练变体、2个原始SAM3仅验证路径；公共设置为batch 4/10000步/LR 2e-6/RemoteCLIP倍率0.01/warmup 500/相对余弦9500。保留LoveDA定期开发验证，独立阶段手选权重并恢复对应结构。新增runner的dry-run、恢复跳过、失败继续和结果目录隔离；同步实验正文预算与当前master背景提示配置。仅有CPU合成/接口回归证据，没有正式模型得分、GPU完整前向或效率测量。历史“定义尚未实现”的描述以本条为准；旧成绩和旧20000步权重不自动当作新设置结果。
+
+
+## 新增encoder_only_update
+
+训练清单与手选权重验证清单新增一项，训练总数为12。核心消融表增加Encoder feature updates only，值保持--。开关默认both保留完整模型路径；feature_only不更新score embed但保留其语义初始化与Q/K梯度，类内保留普通/移位encoder特征窗口。语义更新专用的RemoteCLIP中间层引导及投影不构造/执行。已有默认模型配置指纹保持一致，新变体有独立身份。仅CPU合成回归，尚无GPU正式训练或收益结论。

@@ -404,7 +404,7 @@ class WindowSpatialAttention(nn.Module):
 
 
 class CrossClassAggregationBlock(nn.Module):
-    """Cross-class block with one semantic update then one feature update.
+    """Cross-class block with an optional semantic update, then a feature update.
 
     Each step has its own pre-norm, projections and dropout. Q/K concatenate
     [semantic_state, feature_state] at each spatial position; the value and
@@ -419,8 +419,12 @@ class CrossClassAggregationBlock(nn.Module):
         num_heads: int = 8,
         dropout: float = 0.1,
         cross_class_mode: str = "full",
+        update_streams: str = "both",
     ):
         super().__init__()
+        if update_streams not in {"both", "feature_only"}:
+            raise ValueError("update_streams must be both or feature_only")
+        self.update_streams = update_streams
         self.semantic_attention = CrossClassAttention(
             feature_dim=feature_dim,
             semantic_dim=semantic_dim,
@@ -428,7 +432,7 @@ class CrossClassAggregationBlock(nn.Module):
             dropout=dropout,
             value_stream="semantic",
             cross_class_mode=cross_class_mode,
-        )
+        ) if update_streams == "both" else None
         self.feature_attention = CrossClassAttention(
             feature_dim=feature_dim,
             semantic_dim=semantic_dim,
@@ -437,8 +441,8 @@ class CrossClassAggregationBlock(nn.Module):
             value_stream="feature",
             cross_class_mode=cross_class_mode,
         )
-        self.semantic_attention_norm_feature = nn.LayerNorm(feature_dim)
-        self.semantic_attention_norm_semantic = nn.LayerNorm(semantic_dim)
+        self.semantic_attention_norm_feature = nn.LayerNorm(feature_dim) if update_streams == "both" else None
+        self.semantic_attention_norm_semantic = nn.LayerNorm(semantic_dim) if update_streams == "both" else None
         self.feature_attention_norm_feature = nn.LayerNorm(feature_dim)
         self.feature_attention_norm_semantic = nn.LayerNorm(semantic_dim)
 
@@ -447,14 +451,15 @@ class CrossClassAggregationBlock(nn.Module):
         feature_state_36: torch.Tensor,
         semantic_state_36: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        semantic_state_36 = semantic_state_36 + self.semantic_attention(
-            feature_state=apply_layer_norm_bcdhw(
-                feature_state_36, self.semantic_attention_norm_feature
-            ),
-            semantic_state=apply_layer_norm_bcdhw(
-                semantic_state_36, self.semantic_attention_norm_semantic
-            ),
-        )
+        if self.semantic_attention is not None:
+            semantic_state_36 = semantic_state_36 + self.semantic_attention(
+                feature_state=apply_layer_norm_bcdhw(
+                    feature_state_36, self.semantic_attention_norm_feature
+                ),
+                semantic_state=apply_layer_norm_bcdhw(
+                    semantic_state_36, self.semantic_attention_norm_semantic
+                ),
+            )
         feature_state_36 = feature_state_36 + self.feature_attention(
             feature_state=apply_layer_norm_bcdhw(
                 feature_state_36, self.feature_attention_norm_feature
@@ -513,7 +518,7 @@ class WindowAttentionUpdate(nn.Module):
 
 
 class IntraClassAggregationBlock(nn.Module):
-    """Intra-class block: two semantic window steps, then two feature steps.
+    """Intra-class block: optional semantic windows, then both feature windows.
 
     Semantic steps use RemoteCLIP spatial guidance; feature steps use SAM3
     FPN36 guidance. Regular and shifted windows each own independent
@@ -529,8 +534,12 @@ class IntraClassAggregationBlock(nn.Module):
         shift_size: int = 6,
         dropout: float = 0.1,
         guidance_dim: int = 256,
+        update_streams: str = "both",
     ):
         super().__init__()
+        if update_streams not in {"both", "feature_only"}:
+            raise ValueError("update_streams must be both or feature_only")
+        self.update_streams = update_streams
         step_kwargs = dict(
             feature_dim=feature_dim,
             semantic_dim=semantic_dim,
@@ -541,10 +550,10 @@ class IntraClassAggregationBlock(nn.Module):
         )
         self.semantic_regular = WindowAttentionUpdate(
             shift_size=0, value_stream="semantic", **step_kwargs
-        )
+        ) if update_streams == "both" else None
         self.semantic_shifted = WindowAttentionUpdate(
             shift_size=shift_size, value_stream="semantic", **step_kwargs
-        )
+        ) if update_streams == "both" else None
         self.feature_regular = WindowAttentionUpdate(
             shift_size=0, value_stream="feature", **step_kwargs
         )
@@ -556,15 +565,16 @@ class IntraClassAggregationBlock(nn.Module):
         self,
         feature_state_36: torch.Tensor,
         semantic_state_36: torch.Tensor,
-        clip_spatial_guidance_36: torch.Tensor,
+        clip_spatial_guidance_36: torch.Tensor | None,
         sam3_spatial_guidance_36: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        semantic_state_36 = semantic_state_36 + self.semantic_regular(
-            feature_state_36, semantic_state_36, clip_spatial_guidance_36
-        )
-        semantic_state_36 = semantic_state_36 + self.semantic_shifted(
-            feature_state_36, semantic_state_36, clip_spatial_guidance_36
-        )
+        if self.semantic_regular is not None:
+            semantic_state_36 = semantic_state_36 + self.semantic_regular(
+                feature_state_36, semantic_state_36, clip_spatial_guidance_36
+            )
+            semantic_state_36 = semantic_state_36 + self.semantic_shifted(
+                feature_state_36, semantic_state_36, clip_spatial_guidance_36
+            )
         feature_state_36 = feature_state_36 + self.feature_regular(
             feature_state_36, semantic_state_36, sam3_spatial_guidance_36
         )

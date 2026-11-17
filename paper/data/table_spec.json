@@ -292,6 +292,26 @@
       "inference_time_ms": ""
     },
     {
+      "plan_id": "encoder_only_update",
+      "variant_id": "encoder_only_update",
+      "name": "Encoder feature updates only",
+      "kind": "training",
+      "change": "所有类间及类内块只更新encoder feature；score embed维持初值并参与Q/K；保留普通/移位特征窗口；移除语义更新专用中间层指导",
+      "question": "动态语义状态更新及其指导路径的联合贡献",
+      "retrain": "true",
+      "shared_checkpoint": "",
+      "prediction_gate": "",
+      "status": "planned",
+      "implementation_status": "implemented_cpu_tested_not_run",
+      "priority_datasets": "LoveDA;Potsdam;UAVid",
+      "seed_plan": "TODO; current runtime default 42 is not a declared completed experiment",
+      "prediction_prob_threshold": "",
+      "background_prob_threshold": "",
+      "tta": "",
+      "checkpoint_sha256": "",
+      "inference_time_ms": ""
+    },
+    {
       "plan_id": "T03",
       "variant_id": "no_intra_class",
       "name": "w/o intra-class aggregation",

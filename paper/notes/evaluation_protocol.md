@@ -39,3 +39,8 @@ Full在主表、核心消融和冻结表复用相同选择；同variant在不同
 训练为batch 4、10000步、AdamW LR 2e-6，RemoteCLIP倍率0.01，预热500步，相对余弦9500步；每1000步保存并验证LoveDA，保留10份周期权重。损失、增强及开发域选择角色保持原设置。训练队列11项，独立验证手选每项checkpoint；main组八域、ablation组LoveDA/Potsdam/UAVid。两项training-free SAM3基线共享原始预训练文件并记录step 0。当前seed 42仍为默认运行设置，不代表已完成或锁定正式多种子实验。
 
 验证按训练快照恢复变体并严格加载权重，校验checkpoint指纹；同一次选择跨域复用。结果各目录保存路径/哈希/协议与标准JSON，改选权重须新validation_name。当前master的Potsdam、UAVid、UDD、VDD背景参与前向；LoveDA仍排除背景提示。批量入口不采集或推算效率表数据，也不自动选最佳目标分数。详见docs/experiment_suites.md。
+
+
+## 仅更新特征流的新增消融
+
+`encoder_only_update`令`model.aggregation.update_streams="feature_only"`，所有类间/类内块均跳过语义更新，仅更新encoder feature；类内仍含普通/移位两个窗口步骤。score embed保持本次前向的RemoteCLIP初值，参与Q/K且不detach；专用CLIP中间层语义指导不参与。单独重训练，沿用batch 4/10000步/LR 2e-6及相同损失，评测LoveDA/Potsdam/UAVid；队列增加为12项。该项与无初始先验消融有不同含义，衡量动态语义更新及附属指导路径的联合贡献。

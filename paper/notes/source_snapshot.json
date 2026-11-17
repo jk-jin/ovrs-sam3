@@ -1343,5 +1343,53 @@
       "tools/validate_experiments.py": "7bc37ec171a3e4e99bd0cbe035ce4b5389fb541b72291520e9e59a1f9fd01d67",
       "utils/experiment_suite.py": "6398b475674afdb1b58415fb6e24c1da69f969b66a3cc78d62669791eb08955a"
     }
+  },
+  "encoder_only_update_20261117": {
+    "base_commit": "faa62ccd9bbbeb119ad8986dbefba4e50f1b31a4",
+    "variant_id": "encoder_only_update",
+    "config": "configs/experiments/ablation/encoder_only_update.py",
+    "fingerprint": "66672c7924f1587652cfa40878df17f2ac7817e11e807950ecb7c133f95519d9",
+    "training_variants": 12,
+    "aggregation_update_streams": "feature_only",
+    "evaluation_datasets": [
+      "loveda",
+      "potsdam",
+      "uavid"
+    ],
+    "semantic_prior": "Initial RemoteCLIP prior retained in Q/K with gradients; no attention updates.",
+    "intra_class": "Keep regular and shifted encoder feature windows; no semantic-update CLIP middle guidance.",
+    "default_path": "Both-stream initialization/order and existing training fingerprints unchanged.",
+    "validation": {
+      "cpu_regression_tests": 100,
+      "paper_table_tests": 8,
+      "official_gpu_runs": false
+    },
+    "sha256": {
+      "DESIGN.md": "411a43f4c0b9cf23f8eb2cd31cef372fcd1be511e620cb50c735ef9556d90219",
+      "README.md": "e817e53c2f02534f0c94f41807bec49d314f8548c6b11b59e8a540f228acaa92",
+      "config_dataclasses.py": "77c91bda44d11ac44c75f1464b3ab6819e2d35d9229ec07f0fc91c7f220b1307",
+      "configs/_base_/model/reca_sam3.py": "0ef5d2afa2baef7615677a28b79bba5d9b38bceec9f3518baab83e89bb3d203e",
+      "configs/experiments/ablation/encoder_only_update.py": "3fab6311a6789edfc336af190c6196b6358cc33d45128762b994c9faeda39c0b",
+      "configs/suites/_paper.py": "dcc17c1079c39a7694462f71151df229a8ebc2b6bb2e15099cd1a0523dd506b9",
+      "configs/suites/paper_validate.py": "835a184f44515a94399567ff50fe79f491e5df19e963be36460d5bace43efcf4",
+      "docs/experiment_suites.md": "7dfc6a9fff99c88b4335cada3d3ff15e7ac636d54a5601e9e9513e64d5b26614",
+      "engine/config.py": "fca4e3a59f0727ba6f56a8b3173edc281dc69353fac3f8671d87f6750777d1e8",
+      "model_builder.py": "1a4b979b65b4dad20847ad540d585b761cea046dcffb2d1908bff87b94350d94",
+      "models/aggregation_attention.py": "b111e2dea31543b42ae4dbfdc97f2354ddfb62931687ec94a5ed3b7f5bf4fe5a",
+      "models/feature_aggregation.py": "7b981797d53e222a11bf83150fdd280dc1d45e89c05cc79b04be08bd7f6b715a",
+      "models/sam3_image.py": "faec9fc63f60c8d52e0a775eb8f230d3af60229e31b28ac2ee5159a32ec40194",
+      "paper/README.md": "92488a9728967c54312b4f9c0ab22b6d1ef5befcb640a0a0e3e97f633b18f6be",
+      "paper/data/experiment_plan.csv": "7318707af04b37c6c4cd77070d7d460f698bcc0854b453241a9a42c5c7cf2e2a",
+      "paper/data/table_spec.json": "ef911e33a4accfafa243c4b3ea79e654c9d107244fb9f716c83084d675e165b0",
+      "paper/notes/evaluation_protocol.md": "1376f63c0050a888b10e6c1edd11da0c0e9fe09873e6e40b6c4bb237a316a67c",
+      "paper/notes/manuscript_status.md": "b384cccd6ebffa787cd4d0c521a0ac0eb36412d9da19fd66d4f53eb43bfc80da",
+      "paper/notes/review.md": "69351d1cdacf117e46b208bdad4e4b60c0b096af5bc5c6639a8dae58a690baf9",
+      "paper/sections/experiments.tex": "7d0e0d32aefa586515d73716255e83ed56292998467c002f8ae3990d098eeee9",
+      "paper/tables/ablation_core.tex": "d89d675a89dffd8fa3a09dc228cd2bd6843f4db601c57ae275d587bd61b8b9a0",
+      "paper/tables/build_report.json": "a03bc176ad4c437f63a1265dbc3e0c57a2c88f52ff3343ea92e88f42063869ba",
+      "tests/test_experiment_suite.py": "4033f9445f85179bbcc7c94d44d9d44e21ad6414956565ea32726a24ddd6265f",
+      "tests/test_experiment_variants.py": "0a97abf47211943c79bb72416322ab066cd0eb34a1006d2b0f7354596bbd27c7",
+      "tools/train.py": "501829575ac0420b19b6600d0b432de3daa663671796c6bdf49152de73b612fb"
+    }
   }
 }

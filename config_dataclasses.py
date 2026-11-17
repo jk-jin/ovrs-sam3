@@ -62,6 +62,7 @@ class AggregationConfig:
     cross_class_mode: str = "full"
     intra_class_enabled: bool = True
     semantic_init: str = "remoteclip"
+    update_streams: str = "both"
 
 
 @dataclass

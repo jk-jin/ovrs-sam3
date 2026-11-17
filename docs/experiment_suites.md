@@ -4,7 +4,7 @@
 
 ## 公共训练设置
 
-`configs/experiments/_base_/dlrsd_loveda.py` 统一继承 DLRSD→LoveDA 协议、模型、损失、数据增强、优化器及 `full_10k.py`。主入口与十个消融入口只覆盖差异项。
+`configs/experiments/_base_/dlrsd_loveda.py` 统一继承 DLRSD→LoveDA 协议、模型、损失、数据增强、优化器及 `full_10k.py`。主入口与十一个消融入口只覆盖差异项。
 
 | 设置 | 值 |
 | --- | --- |
@@ -26,6 +26,7 @@
 | full | 完整模型；图文均 attention 微调 | 八数据集 |
 | simple_adapter | 提示条件 72×72 特征经共享残差 1×1→GN→GELU→3×3→GN，移除 RemoteCLIP、聚合、SDF | 八数据集 |
 | diagonal_cross_class | 两次类间注意力均屏蔽展开提示轴的非对角项，别名也不交换 | 八数据集 |
+| encoder_only_update | 类间/类内只更新 encoder feature；保留普通与移位特征窗口；score embed 初值仍参与 Q/K 并反传；移除语义更新专用中间层指导 | LoveDA、Potsdam、UAVid |
 | no_intra_class | 绕过两条流的全部类内块 | LoveDA、Potsdam、UAVid |
 | no_score_prior | 初始语义状态为零，保留 RemoteCLIP 中间层视觉指导 | LoveDA、Potsdam、UAVid |
 | simple_fusion | 聚合特征上采样后与原始提示条件特征、FPN 拼接，768→256→256 卷积 | LoveDA、Potsdam、UAVid |
@@ -47,7 +48,7 @@
 # 只查看计划，不创建目录，不导入 GPU 模型
 python tools/train_experiments.py configs/suites/paper_train.py --dry-run
 
-# 默认单 GPU 顺序完成 11 项训练
+# 默认单 GPU 顺序完成 12 项训练
 python tools/train_experiments.py configs/suites/paper_train.py
 
 # 中断后：跳过配置一致且完整的任务，未完成任务从 latest.pth 恢复
@@ -98,4 +99,19 @@ python tools/validate_experiments.py work_dirs/paper_batch4_10k/validation_templ
 
 ## 验证范围
 
-CPU 回归覆盖配置、11 项计划、手选权重与八域配置恢复、恢复/跳过/失败隔离、注意力屏蔽、零初始化视觉梯度、adapter/fusion 梯度、presence 单次调制及原始实例解码器/掩码头。合成检查不会进入正式结果目录。尚未在用户数据、正式预训练权重和 GPU 上执行完整训练/评测。
+CPU 回归覆盖配置、12 项计划、手选权重与八域配置恢复、恢复/跳过/失败隔离、注意力屏蔽、零初始化视觉梯度、adapter/fusion 梯度、presence 单次调制及原始实例解码器/掩码头。合成检查不会进入正式结果目录。尚未在用户数据、正式预训练权重和 GPU 上执行完整训练/评测。
+
+
+## 单独运行新增消融
+
+```bash
+python tools/train_experiments.py configs/suites/paper_train.py --only encoder_only_update
+```
+
+配置开关是`model.aggregation.update_streams="feature_only"`，默认`both`。score embed在整个聚合前向中不被注意力更新，但其生成模块仍通过Q/K获得梯度。专用CLIP中间层语义指导在该变体中不执行。训练完成后在`paper_validate.py`的同名selection中填写权重，再执行：
+
+```bash
+python tools/validate_experiments.py configs/suites/paper_validate.py --only encoder_only_update
+```
+
+输出在原根目录的`encoder_only_update/seed_42/train/`及独立验证的同名变体目录。已生成的验证模板不会被训练恢复覆盖；使用旧模板时需手动新增这一项selection，或直接使用更新后的`configs/suites/paper_validate.py`。

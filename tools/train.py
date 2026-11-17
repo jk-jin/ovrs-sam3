@@ -26,6 +26,7 @@ if __package__ in (None, ""):
 
     _config_mod = import_module(f"{package_name}.engine.config")
     build_effective_config = _config_mod.build_effective_config
+    finalize_config = _config_mod.finalize_config
     get_by_dot_path = _config_mod.get_by_dot_path
     to_builtin = _config_mod.to_builtin
     _result_mod = import_module(f"{package_name}.engine.result_writer")
@@ -40,6 +41,7 @@ if __package__ in (None, ""):
 else:
     from ..engine.config import (
         build_effective_config,
+        finalize_config,
         get_by_dot_path,
         to_builtin,
     )
@@ -693,7 +695,7 @@ def main():
             ):
                 if extra.get("config_fingerprint") != saved_meta["config_fingerprint"]:
                     raise ValueError("Checkpoint fingerprint does not match its training config.json.")
-                expected_model = dict(saved_cfg["model"], eval_mode=True)
+                expected_model = dict(finalize_config(saved_cfg)["model"], eval_mode=True)
                 if dict(cfg["model"], eval_mode=True) != expected_model:
                     raise ValueError("Evaluation model differs from the saved training architecture/configuration.")
                 eval_experiment = saved_cfg["experiment"]

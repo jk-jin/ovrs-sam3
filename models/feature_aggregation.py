@@ -35,6 +35,9 @@ class RemoteCLIPGuidedAggregation(nn.Module):
     extra encoder concatenation before the branches. The resulting decoder
     feature replaces the original Pixel Decoder's last FPN input.
 
+    With update_streams='feature_only', the initial semantic state remains in
+    Q/K without attention updates; CLIP middle-layer semantic guidance is omitted.
+
     After all blocks, the accumulated 36×36 feature state is normalized once
     with a channel-wise LayerNorm before being returned. The final semantic
     state is not post-normalized.
@@ -60,6 +63,7 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         cross_class_mode: str = "full",
         intra_class_enabled: bool = True,
         semantic_init: str = "remoteclip",
+        update_streams: str = "both",
         fusion_type: str = "sdf",
         orientations=(0, 90, 180, 270),
     ):
@@ -70,6 +74,7 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         self.num_blocks = int(num_blocks)
         self.intra_class_enabled = intra_class_enabled
         self.semantic_init = semantic_init
+        self.update_streams = update_streams
         if prompt_templates is None:
             raise ValueError(
                 "prompt_templates must be a list of 64 prompt templates."
@@ -100,6 +105,7 @@ class RemoteCLIPGuidedAggregation(nn.Module):
                         num_heads=int(num_heads),
                         dropout=float(dropout),
                         cross_class_mode=cross_class_mode,
+                        update_streams=update_streams,
                     )
                 )
             elif intra_class_enabled:
@@ -110,6 +116,7 @@ class RemoteCLIPGuidedAggregation(nn.Module):
                         num_heads=int(num_heads),
                         window_size=int(window_size),
                         shift_size=int(shift_size),
+                        update_streams=update_streams,
                         dropout=float(dropout),
                     )
                 )
@@ -130,7 +137,7 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         self.remoteclip_native_dim = int(remoteclip_native_dim)
         self.clip_spatial_guidance_proj = nn.Conv2d(
             self.remoteclip_native_dim * 2, 256, kernel_size=1
-        ) if intra_class_enabled else None
+        ) if intra_class_enabled and update_streams == "both" else None
 
     def fuse_semantic_detail_chunk(
         self,
@@ -214,48 +221,49 @@ class RemoteCLIPGuidedAggregation(nn.Module):
 
         clip_spatial_guidance_36 = sam3_spatial_guidance_36 = None
         if self.intra_class_enabled:
-            # Project image-level guidance once before broadcasting over prompts.
-            if (
-                clip_spatial_guidance_features is None
-                or clip_spatial_guidance_layer_indices is None
-            ):
-                raise ValueError(
-                    "RemoteCLIP middle guidance requires features and layer "
-                    "indices [7, 15]"
+            if self.update_streams == "both":
+                # Project image-level guidance once before broadcasting over prompts.
+                if (
+                    clip_spatial_guidance_features is None
+                    or clip_spatial_guidance_layer_indices is None
+                ):
+                    raise ValueError(
+                        "RemoteCLIP middle guidance requires features and layer "
+                        "indices [7, 15]"
+                    )
+                if len(clip_spatial_guidance_features) != len(
+                    clip_spatial_guidance_layer_indices
+                ) or len(set(clip_spatial_guidance_layer_indices)) != len(
+                    clip_spatial_guidance_layer_indices
+                ):
+                    raise ValueError(
+                        "RemoteCLIP middle feature indices must be unique and match "
+                        "the feature count"
+                    )
+                by_layer = dict(
+                    zip(
+                        clip_spatial_guidance_layer_indices,
+                        clip_spatial_guidance_features,
+                    )
                 )
-            if len(clip_spatial_guidance_features) != len(
-                clip_spatial_guidance_layer_indices
-            ) or len(set(clip_spatial_guidance_layer_indices)) != len(
-                clip_spatial_guidance_layer_indices
-            ):
-                raise ValueError(
-                    "RemoteCLIP middle feature indices must be unique and match "
-                    "the feature count"
+                if 7 not in by_layer or 15 not in by_layer:
+                    raise ValueError(
+                        "RemoteCLIP middle guidance requires indices 7 and 15 "
+                        "(layers 8 and 16)"
+                    )
+                mids = [by_layer[7], by_layer[15]]
+                if any(
+                    tuple(x.shape) != (batch_size, self.remoteclip_native_dim, 36, 36)
+                    for x in mids
+                ):
+                    raise ValueError(
+                        "RemoteCLIP middle features must match native channels and "
+                        "the 36×36 grid"
+                    )
+                projected = self.clip_spatial_guidance_proj(torch.cat(mids, dim=1))
+                clip_spatial_guidance_36 = projected[:, None].expand(
+                    -1, num_prompts, -1, -1, -1
                 )
-            by_layer = dict(
-                zip(
-                    clip_spatial_guidance_layer_indices,
-                    clip_spatial_guidance_features,
-                )
-            )
-            if 7 not in by_layer or 15 not in by_layer:
-                raise ValueError(
-                    "RemoteCLIP middle guidance requires indices 7 and 15 "
-                    "(layers 8 and 16)"
-                )
-            mids = [by_layer[7], by_layer[15]]
-            if any(
-                tuple(x.shape) != (batch_size, self.remoteclip_native_dim, 36, 36)
-                for x in mids
-            ):
-                raise ValueError(
-                    "RemoteCLIP middle features must match native channels and "
-                    "the 36×36 grid"
-                )
-            projected = self.clip_spatial_guidance_proj(torch.cat(mids, dim=1))
-            clip_spatial_guidance_36 = projected[:, None].expand(
-                -1, num_prompts, -1, -1, -1
-            )
             if sam3_fpn_72 is None or tuple(sam3_fpn_72.shape) != (
                 batch_size, 256, 72, 72
             ):

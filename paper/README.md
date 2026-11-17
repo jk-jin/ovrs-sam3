@@ -20,7 +20,7 @@
 
 完整模型36×36双流聚合、72×72 SDF；SAM3冻结，RemoteCLIP图文attention微调。主BCE按存在/不存在提示分组、默认0.8/0.2；固定蒸馏0.5仅存在提示有效像素，不使用边界环或蒸馏调度。DESIGN.md与实际代码优先于历史稿件笔记。
 
-SAM3语义与语义乘presence基线及11个训练入口现已实现并通过CPU合成检查；训练/独立验证由configs/suites/驱动，公共预算为batch 4、10000步、LR 2e-6。未运行用户数据和正式预训练权重的GPU训练/评测；所有成绩仍为--，seed集合与正式结果选择未锁定。详见根目录docs/experiment_suites.md。
+SAM3语义与语义乘presence基线及12个训练入口现已实现并通过CPU合成检查；训练/独立验证由configs/suites/驱动，公共预算为batch 4、10000步、LR 2e-6。未运行用户数据和正式预训练权重的GPU训练/评测；所有成绩仍为--，seed集合与正式结果选择未锁定。详见根目录docs/experiment_suites.md。
 
 ## 组表与检查
 
@@ -41,3 +41,5 @@ cd paper && latexmk -xelatex -halt-on-error -file-line-error -outdir=build main.
 既有文献CSV、BibTeX和PDF来源指纹不覆盖；47.4与41.6分别是OV3原报告及他文复现。四个历史LoveDA单源值仍带未完全对齐标记。公开checkpoint可能不同于论文权重，不能自动继承论文分数。
 
 notes/manuscript_status.md记录缺口与实际验证；notes/review.md记录提纲与证据自审；notes/source_snapshot.json保留历史工程快照并单独记录本轮变更。没有新训练结果或性能提升结论。
+
+新增核心消融 `encoder_only_update`：只更新encoder feature，score embed初值仍作为可学习的Q/K指导；保留普通/移位特征窗口，跳过语义更新及其专用RemoteCLIP中间层指导。正式得分尚未运行。

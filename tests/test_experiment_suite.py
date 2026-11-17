@@ -18,10 +18,10 @@ class TestPaperSuite(unittest.TestCase):
     def setUp(self):
         self.suite = suite_mod.load_suite('configs/suites/paper_train.py')
 
-    def test_all_eleven_variants_share_the_training_budget(self):
+    def test_all_twelve_variants_share_the_training_budget(self):
         jobs = suite_mod.train_jobs(self.suite)
-        self.assertEqual(len(jobs), 11)
-        self.assertEqual(len({job['signature'] for job in jobs}), 11)
+        self.assertEqual(len(jobs), 12)
+        self.assertEqual(len({job['signature'] for job in jobs}), 12)
         configs = {j['variant']: j['cfg'] for j in jobs}
         for cfg in configs.values():
             self.assertEqual(cfg['train_dataloader']['batch_size'], 4)
@@ -31,6 +31,7 @@ class TestPaperSuite(unittest.TestCase):
             self.assertEqual(cfg['param_scheduler'][1]['T_max'], 9500)
             self.assertEqual(cfg['param_scheduler'][1]['min_lr_ratio'], .01)
             self.assertEqual(cfg['logging']['wandb']['mode'], 'offline')
+        self.assertEqual(configs['encoder_only_update']['model']['aggregation']['update_streams'], 'feature_only')
         self.assertEqual(configs['simple_adapter']['model']['pipeline'], 'adapter')
         self.assertEqual(configs['no_score_prior']['model']['aggregation']['semantic_init'], 'zeros')
         self.assertEqual(configs['no_distillation']['loss']['reference_distill_weight'], 0)
@@ -66,8 +67,37 @@ class TestPaperSuite(unittest.TestCase):
         suite = suite_mod.load_suite('configs/suites/paper_validate.py')
         jobs, pending = suite_mod.validation_jobs(suite, dry_run=True)
         self.assertEqual(len(jobs), 16)
-        self.assertEqual(len(pending), 11)
+        self.assertEqual(len(pending), 12)
         self.assertTrue(all(j['pretrained'] for j in jobs))
+
+    def test_encoder_only_selection_restores_three_ablation_datasets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            suite = suite_mod.load_suite('configs/suites/paper_validate.py')
+            suite['baselines'] = []
+            source = suite_mod.train_jobs(self.suite, ['encoder_only_update'])[0]['cfg']
+            checkpoint = Path(tmp) / 'iter_0005000.pth'
+            checkpoint.write_bytes(b'synthetic metadata only')
+            source['meta'] = dict(config_fingerprint=config_mod.config_fingerprint(source))
+            (checkpoint.parent / 'config.json').write_text(json.dumps(source))
+            suite['selections'] = [dict(variant='encoder_only_update', seed=42, checkpoint=str(checkpoint))]
+            jobs, pending = suite_mod.validation_jobs(suite)
+            self.assertEqual(pending, [])
+            self.assertEqual({job['dataset'] for job in jobs}, {'loveda', 'potsdam', 'uavid'})
+            for job in jobs:
+                self.assertEqual(job['cfg']['model']['aggregation']['update_streams'], 'feature_only')
+                self.assertEqual(job['cfg']['experiment']['variant_id'], 'encoder_only_update')
+
+    def test_stream_choice_validation_and_experiment_identity(self):
+        cfg = suite_mod.train_jobs(self.suite, ['full'])[0]['cfg']
+        fingerprint = config_mod.config_fingerprint(cfg)
+        previous = copy.deepcopy(cfg)
+        previous['model']['aggregation'].pop('update_streams')
+        self.assertEqual(fingerprint, config_mod.config_fingerprint(previous))
+        cfg['model']['aggregation']['update_streams'] = 'feature_only'
+        self.assertNotEqual(fingerprint, config_mod.config_fingerprint(cfg))
+        cfg['model']['aggregation']['update_streams'] = 'typo'
+        with self.assertRaisesRegex(ValueError, 'update_streams'):
+            config_mod.finalize_config(cfg)
 
     def test_skip_resume_changed_config_and_failed_worker(self):
         with tempfile.TemporaryDirectory() as tmp:
