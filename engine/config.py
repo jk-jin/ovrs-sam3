@@ -442,14 +442,6 @@ def _validate_loss_section(loss: dict) -> dict:
 
     if not _is_finite_number(cfg.eps) or float(cfg.eps) <= 0.0:
         raise ValueError("loss.eps must be a positive finite value.")
-    if (
-        isinstance(cfg.reference_boundary_width, bool)
-        or not isinstance(cfg.reference_boundary_width, int)
-        or cfg.reference_boundary_width < 0
-    ):
-        raise ValueError(
-            "loss.reference_boundary_width must be a non-negative int."
-        )
 
     return asdict(cfg)
 

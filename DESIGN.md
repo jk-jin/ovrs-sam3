@@ -185,7 +185,13 @@ feature_state_36 + semantic_state_36
 
 ### 7.2 数据增强
 
-训练：短边确定缩放 1008 → 随机裁剪 1008×1008 → SSD 颜色增强 → 0.5 概率水平翻转 → Normalize(0.5,0.5)。
+训练：原图随机裁剪/整图分支 → Resize 1008×1008 → 随机直角旋转 → SSD 颜色增强 → 0.5 概率水平翻转 → Normalize(0.5,0.5)。
+
+* `RandomResizedCrop(size=(1008,1008), scale=(0.6,1.0), prob=0.7)`：70% 概率从原图采样正方形裁剪，面积在原图的 60%～100% 之间；30% 概率保留完整图像。两条分支最终都只做一次缩放，输入始终为 1008×1008。非正方形源图的裁剪面积范围按能放入的最大正方形截断，极小尺寸按整数像素取整，不引入 padding。
+* `RandomRotate90`：等概率选择 0°/90°/180°/270°，不插值；与水平翻转组合覆盖八种朝向，每个样本只生成一个训练视图。
+* 所有空间变换共享同一次随机参数，同步作用于 `image`、`raw_image`、`label_map` 和 `eval_label_map`；图像使用双线性插值，标签使用最近邻插值。SSD 颜色增强维持原参数，并同步作用于两路图像；仅 SAM3 的 `image` 执行最后的 Normalize。
+* 存在提示由增强后的标签在损失分辨率下重新确定；随机采样使用现有 Python RNG，随训练 runtime RNG 状态一起恢复。
+
 验证：直接 Resize 1008×1008，`keep_ratio=False`。TTA 默认关闭。
 
 ### 7.3 损失
@@ -198,16 +204,15 @@ total_loss = (
 )
 ```
 
-默认 `seg_bce_weight=1.0`、`present_class_weight=0.8`、`seg_dice_weight=0.0`、`reference_boundary_width=3`。
+默认 `seg_bce_weight=1.0`、`present_class_weight=0.8`、`seg_dice_weight=0.0`、`reference_distill_weight=0.5`。
 
 * 主 BCE：每张图的每个提示先在所有 `label != 255` 的像素上取平均，类别内部不单独平衡正负区域；存在提示与不存在提示分别在各自组内取平均，然后以 `present_class_weight` 和 `1-present_class_weight` 合并两组损失，最后在 batch 的图像间平均。
 * 提示存在性由损失分辨率下该图的 GT 标签确定；同义提示继承原类别存在性，仍按提示通道分别计数。每张图的有效像素数、存在/不存在提示数与组权重在完整提示集合上计算一次；所有 chunk 共享这些归一化统计，不能在 chunk 内重新计算组均值。
 * `present_class_weight` 范围为 `[0,1]`，默认存在组占 0.8、不存在组占 0.2。某图全部类别存在时，仅使用存在组并赋全权重；全 ignore 图的主 BCE 为可反传的零，在 batch 平均中仍计为一张图。两组均非空时，调节参数只控制组占比，不随组内提示数量变化。
 * Dice：只对存在的提示计算；默认关闭。
-* Reference 蒸馏：冻结 SAM3 head 的 soft probability；只监督存在提示的全部有效像素，并额外包含 GT 外侧宽度 `reference_boundary_width` 的 ignore 边界环。
-* 蒸馏系数采用独立半余弦衰减，直接替代固定系数；不再另乘一个基础蒸馏权重。`reference_distill_start_iter=1000`、`reference_distill_end_iter=12000`、`reference_distill_start_weight=0.5`、`reference_distill_end_weight=0.0`。开始步数之前及开始时保持开始权重，区间内平滑下降，结束时及以后保持结束权重，绝不周期回升。
-* 训练迭代从 1 开始编号，每次计算使用 `global_iter + 1`，与日志步数一致；同一 batch 的所有 chunk 共用一个蒸馏系数。checkpoint 恢复已完成的 `global_iter` 后，下一个 batch 自动使用下一步的权重，无独立的蒸馏 scheduler 状态。
-* 配置要求开始与结束步数为非负整数且结束大于开始；权重有限、非负且开始不小于结束。两端权重相同可保持常数，两端都为零可关闭蒸馏；实际权重为零或没有监督像素时跳过教师解码。4K 调试入口将区间改为 400～2400 步，消融入口使用 0.25→0 的权重端点。
+* Reference 蒸馏：冻结 SAM3 head 的 soft probability；只监督存在提示的有效标注像素（`label != 255`），全部 ignore 像素排除，不再构造边界环。不监督不存在提示。
+* 蒸馏 BCE 在完整 batch 的所有存在图像-提示对的有效像素上取全局平均，所有 chunk 共用完整分母；随后乘固定 `reference_distill_weight`，默认 0.5。训练从头到尾使用同一个系数，不依赖步数，也没有独立调度器。固定权重为零或没有监督像素时跳过教师解码。
+* 4K 调试入口沿用相同固定蒸馏规则；消融入口将固定权重设为 0.25。
 * 日志键：`loss_seg_bce`、`loss_seg_dice`、`loss_reference_distill_bce`、`loss_reference_distill_weighted`、`reference_distill_weight`、`total_loss`。其中 `reference_distill_weight` 为当前 batch 的真实系数，不按 chunk 累加，也不按日志窗口平滑；JSONL 与离线 W&B 均记录。
 
 损失配置入口为 `configs/_base_/loss/semantic.py`，例如：
@@ -215,14 +220,11 @@ total_loss = (
 ```python
 loss = dict(
     present_class_weight=0.8,
-    reference_distill_start_iter=1000,
-    reference_distill_end_iter=12000,
-    reference_distill_start_weight=0.5,
-    reference_distill_end_weight=0.0,
+    reference_distill_weight=0.5,
 )
 ```
 
-原 `absent_class_weight` 和固定配置项 `reference_distill_weight` 已删除，继续使用时会拒绝配置；后者仅作为运行时系数与日志名称保留。新损失参数参与配置指纹，不能从旧损失配置直接恢复训练。
+原 `absent_class_weight`、四个蒸馏余弦调度配置项 `reference_distill_start_iter` / `reference_distill_end_iter` / `reference_distill_start_weight` / `reference_distill_end_weight`，以及 `reference_boundary_width` 已删除，继续使用时会拒绝配置。新损失和增强参数参与配置指纹，需使用新实验目录启动训练，不能从旧配置直接恢复。
 
 ### 7.4 显存设计
 

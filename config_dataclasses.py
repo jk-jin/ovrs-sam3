@@ -71,15 +71,10 @@ class SemanticCriterionConfig:
 
     eps: float = 1e-6
 
-    reference_distill_start_iter: int = 1000
-    reference_distill_end_iter: int = 12000
-    reference_distill_start_weight: float = 0.5
-    reference_distill_end_weight: float = 0.0
-    reference_boundary_width: int = 3
+    reference_distill_weight: float = 0.5
 
     def __post_init__(self):
-        for name in ("present_class_weight", "reference_distill_start_weight",
-                     "reference_distill_end_weight"):
+        for name in ("present_class_weight", "reference_distill_weight"):
             value = getattr(self, name)
             if (
                 isinstance(value, bool)
@@ -90,14 +85,6 @@ class SemanticCriterionConfig:
                 raise ValueError(f"{name} must be finite and non-negative.")
         if self.present_class_weight > 1.0:
             raise ValueError("present_class_weight must be in [0, 1].")
-        for name in ("reference_distill_start_iter", "reference_distill_end_iter"):
-            value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise ValueError(f"{name} must be a non-negative integer.")
-        if self.reference_distill_end_iter <= self.reference_distill_start_iter:
-            raise ValueError("reference_distill_end_iter must be greater than start_iter.")
-        if self.reference_distill_end_weight > self.reference_distill_start_weight:
-            raise ValueError("Distillation end weight must not exceed start weight.")
 
 
 @dataclass

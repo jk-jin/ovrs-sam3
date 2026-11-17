@@ -311,7 +311,6 @@ class Trainer:
                 prompt_to_class_id=prompt_to_class_id,
                 num_label_classes=num_label_classes,
                 target_hw=(288, 288),
-                global_iter=self.global_iter + 1,
             )
 
         effective_distill_weight = float(

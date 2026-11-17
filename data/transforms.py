@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import random
 from typing import Any, MutableMapping, Sequence, Tuple
 
@@ -245,6 +246,70 @@ class Resize:
 
         sample["img_shape"] = (out_h, out_w)
         sample["scale_factor"] = (out_w / w, out_h / h)
+        return sample
+
+
+class RandomResizedCrop:
+    """Random square crop or full image, followed by one resize.
+
+    ``scale`` is the crop area relative to the source image. For rectangular
+    inputs, bounds are capped at the largest square that fits the image.
+    All spatial inputs share the same crop; labels use nearest interpolation.
+    """
+
+    def __init__(self, size: Tuple[int, int], scale=(0.6, 1.0), prob: float = 0.7):
+        self.size = tuple(size)
+        self.scale = tuple(scale)
+        if len(self.size) != 2 or any(
+            isinstance(x, bool) or not isinstance(x, int) or x <= 0 for x in self.size
+        ):
+            raise ValueError("size must contain two positive integers.")
+        if len(self.scale) != 2 or any(
+            isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x)
+            for x in self.scale
+        ) or not 0.0 < self.scale[0] <= self.scale[1] <= 1.0:
+            raise ValueError("scale must satisfy 0 < min_area <= max_area <= 1.")
+        if (
+            isinstance(prob, bool) or not isinstance(prob, (int, float))
+            or not math.isfinite(prob) or not 0.0 <= prob <= 1.0
+        ):
+            raise ValueError("prob must be finite and in [0, 1].")
+        self.prob = float(prob)
+
+    def __call__(self, sample: Sample) -> Sample:
+        if random.random() < self.prob:
+            sample = dict(sample)
+            h, w = sample["image"].shape[-2:]
+            max_area = min(h, w) ** 2
+            area = random.uniform(
+                min(self.scale[0] * h * w, max_area),
+                min(self.scale[1] * h * w, max_area),
+            )
+            side = max(1, min(round(math.sqrt(area)), h, w))
+            top = random.randint(0, h - side)
+            left = random.randint(0, w - side)
+            for key in ("image", "raw_image"):
+                if sample.get(key) is not None:
+                    sample[key] = _crop_last_two_dims(sample[key], top, left, side, side)
+            sample = _apply_to_label_keys(
+                sample, lambda m: _crop_last_two_dims(m, top, left, side, side)
+            )
+        return Resize(self.size)(sample)
+
+
+class RandomRotate90:
+    """Uniform choice of 0/90/180/270 degrees, without interpolation."""
+
+    def __call__(self, sample: Sample) -> Sample:
+        turns = random.randrange(4)
+        sample = dict(sample)
+        for key in ("image", "raw_image"):
+            if sample.get(key) is not None:
+                sample[key] = torch.rot90(sample[key], turns, dims=(-2, -1))
+        sample = _apply_to_label_keys(
+            sample, lambda m: torch.rot90(m, turns, dims=(-2, -1))
+        )
+        sample["img_shape"] = tuple(sample["image"].shape[-2:])
         return sample
 
 

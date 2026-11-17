@@ -24,11 +24,6 @@ runtime = dict(
     work_dir="./work_dirs/dev/dlrsd_loveda_4k",
 )
 
-loss = dict(
-    reference_distill_start_iter=400,
-    reference_distill_end_iter=2400,
-)
-
 train_dataloader = dict(
     batch_size=2,
     num_workers=8,

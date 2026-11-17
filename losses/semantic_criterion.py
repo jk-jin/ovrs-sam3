@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import math
 from typing import Dict, Optional
 
 import torch
@@ -30,11 +29,6 @@ class SemanticStreamingContext:
     # [B, P], prompt-level presence inherited from original classes.
     presence_target: torch.Tensor
 
-    # [B, M, H, W] bool.
-    # M is the number of original label classes.
-    # Only contains class-specific outer boundaries in ignore pixels.
-    distill_outer_boundary_by_class: torch.Tensor
-
     num_prompt_channels: int
     num_label_classes: int
 
@@ -60,56 +54,15 @@ class SemanticCriterion(nn.Module):
 
         2. Optional Dice on final_logits (default weight 0.0)
 
-        3. SAM3 teacher mask distillation BCE (cosine-decaying weight)
+        3. SAM3 teacher mask distillation BCE (fixed weight)
            - Frozen SAM3 semantic head logits as soft targets
            - Only present image-prompt pairs
-           - All valid GT pixels plus a configurable class-specific
-             outer boundary restricted to ignore pixels
+           - Only valid GT pixels; ignore pixels never contribute
     """
 
     def __init__(self, cfg: Optional[SemanticCriterionConfig] = None):
         super().__init__()
         self.cfg = cfg or SemanticCriterionConfig()
-
-        boundary_width = (
-            self.cfg.reference_boundary_width
-        )
-
-        if (
-            isinstance(boundary_width, bool)
-            or not isinstance(boundary_width, int)
-        ):
-            raise TypeError(
-                "reference_boundary_width must be "
-                "a non-negative integer, "
-                f"got {boundary_width!r}."
-            )
-
-        if boundary_width < 0:
-            raise ValueError(
-                "reference_boundary_width must be >= 0, "
-                f"got {boundary_width}."
-            )
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    def get_reference_distill_weight(self, global_iter: int) -> float:
-        """Weight for the current iteration; hold both ends outside the interval."""
-        if isinstance(global_iter, bool) or not isinstance(global_iter, int) or global_iter < 0:
-            raise ValueError("global_iter must be a non-negative integer.")
-        cfg = self.cfg
-        if global_iter <= cfg.reference_distill_start_iter:
-            return float(cfg.reference_distill_start_weight)
-        if global_iter >= cfg.reference_distill_end_iter:
-            return float(cfg.reference_distill_end_weight)
-        progress = (global_iter - cfg.reference_distill_start_iter) / (
-            cfg.reference_distill_end_iter - cfg.reference_distill_start_iter
-        )
-        return float(cfg.reference_distill_end_weight) + (
-            cfg.reference_distill_start_weight - cfg.reference_distill_end_weight
-        ) * (1.0 + math.cos(math.pi * progress)) / 2.0
 
     def forward(
         self,
@@ -118,7 +71,6 @@ class SemanticCriterion(nn.Module):
         prompt_to_class_id: torch.Tensor,
         num_label_classes: int,
         reduction: str = "mean",
-        global_iter: int = 0,
     ) -> TensorDict:
         """Full prompt-space loss forward."""
         if reduction != "mean":
@@ -147,7 +99,6 @@ class SemanticCriterion(nn.Module):
             prompt_to_class_id=prompt_to_class_id,
             num_label_classes=int(num_label_classes),
             target_hw=final_logits.shape[-2:],
-            global_iter=global_iter,
         )
 
         target_full, _ = self._build_binary_targets(
@@ -171,7 +122,6 @@ class SemanticCriterion(nn.Module):
         prompt_to_class_id: torch.Tensor,
         num_label_classes: int,
         target_hw: tuple[int, int] = (288, 288),
-        global_iter: int = 0,
     ) -> SemanticStreamingContext:
         """Build full-batch statistics before the prompt chunk loop."""
         label_map = self._extract_label_map(targets)
@@ -241,7 +191,6 @@ class SemanticCriterion(nn.Module):
 
         ignore_index = int(self.cfg.ignore_index)
         valid_mask = label_map != ignore_index
-        ignore_mask = label_map == ignore_index
 
         valid_labels = label_map[valid_mask]
         if valid_labels.numel() > 0:
@@ -285,19 +234,6 @@ class SemanticCriterion(nn.Module):
             presence_target.sum().item()
         )
 
-        boundary_width = int(
-            self.cfg.reference_boundary_width
-        )
-
-        # [B, M, H, W]
-        distill_outer_boundary_by_class = (
-            self._build_outer_distill_boundary_by_class(
-                class_mask_by_class=class_mask_by_class,
-                ignore_mask=ignore_mask,
-                boundary_width=boundary_width,
-            )
-        )
-
         # Every present prompt distills all valid pixels.
         # [B]
         valid_pixel_count = (
@@ -321,41 +257,9 @@ class SemanticCriterion(nn.Module):
             presence_target, present_weight[:, None], absent_weight[:, None]
         ) / (valid_pixel_count.clamp_min(1)[:, None] * label_map.shape[0])
 
-        # Each original class additionally owns its own outer boundary.
-        # [B, M]
-        outer_boundary_pixel_count_by_class = (
-            distill_outer_boundary_by_class
-            .to(dtype=torch.long)
-            .flatten(2)
-            .sum(dim=2)
-        )
-
-        # Valid pixels and outer boundaries are disjoint because the
-        # outer boundary is restricted to ignore_mask.
-        # [B, M]
-        distill_pixel_count_by_class = (
-            valid_pixel_count[:, None]
-            + outer_boundary_pixel_count_by_class
-        )
-
-        # Multiple prompts belonging to the same original class reuse
-        # and independently count the same class boundary.
-        # [B, P]
-        distill_pixel_count_by_prompt = (
-            distill_pixel_count_by_class.index_select(
-                dim=1,
-                index=prompt_to_class_id,
-            )
-        )
-
-        # Global denominator across the complete prompt space.
+        # Global count of valid pixels across all present image-prompt pairs.
         distill_pixel_denom = int(
-            (
-                distill_pixel_count_by_prompt
-                * presence_target.to(dtype=torch.long)
-            )
-            .sum()
-            .item()
+            (valid_pixel_count * present_count).sum().item()
         )
 
         return SemanticStreamingContext(
@@ -363,15 +267,12 @@ class SemanticCriterion(nn.Module):
             valid_mask=valid_mask,
             prompt_to_class_id=prompt_to_class_id,
             presence_target=presence_target,
-            distill_outer_boundary_by_class=(
-                distill_outer_boundary_by_class
-            ),
             num_prompt_channels=num_prompt_channels,
             num_label_classes=num_label_classes,
             num_present_pairs=num_present_pairs,
             distill_pixel_denom=distill_pixel_denom,
             seg_bce_pixel_weight=seg_bce_pixel_weight,
-            reference_distill_weight=self.get_reference_distill_weight(global_iter),
+            reference_distill_weight=float(self.cfg.reference_distill_weight),
         )
 
     def forward_chunk(
@@ -492,26 +393,12 @@ class SemanticCriterion(nn.Module):
                 )
             chunk_presence_float = present_mask.to(dtype=torch.float32)
 
-            outer_boundary_chunk = (
-                context.distill_outer_boundary_by_class.index_select(
-                    dim=1,
-                    index=prompt_class_ids,
-                )
-            )
-
-            # Fixed design:
-            # all valid pixels + class-specific outer ignore boundary.
-            distill_mask_chunk = (
-                context.valid_mask[:, None, :, :]
-                | outer_boundary_chunk
-            )
-
             distill_contribution = self._distill_contribution_chunk(
                 final_logits=final_logits_chunk,
                 teacher_logits=outputs[
                     OUTPUT_KEYS.sam3_teacher_logits
                 ],
-                distill_mask_chunk=distill_mask_chunk,
+                distill_mask_chunk=context.valid_mask[:, None, :, :],
                 presence_target_chunk=chunk_presence_float,
                 global_denom=context.distill_pixel_denom,
             )
@@ -544,55 +431,6 @@ class SemanticCriterion(nn.Module):
     # Distillation (per-chunk, global denominator)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _build_outer_distill_boundary_by_class(
-        class_mask_by_class: torch.Tensor,
-        ignore_mask: torch.Tensor,
-        boundary_width: int,
-    ) -> torch.Tensor:
-        """Build class-specific outer GT boundary bands.
-
-        Args:
-            class_mask_by_class:
-                Boolean tensor [B, M, H, W]. Each channel is
-                the GT mask of one original label class.
-            ignore_mask:
-                Boolean tensor [B, H, W], label == ignore_index.
-            boundary_width:
-                Width of the outer boundary at loss resolution.
-                Zero disables the outer boundary.
-
-        Returns:
-            Boolean tensor [B, M, H, W]. Only ignore pixels
-            within the configured distance from each class mask
-            are True.
-        """
-        if boundary_width == 0:
-            return torch.zeros_like(
-                class_mask_by_class,
-                dtype=torch.bool,
-            )
-
-        kernel_size = 2 * boundary_width + 1
-
-        dilated = (
-            F.max_pool2d(
-                class_mask_by_class.to(dtype=torch.float32),
-                kernel_size=kernel_size,
-                stride=1,
-                padding=boundary_width,
-            )
-            > 0.5
-        )
-
-        outer_boundary = (
-            dilated
-            & ~class_mask_by_class
-            & ignore_mask[:, None, :, :]
-        )
-
-        return outer_boundary.contiguous()
-
     def _distill_contribution_chunk(
         self,
         final_logits: torch.Tensor,
@@ -601,7 +439,7 @@ class SemanticCriterion(nn.Module):
         presence_target_chunk: torch.Tensor,
         global_denom: int,
     ) -> torch.Tensor:
-        """Distill present prompts on valid pixels and outer GT boundaries."""
+        """Distill present prompts on valid pixels only."""
         teacher_prob = teacher_logits.detach().sigmoid()
 
         pixel_ce = F.binary_cross_entropy_with_logits(

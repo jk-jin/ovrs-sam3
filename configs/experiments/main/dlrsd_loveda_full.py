@@ -11,10 +11,7 @@ experiment = dict(
         num_blocks=4,
         directional_fusion=True,
         present_class_weight=0.8,
-        reference_distill_start_iter=1000,
-        reference_distill_end_iter=12000,
-        reference_distill_start_weight=0.5,
-        reference_distill_end_weight=0.0,
+        reference_distill_weight=0.5,
     ),
     note="DLRSD train -> LoveDA val; seven-class semantic evaluation.",
 )

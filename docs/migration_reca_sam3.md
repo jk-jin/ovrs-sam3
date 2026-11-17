@@ -31,8 +31,8 @@
 | `encoder_hw` | `aggregation.encoder_hw` |
 | `final_balanced_bce_weight` | `loss.seg_bce_weight` |
 | `final_dice_weight` | `loss.seg_dice_weight` |
-| `sam3_mask_distill_weight` | `loss.reference_distill_start_weight` / `loss.reference_distill_end_weight`（相同值保持常数） |
-| `sam3_mask_distill_boundary_width` | `loss.reference_boundary_width` |
+| `sam3_mask_distill_weight` | `loss.reference_distill_weight`（固定权重） |
+| `sam3_mask_distill_boundary_width` | 已删除；蒸馏只监督存在提示的有效标注像素 |
 | `final_mask_prob_thd` | `evaluation.postprocess.prediction_prob_threshold` |
 | `eval_cfg.prob_thd` | `evaluation.background_prob_threshold` |
 | `openclip_text_finetune` | `freeze.remoteclip_text_finetune` |
