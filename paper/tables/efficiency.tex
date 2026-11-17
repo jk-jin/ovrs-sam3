@@ -1,15 +1,16 @@
 % Generated from paper/data; do not hand-edit numeric cells.
 \begin{table}[!tb]
 \centering
-\caption{Computational cost under a common measurement setup.}
+\caption{Computational cost under a common evaluation setup.}
 \label{tab:efficiency}
 \small
 \setlength{\tabcolsep}{2pt}
-\begin{tabular}{L{0.30\columnwidth}cccc}
+\begin{tabular}{L{0.29\columnwidth}cccc}
 \toprule
-Method & \shortstack{Total\\(M)} & \shortstack{Trainable\\(M)} & \shortstack{Time\\(ms)} & \shortstack{Memory\\(GB)}\\
+Method & \shortstack{Total\\(M)} & \shortstack{Trainable\\(M)} & \shortstack{Latency\\(ms)} & \shortstack{Peak memory\\(GB)}\\
 \midrule
 SAM 3 Semantic-only & -- & -- & -- & --\\
+SAM 3 Semantic $\times$ Presence & -- & -- & -- & --\\
 SAM 3 adapter & -- & -- & -- & --\\
 ReCA-SAM3 & -- & -- & -- & --\\
 Single-orientation SDF & -- & -- & -- & --\\
@@ -17,6 +18,6 @@ Single-orientation SDF & -- & -- & -- & --\\
 \end{tabular}
 \par\vspace{3pt}
 \begin{minipage}{\columnwidth}
-\footnotesize Total and trainable parameters are reported in millions. Measurements use the same hardware, precision, input size, batch size, prompt count, and cache policy. -- denotes unavailable results.
+\footnotesize Measurements share hardware, precision, input size, batch size, prompt count, warm-up, synchronization, and cache policy. Semantic × Presence includes both complete semantic and instance paths; ReCA-SAM3 uses student decoding only. Parameter counts are in millions. -- denotes unavailable measurements.
 \end{minipage}
 \end{table}

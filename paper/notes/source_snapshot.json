@@ -852,7 +852,7 @@
       }
     }
   },
-  "note": "Current refactor working-tree source hashes and effective configurations. base_commit is the parent before this change, not an experiment run. No real-model training or evaluation was executed.",
+  "note": "Historical 2026-11-14 engineering snapshot, not a current training run or current merged configuration. The paper_revision_20261117 entry records the current paper-only update.",
   "data_preparation": {
     "dataset": "DLRSD",
     "protocol_id": "dlrsd_ovrsisbench_official_v1",
@@ -866,5 +866,32 @@
     "label_encoding": "D2masks 0..16 preserved; class zero is airplane",
     "all_includes_training": true,
     "validation": "complete official archive converted; all output image bytes and mask pixels compared with their source"
+  },
+  "paper_revision_20261117": {
+    "base_commit": "ef194e1358e14685d1e978332a1789a213026c25",
+    "scope": "paper tables and source audit only; no model/config mutation",
+    "current_loss": {
+      "present_class_weight": 0.8,
+      "reference_distill_weight": 0.5,
+      "reference_boundary_width": "removed"
+    },
+    "table_files": [
+      "main_rskt8.tex",
+      "ablation_core.tex",
+      "ablation_freeze.tex",
+      "efficiency.tex"
+    ],
+    "note": "Older top-level effective configuration/hash snapshot is historical, not a current merged-config or training claim.",
+    "source_git_blobs": {
+      "DESIGN.md": "651156aa732c4c015f619304e8522af0d5de723e",
+      "configs/_base_/loss/semantic.py": "f76a1f1ece5dde4ef0b81eb78f022efee8462b39",
+      "configs/_base_/model/reca_sam3.py": "e2667fb53d6fa5167cf4fe1ef6b41f80589f7736",
+      "configs/datasets/eval/loveda.py": "ed3e3da2b9e67dac5120977881c55baecc4ae2e1",
+      "configs/experiments/main/dlrsd_loveda_full.py": "8d2a50cf3f130f223aa0062d3ca1db87e83584fa",
+      "losses/semantic_criterion.py": "57ce9db6100533dc5a6fa6e0070a8e8d75ccb5a5",
+      "models/aggregation_attention.py": "37341282a1fe041ce18eaf0911063cd526e426b8",
+      "models/feature_aggregation.py": "c281b12e9217da3af3fe52461eeaec861888d5d6",
+      "models/semantic_detail_fusion.py": "66baa87685f51d12d9736b9e4c2042b3195839b1"
+    }
   }
 }

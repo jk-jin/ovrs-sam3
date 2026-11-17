@@ -4,42 +4,82 @@
   "native_records": 0,
   "missing_cells": [
     {
-      "row": "full",
+      "row": "semantic_only",
       "dataset": "DLRSD",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "full",
+      "row": "semantic_only",
       "dataset": "iSAID",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "full",
+      "row": "semantic_only",
       "dataset": "LoveDA",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "full",
+      "row": "semantic_only",
       "dataset": "Potsdam",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "full",
+      "row": "semantic_only",
       "dataset": "Vaihingen",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "full",
+      "row": "semantic_only",
       "dataset": "UAVid",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "full",
+      "row": "semantic_only",
       "dataset": "UDD5",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "full",
+      "row": "semantic_only",
+      "dataset": "VDD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "DLRSD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "iSAID",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "LoveDA",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "Potsdam",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "Vaihingen",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "UDD5",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
       "dataset": "VDD",
       "reason": "planned_or_not_reported"
     },
@@ -84,32 +124,42 @@
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "sam_sem_ov3",
+      "row": "full",
       "dataset": "DLRSD",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "sam_sem_ov3",
+      "row": "full",
       "dataset": "iSAID",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "sam_sem_ov3",
+      "row": "full",
+      "dataset": "LoveDA",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
       "dataset": "Potsdam",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "sam_sem_ov3",
+      "row": "full",
       "dataset": "Vaihingen",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "sam_sem_ov3",
+      "row": "full",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
       "dataset": "UDD5",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "sam_sem_ov3",
+      "row": "full",
       "dataset": "VDD",
       "reason": "planned_or_not_reported"
     },
@@ -134,193 +184,203 @@
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T00",
+      "row": "full",
       "dataset": "LoveDA",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T00",
+      "row": "full",
       "dataset": "Potsdam",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T00",
+      "row": "full",
       "dataset": "UAVid",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T01",
+      "row": "simple_adapter",
       "dataset": "LoveDA",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T01",
+      "row": "simple_adapter",
       "dataset": "Potsdam",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T01",
+      "row": "simple_adapter",
       "dataset": "UAVid",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T02",
+      "row": "diagonal_cross_class",
       "dataset": "LoveDA",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T02",
+      "row": "diagonal_cross_class",
       "dataset": "Potsdam",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T02",
+      "row": "diagonal_cross_class",
       "dataset": "UAVid",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T03",
+      "row": "no_intra_class",
       "dataset": "LoveDA",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T03",
+      "row": "no_intra_class",
       "dataset": "Potsdam",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T03",
+      "row": "no_intra_class",
       "dataset": "UAVid",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T04",
+      "row": "no_score_prior",
       "dataset": "LoveDA",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T04",
+      "row": "no_score_prior",
       "dataset": "Potsdam",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T04",
+      "row": "no_score_prior",
       "dataset": "UAVid",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T05",
+      "row": "simple_fusion",
       "dataset": "LoveDA",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T05",
+      "row": "simple_fusion",
       "dataset": "Potsdam",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T05",
+      "row": "simple_fusion",
       "dataset": "UAVid",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T06",
+      "row": "single_orientation",
       "dataset": "LoveDA",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T06",
+      "row": "single_orientation",
       "dataset": "Potsdam",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T06",
+      "row": "single_orientation",
       "dataset": "UAVid",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T07",
+      "row": "no_distillation",
       "dataset": "LoveDA",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T07",
+      "row": "no_distillation",
       "dataset": "Potsdam",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T07",
+      "row": "no_distillation",
       "dataset": "UAVid",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T00",
+      "row": "freeze_both",
       "dataset": "LoveDA",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T00",
+      "row": "freeze_both",
       "dataset": "Potsdam",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T00",
+      "row": "freeze_both",
       "dataset": "UAVid",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "T08",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "T08",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "T08",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "P00",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "P00",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "P00",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "P00",
-      "metric": "time_ms",
+      "row": "freeze_params_freeze_both",
+      "metric": "trainable_parameters_m",
       "reason": "planned_measurement"
     },
     {
-      "row": "P01",
+      "row": "freeze_text",
       "dataset": "LoveDA",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "P01",
+      "row": "freeze_text",
       "dataset": "Potsdam",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "P01",
+      "row": "freeze_text",
       "dataset": "UAVid",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "P01",
-      "metric": "time_ms",
+      "row": "freeze_params_freeze_text",
+      "metric": "trainable_parameters_m",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "freeze_image",
+      "dataset": "LoveDA",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "freeze_image",
+      "dataset": "Potsdam",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "freeze_image",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "freeze_params_freeze_image",
+      "metric": "trainable_parameters_m",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "full",
+      "dataset": "LoveDA",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "Potsdam",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "freeze_params_full",
+      "metric": "trainable_parameters_m",
       "reason": "planned_measurement"
     },
     {
@@ -340,6 +400,26 @@
     },
     {
       "row": "cost_semantic_only",
+      "metric": "peak_memory_gb",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "cost_semantic_presence",
+      "metric": "total_parameters_m",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "cost_semantic_presence",
+      "metric": "trainable_parameters_m",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "cost_semantic_presence",
+      "metric": "time_ms",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "cost_semantic_presence",
       "metric": "peak_memory_gb",
       "reason": "planned_measurement"
     },
@@ -404,6 +484,12 @@
       "reason": "planned_measurement"
     }
   ],
-  "averages_locked": false,
-  "note": "Planned cells are distinct from invalid data; no training or synthetic results."
+  "protocol_locked": false,
+  "generated_tables": [
+    "main_rskt8.tex",
+    "ablation_core.tex",
+    "ablation_freeze.tex",
+    "efficiency.tex"
+  ],
+  "note": "Four main-text tables only; no supplementary tables, training, or synthetic scores."
 }

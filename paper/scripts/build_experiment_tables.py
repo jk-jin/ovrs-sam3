@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import math
 import re
 import statistics
 from decimal import Decimal, InvalidOperation
@@ -106,7 +105,7 @@ def native_value(selector, records, row, dataset, spec):
             raise DataError(f'{rid}: checkpoint hash must be explicitly selected per seed')
         if r['method_id']!=row['method_id'] or r['variant_id']!=row['variant_id']:
             raise DataError(f'{rid}: method/variant mismatch')
-        if r['training_dataset'].lower()!=spec['training_dataset'].lower():
+        if r['training_dataset'].lower()!=row.get('training_dataset',spec['training_dataset']).lower():
             raise DataError(f'{rid}: training-source mismatch')
         actual=spec['dataset_aliases'].get(r['eval_dataset'].lower(),r['eval_dataset'])
         if actual!=dataset or r['eval_protocol_id']!=selector['eval_protocol_id'] or r['eval_split']!=selector['eval_split']:
@@ -166,11 +165,6 @@ def resolve(row,dataset,lit,native,spec,missing):
     missing.append({'row':row['row_id'],'dataset':dataset,'reason':'planned_or_not_reported'})
     return '--',None,False
 
-def average(cells,members,locked):
-    if not locked or any(cells[d][1] is None or not cells[d][2] for d in members):
-        return '--'
-    return f'{statistics.mean(cells[d][1] for d in members):.2f}'
-
 def measurement(selection, native, row_id, field, missing):
     """Read an explicitly selected efficiency field from an existing standard JSON.
 
@@ -218,82 +212,135 @@ def table(caption,label,columns,rows,align,wide=False,note=''):
     content.append(f'\\end{{{env}}}')
     return '\n'.join(content)+'\n'
 
+def validate_shared_selections(spec):
+    """One preselected checkpoint per variant/seed, shared across tables/domains."""
+    selected = {}
+    rows = [r for r in spec['main_rows'] if r['panel'] == 'native']
+    rows += [dict(p, native_selection=spec['ablation_native_selection'].get(p['variant_id'], {}))
+             for p in spec['ablation_rows'] + spec['freeze_rows']]
+    weights = {}
+    for row in rows:
+        variant = row['variant_id']
+        for dataset, selector in row.get('native_selection', {}).items():
+            key = (variant, dataset)
+            if key in selected and selected[key] != selector:
+                raise DataError('The same variant/dataset must reuse one selection across tables')
+            selected[key] = selector
+            signature = (sorted(selector.get('expected_seeds', [])),
+                         selector.get('checkpoint_sha256_by_seed', {}))
+            if variant in weights and weights[variant] != signature:
+                raise DataError('A variant must share seeds/checkpoints across evaluation datasets')
+            weights[variant] = signature
+    if all(v in weights for v in ('semantic_only', 'semantic_presence')):
+        if weights['semantic_only'] != weights['semantic_presence']:
+            raise DataError('Both original SAM3 baselines must share the pretrained checkpoint')
+
+
 def build(args):
-    spec=json.loads(args.spec.read_text());lit=read_literature(args.literature);native=read_native(args.native)
-    if spec['datasets']!=['DLRSD','iSAID','LoveDA','Potsdam','Vaihingen','UAVid','UDD5','VDD']:
+    spec = json.loads(args.spec.read_text())
+    if spec.get('schema_version') != 2:
+        raise DataError('Expected the four-table specification (schema_version=2)')
+    lit = read_literature(args.literature)
+    native = read_native(args.native)
+    if spec['datasets'] != ['DLRSD','iSAID','LoveDA','Potsdam','Vaihingen','UAVid','UDD5','VDD']:
         raise DataError('Dataset order must be the fixed RSKT eight-dataset set')
-    missing=[];outputs={};body=[];panel=None
-    full_by_seed={}
-    selections=[r.get('native_selection',{}) for r in spec['main_rows'] if r.get('variant_id')=='full' and r.get('panel')=='native']
-    selections += [spec['ablation_native_selection'].get('T00',{})]
-    selections += list(spec['gate_native_selection'].values())
-    for selection in selections:
-        for sel in selection.values():
-            for rid in sel.get('eval_ids',[]):
-                if rid not in native:raise DataError(f'Selected native eval_id not found: {rid}')
-                r=native[rid];seed=r['seed'];h=r['checkpoint_sha256']
-                if seed in full_by_seed and full_by_seed[seed]!=h:
-                    raise DataError('T00 and gates must share the selected Full checkpoint per seed')
-                full_by_seed[seed]=h
+    validate_shared_selections(spec)
+    missing = []
+    outputs = {}
+    body = []
+    panel = None
     for row in spec['main_rows']:
-        if row['panel']!=panel:
-            panel=row['panel'];n=1+len(spec['datasets'])+len(spec['display_averages'])
-            body.append(r'\midrule' if body else '')
-            body.append(r'\multicolumn{'+str(n)+r'}{l}{'+('ReCA-SAM3 and adaptation baseline' if panel=='native' else 'Literature results under original settings')+r'}\\')
-        cells={d:resolve(row,d,lit,native,spec,missing) for d in spec['datasets']}
-        name=latex(row['label'])+(r'~\cite{'+row['citekey']+'}' if row.get('citekey') else '')+r'$^{'+row['resource']+'}$'
-        body.append([name]+[cells[d][0] for d in spec['datasets']]+[average(cells,spec['averages'][a],spec['averages_locked']) for a in spec['display_averages']])
-    avg_headers = [r'\shortstack{Avg.\\8}', r'\shortstack{Target\\avg.}']
-    outputs['main_rskt8.tex']=table(
-        r'Semantic segmentation results on the eight-dataset evaluation set (mIoU, \%).',
-        'tab:main_rskt8', ['Method']+spec['datasets']+avg_headers, body,
-        'L{0.25\\textwidth}'+'c'*10, True,
-        r'DLRSD is the adaptation source for ReCA-SAM3. N: native evaluation; S: SegEarth-OV3 Tables 1 and 4; E: SegEarth-OV (CVPR 2025), Table 1; P: ProC-SAM3 (arXiv v2), Table I; R: RSKT-Seg, Table 1 (iSAID/ViT-L); I: Pi-Seg (arXiv v3), Table 1 (iSAID/ViT-L). Method citations identify the original methods; numerical sources are SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026}, SegEarth-OV~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025}, ProC-SAM3~\cite{songPromptCalibratedSAM32026}, RSKT-Seg~\cite{liExploringEfficientOpenVocabulary2026}, and Pi-Seg~\cite{liPerturbationRegularizedOpenVocabularyRemote2026}. Literature rows retain their reported settings and are not ranked. Unmarked LoveDA results use seven classes including background. $^{\dagger}$ denotes source-reported single-source results with category mappings not fully harmonized. -- denotes unavailable or unverified results.')
-    for section,filename,label,caption in [
-        ('core_rows','ablation_core.tex','tab:ablation_core',r'Ablation of feature aggregation and fusion (mIoU, \%).'),
-        ('loss_rows','ablation_losses.tex','tab:ablation_losses',r'Ablation of supervision terms (mIoU, \%).')]:
-        body=[]
-        for p in spec[section]:
-            row=dict(row_id=p['plan_id'],method_id='reca_sam3',variant_id=p['variant_id'],native_selection=spec['ablation_native_selection'].get(p['plan_id'],{}))
-            vals=[resolve(row,d,lit,native,spec,missing)[0] for d in spec['ablation_datasets']]
-            body.append([p['plan_id']+' '+latex(p['name'])]+(['On' if p['plan_id']!='T08' else 'Off'] if section=='loss_rows' else [])+vals)
-        cols=['Variant']+(['Distill.'] if section=='loss_rows' else [])+spec['ablation_datasets']
-        width='0.28' if section=='loss_rows' else '0.40'
-        outputs[filename]=table(caption,label,cols,body,'L{'+width+'\\columnwidth}'+'c'*(len(cols)-1),False,
-            'All variants use DLRSD adaptation and the same inference settings. LoveDA is the development domain. -- denotes unavailable results.')
-    body=[]
-    for p in spec['gate_rows']:
-        row=dict(row_id=p['plan_id'],method_id='reca_sam3',variant_id='full',native_selection=spec['gate_native_selection'].get(p['plan_id'],{}))
-        for d,sel in row['native_selection'].items():
-            for rid in sel.get('eval_ids',[]):
-                r=native.get(rid,{})
-                for k,enabled in [('prediction_prob_threshold',p['prediction_gate']=='true')]:
-                    raw=r.get(k,'');is_off=raw.strip().lower() in {'','none','null'}
-                    if enabled==is_off:raise DataError(f'{rid}: gate {k} does not match {p["plan_id"]}')
-        body.append([p['plan_id'],'On' if p['prediction_gate']=='true' else 'Off']+[resolve(row,d,lit,native,spec,missing)[0] for d in spec['ablation_datasets']]+[measurement(spec.get('gate_timing_selection',{}).get(p['plan_id']),native,p['plan_id'],'time_ms',missing)])
-    # Gate evaluations must all use one explicitly selected checkpoint.
-    gate_hashes={r.get('checkpoint_sha256') for p in spec['gate_native_selection'].values() for sel in p.values() for rid in sel.get('eval_ids',[]) for r in [native.get(rid,{})]}
-    if len(gate_hashes)>1:raise DataError('Gate analysis must reuse the same checkpoint')
-    outputs['postprocess_gates.tex']=table(
-        r'Effect of student prediction filtering (mIoU, \%).', 'tab:postprocess_gates',
-        ['ID',r'\shortstack{Pred.\\filter}']+spec['ablation_datasets']+[r'\shortstack{Time\\(ms)}'],
-        body,'l'+'c'*(len(spec['ablation_datasets'])+2),False,
-        'All settings share one checkpoint and decode only the student path. The prediction filter applies only to datasets with background enabled. -- denotes unavailable results.')
-    outputs['efficiency.tex']=table(
-        'Computational cost under a common measurement setup.', 'tab:efficiency',
-        ['Method',r'\shortstack{Total\\(M)}',r'\shortstack{Trainable\\(M)}',r'\shortstack{Time\\(ms)}',r'\shortstack{Memory\\(GB)}'],
-        [[name]+[measurement(spec.get('efficiency_selection',{}).get(variant,{}).get(field),native,'cost_'+variant,field,missing) for field in ['total_parameters_m','trainable_parameters_m','time_ms','peak_memory_gb']] for variant,name in [('semantic_only','SAM 3 Semantic-only'),('simple_adapter','SAM 3 adapter'),('full','ReCA-SAM3'),('single_orientation','Single-orientation SDF')]],
-        'L{0.30\\columnwidth}cccc',False,
-        'Total and trainable parameters are reported in millions. Measurements use the same hardware, precision, input size, batch size, prompt count, and cache policy. -- denotes unavailable results.')
-    report={'draft':args.draft,'literature_records':len(lit),'native_records':len(native),'missing_cells':missing,'averages_locked':spec['averages_locked'],'note':'Planned cells are distinct from invalid data; no training or synthetic results.'}
-    # Formal mode requires the main native and planned ablation/gate cells, never optional reference coverage.
-    required={r['row_id'] for r in spec['main_rows'] if r['panel']=='native'}|{p['plan_id'] for p in spec['core_rows']+spec['loss_rows']+spec['gate_rows']}|{'cost_semantic_only','cost_simple_adapter','cost_full','cost_single_orientation'}
-    if not args.draft and (any(m['row'] in required for m in missing) or not spec['averages_locked']):
-        raise DataError('Formal mode: required planned results/protocol lock are incomplete; use --draft for placeholders')
+        if row['panel'] != panel:
+            panel = row['panel']
+            if body:
+                body.append(r'\midrule')
+            title = 'Evaluated under our protocol' if panel == 'native' else 'Reported under original settings'
+            body.append(r'\multicolumn{10}{l}{' + title + r'}\\')
+        cells = [resolve(row,d,lit,native,spec,missing)[0] for d in spec['datasets']]
+        name = latex(row['label']).replace('×', r'$\times$')
+        if row.get('citekey'):
+            name += r'~\cite{' + row['citekey'] + '}'
+        name += r'$^{' + row['resource'] + '}$'
+        body.append([name, latex(row['adaptation_data'])] + cells)
+    headers = [r'\shortstack{' + d + r'\\' + latex(spec['dataset_roles'][d]) + '}'
+               if d in spec['dataset_roles'] else d for d in spec['datasets']]
+    outputs['main_rskt8.tex'] = table(
+        r'Semantic segmentation results on eight remote sensing datasets (mIoU, \%).',
+        'tab:main_rskt8', ['Method', r'\shortstack{Adaptation\\data}'] + headers,
+        body, r'L{0.25\textwidth}L{0.07\textwidth}' + 'c'*8, True,
+        r'N: local evaluation. S: SegEarth-OV3 v2, Table 1; E: SegEarth-OV (CVPR 2025), Table 1; '
+        r'P: ProC-SAM3 v2, Table I; R: RSKT-Seg, Table 1 (iSAID/ViT-L); I: Pi-Seg v3, Table 1 (iSAID/ViT-L). '
+        r'Method citations identify the methods; numerical sources are SegEarth-OV~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025}, '
+        r'SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026}, ProC-SAM3~\cite{songPromptCalibratedSAM32026}, '
+        r'RSKT-Seg~\cite{liExploringEfficientOpenVocabulary2026}, and Pi-Seg~\cite{liPerturbationRegularizedOpenVocabularyRemote2026}. '
+        r'Adaptation data denotes additional adaptation, not all foundation-model pretraining. None denotes no downstream segmentation adaptation; '
+        r'SegEarth-OV additionally trains its upsampler on unlabeled Million-AID. '
+        r'GSNet (RSKT report) is the iSAID setting reported by RSKT-Seg, not the original LD50K-trained official checkpoint. '
+        r'Source and Dev. refer to ReCA-SAM3: DLRSD is the source; LoveDA is used for model selection. '
+        r'Reference rows retain their original protocols and are not ranked against local results. '
+        r'$^{\dagger}$ marks source-reported LoveDA results whose category mappings are not fully harmonized; '
+        r'unmarked LoveDA reference values use seven classes including background. -- denotes unavailable results.')
+
+    for key, filename, label, caption in [
+        ('ablation_rows','ablation_core.tex','tab:ablation_core',
+         r'Ablation of feature aggregation, fusion, and supervision (mIoU, \%).'),
+        ('freeze_rows','ablation_freeze.tex','tab:ablation_freeze',
+         r'Effect of RemoteCLIP encoder adaptation (mIoU, \%).')]:
+        body = []
+        for p in spec[key]:
+            variant = p['variant_id']
+            row = dict(row_id=variant, method_id='reca_sam3', variant_id=variant,
+                       native_selection=spec['ablation_native_selection'].get(variant, {}))
+            values = [resolve(row,d,lit,native,spec,missing)[0] for d in spec['ablation_datasets']]
+            if key == 'ablation_rows':
+                body.append([latex(p['name'])] + values)
+            else:
+                parameters = measurement(spec['freeze_parameter_selection'].get(variant), native,
+                                         'freeze_params_' + variant, 'trainable_parameters_m', missing)
+                body.append([latex(p['text_encoder']), latex(p['image_encoder'])] + values + [parameters])
+        if key == 'ablation_rows':
+            columns = ['Variant'] + spec['ablation_datasets']
+            align = r'L{0.40\columnwidth}ccc'
+            note = 'All variants use DLRSD adaptation and the same model-selection and inference rules. LoveDA is the development domain. -- denotes unavailable results.'
+        else:
+            columns = [r'\shortstack{Text\\encoder}',r'\shortstack{Image\\encoder}'] + spec['ablation_datasets'] + [r'\shortstack{Trainable\\(M)}']
+            align = r'L{0.16\columnwidth}L{0.16\columnwidth}cccc'
+            note = ('Attention tuning updates the same attention-related parameter subset as Full; it is not full-encoder fine-tuning. '
+                    'Aggregation and SDF remain trainable. The jointly tuned row reuses the Full checkpoint and scores. '
+                    'LoveDA is the development domain. -- denotes unavailable results.')
+        outputs[filename] = table(caption,label,columns,body,align,False,note)
+
+    body = []
+    for row in spec['efficiency_rows']:
+        variant = row['row_id']
+        values = [measurement(spec.get('efficiency_selection',{}).get(variant,{}).get(field),native,
+                              'cost_' + variant,field,missing)
+                  for field in ['total_parameters_m','trainable_parameters_m','time_ms','peak_memory_gb']]
+        body.append([latex(row['name']).replace('×',r'$\times$')] + values)
+    outputs['efficiency.tex'] = table(
+        'Computational cost under a common evaluation setup.', 'tab:efficiency',
+        ['Method',r'\shortstack{Total\\(M)}',r'\shortstack{Trainable\\(M)}',
+         r'\shortstack{Latency\\(ms)}',r'\shortstack{Peak memory\\(GB)}'],body,
+        r'L{0.29\columnwidth}cccc',False,
+        'Measurements share hardware, precision, input size, batch size, prompt count, warm-up, synchronization, and cache policy. '
+        'Semantic × Presence includes both complete semantic and instance paths; ReCA-SAM3 uses student decoding only. '
+        'Parameter counts are in millions. -- denotes unavailable measurements.')
+    report = dict(draft=args.draft,literature_records=len(lit),native_records=len(native),
+                  missing_cells=missing,protocol_locked=spec['protocol_locked'],
+                  generated_tables=list(outputs),
+                  note='Four main-text tables only; no supplementary tables, training, or synthetic scores.')
+    required = {r['row_id'] for r in spec['main_rows'] if r['panel']=='native'}
+    required |= {p['variant_id'] for p in spec['ablation_rows'] + spec['freeze_rows']}
+    required |= {'freeze_params_' + p['variant_id'] for p in spec['freeze_rows']}
+    required |= {'cost_' + p['row_id'] for p in spec['efficiency_rows']}
+    if not args.draft and (any(m['row'] in required for m in missing) or not spec['protocol_locked']):
+        raise DataError('Formal mode: required results/protocol lock are incomplete; use --draft for placeholders')
     args.output.mkdir(parents=True,exist_ok=True)
-    for name,text in outputs.items():(args.output/name).write_text('% Generated from paper/data; do not hand-edit numeric cells.\n'+text,encoding='utf-8')
+    for name, content in outputs.items():
+        (args.output/name).write_text('% Generated from paper/data; do not hand-edit numeric cells.\n' + content,encoding='utf-8')
     (args.output/'build_report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
     print(f'Generated {len(outputs)} tables; literature={len(lit)}, native={len(native)}, missing/blocked={len(missing)}; draft={args.draft}')
+
 
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
@@ -306,4 +353,5 @@ def main():
     try:build(args)
     except (DataError,ValueError,KeyError) as exc:ap.exit(2,f'Invalid/incomplete data: {exc}\n')
 if __name__=='__main__':main()
+
 

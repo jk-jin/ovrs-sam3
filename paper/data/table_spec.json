@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "datasets": [
     "DLRSD",
     "iSAID",
@@ -12,12 +12,25 @@
   ],
   "main_rows": [
     {
-      "row_id": "full",
-      "method_id": "reca_sam3",
-      "variant_id": "full",
-      "label": "ReCA-SAM3",
+      "row_id": "semantic_only",
+      "method_id": "sam3_semantic",
+      "variant_id": "semantic_only",
+      "label": "SAM 3 Semantic-only",
       "panel": "native",
       "resource": "N",
+      "adaptation_data": "None",
+      "training_dataset": "none",
+      "native_selection": {}
+    },
+    {
+      "row_id": "semantic_presence",
+      "method_id": "sam3_semantic",
+      "variant_id": "semantic_presence",
+      "label": "SAM 3 Semantic × Presence",
+      "panel": "native",
+      "resource": "N",
+      "adaptation_data": "None",
+      "training_dataset": "none",
       "native_selection": {}
     },
     {
@@ -27,21 +40,20 @@
       "label": "SAM 3 adapter",
       "panel": "native",
       "resource": "N",
-      "native_selection": {}
+      "native_selection": {},
+      "adaptation_data": "DLRSD",
+      "training_dataset": "dlrsd"
     },
     {
-      "row_id": "sam_sem_ov3",
-      "method_id": "sam3_semantic",
-      "variant_id": "ov3_semantic_only",
-      "label": "SAM 3 Semantic-only",
-      "citekey": "carionSAM3Segment2026",
-      "source_citekey": "liSegEarthOV3ExploringSAM2026",
-      "resource": "S",
-      "panel": "reference",
-      "literature_record_ids": {
-        "LoveDA": "sam_sem_ov3_loveda",
-        "UAVid": "sam_sem_ov3_uavid"
-      }
+      "row_id": "full",
+      "method_id": "reca_sam3",
+      "variant_id": "full",
+      "label": "ReCA-SAM3",
+      "panel": "native",
+      "resource": "N",
+      "native_selection": {},
+      "adaptation_data": "DLRSD",
+      "training_dataset": "dlrsd"
     },
     {
       "row_id": "ov_original",
@@ -60,7 +72,8 @@
         "UAVid": "ov_cvpr_uavid",
         "UDD5": "ov_cvpr_udd5",
         "VDD": "ov_cvpr_vdd"
-      }
+      },
+      "adaptation_data": "None"
     },
     {
       "row_id": "ov3_original",
@@ -79,7 +92,8 @@
         "UAVid": "ov3_original_uavid",
         "UDD5": "ov3_original_udd5",
         "VDD": "ov3_original_vdd"
-      }
+      },
+      "adaptation_data": "None"
     },
     {
       "row_id": "proc_original",
@@ -98,13 +112,14 @@
         "UAVid": "proc_original_uavid",
         "UDD5": "proc_original_udd5",
         "VDD": "proc_original_vdd"
-      }
+      },
+      "adaptation_data": "None"
     },
     {
       "row_id": "cat_seg_rskt_isaid_l",
       "method_id": "cat_seg",
       "variant_id": "isaid_vitl",
-      "label": "CAT-Seg / iSAID",
+      "label": "CAT-Seg (RSKT report)",
       "citekey": "choCATSegCostAggregation2024",
       "source_citekey": "liExploringEfficientOpenVocabulary2026",
       "resource": "R",
@@ -118,13 +133,14 @@
         "UAVid": "cat_seg_rskt_isaid_l_uavid",
         "UDD5": "cat_seg_rskt_isaid_l_udd5",
         "VDD": "cat_seg_rskt_isaid_l_vdd"
-      }
+      },
+      "adaptation_data": "iSAID"
     },
     {
       "row_id": "rskt_seg_rskt_isaid_l",
       "method_id": "rskt_seg",
       "variant_id": "isaid_vitl",
-      "label": "RSKT-Seg / iSAID",
+      "label": "RSKT-Seg",
       "citekey": "liExploringEfficientOpenVocabulary2026",
       "source_citekey": "liExploringEfficientOpenVocabulary2026",
       "resource": "R",
@@ -138,13 +154,14 @@
         "UAVid": "rskt_seg_rskt_isaid_l_uavid",
         "UDD5": "rskt_seg_rskt_isaid_l_udd5",
         "VDD": "rskt_seg_rskt_isaid_l_vdd"
-      }
+      },
+      "adaptation_data": "iSAID"
     },
     {
       "row_id": "pi_isaid_l",
       "method_id": "pi_seg",
       "variant_id": "isaid_vitl",
-      "label": "Pi-Seg / iSAID",
+      "label": "Pi-Seg",
       "citekey": "liPerturbationRegularizedOpenVocabularyRemote2026",
       "source_citekey": "liPerturbationRegularizedOpenVocabularyRemote2026",
       "resource": "I",
@@ -157,13 +174,14 @@
         "UAVid": "pi_isaid_l_uavid",
         "UDD5": "pi_isaid_l_udd5",
         "VDD": "pi_isaid_l_vdd"
-      }
+      },
+      "adaptation_data": "iSAID"
     },
     {
       "row_id": "gsnet_rskt_isaid_l",
       "method_id": "gsnet",
       "variant_id": "isaid_vitl",
-      "label": "GSNet / iSAID re-eval.",
+      "label": "GSNet (RSKT report)",
       "citekey": "yeOpenVocabularyRemoteSensing2025",
       "source_citekey": "liExploringEfficientOpenVocabulary2026",
       "resource": "R",
@@ -177,7 +195,8 @@
         "UAVid": "gsnet_rskt_isaid_l_uavid",
         "UDD5": "gsnet_rskt_isaid_l_udd5",
         "VDD": "gsnet_rskt_isaid_l_vdd"
-      }
+      },
+      "adaptation_data": "iSAID"
     }
   ],
   "training_dataset": "dlrsd",
@@ -196,42 +215,22 @@
     "udd5": "UDD5",
     "vdd": "VDD"
   },
-  "averages": {
-    "Avg-8": [
-      "DLRSD",
-      "iSAID",
-      "LoveDA",
-      "Potsdam",
-      "Vaihingen",
-      "UAVid",
-      "UDD5",
-      "VDD"
-    ],
-    "Target Avg": [
-      "iSAID",
-      "LoveDA",
-      "Potsdam",
-      "Vaihingen",
-      "UAVid",
-      "UDD5",
-      "VDD"
-    ],
-    "Independent Target Avg": [
-      "iSAID",
-      "Potsdam",
-      "Vaihingen",
-      "UAVid",
-      "UDD5",
-      "VDD"
-    ]
-  },
-  "display_averages": [
-    "Avg-8",
-    "Target Avg"
+  "ablation_datasets": [
+    "LoveDA",
+    "Potsdam",
+    "UAVid"
   ],
-  "averages_locked": false,
-  "average_note": "Target Avg为预定七个目标数据集；当前LoveDA参与选择时不是独立目标平均。独立目标集合另登记，正式策略确认前不计算平均。",
-  "core_rows": [
+  "ablation_native_selection": {},
+  "native_decimals": 2,
+  "std_ddof": 1,
+  "efficiency_selection": {},
+  "approved_reported_result_ids": [
+    "cat_seg_rskt_isaid_l_loveda",
+    "gsnet_rskt_isaid_l_loveda",
+    "rskt_seg_rskt_isaid_l_loveda",
+    "pi_isaid_l_loveda"
+  ],
+  "ablation_rows": [
     {
       "plan_id": "T00",
       "variant_id": "full",
@@ -275,7 +274,7 @@
     {
       "plan_id": "T02",
       "variant_id": "diagonal_cross_class",
-      "name": "Diagonal class attention",
+      "name": "Diagonal cross-prompt attention",
       "kind": "training",
       "change": "所有类间块两次注意力屏蔽全部非对角展开提示项；保留投影和残差；同时移除别名交互",
       "question": "跨提示交换贡献",
@@ -295,7 +294,7 @@
     {
       "plan_id": "T03",
       "variant_id": "no_intra_class",
-      "name": "w/o spatial aggregation",
+      "name": "w/o intra-class aggregation",
       "kind": "training",
       "change": "两条流全部类内块bypass，类间不变",
       "question": "空间建模贡献",
@@ -313,29 +312,9 @@
       "inference_time_ms": ""
     },
     {
-      "plan_id": "T04",
-      "variant_id": "generic_clip",
-      "name": "Generic CLIP",
-      "kind": "training",
-      "change": "图像/文本/中间层指导换同ViT-L/14通用CLIP权重，保持提取与微调策略",
-      "question": "遥感预训练贡献",
-      "retrain": "true",
-      "shared_checkpoint": "",
-      "prediction_gate": "",
-      "status": "planned",
-      "implementation_status": "definition_only_not_claimed_supported",
-      "priority_datasets": "LoveDA;Potsdam;UAVid",
-      "seed_plan": "TODO; current runtime default 42 is not a declared completed experiment",
-      "prediction_prob_threshold": "",
-      "background_prob_threshold": "",
-      "tta": "",
-      "checkpoint_sha256": "",
-      "inference_time_ms": ""
-    },
-    {
       "plan_id": "T05",
       "variant_id": "no_score_prior",
-      "name": "w/o score prior",
+      "name": "w/o initial semantic prior",
       "kind": "training",
       "change": "初始语义状态置同形零；保留CLIP中间层指导与双流",
       "question": "初始化先验贡献",
@@ -375,7 +354,7 @@
     {
       "plan_id": "T07",
       "variant_id": "single_orientation",
-      "name": "Single orientation",
+      "name": "Single-orientation SDF",
       "kind": "training",
       "change": "两支路保留256通道/投影/归一化/残差，仅0度卷积",
       "question": "方向聚合贡献",
@@ -385,28 +364,6 @@
       "status": "planned",
       "implementation_status": "definition_only_not_claimed_supported",
       "priority_datasets": "LoveDA;Potsdam;UAVid",
-      "seed_plan": "TODO; current runtime default 42 is not a declared completed experiment",
-      "prediction_prob_threshold": "",
-      "background_prob_threshold": "",
-      "tta": "",
-      "checkpoint_sha256": "",
-      "inference_time_ms": ""
-    }
-  ],
-  "loss_rows": [
-    {
-      "plan_id": "T00",
-      "variant_id": "full",
-      "name": "Full",
-      "kind": "training",
-      "change": "保留完整当前设计",
-      "question": "共享基准",
-      "retrain": "true",
-      "shared_checkpoint": "",
-      "prediction_gate": "",
-      "status": "planned",
-      "implementation_status": "current_code",
-      "priority_datasets": "DLRSD;iSAID;LoveDA;Potsdam;Vaihingen;UAVid;UDD5;VDD",
       "seed_plan": "TODO; current runtime default 42 is not a declared completed experiment",
       "prediction_prob_threshold": "",
       "background_prob_threshold": "",
@@ -435,63 +392,122 @@
       "inference_time_ms": ""
     }
   ],
-  "gate_rows": [
+  "freeze_rows": [
     {
-      "plan_id": "P00",
-      "variant_id": "full",
-      "name": "Prediction filter P00",
-      "kind": "inference",
-      "change": "同T00权重，仅切换学生预测概率过滤",
-      "question": "后处理与开销",
-      "retrain": "false",
-      "shared_checkpoint": "T00; hash TODO",
-      "prediction_gate": "false",
+      "plan_id": "T09",
+      "variant_id": "freeze_both",
+      "name": "Both frozen",
+      "kind": "training",
+      "change": "RemoteCLIP text: Frozen; image: Frozen; same attention subset when trainable",
+      "question": "文本/图像适配贡献",
+      "retrain": "true",
+      "shared_checkpoint": "",
+      "prediction_gate": "",
       "status": "planned",
-      "implementation_status": "threshold_setting_available_not_run",
+      "implementation_status": "freeze_setting_available_not_run",
       "priority_datasets": "LoveDA;Potsdam;UAVid",
-      "seed_plan": "same checkpoint as T00",
-      "prediction_prob_threshold": "None",
-      "background_prob_threshold": "TODO",
-      "tta": "TODO",
+      "seed_plan": "TODO; current runtime default 42 is not a declared completed experiment",
+      "prediction_prob_threshold": "",
+      "background_prob_threshold": "",
+      "tta": "",
       "checkpoint_sha256": "",
-      "inference_time_ms": ""
+      "inference_time_ms": "",
+      "text_encoder": "Frozen",
+      "image_encoder": "Frozen"
     },
     {
-      "plan_id": "P01",
-      "variant_id": "full",
-      "name": "Prediction filter P01",
-      "kind": "inference",
-      "change": "同T00权重，仅切换学生预测概率过滤",
-      "question": "后处理与开销",
-      "retrain": "false",
-      "shared_checkpoint": "T00; hash TODO",
-      "prediction_gate": "true",
+      "plan_id": "T10",
+      "variant_id": "freeze_text",
+      "name": "Text frozen",
+      "kind": "training",
+      "change": "RemoteCLIP text: Frozen; image: Attention tuning; same attention subset when trainable",
+      "question": "文本/图像适配贡献",
+      "retrain": "true",
+      "shared_checkpoint": "",
+      "prediction_gate": "",
       "status": "planned",
-      "implementation_status": "threshold_setting_available_not_run",
+      "implementation_status": "freeze_setting_available_not_run",
       "priority_datasets": "LoveDA;Potsdam;UAVid",
-      "seed_plan": "same checkpoint as T00",
-      "prediction_prob_threshold": "TODO",
-      "background_prob_threshold": "TODO",
-      "tta": "TODO",
+      "seed_plan": "TODO; current runtime default 42 is not a declared completed experiment",
+      "prediction_prob_threshold": "",
+      "background_prob_threshold": "",
+      "tta": "",
       "checkpoint_sha256": "",
-      "inference_time_ms": ""
+      "inference_time_ms": "",
+      "text_encoder": "Frozen",
+      "image_encoder": "Attention tuning"
+    },
+    {
+      "plan_id": "T11",
+      "variant_id": "freeze_image",
+      "name": "Image frozen",
+      "kind": "training",
+      "change": "RemoteCLIP text: Attention tuning; image: Frozen; same attention subset when trainable",
+      "question": "文本/图像适配贡献",
+      "retrain": "true",
+      "shared_checkpoint": "",
+      "prediction_gate": "",
+      "status": "planned",
+      "implementation_status": "freeze_setting_available_not_run",
+      "priority_datasets": "LoveDA;Potsdam;UAVid",
+      "seed_plan": "TODO; current runtime default 42 is not a declared completed experiment",
+      "prediction_prob_threshold": "",
+      "background_prob_threshold": "",
+      "tta": "",
+      "checkpoint_sha256": "",
+      "inference_time_ms": "",
+      "text_encoder": "Attention tuning",
+      "image_encoder": "Frozen"
+    },
+    {
+      "plan_id": "T00",
+      "variant_id": "full",
+      "name": "Full",
+      "kind": "training",
+      "change": "RemoteCLIP text: Attention tuning; image: Attention tuning; same attention subset when trainable",
+      "question": "文本/图像适配贡献",
+      "retrain": "true",
+      "shared_checkpoint": "",
+      "prediction_gate": "",
+      "status": "planned",
+      "implementation_status": "current_code",
+      "priority_datasets": "LoveDA;Potsdam;UAVid",
+      "seed_plan": "TODO; current runtime default 42 is not a declared completed experiment",
+      "prediction_prob_threshold": "",
+      "background_prob_threshold": "",
+      "tta": "",
+      "checkpoint_sha256": "",
+      "inference_time_ms": "",
+      "text_encoder": "Attention tuning",
+      "image_encoder": "Attention tuning"
     }
   ],
-  "ablation_datasets": [
-    "LoveDA",
-    "Potsdam",
-    "UAVid"
+  "efficiency_rows": [
+    {
+      "row_id": "semantic_only",
+      "name": "SAM 3 Semantic-only"
+    },
+    {
+      "row_id": "semantic_presence",
+      "name": "SAM 3 Semantic × Presence"
+    },
+    {
+      "row_id": "simple_adapter",
+      "name": "SAM 3 adapter"
+    },
+    {
+      "row_id": "full",
+      "name": "ReCA-SAM3"
+    },
+    {
+      "row_id": "single_orientation",
+      "name": "Single-orientation SDF"
+    }
   ],
-  "ablation_native_selection": {},
-  "gate_native_selection": {},
-  "native_decimals": 2,
-  "std_ddof": 1,
-  "gate_timing_selection": {},
-  "efficiency_selection": {},
-  "approved_reported_result_ids": [
-    "cat_seg_rskt_isaid_l_loveda",
-    "gsnet_rskt_isaid_l_loveda",
-    "rskt_seg_rskt_isaid_l_loveda",
-    "pi_isaid_l_loveda"
-  ]
+  "freeze_parameter_selection": {},
+  "protocol_locked": false,
+  "dataset_roles": {
+    "DLRSD": "Source",
+    "LoveDA": "Dev."
+  }
 }

@@ -1,0 +1,22 @@
+% Generated from paper/data; do not hand-edit numeric cells.
+\begin{table}[!tb]
+\centering
+\caption{Effect of RemoteCLIP encoder adaptation (mIoU, \%).}
+\label{tab:ablation_freeze}
+\small
+\setlength{\tabcolsep}{2pt}
+\begin{tabular}{L{0.16\columnwidth}L{0.16\columnwidth}cccc}
+\toprule
+\shortstack{Text\\encoder} & \shortstack{Image\\encoder} & LoveDA & Potsdam & UAVid & \shortstack{Trainable\\(M)}\\
+\midrule
+Frozen & Frozen & -- & -- & -- & --\\
+Frozen & Attention tuning & -- & -- & -- & --\\
+Attention tuning & Frozen & -- & -- & -- & --\\
+Attention tuning & Attention tuning & -- & -- & -- & --\\
+\bottomrule
+\end{tabular}
+\par\vspace{3pt}
+\begin{minipage}{\columnwidth}
+\footnotesize Attention tuning updates the same attention-related parameter subset as Full; it is not full-encoder fine-tuning. Aggregation and SDF remain trainable. The jointly tuned row reuses the Full checkpoint and scores. LoveDA is the development domain. -- denotes unavailable results.
+\end{minipage}
+\end{table}

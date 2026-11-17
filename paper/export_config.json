@@ -8,6 +8,27 @@
       },
       "rows": [
         {
+          "label": "SAM 3 Semantic-only",
+          "match": {
+            "experiment.method_id": "sam3_semantic",
+            "experiment.variant_id": "semantic_only"
+          }
+        },
+        {
+          "label": "SAM 3 Semantic × Presence",
+          "match": {
+            "experiment.method_id": "sam3_semantic",
+            "experiment.variant_id": "semantic_presence"
+          }
+        },
+        {
+          "label": "SAM 3 adapter",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "simple_adapter"
+          }
+        },
+        {
           "label": "ReCA-SAM3",
           "match": {
             "experiment.method_id": "reca_sam3",
@@ -36,6 +57,27 @@
         "evaluation.dataset": "isaid"
       },
       "rows": [
+        {
+          "label": "SAM 3 Semantic-only",
+          "match": {
+            "experiment.method_id": "sam3_semantic",
+            "experiment.variant_id": "semantic_only"
+          }
+        },
+        {
+          "label": "SAM 3 Semantic × Presence",
+          "match": {
+            "experiment.method_id": "sam3_semantic",
+            "experiment.variant_id": "semantic_presence"
+          }
+        },
+        {
+          "label": "SAM 3 adapter",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "simple_adapter"
+          }
+        },
         {
           "label": "ReCA-SAM3",
           "match": {
@@ -66,6 +108,27 @@
       },
       "rows": [
         {
+          "label": "SAM 3 Semantic-only",
+          "match": {
+            "experiment.method_id": "sam3_semantic",
+            "experiment.variant_id": "semantic_only"
+          }
+        },
+        {
+          "label": "SAM 3 Semantic × Presence",
+          "match": {
+            "experiment.method_id": "sam3_semantic",
+            "experiment.variant_id": "semantic_presence"
+          }
+        },
+        {
+          "label": "SAM 3 adapter",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "simple_adapter"
+          }
+        },
+        {
           "label": "ReCA-SAM3",
           "match": {
             "experiment.method_id": "reca_sam3",
@@ -94,6 +157,27 @@
         "evaluation.dataset": "potsdam"
       },
       "rows": [
+        {
+          "label": "SAM 3 Semantic-only",
+          "match": {
+            "experiment.method_id": "sam3_semantic",
+            "experiment.variant_id": "semantic_only"
+          }
+        },
+        {
+          "label": "SAM 3 Semantic × Presence",
+          "match": {
+            "experiment.method_id": "sam3_semantic",
+            "experiment.variant_id": "semantic_presence"
+          }
+        },
+        {
+          "label": "SAM 3 adapter",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "simple_adapter"
+          }
+        },
         {
           "label": "ReCA-SAM3",
           "match": {
@@ -124,6 +208,27 @@
       },
       "rows": [
         {
+          "label": "SAM 3 Semantic-only",
+          "match": {
+            "experiment.method_id": "sam3_semantic",
+            "experiment.variant_id": "semantic_only"
+          }
+        },
+        {
+          "label": "SAM 3 Semantic × Presence",
+          "match": {
+            "experiment.method_id": "sam3_semantic",
+            "experiment.variant_id": "semantic_presence"
+          }
+        },
+        {
+          "label": "SAM 3 adapter",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "simple_adapter"
+          }
+        },
+        {
           "label": "ReCA-SAM3",
           "match": {
             "experiment.method_id": "reca_sam3",
@@ -152,6 +257,27 @@
         "evaluation.dataset": "uavid"
       },
       "rows": [
+        {
+          "label": "SAM 3 Semantic-only",
+          "match": {
+            "experiment.method_id": "sam3_semantic",
+            "experiment.variant_id": "semantic_only"
+          }
+        },
+        {
+          "label": "SAM 3 Semantic × Presence",
+          "match": {
+            "experiment.method_id": "sam3_semantic",
+            "experiment.variant_id": "semantic_presence"
+          }
+        },
+        {
+          "label": "SAM 3 adapter",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "simple_adapter"
+          }
+        },
         {
           "label": "ReCA-SAM3",
           "match": {
@@ -182,6 +308,27 @@
       },
       "rows": [
         {
+          "label": "SAM 3 Semantic-only",
+          "match": {
+            "experiment.method_id": "sam3_semantic",
+            "experiment.variant_id": "semantic_only"
+          }
+        },
+        {
+          "label": "SAM 3 Semantic × Presence",
+          "match": {
+            "experiment.method_id": "sam3_semantic",
+            "experiment.variant_id": "semantic_presence"
+          }
+        },
+        {
+          "label": "SAM 3 adapter",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "simple_adapter"
+          }
+        },
+        {
           "label": "ReCA-SAM3",
           "match": {
             "experiment.method_id": "reca_sam3",
@@ -211,6 +358,27 @@
       },
       "rows": [
         {
+          "label": "SAM 3 Semantic-only",
+          "match": {
+            "experiment.method_id": "sam3_semantic",
+            "experiment.variant_id": "semantic_only"
+          }
+        },
+        {
+          "label": "SAM 3 Semantic × Presence",
+          "match": {
+            "experiment.method_id": "sam3_semantic",
+            "experiment.variant_id": "semantic_presence"
+          }
+        },
+        {
+          "label": "SAM 3 adapter",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "simple_adapter"
+          }
+        },
+        {
           "label": "ReCA-SAM3",
           "match": {
             "experiment.method_id": "reca_sam3",
@@ -239,6 +407,27 @@
         "evaluation.dataset": "loveda"
       },
       "rows": [
+        {
+          "label": "SAM 3 Semantic-only",
+          "match": {
+            "experiment.method_id": "sam3_semantic",
+            "experiment.variant_id": "semantic_only"
+          }
+        },
+        {
+          "label": "SAM 3 Semantic × Presence",
+          "match": {
+            "experiment.method_id": "sam3_semantic",
+            "experiment.variant_id": "semantic_presence"
+          }
+        },
+        {
+          "label": "SAM 3 adapter",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "simple_adapter"
+          }
+        },
         {
           "label": "ReCA-SAM3",
           "match": {

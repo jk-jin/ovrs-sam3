@@ -1,60 +1,34 @@
-# 八数据集评测与模型选择协议（2026-11-11 重建）
 
-本轮替换旧 LoveDA 单数据集实验框架。以下区分已经核对的来源、当前代码和正式运行前待锁定协议；没有启动训练。
+# 当前论文评测与组表协议（2026-11-17）
 
-## 固定集合与来源
+本稿只保留四张正文表，不生成数据协议补充表或预测过滤补充表。详细工程记录保留在本文件，不作为新的表格输入论文。
 
-顺序只能是 DLRSD、iSAID、LoveDA、Potsdam、Vaihingen、UAVid、UDD5、VDD。
-集合依据：`liExploringEfficientOpenVocabulary2026` 本地 AAAI-26 正式版，PDF p.3/印刷5984、p.5/印刷5986 Table 1。原表顺序为 DLRSD、iSAID、LoveDA、Potsdam、UAVid、UDD5、Vaihingen、VDD，组表按名称重排。
+## 数据与模型选择
 
-原文说明两个独立单源 panel：DLRSD 与 iSAID。并非联合训练。PDF 将数据与划分详情指向附录 C、指标细节指向附录 D，本地正式版共10页，不包含这些附录。当前只能说采用同一八数据集集合，不能说全部划分/类别/裁块/波段已一致。不得用 Pi-Seg 多源附录替代 RSKT-Seg 单源缺失附录。
+固定列顺序：DLRSD、iSAID、LoveDA、Potsdam、Vaihingen、UAVid、UDD5、VDD。
+训练使用 OVRSISBench DLRSD 发布包官方成员：5601 train / 1401 val。17类，不删零，不设置背景。LoveDA val 仍用于当前 checkpoint 选择，是开发域；尚未切换源域选择，不能因为本轮重排表格就声称目标标签未使用。其余六项为独立目标域，前提是未用于模型或超参数开发。每次训练每个种子只选择一份权重，在所有目标域复用。
 
-## 本文当前开发设置
+本地类别数分别为17/15/7/6/6/8/5/7。背景处理详见正文及具体数据配置。当前 LoveDA 配置实际 reduce_zero_label=True，先对原始标签做零值处理，再进行背景排除；DESIGN.md 中写False的内容不作为已核实标签映射，运行前须结合转换脚本和原始值域确认。不要在本轮为修改标签规则而改变模型/数据配置。
 
-- 实际入口：`configs/experiments/main/dlrsd_loveda_full.py`，继承 `configs/protocols/dlrsd_loveda_semantic.py`。
-- 训练：DLRSD 采用官方 OVRSISBench 划分（5601 train / 1401 val），保留发布包中的具体样本成员；train 用于监督适配，val 用于源域诊断。
-- 选择：LoveDA val，`semantic.miou` 七类含背景，取最大；每2000步完整验证配置，`val_max_iters=None`。实际 `is_full` 必须由样本统计确认，不能仅凭配置断言。
-- 候选正式目标集合：iSAID、LoveDA、Potsdam、Vaihingen、UAVid、UDD5、VDD。LoveDA 当前参与选择，不能标为独立目标结果。
-- 正式模型选择 TODO：优先考虑源域留出验证或预先固定步数，不使用目标标签。当前没有实施，不修改训练配置。
-- 当前工程仅保留 DLRSD 训练配置，iSAID 保留评测。
+主要指标mIoU；mAcc和逐类IoU继续保存在标准结果，不另增表。LoveDA本方法仅七类含背景，须检查真实class_names与逐类union。无真实结果时一律--。主表不显示综合均值；正式导出仍需锁定完整协议与明确选择器，删除平均列不等于解除协议校验。
 
-## 本地数据与原始数据/文献定义的区别
+## 四张表与实验计划
 
-| 数据集 | 本地 eval 配置类别数与划分 | 本地背景与标签规则 | 仍须核对 |
-| --- | --- | --- | --- |
-| DLRSD | 17 / val | 无 background；不减零；ignore255 | 基准划分、裁块与原始图像独立性 |
-| iSAID | 15 / val | reduce_zero_label=True，原始零值删除 | RSKT-Seg 类别数/切块；SegEarth-OV 本地版本是16类含背景，不能直接匹配 |
-| LoveDA | 7 / val | reduce_zero_label=False；背景0保留评测、前向排除 | 基准实际类别与正式选择/评测独立性 |
-| Potsdam | 6 / val | clutter5保留评测、前向排除 | 官方原始条目、波段、MMSeg版本、基准裁块 |
-| Vaihingen | 6 / val | clutter5保留评测且参与前向 | 同上；道路同义提示映射 |
-| UAVid | 8 / val | 背景0保留评测、前向排除 | 车辆合并、序列划分；其他文献包含不同合并版本 |
-| UDD5 | 5 / val | 背景4保留评测、前向排除 | 原版/重标版与类别映射；不套用多源附录的删背景版本 |
-| VDD | 7 / val | 背景0保留评测、前向排除 | 原始论文全文缺失；基准是否test而本地val |
+- main_rskt8：两个无适配SAM3基线、adapter、Full及七个文献参考行；Adaptation data只描述额外适配，不描述基础模型全部预训练资源。
+- ablation_core：Full、adapter、对角类间注意力、无类内、无初始语义先验、简单融合、单方向、无蒸馏。删除Generic CLIP。
+- ablation_freeze：图文均冻结、仅文本冻结、仅图像冻结、均attention微调。Full共享同一结果与checkpoint。其余模块训练与模型选择规则保持一致。
+- efficiency：语义、语义乘presence、adapter、Full、单方向；统一测量条件。presence基线包含完整语义与实例流程。
 
-所有当前图像经 `data/dataset.py` 转为 RGB，本地 eval 统一 resize1008且不保比例。这不能证明原始产品只有RGB，也不能证明与基准使用相同波段。真实样本数、大图/序列、样本清单散列、裁块尺寸及重叠均 TODO。原始数据论文只支持数据介绍，不能替代重处理基准记录。
+文稿表内不显示计划编号；CSV内部plan_id只用于追踪。数值选择器使用variant_id，不提供旧编号兼容。T04和预测过滤分组退出当前稿件计划。结构/损失/冻结变体分别重训练；新增基线只评测原始SAM3预训练权重，不宣称本仓库已经支持其运行入口。
 
-LoveDA 只保存七类 mIoU、mAcc 和逐类 IoU（含背景）。标准 JSON 使用 fraction；论文 percent 转换一次。必须检查逐类 intersection/union、有效类别数、忽略规则，零并集不能悄悄从七类主指标删除。不得估算背景或拼接不同版本成绩。
+## 原生结果与溯源
 
-## 平均集合与排序
+标准结果与config.json、metrics.jsonl、checkpoint sha256保持一一对应。通过现有collect工具获取长表，显式指定eval_ids、预定expected_seeds、每seed权重哈希、eval_protocol_id和eval_split。不自动挑最好/最新记录；同seed多checkpoint不能平均。无适配SAM3行training_dataset明确为none，训练变体为dlrsd，不能为适配选择器而伪造训练源。
 
-- `Avg-8`：固定全部八项，包含源域，不叫跨域平均。
-- `Target Avg`：固定七项，即除DLRSD外所有数据集；当前含被选择过的LoveDA，必须注明非全独立。
-- 若继续采用当前选择方式，`Independent Target Avg` 固定 iSAID、Potsdam、Vaihingen、UAVid、UDD5、VDD；不能逐行按可用项平均。
-- `table_spec.json` 当前 `averages_locked=false`；所有平均保留--。协议未核实的参考成绩不计算本项目平均，也不复制源论文 Mean 字段。
-- 当前没有 matched 文献记录。53条可读数值仅 reference_only；8条LoveDA口径未明是 unresolved，不进入七类列。文献区不排名或加粗。
+Full在主表、核心消融和冻结表复用相同选择；同variant在不同表的同数据集选择完全一致。同一训练run跨目标域必须使用相同seed集合和每seed权重。效率可训练参数从实际测量JSON读取，不估算。正式模式需完整必需结果与protocol_locked=true；draft只容许计划缺失，不容许非法数值。
 
-## 训练矩阵与推理矩阵
+单种子不报标准差，多种子报样本标准差。正式seed集合尚未锁定；默认42不是已经完成的实验。
 
-T00—T08 以 `data/experiment_plan.csv` 的稳定variant_id对齐。T01残差adapter和T06拼接融合结构由指导书定义，尚未宣称代码支持；T02沿展开提示对角屏蔽，同时去除同类别名交互；T05只清零初始语义状态，仍有CLIP中间层指导；T07保持256通道而非旧128通道。T08关闭蒸馏损失需重新训练。所有变体保持其余基准不变。
+## 文献证据
 
-最低共同消融目标：LoveDA七类、Potsdam、UAVid；T00/T01/T02优先完整八项。正式单seed清单待预先固定，三者优先补三个预定seed，运行时默认42不等于已实施种子计划。单seed无标准差。
-
-P00/P01只切换学生prediction过滤，共用T00同一权重，不重训。关用None；开阈值由开发集预先固定。需记录prediction_prob_threshold、背景回填阈值、TTA、权重哈希、提示集合、缓存与端到端时间。验证和推理只测量学生解码，不生成原始SAM3参考掩码。Full/T02未过滤输出是待补诊断，不预写结论。
-
-## 原生结果接口与正式运行前清单
-
-保留每次运行有效config.json、metrics.jsonl、results/<eval_id>.json、对应best.pth、固定样本预测。复用根目录现有collect/export工具，不新增数据库或修改正式校验。
-
-长表实际字段为 eval_id、method_id、variant_id、seed、training_dataset、eval_dataset、eval_split、eval_protocol_id、is_full、checkpoint_sha256、miou_fraction、macc_fraction、per_class、source、result_path。组表必须显式选定eval_id、每seed的checkpoint哈希和完整评测，不能自动取最后或最高成绩。
-
-待确认：八项基准版本/原始类别/标签值域/波段/裁块、原始图像或序列独立性、正式选择方案、正式seed、checkpoint、提示词、后处理、硬件与完整评测清单。先解决这些协议项，再补成绩，不能把当前表格交付写成实验已完成。
+52个主表文献值的本轮核对见comparison_audit_20261117.md及对应JSON。历史CSV保留原PDF哈希、页码、版本与protocol_status；七个参考行不按统一条件排名。四个LoveDA单源结果仍unresolved，依既有用户许可加标记展示。方法引用、数字来源和官方权重训练源分别说明，尤其GSNet官方LD50K与RSKT报告iSAID不混淆。

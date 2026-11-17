@@ -1,36 +1,25 @@
-# 论文组表脚本
 
-从仓库根目录运行 `python paper/scripts/build_experiment_tables.py --draft`。仅用标准库，无GPU、torch、W&B或全文下载。文献只从data/literature_results.csv显式选result_id；本方法只从现有collect工具生成的fraction长表选eval_id，不接受示例或fixture。脚本生成5张动态表及tables/build_report.json；另4张协议/实现/资源表人工维护。
+# 论文四表生成器
 
-## 显式选择原生结果
+从仓库根目录运行`python paper/scripts/build_experiment_tables.py --draft`。只用Python标准库，生成四张正文表和build_report.json，不生成协议/后处理或补充表。
 
-在table_spec.json相应行的native_selection中，以真实数据集名选完整记录。必须填写：`eval_ids`、`expected_seeds`、`checkpoint_sha256_by_seed`、`eval_protocol_id`、`eval_split`。所有值均取自已完成实验；当前为空，不提供可误认成实际结果的示例分数/权重/种子。
+## 数值来源
 
-- 主表：main_rows中的Full/adapter行。
-- 核心与损失：ablation_native_selection，以T00—T08为键，再按数据集选择；T00跨表共享同一映射。
-- 学生预测过滤：gate_native_selection，以P00/P01为键，再按数据集选择。variant_id仍为full；阈值开关必须与行定义一致，两组checkpoint相同。
-- 正式seed集合须预先确定；不能自动取最大、最新或把同seed多checkpoint平均。单seed不显示±0.00，多seed为样本标准差ddof=1。
-- 原生LoveDA需完整七个class_id/name及非零union；禁止把其他口径补成七类。
-- 若正式模型选择改变，先更新固定目标均值集合及其独立性说明，再设averages_locked=true；缺任一必需项仍为--。参考记录不会自动进入matched区或平均。
+文献只从literature_results.csv按显式result_id选择；保持原报告精度、单位与来源状态。四个既有获准LoveDA值只在参考区加dagger，仍unresolved。主表含Adaptation data，不显示均值。数值来源核验记录是comparison_audit_20261117.json，不代替文献CSV。
 
-## 计时与开销（直接读取既有标准JSON）
+本方法与两个原始SAM3基线从现有collect工具生成的fraction长表选择，不能填入示例或fixture。每个selector必须有eval_ids、expected_seeds、checkpoint_sha256_by_seed、eval_protocol_id、eval_split。基线training_dataset为none，训练变体为dlrsd。正式模式只接受完成且全量的独立evaluation记录；开发域LoveDA的成绩应在另行eval-only后显式选择，不把训练验证日志自动当测试。
 
-标准JSON预留efficiency块，但当前没有确认的实际字段，本轮不猜其结构或伪造数值。`gate_timing_selection`按P组选择；`efficiency_selection`按semantic_only/simple_adapter/full/single_orientation选择各成本列。每个选择项要求：真实`eval_id`、明确的`checkpoint_sha256`、已存在JSON中的`json_path`（必须位于efficiency下）、明确`display_scale`（从原始单位转为表内单位）。
+- 主表：main_rows的native_selection，按数据集选择。
+- 核心/冻结：统一ablation_native_selection，按variant_id再按数据集选择，Full键为full。表内不显示plan_id。
+- 可训练参数：freeze_parameter_selection，按variant_id选择标准JSON的真实efficiency字段。
+- 开销：efficiency_selection按semantic_only、semantic_presence、simple_adapter、full、single_orientation选择列。
+- 同variant跨表同数据集必须使用完全相同selector；同variant跨数据集必须使用相同seed集合和权重。Full行在冻结表不新训或重新选权重。
+- 预定seed必须完整，不挑最大/最新，不平均同seed多checkpoint。单seed不显示标准差，多seed样本标准差ddof=1。LoveDA必须具有完整七类名称/编号和非零union。
 
-成本列键：total_parameters_m、trainable_parameters_m、time_ms、peak_memory_gb；它们只是论文列选择键，不是第二套结果格式。数值直接取长表result_path指向的标准JSON，不录入新的结果CSV。原始JSON须与所选eval_id和checkpoint匹配。计时的实际数据集/样本、硬件/精度/batch/提示/chunk/缓存必须在协议中注明；不同条件不能汇为同一成本行。当前这些selector为空，全部--；正式模式拒绝未完成的计时和开销。
+效率selector包括真实eval_id、checkpoint_sha256、json_path（位于efficiency下）和正display_scale。列键total_parameters_m、trainable_parameters_m、time_ms、peak_memory_gb只是显示选择键，不定义另一套结果schema。数值从result_path指向的真实JSON提取。计时统一硬件、精度、输入、batch、提示、chunk、预热、同步与缓存，presence基线包含完整语义和实例路径。
 
-## 构建模式与检查
+## 构建与验证
 
-- draft：计划缺项生成--及明确缺失清单，不放宽非法数值或冲突校验。
-- 不带--draft：全部必需自测/消融/预测过滤/计时/开销和协议锁定齐备才通过；参考方法缺列允许，但不生成不完整平均。
-- 测试：`PYTHONDONTWRITEBYTECODE=1 python paper/scripts/test_build_experiment_tables.py`，合成数据仅存内存和临时目录。
-- 原生逐数据集严格导出仍用根tools/export_paper_results.py与paper/export_config.json。该schema不接收八列文献横表，不修改根工具的校验。
+draft仅容许计划缺失生成--，不容许非法数值或身份冲突。不带--draft要求全部必需原生/消融/冻结/开销数据齐备且protocol_locked=true；参考行缺项不阻止，因原论文没有报告而留--。
 
-
-## Display policy
-
-All generated table captions, notes, headers, switches, and variant names use English. Main-text discussion remains Chinese during review. The eight-dataset table spans both columns; ablation, gate, and efficiency tables use one column and allow top/bottom placement. Source records and numerical validation are unchanged. Manuscript status and pending work are maintained in `../notes/manuscript_status.md`.
-
-## Explicitly approved reported values
-
-`table_spec.json` may list specific `approved_reported_result_ids`. An unresolved record in this list is displayed only in the literature reference panel with a dagger and source-protocol note. It remains unresolved in the source CSV and cannot contribute to a matched-protocol average. Incompatible records remain blocked. This permits explicit editorial selection without changing scientific provenance.
+测试：`PYTHONDONTWRITEBYTECODE=1 python paper/scripts/test_build_experiment_tables.py`。合成记录仅在内存/临时目录；不进入论文结果目录。根工具的原生schema不放宽。export_config.json同步四个本地主表方法身份，供实际结果产生后使用。

@@ -1,7 +1,7 @@
 % Generated from paper/data; do not hand-edit numeric cells.
 \begin{table}[!tb]
 \centering
-\caption{Ablation of feature aggregation and fusion (mIoU, \%).}
+\caption{Ablation of feature aggregation, fusion, and supervision (mIoU, \%).}
 \label{tab:ablation_core}
 \small
 \setlength{\tabcolsep}{2pt}
@@ -9,18 +9,18 @@
 \toprule
 Variant & LoveDA & Potsdam & UAVid\\
 \midrule
-T00 Full & -- & -- & --\\
-T01 SAM 3 adapter & -- & -- & --\\
-T02 Diagonal class attention & -- & -- & --\\
-T03 w/o spatial aggregation & -- & -- & --\\
-T04 Generic CLIP & -- & -- & --\\
-T05 w/o score prior & -- & -- & --\\
-T06 Simple fusion & -- & -- & --\\
-T07 Single orientation & -- & -- & --\\
+Full & -- & -- & --\\
+SAM 3 adapter & -- & -- & --\\
+Diagonal cross-prompt attention & -- & -- & --\\
+w/o intra-class aggregation & -- & -- & --\\
+w/o initial semantic prior & -- & -- & --\\
+Simple fusion & -- & -- & --\\
+Single-orientation SDF & -- & -- & --\\
+w/o distillation & -- & -- & --\\
 \bottomrule
 \end{tabular}
 \par\vspace{3pt}
 \begin{minipage}{\columnwidth}
-\footnotesize All variants use DLRSD adaptation and the same inference settings. LoveDA is the development domain. -- denotes unavailable results.
+\footnotesize All variants use DLRSD adaptation and the same model-selection and inference rules. LoveDA is the development domain. -- denotes unavailable results.
 \end{minipage}
 \end{table}
