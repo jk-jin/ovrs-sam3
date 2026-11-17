@@ -15,6 +15,6 @@ runtime = dict(
 evaluation = dict(
     dataset="uavid",
     split="val",
-    data_version="prepared-v1",
-    protocol_id="uavid_val_resize1008_v1",
+    data_version="prepared-uavid7-v2",
+    protocol_id="uavid_7class_merged_car_val_resize1008_v2",
 )

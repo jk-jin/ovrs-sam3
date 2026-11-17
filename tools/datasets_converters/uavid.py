@@ -13,11 +13,17 @@ SegEarth-style repositories, but is rewritten to:
       uavid_train/seq1/Labels
       uavid_val/seq1/Images
       uavid_test/seq1/Images
-3) crop images/labels into mmseg-style folders
+3) crop images/labels into mmseg-style folders,
+4) merge the two car classes into one seven-class label space.
+
+Input masks must use the original eight-class UAVid colors or class IDs.
+Output: background=0, building=1, road=2, tree=3, low vegetation=4,
+car=5, human=6; ignore=255. Do not use previously converted masks as input.
 """
 
 import argparse
 import glob
+import json
 import os
 import os.path as osp
 import shutil
@@ -32,6 +38,9 @@ Image.MAX_IMAGE_PIXELS = None
 VALID_IMAGE_SUFFIXES = {'.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp'}
 IMAGE_DIR_NAMES = ('Images', 'images', 'Img', 'img')
 LABEL_DIR_NAMES = ('Labels', 'labels', 'GT', 'gt', 'Label', 'label', 'Annotations', 'annotations')
+UAVID_CLASSES = ('background', 'building', 'road', 'tree', 'low vegetation', 'car', 'human')
+UAVID_RAW_TO_INDEX = (0, 1, 2, 3, 4, 5, 5, 6)
+LABEL_SPACE = 'uavid-7class-merged-car-v2'
 
 UAVID_COLOR_TO_INDEX = {
     (0, 0, 0): 0,
@@ -40,8 +49,8 @@ UAVID_COLOR_TO_INDEX = {
     (0, 128, 0): 3,
     (128, 128, 0): 4,
     (64, 0, 128): 5,
-    (192, 0, 192): 6,
-    (64, 64, 0): 7,
+    (192, 0, 192): 5,
+    (64, 64, 0): 6,
 }
 
 
@@ -49,9 +58,9 @@ def ensure_dir(path):
     Path(path).mkdir(parents=True, exist_ok=True)
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description='Convert UAVid dataset to mmsegmentation-style layout')
+        description='Convert original UAVid masks to seven classes by merging moving/static car')
     parser.add_argument('dataset_path', help='UAVid folder path or a directory containing the official UAVid zip')
     parser.add_argument('-o', '--out_dir', help='Output path')
     parser.add_argument('--patch_width', default=1280, type=int,
@@ -66,7 +75,9 @@ def parse_args():
                         help='Optional legacy alias: square stride, overlap becomes crop_size - stride')
     parser.add_argument('--copy_instead_of_move', action='store_true',
                         help='Copy files instead of moving files when not cropping')
-    return parser.parse_args()
+    parser.add_argument('--overwrite', action='store_true',
+                        help='Replace generated img_dir, ann_dir and processing_metadata.json; preserve raw data')
+    return parser.parse_args(argv)
 
 
 def normalize_name(name):
@@ -88,7 +99,12 @@ def _pack_rgb(arr):
 
 def color_label_to_index(label):
     if label.ndim == 2:
-        return label.astype(np.uint8)
+        out = np.full(label.shape, 255, dtype=np.uint8)
+        for raw_id, class_id in enumerate(UAVID_RAW_TO_INDEX):
+            out[label == raw_id] = class_id
+        return out
+    if label.ndim != 3 or label.shape[2] != 3:
+        raise ValueError('Expected an original UAVid index mask or RGB mask')
     h, w, _ = label.shape
     packed = _pack_rgb(label)
     out = np.full((packed.shape[0],), 255, dtype=np.uint8)
@@ -159,8 +175,10 @@ def slide_crop_image(src_path, out_dir, mode, seq_name, patch_h, patch_w, overla
 
 
 def slide_crop_label(src_path, out_dir, mode, seq_name, patch_h, patch_w, overlap):
-    label_rgb = np.asarray(Image.open(src_path).convert('RGB'))
-    label = color_label_to_index(label_rgb)
+    with Image.open(src_path) as source:
+        # Palette entries encode RGB classes; grayscale masks encode original IDs.
+        raw_label = np.asarray(source.convert('RGB') if source.mode in ('P', 'RGB', 'RGBA') else source)
+    label = color_label_to_index(raw_label)
     label = pad_if_needed(label, patch_h, patch_w, 255)
     img_h, img_w = label.shape
     saved = 0
@@ -251,7 +269,7 @@ def prepare_dataset_root(dataset_path):
         raise FileNotFoundError(dataset_path)
 
     extract_root = _extract_dir_for_archive(zip_path)
-    if osp.isdir(extract_root) and any(True for _ in os.scandir(extract_root)):
+    if osp.isdir(extract_root) and os.listdir(extract_root):
         print(f'[Info] Reuse extracted directory: {extract_root}')
         return extract_root
     if osp.isdir(extract_root):
@@ -324,8 +342,8 @@ def maybe_transfer(src, dst, copy_only):
         shutil.move(src, dst)
 
 
-def main():
-    args = parse_args()
+def main(argv=None):
+    args = parse_args(argv)
     patch_w = args.patch_width
     patch_h = args.patch_height
     overlap = args.overlap_area
@@ -341,6 +359,8 @@ def main():
         overlap = patch_w - stride
         if overlap < 0:
             overlap = 0
+    if patch_w <= 0 or patch_h <= 0 or overlap < 0 or overlap >= min(patch_h, patch_w):
+        raise ValueError('Patch dimensions must be positive and 0 <= overlap < min(patch_height, patch_width)')
 
     dataset_path = args.dataset_path
     out_dir = args.out_dir or osp.join('data', 'uavid')
@@ -348,18 +368,37 @@ def main():
     print(f'[Input]  {dataset_path}')
     print(f'[Output] {out_dir}')
 
-    ensure_dir(osp.join(out_dir, 'img_dir', 'train'))
-    ensure_dir(osp.join(out_dir, 'img_dir', 'val'))
-    ensure_dir(osp.join(out_dir, 'img_dir', 'test'))
-    ensure_dir(osp.join(out_dir, 'ann_dir', 'train'))
-    ensure_dir(osp.join(out_dir, 'ann_dir', 'val'))
-
     dataset_root = prepare_dataset_root(dataset_path)
     split_roots = find_split_roots(dataset_root)
+    split_units = {
+        split: sorted({unit for root in roots for unit in find_sequence_units(root)})
+        for split, roots in split_roots.items()
+    }
+    if not any(list_image_files(image_dir) for units in split_units.values() for _, image_dir, _ in units):
+        raise FileNotFoundError('No original UAVid Images directories found; supply the raw release or its zip')
+
+    generated_dirs = [Path(out_dir) / name for name in ('img_dir', 'ann_dir')]
+    for units in split_units.values():
+        for _, image_dir, label_dir in units:
+            for source_dir in (image_dir, label_dir):
+                if source_dir and any(Path(source_dir).resolve().is_relative_to(p.resolve()) for p in generated_dirs):
+                    raise ValueError('Raw Images/Labels must be outside generated img_dir and ann_dir')
+    metadata_path = Path(out_dir) / 'processing_metadata.json'
+    if any(p.exists() for p in [*generated_dirs, metadata_path]) and not args.overwrite:
+        raise FileExistsError('Generated outputs already exist; pass --overwrite to rebuild seven-class UAVid')
+    for directory in generated_dirs:
+        if directory.exists():
+            shutil.rmtree(directory)
+    metadata_path.unlink(missing_ok=True)
+    for split in ('train', 'val', 'test'):
+        ensure_dir(osp.join(out_dir, 'img_dir', split))
+        if split != 'test':
+            ensure_dir(osp.join(out_dir, 'ann_dir', split))
+    counts = {}
 
     for split in ['train', 'val', 'test']:
-        roots = split_roots.get(split, [])
-        if not roots:
+        units = split_units[split]
+        if not units:
             if split == 'test':
                 print('Warning: no test images found for split=test')
             else:
@@ -367,22 +406,32 @@ def main():
             continue
         saved_images = 0
         saved_labels = 0
-        for split_root in roots:
-            units = find_sequence_units(split_root)
-            for seq_name, image_dir, label_dir in units:
-                img_files = list_image_files(image_dir)
-                lab_files = list_image_files(label_dir)
-                if not img_files and not lab_files:
-                    continue
-                print(f'[Info] split={split} seq={seq_name} images={len(img_files)} labels={len(lab_files)}')
-                for img_path in img_files:
-                    saved_images += slide_crop_image(img_path, out_dir, split, seq_name, patch_h, patch_w, overlap)
-                if split != 'test':
-                    for lab_path in lab_files:
-                        saved_labels += slide_crop_label(lab_path, out_dir, split, seq_name, patch_h, patch_w, overlap)
+        for seq_name, image_dir, label_dir in units:
+            img_files = list_image_files(image_dir)
+            lab_files = list_image_files(label_dir)
+            if not img_files and not lab_files:
+                continue
+            print(f'[Info] split={split} seq={seq_name} images={len(img_files)} labels={len(lab_files)}')
+            for img_path in img_files:
+                saved_images += slide_crop_image(img_path, out_dir, split, seq_name, patch_h, patch_w, overlap)
+            if split != 'test':
+                for lab_path in lab_files:
+                    saved_labels += slide_crop_label(lab_path, out_dir, split, seq_name, patch_h, patch_w, overlap)
         print(f'[Info] split={split} saved image patches: {saved_images}')
         if split != 'test':
             print(f'[Info] split={split} saved label patches: {saved_labels}')
+        counts[split] = dict(image_patches=saved_images, label_patches=saved_labels)
+    metadata_path.write_text(json.dumps(dict(
+        label_space=LABEL_SPACE,
+        classes=UAVID_CLASSES,
+        num_classes=len(UAVID_CLASSES),
+        ignore_index=255,
+        raw_id_to_class_id=dict(enumerate(UAVID_RAW_TO_INDEX)),
+        source_root=str(Path(dataset_root).resolve()),
+        patch_width=patch_w, patch_height=patch_h, overlap_area=overlap,
+        counts=counts,
+    ), ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    print(f'[Labels] {len(UAVID_CLASSES)} classes: {", ".join(UAVID_CLASSES)}')
     print('Done!')
 
 

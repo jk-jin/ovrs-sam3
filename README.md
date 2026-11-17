@@ -26,6 +26,21 @@ python tools/datasets_converters/dlrsd.py data/datasets/DLRSD --overwrite
 
 `--overwrite` 仅替换脚本生成的目录和元数据，用于更新之前的自定义划分；转换失败时原输出保留。`all` 为 7002 张训练与验证样本的并集，不是独立测试集。压缩包也可使用绝对路径，输出目录默认与压缩包所在目录一致；`-o` 可指定输出目录。
 
+## UAVid 数据准备（七类，合并车辆）
+
+在项目根目录运行，输入可为官方 zip 所在目录或原始解压目录：
+
+```bash
+python tools/datasets_converters/uavid.py data/datasets/UAVid \
+  -o data/datasets/UAVid --overwrite
+```
+
+两种车辆颜色及原始 ID 5、6 均映射为 `car=5`，原始 `human=7` 映射为 6。最终类别顺序为 `background, building, road, tree, low vegetation, car, human`（0..6），忽略像素仍为 255。模型前向排除背景，使用六个类别提示，其中车辆只使用 `car`。
+
+默认按宽 1280、高 1080、重叠 0 裁块，生成 `img_dir/{train,val,test}`、`ann_dir/{train,val}` 和记录七类映射的 `processing_metadata.json`。`--overwrite` 清理旧的生成目录及元数据，保留原始 zip、分卷及原始解压目录。必须从原始八类 RGB/索引标签重新转换，不要把旧的裁块输出目录作为输入。若之前采用不同裁块大小，请显式传入相同的 `--patch_width`、`--patch_height` 和 `--overlap_area`。
+
+UAVid 独立评测入口仍为 `configs/test/uavid.py`，数据版本与协议标识已更新为七类版本；旧八类成绩不能与新七类成绩混用。
+
 ## 训练
 
 ```bash

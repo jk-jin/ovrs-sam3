@@ -8,7 +8,7 @@
 固定列顺序：DLRSD、iSAID、LoveDA、Potsdam、Vaihingen、UAVid、UDD5、VDD。
 训练使用 OVRSISBench DLRSD 发布包官方成员：5601 train / 1401 val。17类，不删零，不设置背景。LoveDA val 仍用于当前 checkpoint 选择，是开发域；尚未切换源域选择，不能因为本轮重排表格就声称目标标签未使用。其余六项为独立目标域，前提是未用于模型或超参数开发。每次训练每个种子只选择一份权重，在所有目标域复用。
 
-本地类别数分别为17/15/7/6/6/8/5/7。背景处理详见正文及具体数据配置。当前 LoveDA 配置实际 reduce_zero_label=True，先对原始标签做零值处理，再进行背景排除；DESIGN.md 中写False的内容不作为已核实标签映射，运行前须结合转换脚本和原始值域确认。不要在本轮为修改标签规则而改变模型/数据配置。
+本地类别数分别为17/15/7/6/6/7/5/7。UAVid使用合并车辆七类：background、building、road、tree、low vegetation、car、human；原始车辆ID5/6合并为5，human由7变为6。数据版本为prepared-uavid7-v2，协议为uavid_7class_merged_car_val_resize1008_v2；旧八类结果不并入新七类结果，也不据此自动认定外部文献协议matched。背景处理详见正文及具体数据配置。当前 LoveDA 配置实际 reduce_zero_label=True，先对原始标签做零值处理，再进行背景排除；DESIGN.md 中写False的内容不作为已核实标签映射，运行前须结合转换脚本和原始值域确认。
 
 主要指标mIoU；mAcc和逐类IoU继续保存在标准结果，不另增表。LoveDA本方法仅七类含背景，须检查真实class_names与逐类union。无真实结果时一律--。主表不显示综合均值；正式导出仍需锁定完整协议与明确选择器，删除平均列不等于解除协议校验。
 

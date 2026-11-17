@@ -2,7 +2,7 @@
 \subsection{数据集与评价指标}
 本文采用 RSKT-Seg 的八数据集评测集合：DLRSD、iSAID、LoveDA、Potsdam、Vaihingen、UAVid、UDD5 和 VDD~\cite{liExploringEfficientOpenVocabulary2026}。DLRSD 按 OVRSISBench 发布包保留 5601 张训练图像与 1401 张验证图像，分别用于单源监督适配与源域评测。LoveDA 验证集用于模型选择，属于开发域；其余六个数据集用于独立目标域评测。所有目标数据集共用每次训练按同一规则选出的权重，不逐目标选择最高分 checkpoint。
 
-本地评测类别数依次为 17、15、7、6、6、8、5 和 7。LoveDA 七类包含背景；iSAID 的背景被忽略；DLRSD 不设置背景。Potsdam 与 Vaihingen 的 clutter 保留在评测类别中，前者在模型前向中排除，后者参与前向。LoveDA、UAVid、UDD5 和 VDD 的背景保留评测并从前向提示中排除。标签映射与前向类别映射分别执行，忽略像素使用编号 255。各数据集划分、背景和裁块规则保留各自协议，不能仅凭相同数据集名称认定与文献设置一致。
+本地评测类别数依次为 17、15、7、6、6、7、5 和 7。UAVid 将 moving car 与 static car 合并为 car，保留其余类别，使用含背景的七类评测。LoveDA 七类包含背景；iSAID 的背景被忽略；DLRSD 不设置背景。Potsdam 与 Vaihingen 的 clutter 保留在评测类别中，前者在模型前向中排除，后者参与前向。LoveDA、UAVid、UDD5 和 VDD 的背景保留评测并从前向提示中排除。标签映射与前向类别映射分别执行，忽略像素使用编号 255。各数据集划分、背景和裁块规则保留各自协议，不能仅凭相同数据集名称认定与文献设置一致。
 
 主要指标为平均交并比（mIoU），辅助记录平均类别准确率（mAcc）和逐类交并比（IoU）。本地 LoveDA 只使用含背景七类口径；并集为零的类别按评测器规则排除并记录有效类别数。文献参考值保留来源协议，不与本地结果混算综合平均。
 

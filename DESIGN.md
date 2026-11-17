@@ -370,6 +370,8 @@ DLRSD 预处理：`python tools/datasets_converters/dlrsd.py data/datasets/DLRSD
 
 训练仅保留 DLRSD：使用 `data/datasets/DLRSD/{img_dir,ann_dir}/train`，保留官方 OVRSISBench 划分（5601 train / 1401 val / 7002 all），17 类且不启用背景。LoveDA 验证沿用七类口径。iSAID 保留独立评测配置与数据处理脚本。
 
+UAVid 采用合并车辆的七类标签：background、building、road、tree、low vegetation、car、human（0..6）。原始 moving/static car 的 ID 5/6 均映射为 5，human 由 7 映射为 6；忽略值保持 255。前向排除背景，使用六个类别提示。重新转换命令：`python tools/datasets_converters/uavid.py data/datasets/UAVid -o data/datasets/UAVid --overwrite`。脚本从原始八类 RGB/索引标签重建，清理旧 `img_dir`/`ann_dir`，保留原始数据，并写出七类映射元数据；独立评测协议更新为 `uavid_7class_merged_car_val_resize1008_v2`。
+
 ## 11. 主要实现文件
 
 | 文件 | 职责 |

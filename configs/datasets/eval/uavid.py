@@ -10,8 +10,7 @@ val_dataloader = dict(
         'road',
         'tree',
         'low vegetation',
-        'moving car',
-        'static car',
+        'car',
         'human'
         ],
         img_suffix=".png",
