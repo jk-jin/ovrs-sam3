@@ -174,12 +174,12 @@ feature_state_36 + semantic_state_36
 
 有效基线以 `configs/experiments/main/dlrsd_loveda_full.py` 合并结果为准：
 
-* AdamW 基础学习率 `1e-4`；RemoteCLIP 图文乘 `0.01`；normalization 无 weight decay。
+* AdamW 基础学习率 `2e-6`；RemoteCLIP 图文乘 `0.01`；normalization 无 weight decay。
 * 梯度裁剪 `0.01`；AMP 开启。
-* warmup 1000 步（0.1 → 1.0），余弦衰减 19000 步，总计 20000 步。
-* 余弦使用 `RelativeCosineAnnealingLR`，`min_lr_ratio=0.01`；下限按各参数组预热目标学习率独立计算，保持组间比例。主模块从 `1e-4` 降至 `1e-6`，RemoteCLIP 图文从 `1e-6` 降至 `1e-8`。预热分别从目标学习率的 0.1 倍开始，预热结束衔接目标学习率；4K 调试计划采用相同规则。
+* warmup 500 步（0.1 → 1.0），余弦衰减 9500 步，总计 10000 步。
+* 余弦使用 `RelativeCosineAnnealingLR`，`min_lr_ratio=0.01`；下限按各参数组预热目标学习率独立计算，保持组间比例。主模块从 `2e-6` 降至 `2e-8`，RemoteCLIP 图文从 `2e-8` 降至 `2e-10`。预热分别从目标学习率的 0.1 倍开始，预热结束衔接目标学习率；4K 调试计划采用相同规则。
 * 每 2000 步保存与验证；`val_max_iters=None` 表示完整验证。
-* batch size 2；训练 workers 8；验证 workers 2。
+* batch size 4；训练 workers 8；验证 workers 2。
 * 64 个固定 RemoteCLIP 文本模板。
 * dropout 0.1；8 注意力头；窗口 12；移位 6。
 
@@ -350,9 +350,9 @@ work_dirs/<experiment>/
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py --print-config
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
-  --resume-from work_dirs/main/dlrsd_loveda_full/latest.pth
+  --resume-from work_dirs/paper_batch4_10k/full/seed_42/train/latest.pth
 python tools/train.py configs/test/loveda.py --eval-only \
-  --load-model-from work_dirs/main/dlrsd_loveda_full/best.pth
+  --load-model-from work_dirs/paper_batch4_10k/full/seed_42/train/best.pth
 
 python tools/collect_experiments.py work_dirs/paper \
   --output paper/generated/data/results_long.csv
@@ -434,3 +434,19 @@ UAVid 采用合并车辆的七类标签：background、building、road、tree、
 * 不提供旧参数映射、自动转换或兼容别名；迁移对照见 `docs/migration_reca_sam3.md`。
 
 CPU 回归测试：`python -m unittest discover -s tests -v`。测试覆盖有效配置、标签空间、schema、导入导出、多种子统计、结果写入与曲线 attempt 链；不运行模型前向或 GPU 训练。
+
+
+## 14. 配置驱动的论文实验
+
+本节是当前批量实验入口与变体的实现约定。公共设置在 `configs/experiments/_base_/dlrsd_loveda.py`，各变体只覆盖差异；训练清单与独立验证清单位于 `configs/suites/`。具体开关、命令、输出布局和选择规则见 `docs/experiment_suites.md`。
+
+* `model.pipeline`：`reca`、`adapter`、`sam3_semantic`、`sam3_semantic_presence`。后两项只评测原始 SAM3 权重，不构造 RemoteCLIP 或可训练桥接模块。
+* `model.aggregation.cross_class_mode`：`full` 或 `diagonal`；对角掩码同时作用于两次类间注意力，轴为展开提示，包含别名。
+* `model.aggregation.intra_class_enabled=False` 绕过全部类内块；`semantic_init="zeros"` 仅清零语义初始化，保留 RemoteCLIP 中间层视觉指导。
+* `model.fusion.type`：`sdf` 或 `concat`；`orientations=[0]` 保持 SDF 参数结构，仅使用原方向。
+* 完整模型及十个变体分别重训练。当前 Full 在多张表共享一份选择的权重。无 T04；两项原始 SAM3 对比仅进入独立验证队列。
+* `aggregated_features` 为流式训练的桥接张量键：完整聚合为 36×36，简单 adapter 为原始 72×72；adapter 在每个解码块执行，避免构建全提示的高分辨率卷积图。无聚合图时不执行最后一次代理梯度回传，adapter 仍正常反向更新。
+* 验证从权重旁的训练 `config.json` 恢复结构，只替换目标数据与协议，严格加载参数并核对权重/快照指纹。`None` 选择保持待选，不自动挑 best/latest。原始预训练结果记录实际 SAM3 文件及哈希、training-free、step 0。
+* 默认单卡顺序运行，多卡每卡一个独立进程任务。失败继续其他任务，状态、日志与结果按变体/seed/数据集隔离；`--resume` 只复用配置一致的目录。
+
+当前已实现入口及 CPU 合成回归；尚未使用正式预训练权重和用户数据执行 GPU 训练或八域评测，不产生论文成绩或效率估算。

@@ -35,11 +35,24 @@ python tools/datasets_converters/uavid.py data/datasets/UAVid \
   -o data/datasets/UAVid --overwrite
 ```
 
-两种车辆颜色及原始 ID 5、6 均映射为 `car=5`，原始 `human=7` 映射为 6。最终类别顺序为 `background, building, road, tree, low vegetation, car, human`（0..6），忽略像素仍为 255。模型前向排除背景，使用六个类别提示，其中车辆只使用 `car`。
+两种车辆颜色及原始 ID 5、6 均映射为 `car=5`，原始 `human=7` 映射为 6。最终类别顺序为 `background, building, road, tree, low vegetation, car, human`（0..6），忽略像素仍为 255。当前配置在前向中保留 background，共七个类别提示，其中车辆只使用 `car`。
 
 默认按宽 1280、高 1080、重叠 0 裁块，生成 `img_dir/{train,val,test}`、`ann_dir/{train,val}` 和记录七类映射的 `processing_metadata.json`。`--overwrite` 清理旧的生成目录及元数据，保留原始 zip、分卷及原始解压目录。必须从原始八类 RGB/索引标签重新转换，不要把旧的裁块输出目录作为输入。若之前采用不同裁块大小，请显式传入相同的 `--patch_width`、`--patch_height` 和 `--overlap_area`。
 
 UAVid 独立评测入口仍为 `configs/test/uavid.py`，数据版本与协议标识已更新为七类版本；旧八类成绩不能与新七类成绩混用。
+
+## 论文实验批量运行
+
+公共训练设置为 batch size 4、10000 步、基础学习率 `2e-6`（RemoteCLIP 保留 0.01 倍率）。先完成 11 项训练，再手选每项权重并批量验证。完整说明与配置项见 [批量实验指南](docs/experiment_suites.md)。
+
+```bash
+python tools/train_experiments.py configs/suites/paper_train.py --dry-run
+python tools/train_experiments.py configs/suites/paper_train.py
+# 编辑 paper_validate.py 的 selections，填写各变体的 checkpoint 后运行：
+python tools/validate_experiments.py configs/suites/paper_validate.py
+```
+
+默认单卡顺序执行；`--devices cuda:0 cuda:1` 每卡一个实验；`--resume` 继续未完成任务并跳过已完成任务。训练结果按变体/seed 保存，验证结果另外按数据集保存。未填写权重的项保持待选，两个原始 SAM3 基线仅验证。训练期间仍保留 LoveDA 定期验证及 best.pth；不会自动按目标域最高分选权重。
 
 ## 训练
 
@@ -57,7 +70,7 @@ python tools/train.py configs/experiments/main/dlrsd_loveda_full.py --print-conf
 
 ```bash
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
-  --resume-from work_dirs/main/dlrsd_loveda_full/latest.pth
+  --resume-from work_dirs/paper_batch4_10k/full/seed_42/train/latest.pth
 ```
 
 短调试入口 `configs/experiments/dev/dlrsd_loveda_4k.py` 的验证是截断的（`val_max_iters=500`），只能产生 partial/draft 结果。
@@ -68,7 +81,7 @@ python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
 
 ```bash
 python tools/train.py configs/test/loveda.py --eval-only \
-  --load-model-from work_dirs/main/dlrsd_loveda_full/best.pth
+  --load-model-from work_dirs/paper_batch4_10k/full/seed_42/train/best.pth
 ```
 
 独立评测写出 `results/<eval_id>.json`，不会重新打开或截断训练 `metrics.jsonl`。原生评测记录需要 checkpoint step；若权重文件没有训练元数据，显式传 `--eval-iter`。

@@ -2,7 +2,7 @@ _base_ = [
     "../_base_/model/reca_sam3.py",
     "../_base_/loss/semantic.py",
     "../_base_/optimizer/reca_sam3_adamw.py",
-    "../_base_/schedule/full_20k.py",
+    "../_base_/schedule/full_10k.py",
     "../_base_/runtime.py",
     "../_base_/evaluation.py",
     "../_base_/logging.py",

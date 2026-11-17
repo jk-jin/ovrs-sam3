@@ -19,7 +19,7 @@
 - ablation_freeze：图文均冻结、仅文本冻结、仅图像冻结、均attention微调。Full共享同一结果与checkpoint。其余模块训练与模型选择规则保持一致。
 - efficiency：语义、语义乘presence、adapter、Full、单方向；统一测量条件。presence基线包含完整语义与实例流程。
 
-文稿表内不显示计划编号；CSV内部plan_id只用于追踪。数值选择器使用variant_id，不提供旧编号兼容。T04和预测过滤分组退出当前稿件计划。结构/损失/冻结变体分别重训练；新增基线只评测原始SAM3预训练权重，不宣称本仓库已经支持其运行入口。
+文稿表内不显示计划编号；CSV内部plan_id只用于追踪。数值选择器使用variant_id，不提供旧编号兼容。T04和预测过滤分组退出当前稿件计划。结构/损失/冻结变体分别重训练；新增基线只评测原始SAM3预训练权重；现已提供语义及语义乘presence入口与完整消融配置，但未执行正式实验。
 
 ## 原生结果与溯源
 
@@ -32,3 +32,10 @@ Full在主表、核心消融和冻结表复用相同选择；同variant在不同
 ## 文献证据
 
 52个主表文献值的本轮核对见comparison_audit_20261117.md及对应JSON。历史CSV保留原PDF哈希、页码、版本与protocol_status；七个参考行不按统一条件排名。四个LoveDA单源结果仍unresolved，依既有用户许可加标记展示。方法引用、数字来源和官方权重训练源分别说明，尤其GSNet官方LD50K与RSKT报告iSAID不混淆。
+
+
+## 当前工程执行协议
+
+训练为batch 4、10000步、AdamW LR 2e-6，RemoteCLIP倍率0.01，预热500步，相对余弦9500步；每1000步保存并验证LoveDA，保留10份周期权重。损失、增强及开发域选择角色保持原设置。训练队列11项，独立验证手选每项checkpoint；main组八域、ablation组LoveDA/Potsdam/UAVid。两项training-free SAM3基线共享原始预训练文件并记录step 0。当前seed 42仍为默认运行设置，不代表已完成或锁定正式多种子实验。
+
+验证按训练快照恢复变体并严格加载权重，校验checkpoint指纹；同一次选择跨域复用。结果各目录保存路径/哈希/协议与标准JSON，改选权重须新validation_name。当前master的Potsdam、UAVid、UDD、VDD背景参与前向；LoveDA仍排除背景提示。批量入口不采集或推算效率表数据，也不自动选最佳目标分数。详见docs/experiment_suites.md。

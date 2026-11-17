@@ -1,7 +1,7 @@
 train_cfg = dict(
-    max_iters=20000,
-    save_interval=2000,
-    eval_interval=2000,
+    max_iters=10000,
+    save_interval=1000,
+    eval_interval=1000,
     val_max_iters=None,
 
     log_window_size=20,
@@ -15,13 +15,13 @@ param_scheduler = [
     dict(
         type="LinearLR",
         start_factor=0.1,
-        total_iters=1000,
-        end=1000,
+        total_iters=500,
+        end=500,
     ),
     dict(
         type="RelativeCosineAnnealingLR",
-        T_max=19000,
+        T_max=9500,
         min_lr_ratio=0.01,
-        end=20000,
+        end=10000,
     ),
 ]

@@ -134,10 +134,10 @@ class TestUAVidConverter(unittest.TestCase):
         cfg = runpy.run_path(str(REPO_ROOT / 'configs/datasets/eval/uavid.py'))
         dataset = cfg['val_dataloader']['dataset']
         self.assertEqual(dataset['classes'], list(converter.UAVID_CLASSES))
-        self.assertTrue(dataset['background_cfg']['exclude_from_forward'])
-        names, mapping = prompts.expand_class_prompts(dataset['classes'][1:])
-        self.assertEqual(names, ['building', 'road', 'tree', 'low vegetation', 'car', 'human'])
-        self.assertEqual(mapping, list(range(6)))
+        self.assertFalse(dataset['background_cfg']['exclude_from_forward'])
+        names, mapping = prompts.expand_class_prompts(dataset['classes'])
+        self.assertEqual(names, ['background', 'building', 'road', 'tree', 'low vegetation', 'car', 'human'])
+        self.assertEqual(mapping, list(range(7)))
         entry = runpy.run_path(str(REPO_ROOT / 'configs/test/uavid.py'))
         self.assertEqual(entry['evaluation']['protocol_id'], 'uavid_7class_merged_car_val_resize1008_v2')
 

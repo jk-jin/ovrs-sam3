@@ -17,6 +17,7 @@ from .config_dataclasses import (
     AggregationConfig,
     CheckpointManagerConfig,
     FreezeConfig,
+    FusionConfig,
     LoggerHookConfig,
     MetricsJsonlHookConfig,
     RemoteCLIPConfig,
@@ -35,6 +36,8 @@ from .models.adapters.semantic_adapter import (
     HybridSegAdapter,
     SemanticSegAdapter,
 )
+from .models.decoder import TransformerDecoder, TransformerDecoderLayer
+from .models.model_misc import DotProductScoring, MLP
 from .models.encoder import TransformerEncoderFusion, TransformerEncoderLayer
 from .models.geometry_encoders import SequenceGeometryEncoder
 from .models.maskformer_segmentation import PixelDecoder, UniversalSegmentationHead
@@ -196,6 +199,7 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
         cfg.freeze = cls._coerce_freeze(cfg.freeze)
         cfg.remoteclip = cls._coerce_remoteclip_cfg(cfg.remoteclip)
         cfg.aggregation = cls._coerce_aggregation_cfg(cfg.aggregation)
+        cfg.fusion = cls._coerce_config(cfg.fusion, FusionConfig, "fusion")
         return cfg
 
     @classmethod
@@ -303,12 +307,6 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
         cfg: AggregationConfig,
     ) -> AggregationConfig:
         cfg = cls._coerce_aggregation_cfg(cfg)
-
-        if not cfg.enabled:
-            raise ValueError(
-                "model.aggregation.enabled=False is not supported by the "
-                "current semantic training path."
-            )
 
         if cfg.num_blocks <= 0:
             raise ValueError(
@@ -472,16 +470,36 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
         )
 
     @staticmethod
-    def _create_encoder_only_transformer() -> TransformerWrapper:
+    def _create_encoder_only_transformer(with_presence=False) -> TransformerWrapper:
         encoder = ReCASAM3ModelBuilder._create_transformer_encoder()
         return TransformerWrapper(
             encoder=encoder,
-            decoder=None,
+            decoder=ReCASAM3ModelBuilder._create_instance_decoder() if with_presence else None,
             d_model=256,
         )
 
     @staticmethod
-    def _create_segmentation_head(compile_mode=None):
+    def _create_instance_decoder():
+        # Original SAM 3 image decoder (facebookresearch/sam3/model_builder.py).
+        layer = TransformerDecoderLayer(
+            activation="relu", d_model=256, dim_feedforward=2048, dropout=0.1,
+            cross_attention=MultiheadAttention(num_heads=8, dropout=0.1, embed_dim=256),
+            n_heads=8, use_text_cross_attention=True,
+        )
+        return TransformerDecoder(
+            layer=layer, num_layers=6, num_queries=200, return_intermediate=True,
+            box_refine=True, num_o2m_queries=0, dac=True, boxRPB="log", d_model=256,
+            frozen=False, interaction_layer=None, dac_use_selfatt_ln=True,
+            resolution=1008, stride=14, use_act_checkpoint=True, presence_token=True,
+        )
+
+    @staticmethod
+    def _create_instance_scorer():
+        prompt_mlp = MLP(256, 2048, 256, 2, dropout=0.1, residual=True, out_norm=nn.LayerNorm(256))
+        return DotProductScoring(d_model=256, d_proj=256, prompt_mlp=prompt_mlp)
+
+    @staticmethod
+    def _create_segmentation_head(compile_mode=None, with_instance=False):
         pixel_decoder = PixelDecoder(
             num_upsampling_stages=3,
             interpolation_mode="nearest",
@@ -497,7 +515,7 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
             hidden_dim=256,
             upsampling_stages=3,
             aux_masks=False,
-            no_dec=True,
+            no_dec=not with_instance,
             presence_head=False,
             dot_product_scorer=None,
             act_ckpt=True,
@@ -623,6 +641,11 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
         missing_keys, unexpected_keys = model.load_state_dict(
             ckpt, strict=False
         )
+        required_missing = [k for k in missing_keys if not (
+            model.pipeline == "sam3_semantic" and k.startswith("segmentation_head.mask_predictor.")
+        )]
+        if model.pipeline.startswith("sam3_") and required_missing:
+            raise RuntimeError(f"Original SAM3 checkpoint is incomplete: {required_missing}")
         if len(missing_keys) > 0 or len(unexpected_keys) > 0:
             print(
                 f"Loaded {checkpoint_path} with missing keys="
@@ -856,9 +879,10 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
                 cls._create_remoteclip_encoders(cfg.remoteclip)
             )
 
-        transformer = cls._create_encoder_only_transformer()
+        with_instance = cfg.pipeline == "sam3_semantic_presence"
+        transformer = cls._create_encoder_only_transformer(with_presence=with_instance)
         segmentation_head = cls._create_segmentation_head(
-            compile_mode=compile_mode
+            compile_mode=compile_mode, with_instance=with_instance
         )
         input_geometry_encoder = cls._create_geometry_encoder()
 
@@ -869,8 +893,8 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
             segmentation_head=segmentation_head,
             num_feature_levels=1,
             o2m_mask_predict=True,
-            dot_prod_scoring=None,
-            use_instance_query=True,
+            dot_prod_scoring=cls._create_instance_scorer() if with_instance else None,
+            use_instance_query=False,
             multimask_output=True,
             matcher=None,
             clip_image_encoder=clip_image_encoder,
@@ -887,6 +911,12 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
             text_prompt_use_checkpoint=bool(
                 cfg.remoteclip.text_prompt_use_checkpoint
             ),
+            pipeline=cfg.pipeline,
+            cross_class_mode=aggregation_cfg.cross_class_mode,
+            intra_class_enabled=aggregation_cfg.intra_class_enabled,
+            semantic_init=aggregation_cfg.semantic_init,
+            fusion_type=cfg.fusion.type,
+            orientations=cfg.fusion.orientations,
             aggregation_num_blocks=int(aggregation_cfg.num_blocks),
             aggregation_num_heads=int(aggregation_cfg.num_heads),
             aggregation_dropout=float(aggregation_cfg.dropout),
@@ -996,7 +1026,7 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
 
             # RemoteCLIP-guided aggregation is the only module that should
             # be in train mode during training.
-            if not cfg.eval_mode:
+            if not cfg.eval_mode and core.feature_aggregation is not None:
                 core.feature_aggregation.train()
 
         model.core.prompt_chunk_size = (

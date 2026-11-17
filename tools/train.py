@@ -449,6 +449,11 @@ def main():
         print_config_as_json(cfg)
         return
 
+    device = torch.device(cfg["runtime"]["device"])
+    if device.type == "cuda":
+        # Original SAM3 constructors may precompute tensors on the current GPU.
+        torch.cuda.set_device(device.index if device.index is not None else 0)
+
     runtime_imports = _runtime_imports()
     build_dataloader = runtime_imports["build_dataloader"]
     build_optimizer = runtime_imports["build_optimizer"]
@@ -555,7 +560,7 @@ def main():
         checkpoint_metadata = load_model_weights_only(
             model=model,
             path=args.load_model_from,
-            strict=False,
+            strict=bool(args.eval_only),
         )
 
     (
@@ -614,7 +619,7 @@ def main():
             checkpoint_metadata = load_model_weights_only(
                 model=model,
                 path=args.resume_from,
-                strict=False,
+                strict=True,
             )
             checkpoint_step = checkpoint_metadata.get("global_iter", None)
             if checkpoint_step is None:
@@ -623,8 +628,14 @@ def main():
             extra = checkpoint_metadata.get("extra", {}) or {}
             val_stats = checkpoint_metadata.get("val_stats", {}) or {}
         else:
-            checkpoint_step = args.eval_iter
-            checkpoint_path = None
+            if not cfg["model"]["pipeline"].startswith("sam3_"):
+                raise ValueError("Adapted-model evaluation requires an explicitly selected checkpoint.")
+            if args.eval_iter not in (None, 0):
+                raise ValueError("Original pretrained SAM3 has evaluation step 0.")
+            checkpoint_step = 0
+            checkpoint_path = cfg["model"]["checkpoint_path"]
+            if checkpoint_path is None:
+                raise ValueError("Original SAM3 evaluation requires an explicit local checkpoint_path.")
             extra = {}
             val_stats = {}
 
@@ -661,8 +672,11 @@ def main():
             f"{cfg['experiment']['name']}_eval-{uuid.uuid4().hex[:8]}"
         )
 
+        is_pretrained = cfg["model"]["pipeline"].startswith("sam3_")
+        if is_pretrained:
+            selection = dict(dataset=None, split=None, metric=None, mode=None, value=None, is_best=None)
         checkpoint_config = None
-        if checkpoint_path is not None:
+        if checkpoint_path is not None and not is_pretrained:
             checkpoint_config = load_saved_config(
                 Path(checkpoint_path).resolve().parent
             )
@@ -677,6 +691,11 @@ def main():
                 and saved_cfg.get("training") is not None
                 and saved_meta.get("config_fingerprint") is not None
             ):
+                if extra.get("config_fingerprint") != saved_meta["config_fingerprint"]:
+                    raise ValueError("Checkpoint fingerprint does not match its training config.json.")
+                expected_model = dict(saved_cfg["model"], eval_mode=True)
+                if dict(cfg["model"], eval_mode=True) != expected_model:
+                    raise ValueError("Evaluation model differs from the saved training architecture/configuration.")
                 eval_experiment = saved_cfg["experiment"]
                 eval_training = saved_cfg["training"]
                 eval_seed = int(saved_meta.get("seed", seed))
@@ -695,12 +714,17 @@ def main():
                     "meta/experiment/training fields; evaluation metadata "
                     "falls back to the test config."
                 )
-        else:
+        elif not is_pretrained:
             print(
                 "[warning] No config.json found next to the checkpoint; "
                 "evaluation metadata falls back to the test config."
             )
 
+        eval_meta = build_config_meta(
+            run_id=eval_run_id, seed=eval_seed, attempt_id=attempt_id, config_fingerprint=config_fingerprint,
+            git_info=git_info, environment=collect_environment(),
+        )
+        save_effective_config(work_dir, cfg, eval_meta)
         print("Building val_dataloader (eval-only)...")
         val_loader = build_dataloader(cfg["val_dataloader"], seed=seed)
 
@@ -725,7 +749,7 @@ def main():
                 run_id_value=eval_run_id,
                 config_source_path=(
                     Path(checkpoint_path).resolve().parent / "config.json"
-                    if checkpoint_path is not None
+                    if checkpoint_path is not None and not is_pretrained
                     else None
                 ),
             ),

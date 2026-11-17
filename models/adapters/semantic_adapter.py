@@ -333,7 +333,7 @@ class SemanticSegAdapter(nn.Module):
 
         for key in (
             OUTPUT_KEYS.prompt_conditioned_features_72,
-            OUTPUT_KEYS.aggregated_features_36,
+            OUTPUT_KEYS.aggregated_features,
             OUTPUT_KEYS.semantic_state_36,
             OUTPUT_KEYS.clip_guidance_36,
             OUTPUT_KEYS.remoteclip_template_text_features,

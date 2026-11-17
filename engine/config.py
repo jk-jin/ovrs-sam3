@@ -16,6 +16,7 @@ from ..config_dataclasses import (
     EvaluationConfig,
     ExperimentConfig,
     FreezeConfig,
+    FusionConfig,
     RuntimeConfig,
     RemoteCLIPConfig,
     SemanticCriterionConfig,
@@ -276,6 +277,8 @@ def _validate_threshold(value, name: str) -> None:
 def _validate_model_section(model: dict) -> dict:
     allowed = {
         "task_mode",
+        "pipeline",
+        "fusion",
         "bpe_path",
         "checkpoint_path",
         "load_from_hf",
@@ -351,10 +354,26 @@ def _validate_model_section(model: dict) -> dict:
     aggregation = _coerce_dataclass(
         model["aggregation"], AggregationConfig, "model.aggregation"
     )
-    if not aggregation.enabled:
-        raise ValueError(
-            "model.aggregation.enabled=False is not supported."
-        )
+    pipeline = model["pipeline"]
+    if pipeline not in {"reca", "adapter", "sam3_semantic", "sam3_semantic_presence"}:
+        raise ValueError(f"Unknown model.pipeline: {pipeline}")
+    if aggregation.enabled != (pipeline == "reca"):
+        raise ValueError("aggregation.enabled must match pipeline='reca'.")
+    if remoteclip.enabled != (pipeline == "reca"):
+        raise ValueError("remoteclip.enabled must match pipeline='reca'.")
+    if aggregation.cross_class_mode not in {"full", "diagonal"}:
+        raise ValueError("cross_class_mode must be full or diagonal.")
+    if aggregation.semantic_init not in {"remoteclip", "zeros"}:
+        raise ValueError("semantic_init must be remoteclip or zeros.")
+    if not isinstance(aggregation.intra_class_enabled, bool):
+        raise TypeError("intra_class_enabled must be bool.")
+    fusion = _coerce_dataclass(model["fusion"], FusionConfig, "model.fusion")
+    if fusion.type not in {"sdf", "concat"}:
+        raise ValueError("fusion.type must be sdf or concat.")
+    if (not fusion.orientations or len(set(fusion.orientations)) != len(fusion.orientations)
+            or any(type(x) is not int or x not in {0, 90, 180, 270} for x in fusion.orientations)):
+        raise ValueError("fusion.orientations must be unique quarter-turn angles.")
+    model["fusion"] = asdict(fusion)
     if aggregation.num_blocks <= 0:
         raise ValueError("model.aggregation.num_blocks must be positive.")
     if aggregation.num_heads <= 0:
@@ -824,6 +843,8 @@ def _default_sections() -> dict:
         "training": _dataclass_defaults(TrainingProtocolConfig),
         "model": {
             "task_mode": "semantic",
+            "pipeline": "reca",
+            "fusion": _dataclass_defaults(FusionConfig),
             "bpe_path": None,
             "checkpoint_path": None,
             "load_from_hf": True,

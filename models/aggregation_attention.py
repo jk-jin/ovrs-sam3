@@ -65,8 +65,10 @@ class CrossClassAttention(nn.Module):
         dropout: float = 0.1,
         value_stream: str = "feature",
         guidance_dim: int = 0,
+        cross_class_mode: str = "full",
     ):
         super().__init__()
+        self.cross_class_mode = cross_class_mode
         self.feature_dim = int(feature_dim)
         self.semantic_dim = int(semantic_dim)
         self.num_heads = int(num_heads)
@@ -126,6 +128,10 @@ class CrossClassAttention(nn.Module):
             B * N, P, self.num_heads, head_dim
         ).permute(0, 2, 1, 3)
         attn = torch.matmul(q, k.transpose(-2, -1)) * (head_dim ** -0.5)
+        if self.cross_class_mode == "diagonal":
+            # P is the expanded prompt axis, including aliases of one class.
+            allowed = torch.eye(P, device=attn.device, dtype=torch.bool)
+            attn = attn.masked_fill(~allowed, float("-inf"))
         attn = self.dropout(F.softmax(attn, dim=-1))
         out = torch.matmul(attn, v).permute(0, 2, 1, 3).reshape(B * N, P, D)
         out = self.dropout(self.out_proj(out))
@@ -412,6 +418,7 @@ class CrossClassAggregationBlock(nn.Module):
         semantic_dim: int = 256,
         num_heads: int = 8,
         dropout: float = 0.1,
+        cross_class_mode: str = "full",
     ):
         super().__init__()
         self.semantic_attention = CrossClassAttention(
@@ -420,6 +427,7 @@ class CrossClassAggregationBlock(nn.Module):
             num_heads=num_heads,
             dropout=dropout,
             value_stream="semantic",
+            cross_class_mode=cross_class_mode,
         )
         self.feature_attention = CrossClassAttention(
             feature_dim=feature_dim,
@@ -427,6 +435,7 @@ class CrossClassAggregationBlock(nn.Module):
             num_heads=num_heads,
             dropout=dropout,
             value_stream="feature",
+            cross_class_mode=cross_class_mode,
         )
         self.semantic_attention_norm_feature = nn.LayerNorm(feature_dim)
         self.semantic_attention_norm_semantic = nn.LayerNorm(semantic_dim)

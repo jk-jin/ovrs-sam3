@@ -38,8 +38,8 @@ class ToyFusion(torch.nn.Module):
         super().__init__()
         self.scale = torch.nn.Parameter(torch.tensor(0.5))
 
-    def fuse_semantic_detail_chunk(self, aggregated_feature_36, **kwargs):
-        values = aggregated_feature_36.mean(dim=(1, 2, 3), keepdim=True)
+    def fuse_semantic_detail_chunk(self, aggregated_feature, **kwargs):
+        values = aggregated_feature.mean(dim=(1, 2, 3), keepdim=True)
         return (values * self.scale).expand(-1, 256, 72, 72)
 
 
@@ -48,6 +48,7 @@ class ToyCore(core_mod.Sam3Image):
 
     def __init__(self):
         torch.nn.Module.__init__(self)
+        self.pipeline = "reca"
         self.backbone = torch.nn.Identity()
         self.transformer = torch.nn.Identity()
         self.geometry_encoder = torch.nn.Identity()
@@ -69,7 +70,7 @@ class ToyCore(core_mod.Sam3Image):
 
     def run_aggregation_lowres_from_cache(self, aggregation_cache, batch,
                                          return_debug=False):
-        return {OUTPUT_KEYS.aggregated_features_36:
+        return {OUTPUT_KEYS.aggregated_features:
                 self.aggregation_scale.expand(1, 3, 256, 36, 36)}
 
 
@@ -112,7 +113,7 @@ class TestDecodePaths(unittest.TestCase):
         core = model.core
         features = core.run_aggregation_lowres_from_cache(core.cache, batch)
         outputs = core.decode_aggregation_chunk_from_cache(
-            core.cache, features[OUTPUT_KEYS.aggregated_features_36][:, :2],
+            core.cache, features[OUTPUT_KEYS.aggregated_features][:, :2],
             0, 2, return_teacher_logits=True,
         )
         self.assertEqual(len(core.segmentation_head.grad_modes), 1)
@@ -144,6 +145,27 @@ class TestDecodePaths(unittest.TestCase):
                         self.assertGreater(parameter.grad.abs().item(), 0)
                 if not weight or ignore_all:
                     self.assertEqual(losses["loss_reference_distill_bce"].item(), 0)
+
+    def test_adapter_streaming_backprop_without_an_aggregation_graph(self):
+        model, batch = make_model_and_batch()
+        core = model.core
+        core.pipeline = "adapter"
+        core.feature_aggregation = load_module("models.experiment_variants").SimpleAdapter()
+        core.run_aggregation_lowres_from_cache = lambda aggregation_cache, batch, return_debug=False: {
+            OUTPUT_KEYS.aggregated_features: aggregation_cache[OUTPUT_KEYS.prompt_conditioned_features_72]
+        }
+        model.train()
+        trainer = object.__new__(trainer_mod.Trainer)
+        trainer.model = model
+        trainer.cfg = SimpleNamespace(use_amp=False)
+        trainer.device = torch.device("cpu")
+        trainer.scaler = trainer_mod._build_grad_scaler("cpu", False)
+        trainer.criterion = criterion_mod.SemanticCriterion(config_mod.SemanticCriterionConfig())
+        losses = trainer._compute_train_loss_streaming(batch)
+        self.assertTrue(torch.isfinite(losses["total_loss"]))
+        grads = [p.grad for p in core.feature_aggregation.parameters() if p.grad is not None]
+        self.assertTrue(grads)
+        self.assertGreater(sum(g.abs().sum().item() for g in grads), 0)
 
     def test_fixed_weight_shared_by_chunks_at_early_and_late_iterations(self):
         for iteration, expected_weight in ((1, 0.6), (1000, 0.6), (12000, 0.6), (20000, 0.6), (20000, 0.0)):

@@ -59,6 +59,15 @@ class AggregationConfig:
     shift_size: int = 6
 
     use_checkpoint: bool = True
+    cross_class_mode: str = "full"
+    intra_class_enabled: bool = True
+    semantic_init: str = "remoteclip"
+
+
+@dataclass
+class FusionConfig:
+    type: str = "sdf"
+    orientations: list[int] = field(default_factory=lambda: [0, 90, 180, 270])
 
 
 @dataclass
@@ -90,6 +99,8 @@ class SemanticCriterionConfig:
 @dataclass
 class SegmentorBuildConfig:
     task_mode: str = "semantic"
+    pipeline: str = "reca"
+    fusion: FusionConfig = field(default_factory=FusionConfig)
 
     bpe_path: Optional[str] = None
     checkpoint_path: Optional[str] = None

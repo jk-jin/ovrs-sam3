@@ -27,7 +27,7 @@ class ModelOutputKeys:
 
     # RemoteCLIP-guided aggregation outputs
     prompt_conditioned_features_72: str = "prompt_conditioned_features_72"
-    aggregated_features_36: str = "aggregated_features_36"
+    aggregated_features: str = "aggregated_features"
     semantic_state_36: str = "semantic_state_36"
     clip_guidance_36: str = "clip_guidance_36"
     clip_template_scores_36: str = "clip_template_scores_36"

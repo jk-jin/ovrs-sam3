@@ -27,7 +27,7 @@ class TestRelativeCosineSchedule(unittest.TestCase):
         return [group["lr"] for group in optimizer.param_groups]
 
     def test_training_schedules_preserve_group_ratio_and_reach_floors(self):
-        for name in ("full_20k", "exp_4k"):
+        for name in ("full_10k", "exp_4k"):
             with self.subTest(schedule=name):
                 cfg = runpy.run_path(str(REPO_ROOT / f"configs/_base_/schedule/{name}.py"))
                 schedule = cfg["param_scheduler"]

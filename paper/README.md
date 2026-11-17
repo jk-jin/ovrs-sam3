@@ -16,11 +16,11 @@
 
 ## 当前设计与执行边界
 
-当前训练入口configs/experiments/main/dlrsd_loveda_full.py：DLRSD官方5601/1401划分，LoveDA val选择模型。LoveDA是开发域，不能标为独立目标。没有在本轮修改模型、配置或权重选择行为。
+当前训练入口configs/experiments/main/dlrsd_loveda_full.py：DLRSD官方5601/1401划分，LoveDA val选择模型。LoveDA是开发域，不能标为独立目标。批量实验版本更新训练配置及消融路径，仍保留当前开发域选择角色。
 
 完整模型36×36双流聚合、72×72 SDF；SAM3冻结，RemoteCLIP图文attention微调。主BCE按存在/不存在提示分组、默认0.8/0.2；固定蒸馏0.5仅存在提示有效像素，不使用边界环或蒸馏调度。DESIGN.md与实际代码优先于历史稿件笔记。
 
-新增SAM3语义与语义乘presence基线、多个消融仍是计划定义；不能因有表格行就声称运行入口已实现。冻结四组合使用现有配置能力，但没有新建训练入口或执行实验。seed集合与正式结果选择未锁定。
+SAM3语义与语义乘presence基线及11个训练入口现已实现并通过CPU合成检查；训练/独立验证由configs/suites/驱动，公共预算为batch 4、10000步、LR 2e-6。未运行用户数据和正式预训练权重的GPU训练/评测；所有成绩仍为--，seed集合与正式结果选择未锁定。详见根目录docs/experiment_suites.md。
 
 ## 组表与检查
 

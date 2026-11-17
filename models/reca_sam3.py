@@ -52,10 +52,8 @@ class ReCASAM3(nn.Module):
             core.clip_text_encoder.eval()
 
         # RemoteCLIP-guided aggregation is the trainable module.
-        if mode:
-            core.feature_aggregation.train()
-        else:
-            core.feature_aggregation.eval()
+        if core.feature_aggregation is not None:
+            core.feature_aggregation.train(mode)
 
         return self
 
@@ -95,14 +93,14 @@ class ReCASAM3(nn.Module):
     def decode_aggregation_chunk_from_cache(
         self,
         aggregation_cache: Dict[str, Any],
-        aggregated_feature_36_chunk: torch.Tensor,
+        aggregated_feature_chunk: torch.Tensor,
         class_start: int,
         class_end: int,
         return_teacher_logits: bool = False,
     ) -> Dict[str, torch.Tensor]:
         return self.core.decode_aggregation_chunk_from_cache(
             aggregation_cache=aggregation_cache,
-            aggregated_feature_36_chunk=aggregated_feature_36_chunk,
+            aggregated_feature_chunk=aggregated_feature_chunk,
             class_start=class_start,
             class_end=class_end,
             return_teacher_logits=return_teacher_logits,

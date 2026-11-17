@@ -265,10 +265,10 @@ class Trainer:
                 )
             )
 
-        aggregated_features_36 = aggregation_out["aggregated_features_36"]
+        aggregated_features = aggregation_out["aggregated_features"]
         del aggregation_out
 
-        B, C_total = aggregated_features_36.shape[:2]
+        B, C_total = aggregated_features.shape[:2]
 
         metadata = batch.find_metadatas[0]
 
@@ -285,7 +285,7 @@ class Trainer:
         prompt_to_class_id = torch.as_tensor(
             metadata.prompt_to_class_id,
             dtype=torch.long,
-            device=aggregated_features_36.device,
+            device=aggregated_features.device,
         )
 
         if prompt_to_class_id.ndim != 1:
@@ -301,7 +301,7 @@ class Trainer:
             )
 
         # Detached proxy leaf — accumulates gradients from all chunks.
-        aggregation_proxy = aggregated_features_36.detach().requires_grad_(True)
+        aggregation_proxy = aggregated_features.detach().requires_grad_(True)
 
         # Build streaming loss context once.
         with _autocast(device_type=self.device.type, enabled=use_amp):
@@ -339,7 +339,7 @@ class Trainer:
                 chunk_outputs = (
                     self.model.decode_aggregation_chunk_from_cache(
                         aggregation_cache=aggregation_cache,
-                        aggregated_feature_36_chunk=aggregation_proxy_chunk,
+                        aggregated_feature_chunk=aggregation_proxy_chunk,
                         class_start=chunk_start,
                         class_end=chunk_end,
                         return_teacher_logits=need_teacher_logits,
@@ -394,13 +394,14 @@ class Trainer:
 
         scaled_aggregation_grad = aggregation_proxy.grad.detach()
 
-        torch.autograd.backward(
-            tensors=aggregated_features_36,
-            grad_tensors=scaled_aggregation_grad,
-        )
+        if aggregated_features.requires_grad:
+            torch.autograd.backward(
+                tensors=aggregated_features,
+                grad_tensors=scaled_aggregation_grad,
+            )
 
         # The coefficient is a batch-level scalar, not a chunk contribution.
-        accum["reference_distill_weight"] = aggregated_features_36.new_tensor(
+        accum["reference_distill_weight"] = aggregated_features.new_tensor(
             effective_distill_weight, dtype=torch.float32
         )
         return accum

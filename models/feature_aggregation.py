@@ -14,6 +14,7 @@ from .aggregation_attention import (
     apply_layer_norm_bcdhw,
 )
 from .semantic_detail_fusion import SemanticDetailFusion
+from .experiment_variants import ConcatFusion
 from .task_modes import OUTPUT_KEYS
 
 
@@ -56,12 +57,19 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         text_prompt_batch_size: int = 64,
         text_prompt_use_checkpoint: bool = True,
         remoteclip_native_dim: int | None = None,
+        cross_class_mode: str = "full",
+        intra_class_enabled: bool = True,
+        semantic_init: str = "remoteclip",
+        fusion_type: str = "sdf",
+        orientations=(0, 90, 180, 270),
     ):
         super().__init__()
         self.feature_dim = int(feature_dim)
         self.semantic_dim = int(semantic_dim)
         self.use_checkpoint = bool(use_checkpoint)
         self.num_blocks = int(num_blocks)
+        self.intra_class_enabled = intra_class_enabled
+        self.semantic_init = semantic_init
         if prompt_templates is None:
             raise ValueError(
                 "prompt_templates must be a list of 64 prompt templates."
@@ -79,7 +87,7 @@ class RemoteCLIPGuidedAggregation(nn.Module):
             feature_dim=int(semantic_dim),
             text_prompt_batch_size=int(text_prompt_batch_size),
             text_prompt_use_checkpoint=bool(text_prompt_use_checkpoint),
-        )
+        ) if semantic_init == "remoteclip" else None
 
         # Alternate cross → intra → cross → intra without sharing parameters.
         blocks = []
@@ -91,9 +99,10 @@ class RemoteCLIPGuidedAggregation(nn.Module):
                         semantic_dim=self.semantic_dim,
                         num_heads=int(num_heads),
                         dropout=float(dropout),
+                        cross_class_mode=cross_class_mode,
                     )
                 )
-            else:
+            elif intra_class_enabled:
                 blocks.append(
                     IntraClassAggregationBlock(
                         feature_dim=self.feature_dim,
@@ -109,8 +118,9 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         # Final normalization for the accumulated feature residual stream.
         self.feature_output_norm = nn.LayerNorm(self.feature_dim)
 
-        self.semantic_detail_fusion = SemanticDetailFusion(
-            use_checkpoint=self.use_checkpoint,
+        self.semantic_detail_fusion = (
+            SemanticDetailFusion(use_checkpoint=self.use_checkpoint, orientations=orientations)
+            if fusion_type == "sdf" else ConcatFusion()
         )
         if remoteclip_native_dim is None or remoteclip_native_dim <= 0:
             raise ValueError(
@@ -120,23 +130,23 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         self.remoteclip_native_dim = int(remoteclip_native_dim)
         self.clip_spatial_guidance_proj = nn.Conv2d(
             self.remoteclip_native_dim * 2, 256, kernel_size=1
-        )
+        ) if intra_class_enabled else None
 
     def fuse_semantic_detail_chunk(
         self,
-        aggregated_feature_36: torch.Tensor,
+        aggregated_feature: torch.Tensor,
         prompt_conditioned_feature_72: torch.Tensor,
         sam3_fpn_72: torch.Tensor,
     ) -> torch.Tensor:
         """Return [N, 256, 72, 72] for the original SAM3 Pixel Decoder.
 
         Args:
-            aggregated_feature_36:        [N, 256, 36, 36]
+            aggregated_feature:        [N, 256, 36, 36]
             prompt_conditioned_feature_72:[N, 256, 72, 72]
             sam3_fpn_72:                  [B, 256, 72, 72]
         """
         return self.semantic_detail_fusion(
-            aggregated_feature_36=aggregated_feature_36,
+            aggregated_feature=aggregated_feature,
             prompt_conditioned_feature_72=prompt_conditioned_feature_72,
             sam3_fpn_72=sam3_fpn_72,
         )
@@ -191,73 +201,77 @@ class RemoteCLIPGuidedAggregation(nn.Module):
                 f"got {tuple(remoteclip_feat_map.shape[-2:])}."
             )
 
-        (
-            clip_guidance_36,
-            clip_template_scores_36,
-            remoteclip_template_text,
-        ) = self.remoteclip_guidance(
-            class_names=class_names,
-            remoteclip_feat_map=remoteclip_feat_map,
-        )
+        if self.remoteclip_guidance is not None:
+            clip_guidance_36, clip_template_scores_36, remoteclip_template_text = self.remoteclip_guidance(
+                class_names=class_names, remoteclip_feat_map=remoteclip_feat_map,
+            )
+        else:
+            clip_guidance_36 = prompt_conditioned_features_72.new_zeros(
+                batch_size, num_prompts, self.semantic_dim, 36, 36
+            )
+            clip_template_scores_36 = clip_guidance_36[:, :, :0]
+            remoteclip_template_text = clip_guidance_36.new_empty(0)
 
-        # Project image-level guidance once before broadcasting over prompts.
-        if (
-            clip_spatial_guidance_features is None
-            or clip_spatial_guidance_layer_indices is None
-        ):
-            raise ValueError(
-                "RemoteCLIP middle guidance requires features and layer "
-                "indices [7, 15]"
+        clip_spatial_guidance_36 = sam3_spatial_guidance_36 = None
+        if self.intra_class_enabled:
+            # Project image-level guidance once before broadcasting over prompts.
+            if (
+                clip_spatial_guidance_features is None
+                or clip_spatial_guidance_layer_indices is None
+            ):
+                raise ValueError(
+                    "RemoteCLIP middle guidance requires features and layer "
+                    "indices [7, 15]"
+                )
+            if len(clip_spatial_guidance_features) != len(
+                clip_spatial_guidance_layer_indices
+            ) or len(set(clip_spatial_guidance_layer_indices)) != len(
+                clip_spatial_guidance_layer_indices
+            ):
+                raise ValueError(
+                    "RemoteCLIP middle feature indices must be unique and match "
+                    "the feature count"
+                )
+            by_layer = dict(
+                zip(
+                    clip_spatial_guidance_layer_indices,
+                    clip_spatial_guidance_features,
+                )
             )
-        if len(clip_spatial_guidance_features) != len(
-            clip_spatial_guidance_layer_indices
-        ) or len(set(clip_spatial_guidance_layer_indices)) != len(
-            clip_spatial_guidance_layer_indices
-        ):
-            raise ValueError(
-                "RemoteCLIP middle feature indices must be unique and match "
-                "the feature count"
+            if 7 not in by_layer or 15 not in by_layer:
+                raise ValueError(
+                    "RemoteCLIP middle guidance requires indices 7 and 15 "
+                    "(layers 8 and 16)"
+                )
+            mids = [by_layer[7], by_layer[15]]
+            if any(
+                tuple(x.shape) != (batch_size, self.remoteclip_native_dim, 36, 36)
+                for x in mids
+            ):
+                raise ValueError(
+                    "RemoteCLIP middle features must match native channels and "
+                    "the 36×36 grid"
+                )
+            projected = self.clip_spatial_guidance_proj(torch.cat(mids, dim=1))
+            clip_spatial_guidance_36 = projected[:, None].expand(
+                -1, num_prompts, -1, -1, -1
             )
-        by_layer = dict(
-            zip(
-                clip_spatial_guidance_layer_indices,
-                clip_spatial_guidance_features,
+            if sam3_fpn_72 is None or tuple(sam3_fpn_72.shape) != (
+                batch_size, 256, 72, 72
+            ):
+                raise ValueError(
+                    "SAM3 spatial guidance requires [B, 256, 72, 72] "
+                    "backbone_fpn[2]"
+                )
+            downsampled = F.interpolate(
+                sam3_fpn_72,
+                size=(36, 36),
+                mode="bilinear",
+                align_corners=False,
             )
-        )
-        if 7 not in by_layer or 15 not in by_layer:
-            raise ValueError(
-                "RemoteCLIP middle guidance requires indices 7 and 15 "
-                "(layers 8 and 16)"
+            sam3_spatial_guidance_36 = downsampled[:, None].expand(
+                -1, num_prompts, -1, -1, -1
             )
-        mids = [by_layer[7], by_layer[15]]
-        if any(
-            tuple(x.shape) != (batch_size, self.remoteclip_native_dim, 36, 36)
-            for x in mids
-        ):
-            raise ValueError(
-                "RemoteCLIP middle features must match native channels and "
-                "the 36×36 grid"
-            )
-        projected = self.clip_spatial_guidance_proj(torch.cat(mids, dim=1))
-        clip_spatial_guidance_36 = projected[:, None].expand(
-            -1, num_prompts, -1, -1, -1
-        )
-        if sam3_fpn_72 is None or tuple(sam3_fpn_72.shape) != (
-            batch_size, 256, 72, 72
-        ):
-            raise ValueError(
-                "SAM3 spatial guidance requires [B, 256, 72, 72] "
-                "backbone_fpn[2]"
-            )
-        downsampled = F.interpolate(
-            sam3_fpn_72,
-            size=(36, 36),
-            mode="bilinear",
-            align_corners=False,
-        )
-        sam3_spatial_guidance_36 = downsampled[:, None].expand(
-            -1, num_prompts, -1, -1, -1
-        )
 
         initial_feature_36 = F.interpolate(
             prompt_conditioned_features_72.reshape(
@@ -316,7 +330,7 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         )
 
         return {
-            OUTPUT_KEYS.aggregated_features_36: feature_state_36,
+            OUTPUT_KEYS.aggregated_features: feature_state_36,
             OUTPUT_KEYS.semantic_state_36: semantic_state_36,
             OUTPUT_KEYS.clip_guidance_36: clip_guidance_36,
             OUTPUT_KEYS.clip_template_scores_36: clip_template_scores_36,

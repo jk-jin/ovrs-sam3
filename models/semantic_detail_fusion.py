@@ -9,18 +9,20 @@ from torch.utils.checkpoint import checkpoint
 def aggregate_orientations(
     feature: torch.Tensor,
     block: nn.Module,
+    orientations=(0, 90, 180, 270),
 ) -> torch.Tensor:
     """Apply one shared conv block at 0°/90°/180°/270° and average deltas."""
     spatial_dims = (-2, -1)
-    delta = block(feature)
-    for quarter_turns in (1, 2, 3):
+    delta = torch.zeros_like(feature)
+    for angle in orientations:
+        quarter_turns = angle // 90
         rotated_feature = torch.rot90(feature, quarter_turns, spatial_dims)
         rotated_delta = block(rotated_feature)
         # Accumulate every delta back in the input coordinate system.
         delta = delta + torch.rot90(
             rotated_delta, -quarter_turns, spatial_dims
         )
-    return feature + delta * 0.25
+    return feature + delta / len(orientations)
 
 
 class SemanticDetailFusion(nn.Module):
@@ -36,9 +38,10 @@ class SemanticDetailFusion(nn.Module):
     summed with equal weight and pass through a final 1×1 Conv.
     """
 
-    def __init__(self, use_checkpoint: bool = True):
+    def __init__(self, use_checkpoint: bool = True, orientations=(0, 90, 180, 270)):
         super().__init__()
         self.use_checkpoint = bool(use_checkpoint)
+        self.orientations = tuple(orientations)
         self.semantic_feature_proj = self._projection()
         self.detail_feature_proj = self._projection()
         self.encoder_feature_proj = self._projection()
@@ -68,16 +71,16 @@ class SemanticDetailFusion(nn.Module):
 
     def _forward_impl(
         self,
-        aggregated_feature_36: torch.Tensor,
+        aggregated_feature: torch.Tensor,
         prompt_conditioned_feature_72: torch.Tensor,
         sam3_fpn_72: torch.Tensor,
     ) -> torch.Tensor:
         batch_size = sam3_fpn_72.shape[0]
-        num_pairs = aggregated_feature_36.shape[0]
+        num_pairs = aggregated_feature.shape[0]
         num_prompts = num_pairs // batch_size
 
         aggregated_72 = F.interpolate(
-            aggregated_feature_36,
+            aggregated_feature,
             size=(72, 72),
             mode="bilinear",
             align_corners=False,
@@ -95,10 +98,10 @@ class SemanticDetailFusion(nn.Module):
         ).reshape(num_pairs, 256, 72, 72)
 
         semantic_feature = aggregate_orientations(
-            semantic_input, self.semantic_block
+            semantic_input, self.semantic_block, self.orientations
         )
         detail_feature = aggregate_orientations(
-            detail_input, self.detail_block
+            detail_input, self.detail_block, self.orientations
         )
         return self.fusion_out_proj(
             self.semantic_out_proj(semantic_feature)
@@ -107,18 +110,18 @@ class SemanticDetailFusion(nn.Module):
 
     def forward(
         self,
-        aggregated_feature_36: torch.Tensor,
+        aggregated_feature: torch.Tensor,
         prompt_conditioned_feature_72: torch.Tensor,
         sam3_fpn_72: torch.Tensor,
     ) -> torch.Tensor:
         if (
-            aggregated_feature_36.ndim != 4
-            or tuple(aggregated_feature_36.shape[1:]) != (256, 36, 36)
+            aggregated_feature.ndim != 4
+            or tuple(aggregated_feature.shape[1:]) != (256, 36, 36)
         ):
             raise ValueError(
-                "aggregated_feature_36 must be [N, 256, 36, 36]."
+                "aggregated_feature must be [N, 256, 36, 36]."
             )
-        num_pairs = aggregated_feature_36.shape[0]
+        num_pairs = aggregated_feature.shape[0]
         if tuple(prompt_conditioned_feature_72.shape) != (
             num_pairs, 256, 72, 72
         ):
@@ -133,7 +136,7 @@ class SemanticDetailFusion(nn.Module):
         if batch_size <= 0 or num_pairs <= 0 or num_pairs % batch_size:
             raise ValueError("N must be positive and divisible by positive B.")
         if not (
-            aggregated_feature_36.device
+            aggregated_feature.device
             == prompt_conditioned_feature_72.device
             == sam3_fpn_72.device
         ):
@@ -142,13 +145,13 @@ class SemanticDetailFusion(nn.Module):
         if self.use_checkpoint and self.training and torch.is_grad_enabled():
             return checkpoint(
                 self._forward_impl,
-                aggregated_feature_36,
+                aggregated_feature,
                 prompt_conditioned_feature_72,
                 sam3_fpn_72,
                 use_reentrant=False,
             )
         return self._forward_impl(
-            aggregated_feature_36,
+            aggregated_feature,
             prompt_conditioned_feature_72,
             sam3_fpn_72,
         )
