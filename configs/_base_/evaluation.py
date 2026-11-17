@@ -13,6 +13,6 @@ evaluation = dict(
         size_divisor=14,
     ),
     postprocess=dict(
-        prediction_prob_threshold=0.0,
+        prediction_prob_threshold=0.5,
     ),
 )

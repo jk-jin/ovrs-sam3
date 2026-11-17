@@ -20,7 +20,7 @@ val_dataloader = dict(
             enabled=True,
             class_id=5,
             class_name='clutter',
-            exclude_from_forward=True,
+            exclude_from_forward=False,
         ),
     ),
 )
