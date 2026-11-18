@@ -1,0 +1,15 @@
+% The experiment chapter already includes the real PDF when it exists.
+% This slot is suppressed automatically when that PDF is supplied.
+\IfFileExists{figures/qualitative_comparison.pdf}{}{%
+\begin{figure*}[!t]
+\centering
+\fbox{\begin{minipage}{0.94\textwidth}
+\centering\small
+Figure placeholder: qualitative comparison\\[3pt]
+Input image, ground truth, baseline predictions, and ReCA-SAM3\\
+Shared label colors and matched local crops; include representative failures
+\end{minipage}}
+\caption{Qualitative comparison slot for predictions on the same remote sensing images. No prediction results are shown in this placeholder.}
+\label{fig:qualitative_slot}
+\end{figure*}%
+}

@@ -1,0 +1,14 @@
+\begin{figure*}[!t]
+\centering
+\fbox{\begin{minipage}{0.94\textwidth}
+\centering\small
+Figure placeholder: dual-stream aggregation\\[3pt]
+Semantic state: template-score embedding fused with dense RemoteCLIP features\\
+Feature state: downsampled SAM 3 prompt-conditioned features\\
+Cross-class block: semantic update followed by feature update\\
+Intra-class block: regular/shifted semantic windows followed by feature windows\\
+Q/K: both states and applicable spatial guidance; V: the state being updated
+\end{minipage}}
+\caption{Dual-stream aggregation at the low-resolution grid. Cross-class attention exchanges information across expanded prompts at a fixed position; intra-class attention operates within each prompt. Semantic and feature updates have separate parameters, and the feature update uses the refined semantic state.}
+\label{fig:aggregation}
+\end{figure*}

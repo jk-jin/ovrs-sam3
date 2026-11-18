@@ -1,19 +1,8 @@
 \section{方法}
 \subsection{框架概述}
-ReCA-SAM3 由 SAM 3 特征提取、RemoteCLIP 语义引导、双流特征聚合和语义—细节融合四部分组成，如图~\ref{fig:overview} 所示。SAM 3 为各类别提示提取条件特征，RemoteCLIP 提供局部图文相似度先验。聚合模块在低分辨率网格上交替建模提示间关系与提示内空间联系，再通过语义—细节融合（Semantic--Detail Fusion，SDF）将更新特征接入冻结的解码器。
+ReCA-SAM3 由 SAM 3 特征提取、RemoteCLIP 语义引导、双流特征聚合和语义—细节融合四部分组成，如图~\ref{fig:overview} 所示。SAM 3 为各类别提示提取条件特征；RemoteCLIP 的模板级图文相似度与稠密图像特征经卷积融合，形成各提示的指导特征并初始化语义状态。该语义状态与 SAM 3 特征共同构造注意力，聚合模块在低分辨率网格上交替建模提示间关系与提示内空间联系，再通过语义—细节融合（Semantic--Detail Fusion，SDF）将更新特征接入冻结的解码器。
 
-\begin{figure*}[!t]
-\centering
-\fbox{\begin{minipage}{0.93\textwidth}
-\centering\small
-Image and category prompts $\longrightarrow$ SAM 3 prompt-conditioned features\\
-RemoteCLIP image--text similarities $\longrightarrow$ Semantic guidance\\
-Dual-stream cross-class and spatial aggregation $\longrightarrow$ Semantic--Detail Fusion\\
-Frozen SAM 3 pixel decoder $\longrightarrow$ Per-class semantic predictions
-\end{minipage}}
-\caption{Overview of ReCA-SAM3. RemoteCLIP guides dual-stream feature aggregation before the frozen SAM 3 decoder. Semantic--Detail Fusion combines aggregated features with the original semantic and spatial representations.}
-\label{fig:overview}
-\end{figure*}
+\input{figures/overview}
 
 \subsection{任务定义与提示映射}
 For an image $I$, let $\mathcal C=\{c_m\}_{m=0}^{M-1}$ denote the $M$ semantic classes represented in the model forward pass. Expanding aliases yields $P$ prompts $\{q_p\}_{p=1}^{P}$, with $\mu(p)\in\{0,\ldots,M-1\}$ mapping prompt $p$ to its forward class. Aliases share binary supervision but interact as separate prompt tokens. Background may participate in the forward pass or be restored afterward, so forward classes and evaluation labels are distinguished.
@@ -42,6 +31,8 @@ The score embedding also incorporates dense image features:
 \end{equation}
 Brackets denote channel concatenation, and $\mathcal N$ acts independently at each position. The intermediate maps $A_p$ and $B_p$ have $D$ channels. Both $\phi_1$ and $\phi_2$ are a $1\times1$ convolution followed by eight-group GroupNorm and GELU; their input widths are $K$ and $D+d_c$, respectively. The function $\phi_3$ uses two $3\times3$ convolutions, each followed by GroupNorm and GELU, mapping $2D$ input channels to $D$ output channels. Parameters are shared across prompts. Stacking and flattening $S_p^0$ gives the initial semantic state $S^0\in\mathbb R^{P\times N\times D}$.
 
+The similarity tensor in Eq.~\eqref{eq:template_scores} is converted into a class-specific guidance representation through Eq.~\eqref{eq:semantic_embedding}. Dense image features are shared across prompts, whereas the template-score input makes $S_p^0$ prompt dependent. For a class with several aliases, each expanded prompt retains its own guidance map. Here, class-specific guidance refers to this similarity-derived semantic state; the intermediate-layer spatial guides introduced below serve an additional role.
+
 The feature state starts from the original conditional features:
 \begin{equation}
  F_p^0=\mathcal D(E_p),
@@ -50,7 +41,7 @@ The feature state starts from the original conditional features:
 where $\mathcal D$ is bilinear resizing from $72\times72$ to $36\times36$. Stacking and flattening yields $F^0\in\mathbb R^{P\times N\times D}$. Superscript $0$ denotes initialization before aggregation: $S^0$ represents RemoteCLIP alignment information, whereas $F^0$ retains the SAM 3 conditional representation.
 
 \subsection{双流特征聚合}
-The two states pass through four alternating blocks:
+The two states pass through four alternating blocks (Fig.~\ref{fig:aggregation}):
 \begin{equation}
 \begin{aligned}
  (F^{j+1},S^{j+1})&=\mathcal B_j(F^j,S^j),\\
@@ -60,6 +51,11 @@ The two states pass through four alternating blocks:
 \label{eq:aggregation_stack}
 \end{equation}
 The index $j=0,\ldots,L-1$ identifies a block; $\mathcal B_j$ is cross-class for even $j$ and intra-class for odd $j$. Superscripts count completed blocks. The final channel-wise LayerNorm $\operatorname{LN}_{\mathrm{out}}$ acts only on $F^L$, producing $F^{\mathrm{agg}}$. Blocks have independent parameters and no additional feed-forward network after attention.
+
+
+\input{figures/aggregation}
+
+Cost-aggregation approaches contextualize image--text matching embeddings and decode the aggregated cost representation~\cite{choCATSegCostAggregation2024,liExploringEfficientOpenVocabulary2026}. ReCA-SAM3 maintains the semantic guidance $S$ alongside a separate SAM 3 feature state $F$. Both states determine attention affinities. When updating $F$, the values come from $F$, allowing similarity-derived semantic evidence to guide the redistribution of conditional segmentation features. When updating $S$, the values come from $S$, adapting the guidance to the evolving feature context. The final decoder input is derived from $F^{\mathrm{agg}}$ through SDF. The distinction is thus the jointly updated representations and their connection to the pretrained segmentation decoder.
 
 \paragraph{Attention formulation.}
 Each sub-update normalizes its current states along channels as $\bar S=\operatorname{LN}_S(S)$ and $\bar F=\operatorname{LN}_F(F)$. An optional spatial guide $G$ is independently normalized as $\bar G=\operatorname{LN}_G(G)$. Queries and keys use
@@ -132,7 +128,7 @@ Write $\mathcal W_\delta^r(F,S;G)$ for the attention increment in a window, with
 Subscripts 1 and 2 denote intermediate states within this block. Shift 0 is regular and shift 6 is shifted; shifted outputs are restored to the original coordinates before residual addition. The block returns $(F_2,S_2)$. Each state therefore receives regular and shifted updates, while spatial attention remains separate across prompts.
 
 \subsection{语义—细节融合与解码}
-SDF reconnects aggregated features to the original decoder at $72\times72$. With $\mathcal U$ denoting bilinear upsampling from $36\times36$ to $72\times72$, prompt $p$ has branch inputs
+SDF reconnects aggregated features to the original decoder at $72\times72$, as illustrated in Fig.~\ref{fig:sdf}. With $\mathcal U$ denoting bilinear upsampling from $36\times36$ to $72\times72$, prompt $p$ has branch inputs
 \begin{equation}
 \begin{aligned}
  A_p^{72} &= \mathcal U(F_p^{\mathrm{agg}}),\\
@@ -142,6 +138,8 @@ SDF reconnects aggregated features to the original decoder at $72\times72$. With
 \label{eq:sdf_inputs}
 \end{equation}
 Here $F_p^{\mathrm{agg}}$ is the reshaped feature slice, $A_p^{72}$ its upsampled map, and $X_{s,p},X_{d,p}$ the semantic/detail branch inputs. Each of $\Pi_s,\Pi_E,\Pi_d,\Pi_J$ is an independent $1\times1$ convolution plus eight-group GroupNorm. All maps have $D$ channels; the projected image-level $J^{72}$ is broadcast over prompts. The two branches retain separate access to original conditional features and image-level spatial features.
+
+\input{figures/sdf}
 
 For branch $b\in\{s,d\}$, orientation aggregation is
 \begin{equation}

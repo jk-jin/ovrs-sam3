@@ -1,0 +1,13 @@
+\begin{figure*}[!t]
+\centering
+\fbox{\begin{minipage}{0.94\textwidth}
+\centering\small
+Figure placeholder: overall framework\\[3pt]
+Image and prompts: frozen SAM 3 features and RemoteCLIP representations\\
+Template similarities plus dense RemoteCLIP features: class-specific guidance\\
+Dual-stream feature aggregation: Semantic--Detail Fusion: frozen segmentation decoder\\
+Training-only frozen reference: soft-mask supervision
+\end{minipage}}
+\caption{Overview of ReCA-SAM3. Similarity-derived RemoteCLIP guidance and SAM 3 conditional features form two interacting states. SDF connects the aggregated feature state to the frozen decoder; the reference path supplies soft-mask targets during training.}
+\label{fig:overview}
+\end{figure*}
