@@ -138,3 +138,17 @@ DLRSD 处理脚本改为消费 RSKT-Seg README 链接的 OVRSISBench DLRSD.zip�
 ## 新增encoder_only_update
 
 训练清单与手选权重验证清单新增一项，训练总数为12。核心消融表增加Encoder feature updates only，值保持--。开关默认both保留完整模型路径；feature_only不更新score embed但保留其语义初始化与Q/K梯度，类内保留普通/移位encoder特征窗口。语义更新专用的RemoteCLIP中间层引导及投影不构造/执行。已有默认模型配置指纹保持一致，新变体有独立身份。仅CPU合成回归，尚无GPU正式训练或收益结论。
+
+
+## 2026-11-18 方法公式及英文说明（当前修订）
+
+依据master@792490eb4ef1e53c1cc41e61acfbabde44b85d20的DESIGN.md、RemoteCLIP指导、aggregation_attention、feature_aggregation、semantic_detail_fusion、SAM3解码路径、criterion、adapter/evaluator和有效默认配置核对方法。此次只改方法与论文审阅记录，实验正文、四表、BibTeX、文献数据、代码和配置均保持原字节。
+
+- 24个公式覆盖提示/模板映射、两次归一化融合、双流初始化与四块交替、Q/K/V和两种dropout、类间顺序残差、类内普通/移位四子步骤、两分支四方向SDF及三次输出投影、逐图分组BCE、全batch有效像素蒸馏、别名合并、学生阈值与背景恢复。
+- 所有公式及其解释直接用英文；已有中文概述和中文标题保留。每个新符号均解释含义，并明确提示轴包含同类别名、更新的状态与引导的状态、特征维度及冻结路径上的梯度。
+- 精确损失定义以当前criterion为准：逐图分别平均存在/缺席提示，按0.8/0.2加权，再在batch平均；蒸馏仅存在提示的有效像素，以全batch所选像素总数归一化，固定权重0.5。不存在边界环、蒸馏余弦调度或推理教师/实例融合。
+- 默认模型的方法描述不新增消融或声称已运行实验；参数仅陈述当前实现，不意味着已证实最优。总体框架图仍为已有文字占位示意，后续需正式绘制。
+
+实际验证：`python -m unittest tests.test_semantic_training_paths -q`的14项现有CPU测试通过。另以独立softplus/BCE表达式核对混合存在/缺席与别名、全存在、全忽略三种样例和0/0.8/1三种分组系数，共9组；分割、蒸馏及总损失一致（总损失最大绝对误差1.20e-7以内），学生梯度一致、教师无梯度、2提示分块求和一致。未执行正式权重或用户数据训练。
+
+LaTeX检查：24个公式、唯一标签、环境配对、全部论文交叉引用及方法引用键静态通过；公式解释无中文。完整`latexmk -xelatex -halt-on-error -file-line-error -outdir=build main.tex`因本环境TeX格式/IEEEtran/ctex/字体依赖不完整而失败。临时构建xelatex格式后，仅在ASCII正文预览中保留全部数学表达式，以article双栏、249pt列宽进行`xetex -no-pdf`检查：4页XDV，最终轮无未定义引用、无Overfull警告。该检查不能替代IEEEtran中文PDF编译和视觉验收；PDF驱动仍缺少物理字体，本轮没有可验收的新PDF。未改main.tex或加入替代模板以规避环境限制。

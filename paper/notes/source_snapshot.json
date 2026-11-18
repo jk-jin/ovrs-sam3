@@ -1391,5 +1391,66 @@
       "tests/test_experiment_variants.py": "0a97abf47211943c79bb72416322ab066cd0eb34a1006d2b0f7354596bbd27c7",
       "tools/train.py": "501829575ac0420b19b6600d0b432de3daa663671796c6bdf49152de73b612fb"
     }
+  },
+  "method_equations_20261118": {
+    "date": "2026-11-18",
+    "base_commit": "792490eb4ef1e53c1cc41e61acfbabde44b85d20",
+    "branch": "master",
+    "scope": "Method chapter plus paper README and audit/status notes only. Experiments, tables, references, model code and configurations unchanged.",
+    "language": "English equations and their explanations; Chinese section titles and existing overview retained.",
+    "equations": 24,
+    "validation": {
+      "semantic_training_path_tests": 14,
+      "independent_formula_cases": 9,
+      "checks": [
+        "segmentation/distillation/total losses",
+        "student gradients",
+        "detached teacher",
+        "two-prompt chunk equivalence",
+        "unique labels and balanced environments",
+        "all paper cross-references",
+        "method citation keys",
+        "English formula descriptions"
+      ],
+      "maximum_total_loss_absolute_error": 1.1920928955078125e-07,
+      "temporary_math_layout": {
+        "class": "article",
+        "column_width_pt": 249,
+        "pages_xdv": 4,
+        "overfull_warnings": 0,
+        "undefined_references": 0,
+        "chinese_body_omitted": true,
+        "full_ieeetran_validation": false
+      },
+      "full_pdf_build": "Blocked by incomplete TeX format/class/package/font dependencies; no PDF visual validation. main.tex unchanged.",
+      "official_model_runs": false
+    },
+    "sha256": {
+      "DESIGN.md": "411a43f4c0b9cf23f8eb2cd31cef372fcd1be511e620cb50c735ef9556d90219",
+      "config_dataclasses.py": "77c91bda44d11ac44c75f1464b3ab6819e2d35d9229ec07f0fc91c7f220b1307",
+      "configs/_base_/model/reca_sam3.py": "0ef5d2afa2baef7615677a28b79bba5d9b38bceec9f3518baab83e89bb3d203e",
+      "configs/_base_/loss/semantic.py": "70778463d980794cb3e6eafd4b19cac3f519f0e8236899e0ec45e6d990aefaa1",
+      "configs/experiments/main/dlrsd_loveda_full.py": "1c87a4c8b9943289036c4f4872cc78b399618deebdfc26181479077a48d0775d",
+      "model_builder.py": "1a4b979b65b4dad20847ad540d585b761cea046dcffb2d1908bff87b94350d94",
+      "models/remoteclip_guidance.py": "59e8fa4cf05f259f7c7a326cf3de1b4430578d1a42467404680622a15f7f720c",
+      "models/aggregation_attention.py": "b111e2dea31543b42ae4dbfdc97f2354ddfb62931687ec94a5ed3b7f5bf4fe5a",
+      "models/feature_aggregation.py": "7b981797d53e222a11bf83150fdd280dc1d45e89c05cc79b04be08bd7f6b715a",
+      "models/semantic_detail_fusion.py": "428c16cd803800bd34a81678e52b540dd68887c79363a1cd06926192f878aa76",
+      "models/sam3_image.py": "faec9fc63f60c8d52e0a775eb8f230d3af60229e31b28ac2ee5159a32ec40194",
+      "models/adapters/semantic_adapter.py": "3267cef6c985f8537e66199c5eb01b6a59f747cb26cdee74f5be53bed627cf21",
+      "engine/evaluator.py": "27928a5b309d630a280d1e9864bbd431fb6539c7a3042ec9e01e835a29f77864",
+      "losses/semantic_criterion.py": "2e4b5bc975e648e746a47837421cf34ef70c79aa724a990457db9bf92d0140c6",
+      "tests/test_semantic_training_paths.py": "37fb6cf89a9b801270f8b54057c007c8c1014ba56f89b00bc4a2246984e86727",
+      "paper/README.md": "b35fcf72a4c86c6ab5b2dea2b98e1b9939f17581c746392e20ae1d4f89d2578e",
+      "paper/sections/method.tex": "971229293cd28b45ac5a036fead4e15e1bd72489cfa97a4840d32fbca222e806",
+      "paper/sections/experiments.tex": "7d0e0d32aefa586515d73716255e83ed56292998467c002f8ae3990d098eeee9",
+      "paper/notes/review.md": "b7b5c6144ea0f0ef532b18f8b1fd29de8253480398e8775f46e35ef6ced3eb58",
+      "paper/notes/manuscript_status.md": "9a666abb58a3b3977dcd7042424ef91ffc80cfece832e3e6b4abe325ad39fd79",
+      "paper/references.bib": "4dae7bb8bb9ac763567e4ee711339f3d1a210586ac33b9a9346892cd08224f34",
+      "paper/tables/ablation_core.tex": "d89d675a89dffd8fa3a09dc228cd2bd6843f4db601c57ae275d587bd61b8b9a0",
+      "paper/tables/ablation_freeze.tex": "e4e6197620ea97a07cbc3195e1ab13ef4ac491ee5ea9ef6c0f6ab6b7411adad3",
+      "paper/tables/efficiency.tex": "916955c39f48815cd32faeffca2fe193a578009fecb17e6fd73406a751f4eaa1",
+      "paper/tables/main_rskt8.tex": "4c0fdad63f44f9e2feb2f7352208a1433dada3a59d82e1956e87cc0390dcf916"
+    }
   }
 }
