@@ -1,14 +1,6 @@
-\begin{figure}[!t]
+\begin{figure*}[!tbp]
 \centering
-\fbox{\begin{minipage}{0.92\columnwidth}
-\centering\small
-Figure placeholder: SDF\\[3pt]
-Upsampled aggregation + original conditional feature\\
-Upsampled aggregation + image-level FPN feature\\
-Separate branches: shared convolution over four rotations\\
-Inverse alignment, averaging, and residual addition\\
-Branch projections, summation, final projection
-\end{minipage}}
-\caption{Semantic--Detail Fusion. Semantic and detail branches use independent parameters, with convolution weights shared across orientations within each branch. Aligned residuals are fused into the feature supplied to the frozen decoder.}
+\includegraphics[width=\textwidth]{figures/sdf.pdf}
+\caption{Semantic--Detail Fusion. A common upsampled aggregation feature feeds two independently parameterized branches. Each branch combines independently projected inputs, averages inverse-aligned convolutional responses over four orientations, and adds a residual. Branch projections are added and followed by a final output projection.}
 \label{fig:sdf}
-\end{figure}
+\end{figure*}

@@ -1,0 +1,63 @@
+{
+  "source": "src/*.drawio",
+  "image_tile": "image_placeholder.svg",
+  "figures": [
+    {
+      "name": "motivation",
+      "width": 1260,
+      "height": 295,
+      "native_cells": 63,
+      "editable": true,
+      "source": "src/motivation.drawio",
+      "svg": "motivation.svg",
+      "pdf": "motivation.pdf",
+      "placeholders": 2
+    },
+    {
+      "name": "overview",
+      "width": 1440,
+      "height": 565,
+      "native_cells": 106,
+      "editable": true,
+      "source": "src/overview.drawio",
+      "svg": "overview.svg",
+      "pdf": "overview.pdf",
+      "placeholders": 2
+    },
+    {
+      "name": "aggregation",
+      "width": 1320,
+      "height": 480,
+      "native_cells": 53,
+      "editable": true,
+      "source": "src/aggregation.drawio",
+      "svg": "aggregation.svg",
+      "pdf": "aggregation.pdf",
+      "placeholders": 0
+    },
+    {
+      "name": "sdf",
+      "width": 1300,
+      "height": 440,
+      "native_cells": 78,
+      "editable": true,
+      "source": "src/sdf.drawio",
+      "svg": "sdf.svg",
+      "pdf": "sdf.pdf",
+      "placeholders": 0
+    },
+    {
+      "name": "qualitative_comparison",
+      "width": 1160,
+      "height": 415,
+      "native_cells": 51,
+      "editable": true,
+      "source": "src/qualitative_comparison.drawio",
+      "svg": "qualitative_comparison.svg",
+      "pdf": "qualitative_comparison.pdf",
+      "placeholders": 15
+    }
+  ],
+  "notes": "Native editable cells; placeholder image and mask tiles are not experimental results.",
+  "native_cell_count_includes_root": true
+}

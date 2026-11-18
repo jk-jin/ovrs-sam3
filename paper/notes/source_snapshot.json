@@ -1,48 +1,144 @@
 {
   "date": "2026-11-18",
   "branch": "master",
-  "base_commit": "671c3d9e22534611c7e7dbbac1bc31d90b4663f8",
-  "historical_snapshot": "https://github.com/jk-jin/ovrs-sam3/blob/671c3d9e22534611c7e7dbbac1bc31d90b4663f8/paper/notes/source_snapshot.json",
-  "scope": "Paper layout and table renderer only: bounded table widths, aligned notes, final float boundary, top-aligned float pages, ragged final text and URL wrapping. Table data, bibliography entries, method/experimental narrative and model/config code unchanged.",
-  "current_state": "paper/notes/manuscript_status.md",
+  "base_commit": "bffc3b12cd36e89ed3e44f08bc1fb8540e3eccab",
+  "historical_snapshot": "https://github.com/jk-jin/ovrs-sam3/blob/bffc3b12cd36e89ed3e44f08bc1fb8540e3eccab/paper/notes/source_snapshot.json",
+  "scope": "Five native editable draw.io figures and SVG/PDF exports; image/mask placeholders; paper figure integration and natural float/reference flow. No experimental score, formula, bibliography entry or model/config changes.",
   "deleted_obsolete_files": [
-    "paper/notes/results.csv",
-    "paper/notes/literature_audit.md"
+    "paper/figures/qualitative_placeholder.tex"
   ],
-  "guidance_path": [
-    "64 scaled template similarities per prompt",
-    "projection and normalized dense RemoteCLIP fusion",
-    "class-specific guidance initializes semantic state",
-    "semantic and SAM3 feature states jointly form Q/K; target stream supplies V",
-    "sequential semantic/feature updates in alternating cross/intra blocks",
-    "aggregated SAM3 feature state enters SDF and frozen decoder"
-  ],
+  "current_state": "paper/notes/manuscript_status.md",
+  "figure_editing": "paper/figures/README.md",
   "validation": {
-    "latexmk_full_build": true,
-    "pdf_pages": 8,
-    "table_pages": [
-      7
+    "figures": [
+      {
+        "name": "aggregation",
+        "native_cells": 53,
+        "placeholders": 0,
+        "pdf_one_page": true,
+        "aspect_ratio_verified": true
+      },
+      {
+        "name": "motivation",
+        "native_cells": 63,
+        "placeholders": 2,
+        "pdf_one_page": true,
+        "aspect_ratio_verified": true
+      },
+      {
+        "name": "overview",
+        "native_cells": 106,
+        "placeholders": 2,
+        "pdf_one_page": true,
+        "aspect_ratio_verified": true
+      },
+      {
+        "name": "qualitative_comparison",
+        "native_cells": 51,
+        "placeholders": 15,
+        "pdf_one_page": true,
+        "aspect_ratio_verified": true
+      },
+      {
+        "name": "sdf",
+        "native_cells": 78,
+        "placeholders": 0,
+        "pdf_one_page": true,
+        "aspect_ratio_verified": true
+      }
     ],
-    "bibliography_heading_pages": [
-      8
+    "pdf_pages": 9,
+    "reference_column_flow": [
+      [
+        8,
+        "right",
+        1,
+        632.9
+      ],
+      [
+        8,
+        "right",
+        2,
+        677.7
+      ],
+      [
+        8,
+        "right",
+        3,
+        713.6
+      ],
+      [
+        9,
+        "left",
+        4,
+        66.3
+      ],
+      [
+        9,
+        "left",
+        5,
+        102.1
+      ],
+      [
+        9,
+        "left",
+        6,
+        138.0
+      ],
+      [
+        9,
+        "left",
+        7,
+        200.8
+      ],
+      [
+        9,
+        "left",
+        8,
+        227.7
+      ],
+      [
+        9,
+        "left",
+        9,
+        263.5
+      ],
+      [
+        9,
+        "left",
+        10,
+        290.4
+      ],
+      [
+        9,
+        "left",
+        11,
+        335.2
+      ],
+      [
+        9,
+        "left",
+        12,
+        362.1
+      ],
+      [
+        9,
+        "left",
+        13,
+        389.0
+      ]
     ],
-    "table_body_unchanged": 4,
+    "equations_unchanged": 24,
+    "table_data_unchanged": 4,
     "bibliography_files_unchanged": 2,
-    "method_and_experiments_text_unchanged": true,
-    "paper_table_tests_passed": 8,
+    "experiment_narrative_unchanged": true,
+    "paper_table_tests": 8,
     "overfull_warnings": 0,
-    "undefined_references": 0,
-    "missing_glyph_warnings": 0,
-    "horizontal_rule_widths_pt": [
-      251.06,
-      490.0,
-      514.07
-    ],
-    "visual_review_pages": [
-      7,
-      8
-    ]
+    "missing_glyphs": 0,
+    "reference_flow_sequential": true,
+    "no_model_runs": true
   },
+  "visual_review": "All five standalone figures and all nine compiled pages rendered; detail review of pages 3–9.",
   "official_model_runs": false,
   "sha256": {
     "DESIGN.md": "411a43f4c0b9cf23f8eb2cd31cef372fcd1be511e620cb50c735ef9556d90219",
@@ -58,39 +154,57 @@
     "models/semantic_detail_fusion.py": "428c16cd803800bd34a81678e52b540dd68887c79363a1cd06926192f878aa76",
     "paper/.gitignore": "4df1cb7ea62d9a9063e5ef8be29113d723129dc686706e00ad306bae5359fdfb",
     "paper/AGENTS.md": "026550643daf511ec9a721f6855cd6fdb6cd19d8b2d6ebe0ebd54cab78437881",
-    "paper/README.md": "6cbc10b8bdeca2f6a91aceb3ad3db431c576848b78d98d57ebf48140fe58b376",
+    "paper/README.md": "6efdc4fef3cbfac97d8ff9a8d13e6cc3b75d960ccdbaa96dc54765fdb19ae4d1",
     "paper/data/comparison_audit_20261117.json": "710e189b41c3b6385edcc89e60b41cf8f11daa9ccfc14aaf897407c14dae28f5",
     "paper/data/experiment_plan.csv": "7318707af04b37c6c4cd77070d7d460f698bcc0854b453241a9a42c5c7cf2e2a",
     "paper/data/literature_inventory.csv": "9a1bc3328ce66da15087e0b43a7ab1bc1d5a29c5e8691fbdb6954d964daf1469",
     "paper/data/literature_results.csv": "5d559c2a5045cc4e11b66764ed6d7696313a01bded65ba17ecccc53cc414e509",
     "paper/data/table_spec.json": "ef911e33a4accfafa243c4b3ea79e654c9d107244fb9f716c83084d675e165b0",
     "paper/export_config.json": "52a7f8babc7aaf642b160a869b73dc585409345dcc68f714bbc1f10c8e2bf488",
-    "paper/figures/aggregation.tex": "2d9c9692ca299c08eeffae4d245089692ea2fba8050159a08248a2549af72f17",
-    "paper/figures/motivation.tex": "b6c32f9eb6babd50580fea07b1e0bb59460ee83df2d68a44de5715756175160a",
-    "paper/figures/overview.tex": "f0169a9fd7b063fad53ef2a75a0749567cb0848098d5af704574f17929f29556",
-    "paper/figures/qualitative_placeholder.tex": "98b4f69ec31d931c1466ef4733c40e366271da09e134a430f37e57b42222b292",
-    "paper/figures/sdf.tex": "beb7d7ebd26c73c29d0da4a159cdfb738ba12cd0a48115fbf65d2171fc5756fc",
-    "paper/main.tex": "d79fac27aa3eaaf5b8b56e76c8ce26121d581519df8152238467617b5595cddd",
+    "paper/figures/README.md": "a14e31aae1f8107d65cd5886fe868d779f0a6de5ccf2ba7d72bd492d7b22b869",
+    "paper/figures/aggregation.pdf": "398d412a44b45b59d7389af70b983ad344cd3a7ebee047627f53a6726479e406",
+    "paper/figures/aggregation.svg": "38a85143ad7a0a9a9dc08244d8e55094223280027684c1d35f93871001083846",
+    "paper/figures/aggregation.tex": "e3e10dbca427c2e1f9bc700ca3d80958007e88e49c95906f64debc5956276fc0",
+    "paper/figures/figure_manifest.json": "4f16a7f66a898cc838be7d531138f72b60913816107b7a9b7767d28162d1d088",
+    "paper/figures/image_placeholder.svg": "1997fca9731d5c52aa286dd3cf7e7705e8c244691f7d274a3d2bc6bd89c5ea01",
+    "paper/figures/motivation.pdf": "ec46f1f22b7cb630a497246d7d08afed5fa963b1e58a530e440f2df2b788fa3e",
+    "paper/figures/motivation.svg": "5adeb08b32cfb64d9a07e50c962e1dc621686ab90d1bdb328128a41ed5a9141e",
+    "paper/figures/motivation.tex": "6fe7391d5c25cf99ad38750ca4d6b810196c514c822fe8f4ee25d78fdac01296",
+    "paper/figures/overview.pdf": "efcc6a90d09cd115aba3724263b1d248e8ba713c467b1e4f1fc36cddfc9f216d",
+    "paper/figures/overview.svg": "60044d843b8ba1b6d21ba8a00c691d5a90f28e66c35401fb224ac5068718d7f8",
+    "paper/figures/overview.tex": "4e9f250fe9dd776d889ac96c836a55ea1efec0b96f0a5c64e0b7e6e8e4d87e87",
+    "paper/figures/qualitative_comparison.pdf": "4dfa334d9d94082a429cefd8d49fd1a5e15cdeb97dc66cf46912e53cd456e4f9",
+    "paper/figures/qualitative_comparison.svg": "e29fcb57326b6c499882a3a42d26702faec12ac5ea57245edfa31a4b8f1ff2be",
+    "paper/figures/qualitative_comparison.tex": "65686976326723bef4db06ed3922724ad1e83e9aac50c03479ff05723cdf32e3",
+    "paper/figures/sdf.pdf": "32d4cfb6f02437c890aa899544fc6bb6b4bcf6d066ee18ca361b39a3c05da8da",
+    "paper/figures/sdf.svg": "bee1a740932e84356b7a3c307b49e31b9db0048cb2a66aef0c9ee31232df06b8",
+    "paper/figures/sdf.tex": "157a51b26d9bfdc7c5d9d11bfd7cda157e5d255cd66a41aaf885988bd4946fdf",
+    "paper/figures/src/aggregation.drawio": "3c92e3f3bbb5ec52f0cde84e6b6091e3b51113b24e327524f0af1fb12b7756c0",
+    "paper/figures/src/motivation.drawio": "35639de22e6f8601806d5f70a13601ff0e1aa8d691b83f7fa87c7a928b3e3874",
+    "paper/figures/src/overview.drawio": "981e9e3886c83a391fcde4ffe026e5c8041501df66dfa03eaa22e65b873fb077",
+    "paper/figures/src/qualitative_comparison.drawio": "e5d3c33517f5ca795e05de5278f9c7da21357ba0f131225c8638ab6e39488823",
+    "paper/figures/src/sdf.drawio": "ca8baa778aad2ce88b73e59853c9d46e1ea984b2b040ddffc132729901d858fa",
+    "paper/main.tex": "2ee32290a5d3d568de1acb5a3bc048ce3f13db096c29b5e772280f65b0889838",
     "paper/notes/comparison_audit_20261117.md": "98546cdd40c429e100f9f61b057bd9b5d8278edbc2f9a2194de97990d4b78a33",
     "paper/notes/evaluation_protocol.md": "490038bd9723c59eb051d75857bde1a4aed680147d09c2d5cafdd44d7532cb6d",
     "paper/notes/literature_fill_audit.md": "a6fcc64d30eaf501d05aaf049177404568e1c4759f1eec418b3c20c37474ad19",
-    "paper/notes/manuscript_status.md": "41a389625d2105a74b8a5add0aaec9686d9d879709e178559266134ac46587c8",
-    "paper/notes/review.md": "82c3a535d7c5fb796e71f938fe005ab1cce95a2cd7c9a1ca7120f8a1111deb5c",
+    "paper/notes/manuscript_status.md": "b967614e1dfdbd6a74c5324ccf983b34656455c15271b190820d0c43848f7e59",
+    "paper/notes/review.md": "0600216720cb8ff198c86ecebe2b4e2e104f659bb4016f14a4df3b751f4f4a04",
     "paper/references.bib": "4dae7bb8bb9ac763567e4ee711339f3d1a210586ac33b9a9346892cd08224f34",
     "paper/references_extra.bib": "bfcfa1deff1c748b6bfe9ec2e7aede51551bb087dcf1f6d23331cfafafc4ed52",
-    "paper/scripts/README.md": "d3bef56735168f565159a818db7eff9c01b5de9e694b244d03d7359ecacbdeba",
-    "paper/scripts/build_experiment_tables.py": "25377ec6760f4f11efb94d4bd0c4fcf36c581ee632bb16db222f90f3ee1cb807",
+    "paper/scripts/README.md": "530e425e97450dd7e0481696e6925ceca5e174d9fdd3c95b5df6d5f95b804443",
+    "paper/scripts/build_experiment_tables.py": "ce7bb49a48f17cb2af2a3d8c456d0e418bb2dae65ad311dbb17cd447c85dc26a",
     "paper/scripts/test_build_experiment_tables.py": "234afe7f63af2f3e807267da6289212f52a98d7f28d2a94908449cdaedd51074",
     "paper/sections/abstract.tex": "cbf709af5aee796e91face5ade3e316d9cdeeb8b1ca09d89083c365588a05146",
     "paper/sections/conclusion.tex": "90feea31128502b0a0b1441a56540f56c8b514400a70a3783dfddda204f9b48b",
-    "paper/sections/experiments.tex": "7d0e0d32aefa586515d73716255e83ed56292998467c002f8ae3990d098eeee9",
+    "paper/sections/experiments.tex": "d6178e13d5e4220f10e925d5c14c5d1ddbdcdcf6bbbcbcdf172b46f3f1c5f6c0",
     "paper/sections/introduction.tex": "a234aeb4451729c46b13a396892cc9b949c2cad1731b62429d38d0cfbc9661d4",
     "paper/sections/method.tex": "76b1f73dbbbcfde1164323546a43952dd8299d9d4ddc32167953e57b4cd54fab",
     "paper/sections/related_work.tex": "d43c573e738d4f076fd12a59db11192ec200a61fca5c4272e8a3728b99a2e856",
-    "paper/tables/ablation_core.tex": "011c17b26191875a0183d3fc800b5c852ba628661fc5cfc5baace6bc4c1524f3",
-    "paper/tables/ablation_freeze.tex": "c3d117a54eec6392b7540f267cbe25822d3796bd7597aa71aebff5d3d93afadb",
+    "paper/tables/ablation_core.tex": "0ddd09623cda817ab7bb1d35a4acbffabb41d30176f232b3ac2772015d53d37d",
+    "paper/tables/ablation_freeze.tex": "985e0fb489db6cbdb41a0846c50c5d47480246444594b542bd2138c12e9b10e3",
     "paper/tables/build_report.json": "a03bc176ad4c437f63a1265dbc3e0c57a2c88f52ff3343ea92e88f42063869ba",
-    "paper/tables/efficiency.tex": "c51c62b4d625115d82619397fa29a6fee6d4e014c13e324b9f3ba50986a87c77",
-    "paper/tables/main_rskt8.tex": "855e6588485ce5cd34825503f98b501058cf865ea06c8105bbe3a86091704bb9"
+    "paper/tables/efficiency.tex": "41f367bde6794c09419a71f1035c68599b54f3cb05efa7d6a4c1ad7860807c69",
+    "paper/tables/main_rskt8.tex": "f05cfa248662f57149abbcc8c00c231fa5ff062cb799802d672c7f4011b6fedc"
   }
 }

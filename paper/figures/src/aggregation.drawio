@@ -1,0 +1,206 @@
+<mxfile host="app.diagrams.net" version="24.7.17" type="device">
+  <diagram id="aggregation" name="Aggregation">
+    <mxGraphModel dx="1320" dy="480" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1320" pageHeight="480" math="0" shadow="0" background="#FFFFFF">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="aggregation_n1" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FFFFFF;strokeColor=#9AA1AC;strokeWidth=1.5;dashed=1;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="8" y="8" width="1304" height="463" />
+        </mxCell>
+        <mxCell id="aggregation_txt2" value="Dual-stream aggregation at 36 × 36" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=26;fontColor=#263443;fontStyle=1;" parent="aggregation_n1" vertex="1">
+          <mxGeometry as="geometry" x="10" y="4" width="1284" height="32" />
+        </mxCell>
+        <mxCell id="aggregation_n3" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#9AA1AC;strokeWidth=1.5;dashed=1;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="165" y="63" width="451" height="314" />
+        </mxCell>
+        <mxCell id="aggregation_txt4" value="Cross-class block" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=24;fontColor=#263443;fontStyle=1;" parent="aggregation_n3" vertex="1">
+          <mxGeometry as="geometry" x="10" y="4" width="431" height="32" />
+        </mxCell>
+        <mxCell id="aggregation_n5" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DFEDCC;strokeColor=#9AA1AC;strokeWidth=1.5;dashed=1;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="637" y="63" width="665" height="314" />
+        </mxCell>
+        <mxCell id="aggregation_txt6" value="Intra-class block" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=24;fontColor=#263443;fontStyle=1;" parent="aggregation_n5" vertex="1">
+          <mxGeometry as="geometry" x="10" y="4" width="645" height="32" />
+        </mxCell>
+        <mxCell id="aggregation_n7" value="" style="rounded=1;arcSize=10;html=0;fillColor=#E8DFF4;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="24" y="144" width="118" height="62" />
+        </mxCell>
+        <mxCell id="aggregation_txt8" value="Semantic&#10;state" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=23;fontColor=#263443;fontStyle=0;" parent="aggregation_n7" vertex="1">
+          <mxGeometry as="geometry" x="3" y="2" width="112" height="58" />
+        </mxCell>
+        <mxCell id="aggregation_n9" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="24" y="259" width="118" height="62" />
+        </mxCell>
+        <mxCell id="aggregation_txt10" value="SAM 3&#10;feature state" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=22;fontColor=#263443;fontStyle=0;" parent="aggregation_n9" vertex="1">
+          <mxGeometry as="geometry" x="3" y="2" width="112" height="58" />
+        </mxCell>
+        <mxCell id="aggregation_n11" value="" style="rounded=1;arcSize=10;html=0;fillColor=#E8DFF4;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="192" y="144" width="163" height="70" />
+        </mxCell>
+        <mxCell id="aggregation_txt12" value="1. Semantic&#10;update&#10;V: semantic state" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="aggregation_n11" vertex="1">
+          <mxGeometry as="geometry" x="3" y="2" width="157" height="66" />
+        </mxCell>
+        <mxCell id="aggregation_n13" value="" style="ellipse;html=0;fillColor=#FFFFFF;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="385" y="166" width="28" height="28" />
+        </mxCell>
+        <mxCell id="aggregation_txt14" value="+" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=23;fontColor=#263443;fontStyle=0;" parent="aggregation_n13" vertex="1">
+          <mxGeometry as="geometry" x="3" y="2" width="22" height="24" />
+        </mxCell>
+        <mxCell id="aggregation_n15" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="434" y="259" width="151" height="70" />
+        </mxCell>
+        <mxCell id="aggregation_txt16" value="2. Feature update&#10;V: feature state" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="aggregation_n15" vertex="1">
+          <mxGeometry as="geometry" x="3" y="2" width="145" height="66" />
+        </mxCell>
+        <mxCell id="aggregation_n17" value="" style="ellipse;html=0;fillColor=#FFFFFF;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="589" y="280" width="28" height="28" />
+        </mxCell>
+        <mxCell id="aggregation_txt18" value="+" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=23;fontColor=#263443;fontStyle=0;" parent="aggregation_n17" vertex="1">
+          <mxGeometry as="geometry" x="3" y="2" width="22" height="24" />
+        </mxCell>
+        <mxCell id="aggregation_edge19" parent="1" edge="1" source="aggregation_n7" target="aggregation_n11" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#7859B6;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="aggregation_edge20" parent="1" edge="1" source="aggregation_n11" target="aggregation_n13" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#7859B6;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="aggregation_edge21" parent="1" edge="1" source="aggregation_n9" target="aggregation_n15" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="aggregation_edge22" parent="1" edge="1" source="aggregation_n15" target="aggregation_n17" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="aggregation_edge23" parent="1" edge="1" source="aggregation_n9" target="aggregation_n11" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0.5;entryY=1;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="155" y="290" />
+              <mxPoint x="155" y="234" />
+              <mxPoint x="273.5" y="234" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="aggregation_txt24" value="Q/K context" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=17;fontColor=#263443;fontStyle=0;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="162" y="236" width="100" height="24" />
+        </mxCell>
+        <mxCell id="aggregation_edge25" parent="1" edge="1" source="aggregation_n7" target="aggregation_n13" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#7859B6;strokeWidth=1.7;dashed=0;exitX=0.5;exitY=0;entryX=0.5;entryY=0;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="83" y="120" />
+              <mxPoint x="399" y="120" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="aggregation_edge26" parent="1" edge="1" source="aggregation_n9" target="aggregation_n17" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=0.5;exitY=1;entryX=0.5;entryY=1;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="83" y="351" />
+              <mxPoint x="603" y="351" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="aggregation_edge27" parent="1" edge="1" source="aggregation_n13" target="aggregation_n15" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#7859B6;strokeWidth=1.7;dashed=0;exitX=0.5;exitY=1;entryX=0.5;entryY=0;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="399" y="236" />
+              <mxPoint x="509.5" y="236" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="aggregation_txt28" value="Updated semantic&#10;context for Q/K" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=18;fontColor=#7859B6;fontStyle=0;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="427" y="199" width="157" height="43" />
+        </mxCell>
+        <mxCell id="aggregation_txt29" value="Across expanded prompts at each position" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=19;fontColor=#263443;fontStyle=0;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="181" y="94" width="413" height="24" />
+        </mxCell>
+        <mxCell id="aggregation_n30" value="" style="rounded=1;arcSize=10;html=0;fillColor=#E8DFF4;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="670" y="144" width="211" height="70" />
+        </mxCell>
+        <mxCell id="aggregation_txt31" value="Semantic: regular&#10;window update" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=22;fontColor=#263443;fontStyle=0;" parent="aggregation_n30" vertex="1">
+          <mxGeometry as="geometry" x="3" y="2" width="205" height="66" />
+        </mxCell>
+        <mxCell id="aggregation_n32" value="" style="rounded=1;arcSize=10;html=0;fillColor=#E8DFF4;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="917" y="144" width="211" height="70" />
+        </mxCell>
+        <mxCell id="aggregation_txt33" value="Semantic: shifted&#10;window update" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=22;fontColor=#263443;fontStyle=0;" parent="aggregation_n32" vertex="1">
+          <mxGeometry as="geometry" x="3" y="2" width="205" height="66" />
+        </mxCell>
+        <mxCell id="aggregation_n34" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="670" y="259" width="211" height="70" />
+        </mxCell>
+        <mxCell id="aggregation_txt35" value="Feature: regular&#10;window update" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=22;fontColor=#263443;fontStyle=0;" parent="aggregation_n34" vertex="1">
+          <mxGeometry as="geometry" x="3" y="2" width="205" height="66" />
+        </mxCell>
+        <mxCell id="aggregation_n36" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="917" y="259" width="211" height="70" />
+        </mxCell>
+        <mxCell id="aggregation_txt37" value="Feature: shifted&#10;window update" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=22;fontColor=#263443;fontStyle=0;" parent="aggregation_n36" vertex="1">
+          <mxGeometry as="geometry" x="3" y="2" width="205" height="66" />
+        </mxCell>
+        <mxCell id="aggregation_edge38" parent="1" edge="1" source="aggregation_n13" target="aggregation_n30" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#7859B6;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="629" y="180" />
+              <mxPoint x="629" y="179" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="aggregation_edge39" parent="1" edge="1" source="aggregation_n17" target="aggregation_n34" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="629" y="294" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="aggregation_edge40" parent="1" edge="1" source="aggregation_n30" target="aggregation_n32" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#7859B6;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="aggregation_edge41" parent="1" edge="1" source="aggregation_n34" target="aggregation_n36" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="aggregation_edge42" parent="1" edge="1" source="aggregation_n32" target="aggregation_n34" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#7859B6;strokeWidth=1.7;dashed=0;exitX=0.5;exitY=1;entryX=0.5;entryY=0;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="1022.5" y="237" />
+              <mxPoint x="775.5" y="237" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="aggregation_n43" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FFF0B3;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="844" y="103" width="293" height="31" />
+        </mxCell>
+        <mxCell id="aggregation_txt44" value="RemoteCLIP middle-layer spatial guide" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=17;fontColor=#263443;fontStyle=0;" parent="aggregation_n43" vertex="1">
+          <mxGeometry as="geometry" x="3" y="2" width="287" height="27" />
+        </mxCell>
+        <mxCell id="aggregation_edge45" parent="1" edge="1" source="aggregation_n43" target="aggregation_n30" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#7859B6;strokeWidth=1.7;dashed=0;exitX=0;exitY=0.5;entryX=0.5;entryY=0;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="775.5" y="118.5" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="aggregation_n46" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DFF3F1;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="843" y="340" width="293" height="31" />
+        </mxCell>
+        <mxCell id="aggregation_txt47" value="SAM 3 FPN spatial guide" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=19;fontColor=#263443;fontStyle=0;" parent="aggregation_n46" vertex="1">
+          <mxGeometry as="geometry" x="3" y="2" width="287" height="27" />
+        </mxCell>
+        <mxCell id="aggregation_edge48" parent="1" edge="1" source="aggregation_n46" target="aggregation_n34" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=0;exitY=0.5;entryX=0.5;entryY=1;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="775.5" y="355.5" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="aggregation_txt49" value="Regular&#10;↓&#10;Shifted&#10;&#10;Residual update&#10;at every step" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=19;fontColor=#263443;fontStyle=0;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="1150" y="148" width="139" height="150" />
+        </mxCell>
+        <mxCell id="aggregation_n50" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F3F4F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="24" y="398" width="1272" height="56" />
+        </mxCell>
+        <mxCell id="aggregation_txt51" value="Q: query K: key V: value | Q/K combine both states; V comes from the updated state." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=22;fontColor=#263443;fontStyle=0;" parent="aggregation_n50" vertex="1">
+          <mxGeometry as="geometry" x="3" y="2" width="1266" height="52" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

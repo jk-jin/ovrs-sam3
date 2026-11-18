@@ -30,16 +30,8 @@ SAM 3 分支输入尺寸为 $1008\times1008$，RemoteCLIP 分支为 $504\times50
 表~\ref{tab:ablation_freeze} 比较 RemoteCLIP 文本与图像编码器的四种冻结组合。Attention tuning 沿用完整模型的注意力相关参数子集，不表示全量微调。除编码器可训练范围外，其余结构、监督、运行模式及训练预算一致；聚合与 SDF 始终可训练。双编码器均适配的一行复用完整模型的同一权重和结果，避免重复选取实验。可训练参数量与精度共同描述适配代价。
 
 \subsection{计算开销与定性分析}
+\input{figures/qualitative_comparison}
 \input{tables/efficiency}
 表~\ref{tab:efficiency} 报告总参数、可训练参数、端到端推理时间与峰值显存。测量统一硬件、数值精度、输入尺寸、批量、提示数量、预热、同步方式及缓存状态。presence 基线计入语义与实例两条完整路径；ReCA-SAM3 推理仅执行学生路径，不计训练教师解码。完整 SDF 与单方向 SDF 保持其余测量条件一致。
 
 定性比较使用相同样本、类别色表与局部放大区域，关注相似类别混淆、密集小目标和大面积目标内部完整性，同时保留失败案例。
-\IfFileExists{figures/qualitative_comparison.pdf}{%
-\begin{figure}[!t]
-\centering
-\includegraphics[width=\columnwidth]{figures/qualitative_comparison.pdf}
-\caption{Qualitative comparisons on remote sensing images. Columns show the input, ground truth, SAM 3, the adapter baseline, and ReCA-SAM3. Insets highlight local structures.}
-\label{fig:qualitative_comparison}
-\end{figure}
-图~\ref{fig:qualitative_comparison} 给出相同样本上的分割预测。%
-}{}

@@ -203,7 +203,7 @@ def measurement(selection, native, row_id, field, missing):
 def table(caption,label,columns,rows,align,wide=False,note=''):
     env='table*' if wide else 'table'
     align=align.replace('p{','L{')
-    content=[f'\\begin{{{env}}}'+('[!t]' if wide else '[!tb]'),r'\centering',f'\\caption{{{caption}}}',f'\\label{{{label}}}',r'\footnotesize' if wide else r'\small',r'\setlength{\tabcolsep}{2pt}',f'\\begin{{tabularx}}{{\\linewidth}}{{{align}}}',r'\toprule',' & '.join(columns)+r'\\',r'\midrule']
+    content=[f'\\begin{{{env}}}'+('[!tbp]' if wide else '[!htbp]'),r'\centering',f'\\caption{{{caption}}}',f'\\label{{{label}}}',r'\footnotesize' if wide else r'\small',r'\setlength{\tabcolsep}{2pt}',f'\\begin{{tabularx}}{{\\linewidth}}{{{align}}}',r'\toprule',' & '.join(columns)+r'\\',r'\midrule']
     for row in rows:
         if isinstance(row,str):content.append(row)
         else:content.append(' & '.join(row)+r'\\')

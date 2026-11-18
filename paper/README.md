@@ -22,9 +22,9 @@ RemoteCLIP的每提示64模板图文相似度经投影，与稠密RemoteCLIP特�
 
 ## 图与实验边界
 
-[figures/](figures/)保留五个英文占位：动机、总体框架、双流聚合、SDF、定性比较。机制热图/特征结果图退出当前计划。正式绘图的输入、布局和替换方式见状态文档。
+[figures/README.md](figures/README.md)提供五张图的原生draw.io源文件、SVG与矢量PDF：动机、总体框架、双流聚合、SDF、定性比较。五图已嵌入论文，全部真实影像/GT/预测位置仍为可替换占位图片。机制热图/特征结果图不在计划内。
 
-本轮不改[sections/experiments.tex](sections/experiments.tex)、四张结果表、实验CSV/JSON、模型或训练配置；本方法及两个原始SAM3基线均无正式得分，继续显示--。训练与手选权重验证方式见[批量实验说明](../docs/experiment_suites.md)。实验跑完后再补摘要结果句、实证贡献、结果分析和结论。
+本轮实验正文只更新定性图的加载位置和占位图说明，四表只调整浮动位置选项，实验数值/CSV/JSON、模型与训练配置不变；本方法及两个原始SAM3基线均无正式得分，继续显示--。训练与手选权重验证方式见[批量实验说明](../docs/experiment_suites.md)。实验跑完后再补摘要结果句、实证贡献、结果分析和结论。
 
 ## 引用与检查
 
@@ -38,6 +38,6 @@ cd paper
 latexmk -xelatex -halt-on-error -file-line-error -outdir=build main.tex
 ```
 
-需要组表时另运行`python paper/scripts/build_experiment_tables.py --draft`；它会写入tables/，本次文字修订不重新生成表格。本次已完成IEEEtran中文PDF全量构建与页面检查：四表位于第7页，结论/参考文献位于第8页，无图表穿入文献；详细记录见manuscript_status。替换真实图与结果后仍须重新验收。
+需要组表时另运行`python paper/scripts/build_experiment_tables.py --draft`；它会写入tables/，本次文字修订不重新生成表格。本次已完成含五张矢量图的IEEEtran中文PDF全量构建与页面检查，共9页；原第6/7页的大段空白已消除，参考文献自然逐栏续排。当前第9页仅剩左栏参考文献，右栏留空为正常结束，不人为提前分栏。替换真实图与结果后仍须重新验收，详见manuscript_status。
 
 本轮删除旧iSAID空结果模板`notes/results.csv`及已被后续补核覆盖的`notes/literature_audit.md`，其必要事实移入当前状态文档；旧版本保留于Git历史。原始文献CSV、inventory、逐格审计JSON和仍有引用的补核文档保留。
