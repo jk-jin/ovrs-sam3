@@ -1,9 +1,9 @@
 {
   "date": "2026-11-18",
   "branch": "master",
-  "base_commit": "b953cc98e2f96012cc654a9c9f39f1884ac65f8f",
-  "historical_snapshot": "https://github.com/jk-jin/ovrs-sam3/blob/b953cc98e2f96012cc654a9c9f39f1884ac65f8f/paper/notes/source_snapshot.json",
-  "scope": "Paper narrative, figure slots, separate manual bibliography, and documentation consolidation. Experimental text, tables, data, export config, original bibliography, model code and training configs unchanged.",
+  "base_commit": "671c3d9e22534611c7e7dbbac1bc31d90b4663f8",
+  "historical_snapshot": "https://github.com/jk-jin/ovrs-sam3/blob/671c3d9e22534611c7e7dbbac1bc31d90b4663f8/paper/notes/source_snapshot.json",
+  "scope": "Paper layout and table renderer only: bounded table widths, aligned notes, final float boundary, top-aligned float pages, ragged final text and URL wrapping. Table data, bibliography entries, method/experimental narrative and model/config code unchanged.",
   "current_state": "paper/notes/manuscript_status.md",
   "deleted_obsolete_files": [
     "paper/notes/results.csv",
@@ -18,26 +18,31 @@
     "aggregated SAM3 feature state enters SDF and frozen decoder"
   ],
   "validation": {
-    "equations_unchanged": 24,
-    "figure_placeholders": 5,
-    "bib_keys": 20,
-    "table_tests_passed": 8,
-    "cross_references_resolved": true,
-    "method_explanations_english": true,
-    "protected_files_byte_identical": 13,
-    "markdown_links_resolved": true,
-    "full_pdf_validated": false
-  },
-  "limited_layout_check": {
-    "class": "article",
-    "column_width_pt": 249,
-    "xdv_pages": 6,
+    "latexmk_full_build": true,
+    "pdf_pages": 8,
+    "table_pages": [
+      7
+    ],
+    "bibliography_heading_pages": [
+      8
+    ],
+    "table_body_unchanged": 4,
+    "bibliography_files_unchanged": 2,
+    "method_and_experiments_text_unchanged": true,
+    "paper_table_tests_passed": 8,
     "overfull_warnings": 0,
     "undefined_references": 0,
-    "chinese_body_omitted": true,
-    "full_pdf_validated": false
+    "missing_glyph_warnings": 0,
+    "horizontal_rule_widths_pt": [
+      251.06,
+      490.0,
+      514.07
+    ],
+    "visual_review_pages": [
+      7,
+      8
+    ]
   },
-  "full_build": "Blocked by missing TeX format/class/CJK/font dependencies; no IEEEtran Chinese PDF visual validation.",
   "official_model_runs": false,
   "sha256": {
     "DESIGN.md": "411a43f4c0b9cf23f8eb2cd31cef372fcd1be511e620cb50c735ef9556d90219",
@@ -53,7 +58,7 @@
     "models/semantic_detail_fusion.py": "428c16cd803800bd34a81678e52b540dd68887c79363a1cd06926192f878aa76",
     "paper/.gitignore": "4df1cb7ea62d9a9063e5ef8be29113d723129dc686706e00ad306bae5359fdfb",
     "paper/AGENTS.md": "026550643daf511ec9a721f6855cd6fdb6cd19d8b2d6ebe0ebd54cab78437881",
-    "paper/README.md": "1c484c5f0ffd7aafdaec1e26829d70da3fd0fda940e62f357554ed3fdb11e987",
+    "paper/README.md": "6cbc10b8bdeca2f6a91aceb3ad3db431c576848b78d98d57ebf48140fe58b376",
     "paper/data/comparison_audit_20261117.json": "710e189b41c3b6385edcc89e60b41cf8f11daa9ccfc14aaf897407c14dae28f5",
     "paper/data/experiment_plan.csv": "7318707af04b37c6c4cd77070d7d460f698bcc0854b453241a9a42c5c7cf2e2a",
     "paper/data/literature_inventory.csv": "9a1bc3328ce66da15087e0b43a7ab1bc1d5a29c5e8691fbdb6954d964daf1469",
@@ -65,16 +70,16 @@
     "paper/figures/overview.tex": "f0169a9fd7b063fad53ef2a75a0749567cb0848098d5af704574f17929f29556",
     "paper/figures/qualitative_placeholder.tex": "98b4f69ec31d931c1466ef4733c40e366271da09e134a430f37e57b42222b292",
     "paper/figures/sdf.tex": "beb7d7ebd26c73c29d0da4a159cdfb738ba12cd0a48115fbf65d2171fc5756fc",
-    "paper/main.tex": "12e2b9b4561cb2db707b67304b46eee9fef69639fb11c0e0c797cf14b22e2304",
+    "paper/main.tex": "d79fac27aa3eaaf5b8b56e76c8ce26121d581519df8152238467617b5595cddd",
     "paper/notes/comparison_audit_20261117.md": "98546cdd40c429e100f9f61b057bd9b5d8278edbc2f9a2194de97990d4b78a33",
     "paper/notes/evaluation_protocol.md": "490038bd9723c59eb051d75857bde1a4aed680147d09c2d5cafdd44d7532cb6d",
     "paper/notes/literature_fill_audit.md": "a6fcc64d30eaf501d05aaf049177404568e1c4759f1eec418b3c20c37474ad19",
-    "paper/notes/manuscript_status.md": "862048b8620cec47f95459c33727874411b11e9dc85e7a3c7927901e877a0d80",
-    "paper/notes/review.md": "dbb0d9efad9219671b88cb2f2e43942a8d7d06e4171302d5190ca704607f619b",
+    "paper/notes/manuscript_status.md": "41a389625d2105a74b8a5add0aaec9686d9d879709e178559266134ac46587c8",
+    "paper/notes/review.md": "82c3a535d7c5fb796e71f938fe005ab1cce95a2cd7c9a1ca7120f8a1111deb5c",
     "paper/references.bib": "4dae7bb8bb9ac763567e4ee711339f3d1a210586ac33b9a9346892cd08224f34",
     "paper/references_extra.bib": "bfcfa1deff1c748b6bfe9ec2e7aede51551bb087dcf1f6d23331cfafafc4ed52",
-    "paper/scripts/README.md": "3556d14a0f7bdff4308ddef29ca9d92bac5bcf8e1b52d226486d8fb4c413623f",
-    "paper/scripts/build_experiment_tables.py": "a8b66e0f8792bb26844d9ef066321ef996770e58f92496774140a044b56df32e",
+    "paper/scripts/README.md": "d3bef56735168f565159a818db7eff9c01b5de9e694b244d03d7359ecacbdeba",
+    "paper/scripts/build_experiment_tables.py": "25377ec6760f4f11efb94d4bd0c4fcf36c581ee632bb16db222f90f3ee1cb807",
     "paper/scripts/test_build_experiment_tables.py": "234afe7f63af2f3e807267da6289212f52a98d7f28d2a94908449cdaedd51074",
     "paper/sections/abstract.tex": "cbf709af5aee796e91face5ade3e316d9cdeeb8b1ca09d89083c365588a05146",
     "paper/sections/conclusion.tex": "90feea31128502b0a0b1441a56540f56c8b514400a70a3783dfddda204f9b48b",
@@ -82,10 +87,10 @@
     "paper/sections/introduction.tex": "a234aeb4451729c46b13a396892cc9b949c2cad1731b62429d38d0cfbc9661d4",
     "paper/sections/method.tex": "76b1f73dbbbcfde1164323546a43952dd8299d9d4ddc32167953e57b4cd54fab",
     "paper/sections/related_work.tex": "d43c573e738d4f076fd12a59db11192ec200a61fca5c4272e8a3728b99a2e856",
-    "paper/tables/ablation_core.tex": "d89d675a89dffd8fa3a09dc228cd2bd6843f4db601c57ae275d587bd61b8b9a0",
-    "paper/tables/ablation_freeze.tex": "e4e6197620ea97a07cbc3195e1ab13ef4ac491ee5ea9ef6c0f6ab6b7411adad3",
+    "paper/tables/ablation_core.tex": "011c17b26191875a0183d3fc800b5c852ba628661fc5cfc5baace6bc4c1524f3",
+    "paper/tables/ablation_freeze.tex": "c3d117a54eec6392b7540f267cbe25822d3796bd7597aa71aebff5d3d93afadb",
     "paper/tables/build_report.json": "a03bc176ad4c437f63a1265dbc3e0c57a2c88f52ff3343ea92e88f42063869ba",
-    "paper/tables/efficiency.tex": "916955c39f48815cd32faeffca2fe193a578009fecb17e6fd73406a751f4eaa1",
-    "paper/tables/main_rskt8.tex": "4c0fdad63f44f9e2feb2f7352208a1433dada3a59d82e1956e87cc0390dcf916"
+    "paper/tables/efficiency.tex": "c51c62b4d625115d82619397fa29a6fee6d4e014c13e324b9f3ba50986a87c77",
+    "paper/tables/main_rskt8.tex": "855e6588485ce5cd34825503f98b501058cf865ea06c8105bbe3a86091704bb9"
   }
 }

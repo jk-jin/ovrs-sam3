@@ -38,6 +38,6 @@ cd paper
 latexmk -xelatex -halt-on-error -file-line-error -outdir=build main.tex
 ```
 
-需要组表时另运行`python paper/scripts/build_experiment_tables.py --draft`；它会写入tables/，本次文字修订不重新生成表格。完整编译与PDF视觉检查的实际状态见manuscript_status，不用静态检查代替PDF验收。
+需要组表时另运行`python paper/scripts/build_experiment_tables.py --draft`；它会写入tables/，本次文字修订不重新生成表格。本次已完成IEEEtran中文PDF全量构建与页面检查：四表位于第7页，结论/参考文献位于第8页，无图表穿入文献；详细记录见manuscript_status。替换真实图与结果后仍须重新验收。
 
 本轮删除旧iSAID空结果模板`notes/results.csv`及已被后续补核覆盖的`notes/literature_audit.md`，其必要事实移入当前状态文档；旧版本保留于Git历史。原始文献CSV、inventory、逐格审计JSON和仍有引用的补核文档保留。

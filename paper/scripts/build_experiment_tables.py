@@ -203,12 +203,12 @@ def measurement(selection, native, row_id, field, missing):
 def table(caption,label,columns,rows,align,wide=False,note=''):
     env='table*' if wide else 'table'
     align=align.replace('p{','L{')
-    content=[f'\\begin{{{env}}}'+('[!t]' if wide else '[!tb]'),r'\centering',f'\\caption{{{caption}}}',f'\\label{{{label}}}',r'\footnotesize' if wide else r'\small',r'\setlength{\tabcolsep}{2pt}',f'\\begin{{tabular}}{{{align}}}',r'\toprule',' & '.join(columns)+r'\\',r'\midrule']
+    content=[f'\\begin{{{env}}}'+('[!t]' if wide else '[!tb]'),r'\centering',f'\\caption{{{caption}}}',f'\\label{{{label}}}',r'\footnotesize' if wide else r'\small',r'\setlength{\tabcolsep}{2pt}',f'\\begin{{tabularx}}{{\\linewidth}}{{{align}}}',r'\toprule',' & '.join(columns)+r'\\',r'\midrule']
     for row in rows:
         if isinstance(row,str):content.append(row)
         else:content.append(' & '.join(row)+r'\\')
-    content += [r'\bottomrule',r'\end{tabular}']
-    if note:content += [r'\par\vspace{3pt}',r'\begin{minipage}{'+(r'\textwidth' if wide else r'\columnwidth')+'}',r'\footnotesize '+note,r'\end{minipage}']
+    content += [r'\bottomrule',r'\end{tabularx}']
+    if note:content += [r'\par\vspace{3pt}',r'\begin{minipage}{\linewidth}',r'\footnotesize '+note,r'\end{minipage}']
     content.append(f'\\end{{{env}}}')
     return '\n'.join(content)+'\n'
 
@@ -267,7 +267,7 @@ def build(args):
     outputs['main_rskt8.tex'] = table(
         r'Semantic segmentation results on eight remote sensing datasets (mIoU, \%).',
         'tab:main_rskt8', ['Method', r'\shortstack{Adaptation\\data}'] + headers,
-        body, r'L{0.25\textwidth}L{0.07\textwidth}' + 'c'*8, True,
+        body, r'@{}L{0.25\linewidth}L{0.09\linewidth}*{8}{C}@{}', True,
         r'N: local evaluation. S: SegEarth-OV3 v2, Table 1; E: SegEarth-OV (CVPR 2025), Table 1; '
         r'P: ProC-SAM3 v2, Table I; R: RSKT-Seg, Table 1 (iSAID/ViT-L); I: Pi-Seg v3, Table 1 (iSAID/ViT-L). '
         r'Method citations identify the methods; numerical sources are SegEarth-OV~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025}, '
@@ -300,11 +300,11 @@ def build(args):
                 body.append([latex(p['text_encoder']), latex(p['image_encoder'])] + values + [parameters])
         if key == 'ablation_rows':
             columns = ['Variant'] + spec['ablation_datasets']
-            align = r'L{0.40\columnwidth}ccc'
+            align = r'@{}L{0.48\linewidth}*{3}{C}@{}'
             note = 'All variants use DLRSD adaptation and the same model-selection and inference rules. LoveDA is the development domain. -- denotes unavailable results.'
         else:
             columns = [r'\shortstack{Text\\encoder}',r'\shortstack{Image\\encoder}'] + spec['ablation_datasets'] + [r'\shortstack{Trainable\\(M)}']
-            align = r'L{0.16\columnwidth}L{0.16\columnwidth}cccc'
+            align = r'@{}L{0.17\linewidth}L{0.17\linewidth}*{4}{C}@{}'
             note = ('Attention tuning updates the same attention-related parameter subset as Full; it is not full-encoder fine-tuning. '
                     'Aggregation and SDF remain trainable. The jointly tuned row reuses the Full checkpoint and scores. '
                     'LoveDA is the development domain. -- denotes unavailable results.')
@@ -320,8 +320,8 @@ def build(args):
     outputs['efficiency.tex'] = table(
         'Computational cost under a common evaluation setup.', 'tab:efficiency',
         ['Method',r'\shortstack{Total\\(M)}',r'\shortstack{Trainable\\(M)}',
-         r'\shortstack{Latency\\(ms)}',r'\shortstack{Peak memory\\(GB)}'],body,
-        r'L{0.29\columnwidth}cccc',False,
+         r'\shortstack{Latency\\(ms)}',r'\shortstack{Peak\\memory\\(GB)}'],body,
+        r'@{}L{0.36\linewidth}*{4}{C}@{}',False,
         'Measurements share hardware, precision, input size, batch size, prompt count, warm-up, synchronization, and cache policy. '
         'Semantic × Presence includes both complete semantic and instance paths; ReCA-SAM3 uses student decoding only. '
         'Parameter counts are in millions. -- denotes unavailable measurements.')

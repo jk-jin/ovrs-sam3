@@ -23,3 +23,8 @@
 draft仅容许计划缺失生成--，不容许非法数值或身份冲突。不带--draft要求全部必需原生/消融/冻结/开销数据齐备且protocol_locked=true；参考行缺项不阻止，因原论文没有报告而留--。
 
 测试：`PYTHONDONTWRITEBYTECODE=1 python paper/scripts/test_build_experiment_tables.py`。合成记录仅在内存/临时目录；不进入论文结果目录。根工具的原生schema不放宽。export_config.json同步四个本地主表方法身份，供实际结果产生后使用。
+
+
+## 表格版式
+
+四表统一生成`tabularx{\linewidth}`并采用可伸缩数值列；表注也使用`\linewidth`，保证跨栏/单栏的左右边界一致。main.tex提供tabularx包和居中的C列，主表跨栏、其他表单栏；长表头显式分行。不要手工缩放已生成表格或恢复自然宽度tabular。文末由main中的一次浮动边界保证所有图表先于结论/参考文献排出，不能为每个小节增加强制分页。

@@ -5,9 +5,9 @@
 \label{tab:efficiency}
 \small
 \setlength{\tabcolsep}{2pt}
-\begin{tabular}{L{0.29\columnwidth}cccc}
+\begin{tabularx}{\linewidth}{@{}L{0.36\linewidth}*{4}{C}@{}}
 \toprule
-Method & \shortstack{Total\\(M)} & \shortstack{Trainable\\(M)} & \shortstack{Latency\\(ms)} & \shortstack{Peak memory\\(GB)}\\
+Method & \shortstack{Total\\(M)} & \shortstack{Trainable\\(M)} & \shortstack{Latency\\(ms)} & \shortstack{Peak\\memory\\(GB)}\\
 \midrule
 SAM 3 Semantic-only & -- & -- & -- & --\\
 SAM 3 Semantic $\times$ Presence & -- & -- & -- & --\\
@@ -15,9 +15,9 @@ SAM 3 adapter & -- & -- & -- & --\\
 ReCA-SAM3 & -- & -- & -- & --\\
 Single-orientation SDF & -- & -- & -- & --\\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \par\vspace{3pt}
-\begin{minipage}{\columnwidth}
+\begin{minipage}{\linewidth}
 \footnotesize Measurements share hardware, precision, input size, batch size, prompt count, warm-up, synchronization, and cache policy. Semantic × Presence includes both complete semantic and instance paths; ReCA-SAM3 uses student decoding only. Parameter counts are in millions. -- denotes unavailable measurements.
 \end{minipage}
 \end{table}

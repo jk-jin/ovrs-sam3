@@ -5,12 +5,22 @@
 \setCJKmainfont{Noto Serif CJK SC}
 \setCJKsansfont{Noto Sans CJK SC}
 \setCJKmonofont{Noto Sans Mono CJK SC}
-\usepackage{amsmath,amssymb,booktabs,array,graphicx}
-\usepackage[hidelinks,unicode]{hyperref}
+\usepackage{amsmath,amssymb,booktabs,array,graphicx,tabularx}
+\usepackage{placeins,xurl}
+\usepackage[hidelinks,unicode,breaklinks=true]{hyperref}
+\urlstyle{same}
 \renewcommand{\abstractname}{摘要}
 \renewcommand{\IEEEkeywordsname}{关键词}
 \renewcommand{\refname}{参考文献}
 \newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{C}{>{\centering\arraybackslash}X}
+% Align and group floats at the top of float-only pages.
+\makeatletter
+\setlength{\@fptop}{0pt}
+\setlength{\@fpsep}{12pt}
+\setlength{\@dblfptop}{0pt}
+\setlength{\@dblfpsep}{12pt}
+\makeatother
 \title{ReCA-SAM3: RemoteCLIP-Guided Cross-Class Feature Aggregation for Open-Vocabulary Remote Sensing Semantic Segmentation}
 \author{}
 \begin{document}
@@ -24,6 +34,10 @@
 \input{sections/method}
 \input{sections/experiments}
 \input{figures/qualitative_placeholder}
+% Flush the final figure/table queue before the conclusion and bibliography.
+% Keep the short final section and reference list from stretching vertically.
+\FloatBarrier
+\raggedbottom
 \input{sections/conclusion}
 \bibliographystyle{IEEEtran}
 \bibliography{references,references_extra}

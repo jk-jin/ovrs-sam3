@@ -5,7 +5,7 @@
 \label{tab:ablation_core}
 \small
 \setlength{\tabcolsep}{2pt}
-\begin{tabular}{L{0.40\columnwidth}ccc}
+\begin{tabularx}{\linewidth}{@{}L{0.48\linewidth}*{3}{C}@{}}
 \toprule
 Variant & LoveDA & Potsdam & UAVid\\
 \midrule
@@ -19,9 +19,9 @@ Simple fusion & -- & -- & --\\
 Single-orientation SDF & -- & -- & --\\
 w/o distillation & -- & -- & --\\
 \bottomrule
-\end{tabular}
+\end{tabularx}
 \par\vspace{3pt}
-\begin{minipage}{\columnwidth}
+\begin{minipage}{\linewidth}
 \footnotesize All variants use DLRSD adaptation and the same model-selection and inference rules. LoveDA is the development domain. -- denotes unavailable results.
 \end{minipage}
 \end{table}
