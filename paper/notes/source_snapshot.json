@@ -1,144 +1,63 @@
 {
-  "date": "2026-11-18",
+  "date": "2026-11-19",
   "branch": "master",
-  "base_commit": "bffc3b12cd36e89ed3e44f08bc1fb8540e3eccab",
-  "historical_snapshot": "https://github.com/jk-jin/ovrs-sam3/blob/bffc3b12cd36e89ed3e44f08bc1fb8540e3eccab/paper/notes/source_snapshot.json",
-  "scope": "Five native editable draw.io figures and SVG/PDF exports; image/mask placeholders; paper figure integration and natural float/reference flow. No experimental score, formula, bibliography entry or model/config changes.",
-  "deleted_obsolete_files": [
-    "paper/figures/qualitative_placeholder.tex"
-  ],
+  "base_commit": "e1eea7a9d99ef3c2f82e4f2a9d46452a12c7ece5",
+  "historical_snapshot": "https://github.com/jk-jin/ovrs-sam3/blob/e1eea7a9d99ef3c2f82e4f2a9d46452a12c7ece5/paper/notes/source_snapshot.json",
+  "scope": "Five-figure palette update: pale vertical-gradient regions and distinct solid module fills, synchronized native draw.io/SVG/PDF. Geometry, labels, connectors, image placeholders, LaTeX sources, experimental data, equations, bibliography, and model/config code unchanged.",
+  "deleted_obsolete_files": [],
   "current_state": "paper/notes/manuscript_status.md",
   "figure_editing": "paper/figures/README.md",
   "validation": {
     "figures": [
       {
         "name": "aggregation",
-        "native_cells": 53,
-        "placeholders": 0,
-        "pdf_one_page": true,
-        "aspect_ratio_verified": true
+        "gradient_regions": 3,
+        "geometry_labels_links_images_unchanged": true,
+        "pdf_bounds_and_text_unchanged": true,
+        "native_svg_colors_match": true,
+        "minimum_text_contrast": 7.49
       },
       {
         "name": "motivation",
-        "native_cells": 63,
-        "placeholders": 2,
-        "pdf_one_page": true,
-        "aspect_ratio_verified": true
+        "gradient_regions": 3,
+        "geometry_labels_links_images_unchanged": true,
+        "pdf_bounds_and_text_unchanged": true,
+        "native_svg_colors_match": true,
+        "minimum_text_contrast": 7.49
       },
       {
         "name": "overview",
-        "native_cells": 106,
-        "placeholders": 2,
-        "pdf_one_page": true,
-        "aspect_ratio_verified": true
+        "gradient_regions": 5,
+        "geometry_labels_links_images_unchanged": true,
+        "pdf_bounds_and_text_unchanged": true,
+        "native_svg_colors_match": true,
+        "minimum_text_contrast": 7.49
       },
       {
         "name": "qualitative_comparison",
-        "native_cells": 51,
-        "placeholders": 15,
-        "pdf_one_page": true,
-        "aspect_ratio_verified": true
+        "gradient_regions": 1,
+        "geometry_labels_links_images_unchanged": true,
+        "pdf_bounds_and_text_unchanged": true,
+        "native_svg_colors_match": true,
+        "minimum_text_contrast": 7.49
       },
       {
         "name": "sdf",
-        "native_cells": 78,
-        "placeholders": 0,
-        "pdf_one_page": true,
-        "aspect_ratio_verified": true
+        "gradient_regions": 3,
+        "geometry_labels_links_images_unchanged": true,
+        "pdf_bounds_and_text_unchanged": true,
+        "native_svg_colors_match": true,
+        "minimum_text_contrast": 7.94
       }
     ],
+    "gradient_regions": 15,
     "pdf_pages": 9,
-    "reference_column_flow": [
-      [
-        8,
-        "right",
-        1,
-        632.9
-      ],
-      [
-        8,
-        "right",
-        2,
-        677.7
-      ],
-      [
-        8,
-        "right",
-        3,
-        713.6
-      ],
-      [
-        9,
-        "left",
-        4,
-        66.3
-      ],
-      [
-        9,
-        "left",
-        5,
-        102.1
-      ],
-      [
-        9,
-        "left",
-        6,
-        138.0
-      ],
-      [
-        9,
-        "left",
-        7,
-        200.8
-      ],
-      [
-        9,
-        "left",
-        8,
-        227.7
-      ],
-      [
-        9,
-        "left",
-        9,
-        263.5
-      ],
-      [
-        9,
-        "left",
-        10,
-        290.4
-      ],
-      [
-        9,
-        "left",
-        11,
-        335.2
-      ],
-      [
-        9,
-        "left",
-        12,
-        362.1
-      ],
-      [
-        9,
-        "left",
-        13,
-        389.0
-      ]
-    ],
-    "equations_unchanged": 24,
-    "table_data_unchanged": 4,
-    "bibliography_files_unchanged": 2,
-    "experiment_narrative_unchanged": true,
-    "paper_table_tests": 8,
     "overfull_warnings": 0,
     "missing_glyphs": 0,
-    "reference_flow_sequential": true,
-    "no_model_runs": true
+    "undefined_references": 0,
+    "scope": "Only figure fill colors and their documentation/snapshot; LaTeX sources, figure dimensions, image placeholders, scores, equations, and model code unchanged."
   },
-  "visual_review": "All five standalone figures and all nine compiled pages rendered; detail review of pages 3–9.",
+  "visual_review": "Rendered and inspected all five standalone figures, the nine-page paper contact sheet, and the full-size aggregation figure page.",
   "official_model_runs": false,
   "sha256": {
     "DESIGN.md": "411a43f4c0b9cf23f8eb2cd31cef372fcd1be511e620cb50c735ef9556d90219",
@@ -161,35 +80,35 @@
     "paper/data/literature_results.csv": "5d559c2a5045cc4e11b66764ed6d7696313a01bded65ba17ecccc53cc414e509",
     "paper/data/table_spec.json": "ef911e33a4accfafa243c4b3ea79e654c9d107244fb9f716c83084d675e165b0",
     "paper/export_config.json": "52a7f8babc7aaf642b160a869b73dc585409345dcc68f714bbc1f10c8e2bf488",
-    "paper/figures/README.md": "a14e31aae1f8107d65cd5886fe868d779f0a6de5ccf2ba7d72bd492d7b22b869",
-    "paper/figures/aggregation.pdf": "398d412a44b45b59d7389af70b983ad344cd3a7ebee047627f53a6726479e406",
-    "paper/figures/aggregation.svg": "38a85143ad7a0a9a9dc08244d8e55094223280027684c1d35f93871001083846",
+    "paper/figures/README.md": "7af73de089832966e1c64008a512305d34943aee4e5ef71ea3f6cfbe803cd049",
+    "paper/figures/aggregation.pdf": "da3cae69e46ee57c49e01441f5882cb78fc1f01d18cabff250823ac1fbbd4faa",
+    "paper/figures/aggregation.svg": "654bd000d07ac1f2fbbee01061ccf313c6cfd8ba00a66178993f4625e67be2ef",
     "paper/figures/aggregation.tex": "e3e10dbca427c2e1f9bc700ca3d80958007e88e49c95906f64debc5956276fc0",
-    "paper/figures/figure_manifest.json": "4f16a7f66a898cc838be7d531138f72b60913816107b7a9b7767d28162d1d088",
+    "paper/figures/figure_manifest.json": "2831b6389404bf811011c17455ff946811c0110bffce3c55893ac08fea1ecbac",
     "paper/figures/image_placeholder.svg": "1997fca9731d5c52aa286dd3cf7e7705e8c244691f7d274a3d2bc6bd89c5ea01",
-    "paper/figures/motivation.pdf": "ec46f1f22b7cb630a497246d7d08afed5fa963b1e58a530e440f2df2b788fa3e",
-    "paper/figures/motivation.svg": "5adeb08b32cfb64d9a07e50c962e1dc621686ab90d1bdb328128a41ed5a9141e",
+    "paper/figures/motivation.pdf": "5a0f2ae70c0f1bb7ec2861888e6fdb66d5f13eb4b8170fdac2017dca16a86738",
+    "paper/figures/motivation.svg": "fde894ea0acb7b58818742bf1ed84dc4583e34d9ef216c5366ad503b36f1b95a",
     "paper/figures/motivation.tex": "6fe7391d5c25cf99ad38750ca4d6b810196c514c822fe8f4ee25d78fdac01296",
-    "paper/figures/overview.pdf": "efcc6a90d09cd115aba3724263b1d248e8ba713c467b1e4f1fc36cddfc9f216d",
-    "paper/figures/overview.svg": "60044d843b8ba1b6d21ba8a00c691d5a90f28e66c35401fb224ac5068718d7f8",
+    "paper/figures/overview.pdf": "b9d48906fdffb500e61293602cd0ad966f309d1a6c34fd2c8d4c83ee3a7ba309",
+    "paper/figures/overview.svg": "792e9ddaf25b5e61010bf9249cafd1dd89d9593a6197b7c6724a73e33c6f0403",
     "paper/figures/overview.tex": "4e9f250fe9dd776d889ac96c836a55ea1efec0b96f0a5c64e0b7e6e8e4d87e87",
-    "paper/figures/qualitative_comparison.pdf": "4dfa334d9d94082a429cefd8d49fd1a5e15cdeb97dc66cf46912e53cd456e4f9",
-    "paper/figures/qualitative_comparison.svg": "e29fcb57326b6c499882a3a42d26702faec12ac5ea57245edfa31a4b8f1ff2be",
+    "paper/figures/qualitative_comparison.pdf": "658cae58264da7d2f63bc8feade35e875c16cd28eeaca68a44b18abbd33758ee",
+    "paper/figures/qualitative_comparison.svg": "a1560d9391aa7a9a765d54eef0f429edf53e280a2cb3964666118d3a52eba095",
     "paper/figures/qualitative_comparison.tex": "65686976326723bef4db06ed3922724ad1e83e9aac50c03479ff05723cdf32e3",
-    "paper/figures/sdf.pdf": "32d4cfb6f02437c890aa899544fc6bb6b4bcf6d066ee18ca361b39a3c05da8da",
-    "paper/figures/sdf.svg": "bee1a740932e84356b7a3c307b49e31b9db0048cb2a66aef0c9ee31232df06b8",
+    "paper/figures/sdf.pdf": "e3528f446fa8403587d01e017fc0692fe2104da66907596bb2a989543f66d24c",
+    "paper/figures/sdf.svg": "ac0ce6d48b4d406d9efae0e612c463b6799bda12f5cbb27432205c349aa5bec8",
     "paper/figures/sdf.tex": "157a51b26d9bfdc7c5d9d11bfd7cda157e5d255cd66a41aaf885988bd4946fdf",
-    "paper/figures/src/aggregation.drawio": "3c92e3f3bbb5ec52f0cde84e6b6091e3b51113b24e327524f0af1fb12b7756c0",
-    "paper/figures/src/motivation.drawio": "35639de22e6f8601806d5f70a13601ff0e1aa8d691b83f7fa87c7a928b3e3874",
-    "paper/figures/src/overview.drawio": "981e9e3886c83a391fcde4ffe026e5c8041501df66dfa03eaa22e65b873fb077",
-    "paper/figures/src/qualitative_comparison.drawio": "e5d3c33517f5ca795e05de5278f9c7da21357ba0f131225c8638ab6e39488823",
-    "paper/figures/src/sdf.drawio": "ca8baa778aad2ce88b73e59853c9d46e1ea984b2b040ddffc132729901d858fa",
+    "paper/figures/src/aggregation.drawio": "f05aabba2930e37456489ff51648831393b94df616966b8606a45d7286026f60",
+    "paper/figures/src/motivation.drawio": "9e1826150af888bab41102b04365e634567193c8700e185d5222d2d490e0c73d",
+    "paper/figures/src/overview.drawio": "13a0adad1a6b846b596754ed121b9c07e0a7316d148e73490f5d148556ea7e44",
+    "paper/figures/src/qualitative_comparison.drawio": "0233b54e96a3676cca426fd285ce74d2fd8794384354914d0dd7af497985f24b",
+    "paper/figures/src/sdf.drawio": "67861804fd3038730211dd4d1578a8363a8f2d351da43b28266f403a3b62657b",
     "paper/main.tex": "2ee32290a5d3d568de1acb5a3bc048ce3f13db096c29b5e772280f65b0889838",
     "paper/notes/comparison_audit_20261117.md": "98546cdd40c429e100f9f61b057bd9b5d8278edbc2f9a2194de97990d4b78a33",
     "paper/notes/evaluation_protocol.md": "490038bd9723c59eb051d75857bde1a4aed680147d09c2d5cafdd44d7532cb6d",
     "paper/notes/literature_fill_audit.md": "a6fcc64d30eaf501d05aaf049177404568e1c4759f1eec418b3c20c37474ad19",
-    "paper/notes/manuscript_status.md": "b967614e1dfdbd6a74c5324ccf983b34656455c15271b190820d0c43848f7e59",
-    "paper/notes/review.md": "0600216720cb8ff198c86ecebe2b4e2e104f659bb4016f14a4df3b751f4f4a04",
+    "paper/notes/manuscript_status.md": "437330e1bdc84fabb20170b675df8ae8b56765fa642c920837edfe765a3372ed",
+    "paper/notes/review.md": "724e8cd72bb9fae26ec5655415ff6becca28f0adfa7c9104d75253a140b56e72",
     "paper/references.bib": "4dae7bb8bb9ac763567e4ee711339f3d1a210586ac33b9a9346892cd08224f34",
     "paper/references_extra.bib": "bfcfa1deff1c748b6bfe9ec2e7aede51551bb087dcf1f6d23331cfafafc4ed52",
     "paper/scripts/README.md": "530e425e97450dd7e0481696e6925ceca5e174d9fdd3c95b5df6d5f95b804443",

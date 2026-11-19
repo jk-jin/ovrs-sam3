@@ -4,7 +4,7 @@
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="sdf_n1" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FFFFFF;strokeColor=#9AA1AC;strokeWidth=1.5;dashed=1;" parent="1" vertex="1">
+        <mxCell id="sdf_n1" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FFFFFF;strokeColor=#9AA1AC;strokeWidth=1.5;dashed=1;gradientColor=#F0F4F8;gradientDirection=south;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="8" y="8" width="1284" height="423" />
         </mxCell>
         <mxCell id="sdf_txt2" value="Semantic–Detail Fusion · 72 × 72 decoder interface" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=26;fontColor=#263443;fontStyle=1;" parent="sdf_n1" vertex="1">
@@ -13,22 +13,22 @@
         <mxCell id="sdf_stack3" value="" style="group;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="27" y="140" width="119" height="102" />
         </mxCell>
-        <mxCell id="sdf_n4" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#8D9AAE;strokeWidth=1.5;dashed=0;" parent="sdf_stack3" vertex="1">
+        <mxCell id="sdf_n4" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#8D9AAE;strokeWidth=1.5;dashed=0;" parent="sdf_stack3" vertex="1">
           <mxGeometry as="geometry" x="15.0" y="0.0" width="104" height="87" />
         </mxCell>
-        <mxCell id="sdf_n5" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#8D9AAE;strokeWidth=1.5;dashed=0;" parent="sdf_stack3" vertex="1">
+        <mxCell id="sdf_n5" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#8D9AAE;strokeWidth=1.5;dashed=0;" parent="sdf_stack3" vertex="1">
           <mxGeometry as="geometry" x="10.0" y="5.0" width="104" height="87" />
         </mxCell>
-        <mxCell id="sdf_n6" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#8D9AAE;strokeWidth=1.5;dashed=0;" parent="sdf_stack3" vertex="1">
+        <mxCell id="sdf_n6" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#8D9AAE;strokeWidth=1.5;dashed=0;" parent="sdf_stack3" vertex="1">
           <mxGeometry as="geometry" x="5.0" y="10.0" width="104" height="87" />
         </mxCell>
-        <mxCell id="sdf_n7" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="sdf_stack3" vertex="1">
+        <mxCell id="sdf_n7" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="sdf_stack3" vertex="1">
           <mxGeometry as="geometry" x="0.0" y="15.0" width="104" height="87" />
         </mxCell>
         <mxCell id="sdf_txt8" value="Aggregated&#10;feature&#10;36 × 36" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="sdf_n7" vertex="1">
           <mxGeometry as="geometry" x="3" y="2" width="98" height="83" />
         </mxCell>
-        <mxCell id="sdf_n9" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FAD5B3;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="sdf_n9" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F1C49F;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="154" y="165" width="102" height="65" />
         </mxCell>
         <mxCell id="sdf_txt10" value="Upsample&#10;72 × 72" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=22;fontColor=#263443;fontStyle=0;" parent="sdf_n9" vertex="1">
@@ -37,31 +37,31 @@
         <mxCell id="sdf_edge11" parent="1" edge="1" source="sdf_n7" target="sdf_n9" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1" />
         </mxCell>
-        <mxCell id="sdf_n12" value="" style="rounded=1;arcSize=10;html=0;fillColor=#E8DFF4;strokeColor=#9AA1AC;strokeWidth=1.5;dashed=1;" parent="1" vertex="1">
+        <mxCell id="sdf_n12" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FCFAFF;strokeColor=#9AA1AC;strokeWidth=1.5;dashed=1;gradientColor=#EDE5F8;gradientDirection=south;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="279" y="61" width="717" height="166" />
         </mxCell>
         <mxCell id="sdf_txt13" value="Semantic branch" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=23;fontColor=#263443;fontStyle=1;" parent="sdf_n12" vertex="1">
           <mxGeometry as="geometry" x="10" y="4" width="697" height="32" />
         </mxCell>
-        <mxCell id="sdf_n14" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="sdf_n14" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="295" y="114" width="104" height="37" />
         </mxCell>
         <mxCell id="sdf_txt15" value="Agg. feature" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=18;fontColor=#263443;fontStyle=0;" parent="sdf_n14" vertex="1">
           <mxGeometry as="geometry" x="3" y="2" width="98" height="33" />
         </mxCell>
-        <mxCell id="sdf_n16" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="sdf_n16" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="295" y="167" width="147" height="37" />
         </mxCell>
         <mxCell id="sdf_txt17" value="Original conditional" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=16;fontColor=#263443;fontStyle=0;" parent="sdf_n16" vertex="1">
           <mxGeometry as="geometry" x="3" y="2" width="141" height="33" />
         </mxCell>
-        <mxCell id="sdf_n18" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FAD5B3;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="sdf_n18" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F1C49F;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="456" y="114" width="65" height="37" />
         </mxCell>
         <mxCell id="sdf_txt19" value="Proj." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="sdf_n18" vertex="1">
           <mxGeometry as="geometry" x="3" y="2" width="59" height="33" />
         </mxCell>
-        <mxCell id="sdf_n20" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FAD5B3;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="sdf_n20" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F1C49F;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="456" y="167" width="65" height="37" />
         </mxCell>
         <mxCell id="sdf_txt21" value="Proj." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="sdf_n20" vertex="1">
@@ -103,7 +103,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="sdf_n29" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F3F4F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="sdf_n29" value="" style="rounded=1;arcSize=10;html=0;fillColor=#E3E8EF;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="592" y="119" width="243" height="75" />
         </mxCell>
         <mxCell id="sdf_txt30" value="0° 90° 180° 270°&#10;Shared Conv → Inverse align&#10;Mean over orientations" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=19;fontColor=#263443;fontStyle=0;" parent="sdf_n29" vertex="1">
@@ -129,7 +129,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="sdf_n36" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FAD5B3;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="sdf_n36" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F1C49F;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="908" y="131" width="73" height="50" />
         </mxCell>
         <mxCell id="sdf_txt37" value="Branch&#10;proj." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="sdf_n36" vertex="1">
@@ -138,31 +138,31 @@
         <mxCell id="sdf_edge38" parent="1" edge="1" source="sdf_n32" target="sdf_n36" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1" />
         </mxCell>
-        <mxCell id="sdf_n39" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DFEDCC;strokeColor=#9AA1AC;strokeWidth=1.5;dashed=1;" parent="1" vertex="1">
+        <mxCell id="sdf_n39" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FAFCF5;strokeColor=#9AA1AC;strokeWidth=1.5;dashed=1;gradientColor=#E9F1DC;gradientDirection=south;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="279" y="242" width="717" height="166" />
         </mxCell>
         <mxCell id="sdf_txt40" value="Detail branch" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=23;fontColor=#263443;fontStyle=1;" parent="sdf_n39" vertex="1">
           <mxGeometry as="geometry" x="10" y="4" width="697" height="32" />
         </mxCell>
-        <mxCell id="sdf_n41" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="sdf_n41" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="295" y="295" width="104" height="37" />
         </mxCell>
         <mxCell id="sdf_txt42" value="Agg. feature" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=18;fontColor=#263443;fontStyle=0;" parent="sdf_n41" vertex="1">
           <mxGeometry as="geometry" x="3" y="2" width="98" height="33" />
         </mxCell>
-        <mxCell id="sdf_n43" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="sdf_n43" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="295" y="348" width="147" height="37" />
         </mxCell>
         <mxCell id="sdf_txt44" value="Image-level FPN72" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=17;fontColor=#263443;fontStyle=0;" parent="sdf_n43" vertex="1">
           <mxGeometry as="geometry" x="3" y="2" width="141" height="33" />
         </mxCell>
-        <mxCell id="sdf_n45" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FAD5B3;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="sdf_n45" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F1C49F;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="456" y="295" width="65" height="37" />
         </mxCell>
         <mxCell id="sdf_txt46" value="Proj." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="sdf_n45" vertex="1">
           <mxGeometry as="geometry" x="3" y="2" width="59" height="33" />
         </mxCell>
-        <mxCell id="sdf_n47" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FAD5B3;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="sdf_n47" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F1C49F;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="456" y="348" width="65" height="37" />
         </mxCell>
         <mxCell id="sdf_txt48" value="Proj." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="sdf_n47" vertex="1">
@@ -204,7 +204,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="sdf_n56" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F3F4F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="sdf_n56" value="" style="rounded=1;arcSize=10;html=0;fillColor=#E3E8EF;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="592" y="300" width="243" height="75" />
         </mxCell>
         <mxCell id="sdf_txt57" value="0° 90° 180° 270°&#10;Shared Conv → Inverse align&#10;Mean over orientations" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=19;fontColor=#263443;fontStyle=0;" parent="sdf_n56" vertex="1">
@@ -230,7 +230,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="sdf_n63" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FAD5B3;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="sdf_n63" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F1C49F;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="908" y="312" width="73" height="50" />
         </mxCell>
         <mxCell id="sdf_txt64" value="Branch&#10;proj." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="sdf_n63" vertex="1">
@@ -245,13 +245,13 @@
         <mxCell id="sdf_txt67" value="+" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=23;fontColor=#263443;fontStyle=0;" parent="sdf_n66" vertex="1">
           <mxGeometry as="geometry" x="3" y="2" width="22" height="24" />
         </mxCell>
-        <mxCell id="sdf_n68" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FAD5B3;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="sdf_n68" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F1C49F;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="1080" y="184" width="106" height="72" />
         </mxCell>
         <mxCell id="sdf_txt69" value="Output&#10;projection" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=22;fontColor=#263443;fontStyle=0;" parent="sdf_n68" vertex="1">
           <mxGeometry as="geometry" x="3" y="2" width="100" height="68" />
         </mxCell>
-        <mxCell id="sdf_n70" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="sdf_n70" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="1210" y="184" width="73" height="72" />
         </mxCell>
         <mxCell id="sdf_txt71" value="Decoder&#10;input" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=18;fontColor=#263443;fontStyle=0;" parent="sdf_n70" vertex="1">

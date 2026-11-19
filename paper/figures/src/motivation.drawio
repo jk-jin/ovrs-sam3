@@ -4,19 +4,19 @@
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="motivation_n1" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DFF3F1;strokeColor=#9AA1AC;strokeWidth=1.5;dashed=1;" parent="1" vertex="1">
+        <mxCell id="motivation_n1" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F4FCFA;strokeColor=#9AA1AC;strokeWidth=1.5;dashed=1;gradientColor=#E0F1EB;gradientDirection=south;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="6" y="6" width="408" height="278" />
         </mxCell>
         <mxCell id="motivation_txt2" value="(a) Matching-space reasoning" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=23;fontColor=#263443;fontStyle=1;" parent="motivation_n1" vertex="1">
           <mxGeometry as="geometry" x="10" y="4" width="388" height="32" />
         </mxCell>
-        <mxCell id="motivation_n3" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#9AA1AC;strokeWidth=1.5;dashed=1;" parent="1" vertex="1">
+        <mxCell id="motivation_n3" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F8FBFF;strokeColor=#9AA1AC;strokeWidth=1.5;dashed=1;gradientColor=#E5EDF8;gradientDirection=south;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="426" y="6" width="408" height="278" />
         </mxCell>
         <mxCell id="motivation_txt4" value="(b) Per-class SAM 3 inference" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=23;fontColor=#263443;fontStyle=1;" parent="motivation_n3" vertex="1">
           <mxGeometry as="geometry" x="10" y="4" width="388" height="32" />
         </mxCell>
-        <mxCell id="motivation_n5" value="" style="rounded=1;arcSize=10;html=0;fillColor=#E8DFF4;strokeColor=#9AA1AC;strokeWidth=1.5;dashed=1;" parent="1" vertex="1">
+        <mxCell id="motivation_n5" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FCFAFF;strokeColor=#9AA1AC;strokeWidth=1.5;dashed=1;gradientColor=#EDE5F8;gradientDirection=south;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="846" y="6" width="408" height="278" />
         </mxCell>
         <mxCell id="motivation_txt6" value="(c) Guided feature interaction" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=23;fontColor=#263443;fontStyle=1;" parent="motivation_n5" vertex="1">
@@ -25,19 +25,19 @@
         <mxCell id="motivation_image7" value="" style="shape=image;imageAspect=0;aspect=fixed;image=data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22180%22%20height%3D%22110%22%20viewBox%3D%220%200%20180%20110%22%3E%3Crect%20width%3D%22180%22%20height%3D%22110%22%20fill%3D%22%23E7E9EC%22%2F%3E%3Cpath%20d%3D%22M0%2025L180%2095M10%20110L105%200M60%20110L155%200M0%2072L93%200%22%20stroke%3D%22white%22%20stroke-width%3D%223%22%2F%3E%3Cpath%20d%3D%22M0%2020L180%2090M5%20110L100%200%22%20stroke%3D%22%23C7CCD2%22%20stroke-width%3D%221%22%2F%3E%3Crect%20x%3D%2211%22%20y%3D%2241%22%20width%3D%22158%22%20height%3D%2229%22%20rx%3D%224%22%20fill%3D%22white%22%20opacity%3D%22.92%22%2F%3E%3Ctext%20x%3D%2290%22%20y%3D%2260%22%20font-family%3D%22serif%22%20font-size%3D%2216%22%20font-weight%3D%22bold%22%20text-anchor%3D%22middle%22%20fill%3D%22%235B6470%22%3EPLACEHOLDER%3C%2Ftext%3E%3Crect%20x%3D%22143%22%20y%3D%2278%22%20width%3D%2228%22%20height%3D%2224%22%20fill%3D%22white%22%20opacity%3D%22.9%22%2F%3E%3Cpath%20d%3D%22M143%2078h14v12h14v12h-14V90h-14z%22%20fill%3D%22%23BFC5CD%22%2F%3E%3C%2Fsvg%3E;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="20" y="85" width="55" height="62" />
         </mxCell>
-        <mxCell id="motivation_n8" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FFF0B3;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="motivation_n8" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FFE29A;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="92" y="82" width="86" height="68" />
         </mxCell>
         <mxCell id="motivation_txt9" value="Image–text&#10;matching" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=17;fontColor=#263443;fontStyle=0;" parent="motivation_n8" vertex="1">
           <mxGeometry as="geometry" x="3" y="2" width="80" height="64" />
         </mxCell>
-        <mxCell id="motivation_n10" value="" style="rounded=1;arcSize=10;html=0;fillColor=#E8DFF4;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="motivation_n10" value="" style="rounded=1;arcSize=10;html=0;fillColor=#D4BEED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="195" y="82" width="90" height="68" />
         </mxCell>
         <mxCell id="motivation_txt11" value="Cost&#10;aggregation" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=17;fontColor=#263443;fontStyle=0;" parent="motivation_n10" vertex="1">
           <mxGeometry as="geometry" x="3" y="2" width="84" height="64" />
         </mxCell>
-        <mxCell id="motivation_n12" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FAD5B3;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="motivation_n12" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F1C49F;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="302" y="82" width="94" height="68" />
         </mxCell>
         <mxCell id="motivation_txt13" value="Task&#10;decoder" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="motivation_n12" vertex="1">
@@ -52,7 +52,7 @@
         <mxCell id="motivation_edge16" parent="1" edge="1" source="motivation_n10" target="motivation_n12" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1" />
         </mxCell>
-        <mxCell id="motivation_n17" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DFF3F1;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="motivation_n17" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BBDDD6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="20" y="195" width="158" height="45" />
         </mxCell>
         <mxCell id="motivation_txt18" value="Category texts" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="motivation_n17" vertex="1">
@@ -72,7 +72,7 @@
         <mxCell id="motivation_image21" value="" style="shape=image;imageAspect=0;aspect=fixed;image=data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22180%22%20height%3D%22110%22%20viewBox%3D%220%200%20180%20110%22%3E%3Crect%20width%3D%22180%22%20height%3D%22110%22%20fill%3D%22%23E7E9EC%22%2F%3E%3Cpath%20d%3D%22M0%2025L180%2095M10%20110L105%200M60%20110L155%200M0%2072L93%200%22%20stroke%3D%22white%22%20stroke-width%3D%223%22%2F%3E%3Cpath%20d%3D%22M0%2020L180%2090M5%20110L100%200%22%20stroke%3D%22%23C7CCD2%22%20stroke-width%3D%221%22%2F%3E%3Crect%20x%3D%2211%22%20y%3D%2241%22%20width%3D%22158%22%20height%3D%2229%22%20rx%3D%224%22%20fill%3D%22white%22%20opacity%3D%22.92%22%2F%3E%3Ctext%20x%3D%2290%22%20y%3D%2260%22%20font-family%3D%22serif%22%20font-size%3D%2216%22%20font-weight%3D%22bold%22%20text-anchor%3D%22middle%22%20fill%3D%22%235B6470%22%3EPLACEHOLDER%3C%2Ftext%3E%3Crect%20x%3D%22143%22%20y%3D%2278%22%20width%3D%2228%22%20height%3D%2224%22%20fill%3D%22white%22%20opacity%3D%22.9%22%2F%3E%3Cpath%20d%3D%22M143%2078h14v12h14v12h-14V90h-14z%22%20fill%3D%22%23BFC5CD%22%2F%3E%3C%2Fsvg%3E;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="439" y="85" width="55" height="62" />
         </mxCell>
-        <mxCell id="motivation_n22" value="" style="shape=trapezoid;direction=east;html=0;fillColor=#DCE6F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="motivation_n22" value="" style="shape=trapezoid;direction=east;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="514" y="77" width="89" height="80" />
         </mxCell>
         <mxCell id="motivation_txt23" value="SAM 3&#10;frozen" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="motivation_n22" vertex="1">
@@ -81,7 +81,7 @@
         <mxCell id="motivation_edge24" parent="1" edge="1" source="motivation_image21" target="motivation_n22" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1" />
         </mxCell>
-        <mxCell id="motivation_n25" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="motivation_n25" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="625" y="66" width="92" height="37" />
         </mxCell>
         <mxCell id="motivation_txt26" value="Building" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=18;fontColor=#263443;fontStyle=0;" parent="motivation_n25" vertex="1">
@@ -95,7 +95,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="motivation_n28" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="motivation_n28" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="625" y="117" width="92" height="37" />
         </mxCell>
         <mxCell id="motivation_txt29" value="Road" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=18;fontColor=#263443;fontStyle=0;" parent="motivation_n28" vertex="1">
@@ -109,7 +109,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="motivation_n31" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="motivation_n31" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="625" y="168" width="92" height="37" />
         </mxCell>
         <mxCell id="motivation_txt32" value="Vegetation" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=18;fontColor=#263443;fontStyle=0;" parent="motivation_n31" vertex="1">
@@ -123,7 +123,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="motivation_n34" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DFEDCC;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="motivation_n34" value="" style="rounded=1;arcSize=10;html=0;fillColor=#C6DCA9;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="738" y="93" width="81" height="70" />
         </mxCell>
         <mxCell id="motivation_txt35" value="Mask&#10;fusion" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="motivation_n34" vertex="1">
@@ -156,13 +156,13 @@
         <mxCell id="motivation_txt39" value="Separate class-conditioned predictions" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=19;fontColor=#263443;fontStyle=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="446" y="230" width="365" height="30" />
         </mxCell>
-        <mxCell id="motivation_n40" value="" style="shape=trapezoid;direction=east;html=0;fillColor=#FFF0B3;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="motivation_n40" value="" style="shape=trapezoid;direction=east;html=0;fillColor=#FFE29A;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="861" y="97" width="88" height="67" />
         </mxCell>
         <mxCell id="motivation_txt41" value="RemoteCLIP" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=15;fontColor=#263443;fontStyle=0;" parent="motivation_n40" vertex="1">
           <mxGeometry as="geometry" x="3" y="2" width="82" height="63" />
         </mxCell>
-        <mxCell id="motivation_n42" value="" style="rounded=1;arcSize=10;html=0;fillColor=#E8DFF4;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="motivation_n42" value="" style="rounded=1;arcSize=10;html=0;fillColor=#D4BEED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="965" y="97" width="82" height="67" />
         </mxCell>
         <mxCell id="motivation_txt43" value="Class&#10;guidance" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="motivation_n42" vertex="1">
@@ -171,19 +171,19 @@
         <mxCell id="motivation_edge44" parent="1" edge="1" source="motivation_n40" target="motivation_n42" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1" />
         </mxCell>
-        <mxCell id="motivation_n45" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="motivation_n45" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="1063" y="57" width="78" height="41" />
         </mxCell>
         <mxCell id="motivation_txt46" value="Class&#10;features" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=17;fontColor=#263443;fontStyle=0;" parent="motivation_n45" vertex="1">
           <mxGeometry as="geometry" x="3" y="2" width="72" height="37" />
         </mxCell>
-        <mxCell id="motivation_n47" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="motivation_n47" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="1063" y="116" width="78" height="41" />
         </mxCell>
         <mxCell id="motivation_txt48" value="Class&#10;features" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=17;fontColor=#263443;fontStyle=0;" parent="motivation_n47" vertex="1">
           <mxGeometry as="geometry" x="3" y="2" width="72" height="37" />
         </mxCell>
-        <mxCell id="motivation_n49" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="motivation_n49" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="1063" y="175" width="78" height="41" />
         </mxCell>
         <mxCell id="motivation_txt50" value="Class&#10;features" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=17;fontColor=#263443;fontStyle=0;" parent="motivation_n49" vertex="1">
@@ -213,7 +213,7 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="motivation_n54" value="" style="rounded=1;arcSize=10;html=0;fillColor=#DCE6F6;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
+        <mxCell id="motivation_n54" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
           <mxGeometry as="geometry" x="1160" y="97" width="79" height="81" />
         </mxCell>
         <mxCell id="motivation_txt55" value="Frozen&#10;decoder" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="motivation_n54" vertex="1">

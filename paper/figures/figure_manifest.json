@@ -59,5 +59,59 @@
     }
   ],
   "notes": "Native editable cells; placeholder image and mask tiles are not experimental results.",
-  "native_cell_count_includes_root": true
+  "native_cell_count_includes_root": true,
+  "color_design": {
+    "region_fill": "vertical gradient; pale start/end colors",
+    "module_fill": "solid; higher saturation than enclosing regions",
+    "palette": {
+      "blue": {
+        "module": "#BCD3ED",
+        "start": "#F8FBFF",
+        "end": "#E5EDF8"
+      },
+      "yellow": {
+        "module": "#FFE29A",
+        "start": "#FFFCF1",
+        "end": "#FFF0CF"
+      },
+      "purple": {
+        "module": "#D4BEED",
+        "start": "#FCFAFF",
+        "end": "#EDE5F8"
+      },
+      "sage": {
+        "module": "#C6DCA9",
+        "start": "#FAFCF5",
+        "end": "#E9F1DC"
+      },
+      "peach": {
+        "module": "#F1C49F",
+        "start": "#FFF9F3",
+        "end": "#F9E6D6"
+      },
+      "teal": {
+        "module": "#BBDDD6",
+        "start": "#F4FCFA",
+        "end": "#E0F1EB"
+      },
+      "gray": {
+        "module": "#E3E8EF",
+        "start": "#FFFFFF",
+        "end": "#EEF2F7"
+      }
+    },
+    "neutral_region": {
+      "start": "#FFFFFF",
+      "end": "#F0F4F8"
+    },
+    "qualitative_headers": [
+      "teal",
+      "sage",
+      "blue",
+      "peach",
+      "purple"
+    ],
+    "qualitative_row_labels": "gray",
+    "image_placeholders": "unchanged neutral gray"
+  }
 }
