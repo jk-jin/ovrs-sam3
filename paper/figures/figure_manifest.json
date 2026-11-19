@@ -4,14 +4,22 @@
   "figures": [
     {
       "name": "motivation",
-      "width": 1260,
-      "height": 295,
-      "native_cells": 63,
+      "width": 1448,
+      "height": 172,
+      "native_cells": 103,
       "editable": true,
       "source": "src/motivation.drawio",
       "svg": "motivation.svg",
       "pdf": "motivation.pdf",
-      "placeholders": 2
+      "placeholders": 5,
+      "reference": "Figure 1 in the user-provided ReCA-SAM3 five-figure design preview",
+      "palette_source": "Reference-specific cyan / blue / purple panels and pastel module fills; overrides the shared palette",
+      "image_tile": "Five embedded square neutral placeholders; editable via Edit Image",
+      "native_vector_stencils": [
+        "encoder",
+        "snowflake",
+        "fire"
+      ]
     },
     {
       "name": "overview",
@@ -112,6 +120,7 @@
       "purple"
     ],
     "qualitative_row_labels": "gray",
-    "image_placeholders": "unchanged neutral gray"
+    "image_placeholders": "unchanged neutral gray",
+    "scope": "Shared palette for Figures 2–5; Figure 1 follows its approved preview and has a reference-specific palette."
   }
 }

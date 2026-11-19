@@ -1,63 +1,43 @@
 {
   "date": "2026-11-19",
   "branch": "master",
-  "base_commit": "e1eea7a9d99ef3c2f82e4f2a9d46452a12c7ece5",
-  "historical_snapshot": "https://github.com/jk-jin/ovrs-sam3/blob/e1eea7a9d99ef3c2f82e4f2a9d46452a12c7ece5/paper/notes/source_snapshot.json",
-  "scope": "Five-figure palette update: pale vertical-gradient regions and distinct solid module fills, synchronized native draw.io/SVG/PDF. Geometry, labels, connectors, image placeholders, LaTeX sources, experimental data, equations, bibliography, and model/config code unchanged.",
+  "base_commit": "6669360d2dc2394b6123d6378ca278242e27ee30",
+  "historical_snapshot": "https://github.com/jk-jin/ovrs-sam3/blob/6669360d2dc2394b6123d6378ca278242e27ee30/paper/notes/source_snapshot.json",
+  "scope": "Redraw only Figure 1 to follow the approved preview: exact three-panel organization, reference palette, class branches, input/output placeholders, trainable/frozen vector icons, and feature interactions. Keep Figures 2–5, all LaTeX/captions, data, equations, bibliography, and model/config sources unchanged.",
   "deleted_obsolete_files": [],
   "current_state": "paper/notes/manuscript_status.md",
   "figure_editing": "paper/figures/README.md",
   "validation": {
-    "figures": [
-      {
-        "name": "aggregation",
-        "gradient_regions": 3,
-        "geometry_labels_links_images_unchanged": true,
-        "pdf_bounds_and_text_unchanged": true,
-        "native_svg_colors_match": true,
-        "minimum_text_contrast": 7.49
-      },
-      {
-        "name": "motivation",
-        "gradient_regions": 3,
-        "geometry_labels_links_images_unchanged": true,
-        "pdf_bounds_and_text_unchanged": true,
-        "native_svg_colors_match": true,
-        "minimum_text_contrast": 7.49
-      },
-      {
-        "name": "overview",
-        "gradient_regions": 5,
-        "geometry_labels_links_images_unchanged": true,
-        "pdf_bounds_and_text_unchanged": true,
-        "native_svg_colors_match": true,
-        "minimum_text_contrast": 7.49
-      },
-      {
-        "name": "qualitative_comparison",
-        "gradient_regions": 1,
-        "geometry_labels_links_images_unchanged": true,
-        "pdf_bounds_and_text_unchanged": true,
-        "native_svg_colors_match": true,
-        "minimum_text_contrast": 7.49
-      },
-      {
-        "name": "sdf",
-        "gradient_regions": 3,
-        "geometry_labels_links_images_unchanged": true,
-        "pdf_bounds_and_text_unchanged": true,
-        "native_svg_colors_match": true,
-        "minimum_text_contrast": 7.94
-      }
-    ],
-    "gradient_regions": 15,
+    "figure1": {
+      "canvas": [
+        1448,
+        172
+      ],
+      "native_cells": 103,
+      "editable_image_tiles": 5,
+      "connected_edges": 27,
+      "native_vector_stencils": [
+        "encoder",
+        "snowflake",
+        "encoder",
+        "fire",
+        "snowflake"
+      ],
+      "panel_labels_and_contents_verified": true,
+      "native_parent_and_endpoint_links_valid": true,
+      "drawio_stencils_decode_like_official_Graph_decompress": true,
+      "pdf_aspect_ratio_matches": true
+    },
+    "other_figure_assets_byte_identical": 12,
+    "all_latex_sources_byte_identical": true,
+    "latexmk_complete": true,
     "pdf_pages": 9,
     "overfull_warnings": 0,
     "missing_glyphs": 0,
     "undefined_references": 0,
-    "scope": "Only figure fill colors and their documentation/snapshot; LaTeX sources, figure dimensions, image placeholders, scores, equations, and model code unchanged."
+    "no_model_runs": true
   },
-  "visual_review": "Rendered and inspected all five standalone figures, the nine-page paper contact sheet, and the full-size aggregation figure page.",
+  "visual_review": "Inspected the reference Figure 1 crop and the redrawn figure, compiled paper page 2 at full size, and the nine-page paper contact sheet.",
   "official_model_runs": false,
   "sha256": {
     "DESIGN.md": "411a43f4c0b9cf23f8eb2cd31cef372fcd1be511e620cb50c735ef9556d90219",
@@ -80,14 +60,14 @@
     "paper/data/literature_results.csv": "5d559c2a5045cc4e11b66764ed6d7696313a01bded65ba17ecccc53cc414e509",
     "paper/data/table_spec.json": "ef911e33a4accfafa243c4b3ea79e654c9d107244fb9f716c83084d675e165b0",
     "paper/export_config.json": "52a7f8babc7aaf642b160a869b73dc585409345dcc68f714bbc1f10c8e2bf488",
-    "paper/figures/README.md": "7af73de089832966e1c64008a512305d34943aee4e5ef71ea3f6cfbe803cd049",
+    "paper/figures/README.md": "c984066b4ef8c128850c854ba9131d38335b7de75a63da61ae3ed6bb5c5fb16f",
     "paper/figures/aggregation.pdf": "da3cae69e46ee57c49e01441f5882cb78fc1f01d18cabff250823ac1fbbd4faa",
     "paper/figures/aggregation.svg": "654bd000d07ac1f2fbbee01061ccf313c6cfd8ba00a66178993f4625e67be2ef",
     "paper/figures/aggregation.tex": "e3e10dbca427c2e1f9bc700ca3d80958007e88e49c95906f64debc5956276fc0",
-    "paper/figures/figure_manifest.json": "2831b6389404bf811011c17455ff946811c0110bffce3c55893ac08fea1ecbac",
+    "paper/figures/figure_manifest.json": "e395d92ac5f6b0ace1e78d2e8d7590f5cbad2baf689a697f3163ed126e1907f6",
     "paper/figures/image_placeholder.svg": "1997fca9731d5c52aa286dd3cf7e7705e8c244691f7d274a3d2bc6bd89c5ea01",
-    "paper/figures/motivation.pdf": "5a0f2ae70c0f1bb7ec2861888e6fdb66d5f13eb4b8170fdac2017dca16a86738",
-    "paper/figures/motivation.svg": "fde894ea0acb7b58818742bf1ed84dc4583e34d9ef216c5366ad503b36f1b95a",
+    "paper/figures/motivation.pdf": "756494e458ecdc5f392c1390787214fae10ed2b6ee411c41974b2ff6c6105dfe",
+    "paper/figures/motivation.svg": "22d08725efd6714165d7615042d5ac64960d0daf169f51b6672f2881df0af2bf",
     "paper/figures/motivation.tex": "6fe7391d5c25cf99ad38750ca4d6b810196c514c822fe8f4ee25d78fdac01296",
     "paper/figures/overview.pdf": "b9d48906fdffb500e61293602cd0ad966f309d1a6c34fd2c8d4c83ee3a7ba309",
     "paper/figures/overview.svg": "792e9ddaf25b5e61010bf9249cafd1dd89d9593a6197b7c6724a73e33c6f0403",
@@ -99,7 +79,7 @@
     "paper/figures/sdf.svg": "ac0ce6d48b4d406d9efae0e612c463b6799bda12f5cbb27432205c349aa5bec8",
     "paper/figures/sdf.tex": "157a51b26d9bfdc7c5d9d11bfd7cda157e5d255cd66a41aaf885988bd4946fdf",
     "paper/figures/src/aggregation.drawio": "f05aabba2930e37456489ff51648831393b94df616966b8606a45d7286026f60",
-    "paper/figures/src/motivation.drawio": "9e1826150af888bab41102b04365e634567193c8700e185d5222d2d490e0c73d",
+    "paper/figures/src/motivation.drawio": "d7ab851dd1f5cf1859be7836195d2d1c3cff53e899ab06c7a71a7f9e5147daf3",
     "paper/figures/src/overview.drawio": "13a0adad1a6b846b596754ed121b9c07e0a7316d148e73490f5d148556ea7e44",
     "paper/figures/src/qualitative_comparison.drawio": "0233b54e96a3676cca426fd285ce74d2fd8794384354914d0dd7af497985f24b",
     "paper/figures/src/sdf.drawio": "67861804fd3038730211dd4d1578a8363a8f2d351da43b28266f403a3b62657b",
@@ -107,7 +87,7 @@
     "paper/notes/comparison_audit_20261117.md": "98546cdd40c429e100f9f61b057bd9b5d8278edbc2f9a2194de97990d4b78a33",
     "paper/notes/evaluation_protocol.md": "490038bd9723c59eb051d75857bde1a4aed680147d09c2d5cafdd44d7532cb6d",
     "paper/notes/literature_fill_audit.md": "a6fcc64d30eaf501d05aaf049177404568e1c4759f1eec418b3c20c37474ad19",
-    "paper/notes/manuscript_status.md": "437330e1bdc84fabb20170b675df8ae8b56765fa642c920837edfe765a3372ed",
+    "paper/notes/manuscript_status.md": "60e4d007964f0ac8a554d6aeb3cd45b20ef50b6f814b79e1a5ed50250ff2292d",
     "paper/notes/review.md": "724e8cd72bb9fae26ec5655415ff6becca28f0adfa7c9104d75253a140b56e72",
     "paper/references.bib": "4dae7bb8bb9ac763567e4ee711339f3d1a210586ac33b9a9346892cd08224f34",
     "paper/references_extra.bib": "bfcfa1deff1c748b6bfe9ec2e7aede51551bb087dcf1f6d23331cfafafc4ed52",
