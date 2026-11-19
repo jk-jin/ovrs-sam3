@@ -1,71 +1,93 @@
 {
   "date": "2026-11-19",
   "branch": "master",
-  "base_commit": "c02f5d32072a9f1635e7b202f72986a0fe301c24",
-  "scope": "Delete standalone SVGs; redraw Figures 2–5 against the approved preview; correct native corner radii; export draw.io directly to PDF before latexmk builds. Keep model, config, data, formulas, captions, bibliography and manuscript text unchanged.",
-  "deleted_obsolete_files": [
-    "paper/figures/motivation.svg",
-    "paper/figures/overview.svg",
-    "paper/figures/aggregation.svg",
-    "paper/figures/sdf.svg",
-    "paper/figures/qualitative_comparison.svg",
-    "paper/figures/image_placeholder.svg"
-  ],
+  "base_commit": "e28303d6ee38b2973705ed35ff0ae9a64e712418",
+  "scope": "Remove the five outer dashed frames and top-level figure titles; increase actual vertical content spacing, module heights, and qualitative tile height. Preserve text styles, semantic graph, captions and all manuscript/model/data sources.",
   "current_state": "paper/notes/manuscript_status.md",
   "figure_editing": "paper/figures/README.md",
   "validation": {
     "figures": {
       "motivation": {
-        "native_cells": 103,
-        "edges": 27,
-        "placeholders": 5,
-        "pdf_pages": 1
+        "native_cells": 101,
+        "removed_nodes": [
+          "motivation_frame",
+          "motivation_text1"
+        ],
+        "canvas": [
+          1448,
+          250
+        ],
+        "pdf_height_increase_at_equal_width_percent": 41.6,
+        "text_styles_and_connections_unchanged": true,
+        "image_tiles": 5
       },
       "overview": {
-        "native_cells": 137,
-        "edges": 35,
-        "placeholders": 2,
-        "pdf_pages": 1
+        "native_cells": 135,
+        "removed_nodes": [
+          "overview_frame",
+          "overview_text1"
+        ],
+        "canvas": [
+          1448,
+          504
+        ],
+        "pdf_height_increase_at_equal_width_percent": 41.0,
+        "text_styles_and_connections_unchanged": true,
+        "image_tiles": 2
       },
       "aggregation": {
-        "native_cells": 103,
-        "edges": 41,
-        "placeholders": 0,
-        "pdf_pages": 1
+        "native_cells": 101,
+        "removed_nodes": [
+          "aggregation_frame",
+          "aggregation_text1"
+        ],
+        "canvas": [
+          768,
+          340
+        ],
+        "pdf_height_increase_at_equal_width_percent": 33.5,
+        "text_styles_and_connections_unchanged": true,
+        "image_tiles": 0
       },
       "sdf": {
-        "native_cells": 109,
-        "edges": 29,
-        "placeholders": 0,
-        "pdf_pages": 1
+        "native_cells": 107,
+        "removed_nodes": [
+          "sdf_frame",
+          "sdf_text1"
+        ],
+        "canvas": [
+          675,
+          336
+        ],
+        "pdf_height_increase_at_equal_width_percent": 28.7,
+        "text_styles_and_connections_unchanged": true,
+        "image_tiles": 0
       },
       "qualitative_comparison": {
-        "native_cells": 43,
-        "edges": 0,
-        "placeholders": 15,
-        "pdf_pages": 1
+        "native_cells": 41,
+        "removed_nodes": [
+          "qualitative_comparison_frame",
+          "qualitative_comparison_text1"
+        ],
+        "canvas": [
+          1448,
+          302
+        ],
+        "pdf_height_increase_at_equal_width_percent": 67.3,
+        "text_styles_and_connections_unchanged": true,
+        "image_tiles": 15
       }
     },
-    "export": {
-      "unchanged_without_drawio": true,
-      "changed_source_detected_without_mtime_change": true,
-      "failure_preserves_pdf": true,
-      "only_changed_source_exported_as_pdf": true,
-      "second_run_skips_all": true
-    },
+    "model_latex_captions_data_and_pdf_export_unchanged": true,
     "no_standalone_svg": true,
-    "model_latex_and_data_unchanged": true,
-    "motivation_changed_only_native_corner_radii": true,
-    "paper_pages": 8,
-    "latexmk_complete": true,
-    "pdf_pages": 8,
-    "pdf_version": "1.7",
+    "pdf_pages": 9,
     "overfull_warnings": 0,
     "missing_glyphs": 0,
     "undefined_references": 0,
+    "latexmk_complete": true,
     "no_model_runs": true
   },
-  "visual_review": "Inspected all five native PDF exports, the eight-page manuscript contact sheet, and figure pages at readable resolution. Corrected label/connector overlaps and native rounded-corner rendering.",
+  "visual_review": "Inspected all five native PDF exports and the nine-page manuscript contact sheet, including readable-size aggregation and qualitative pages. No outside frame/title, connector loss, text overlap, or abnormal float whitespace observed.",
   "official_model_runs": false,
   "sha256": {
     "DESIGN.md": "411a43f4c0b9cf23f8eb2cd31cef372fcd1be511e620cb50c735ef9556d90219",
@@ -82,36 +104,36 @@
     "paper/.gitignore": "51ee851bec2e668ea8a4297fa72976493d02e3e603220a060ad7640753df7723",
     "paper/.latexmkrc": "cb517f77dc9678c647acb482bb3d2cfcd8e54b43c5a98983f218eead7df50220",
     "paper/AGENTS.md": "026550643daf511ec9a721f6855cd6fdb6cd19d8b2d6ebe0ebd54cab78437881",
-    "paper/README.md": "a8cc3a87dd4d7800c6baccfccfede8de41be135b1d4978f23dccbe51181b00ea",
+    "paper/README.md": "ea9bc32588b0b3072a76ab3ef1605a7f140cd96400e3d7dbc3bef9d19f3f2d94",
     "paper/data/comparison_audit_20261117.json": "710e189b41c3b6385edcc89e60b41cf8f11daa9ccfc14aaf897407c14dae28f5",
     "paper/data/experiment_plan.csv": "7318707af04b37c6c4cd77070d7d460f698bcc0854b453241a9a42c5c7cf2e2a",
     "paper/data/literature_inventory.csv": "9a1bc3328ce66da15087e0b43a7ab1bc1d5a29c5e8691fbdb6954d964daf1469",
     "paper/data/literature_results.csv": "5d559c2a5045cc4e11b66764ed6d7696313a01bded65ba17ecccc53cc414e509",
     "paper/data/table_spec.json": "ef911e33a4accfafa243c4b3ea79e654c9d107244fb9f716c83084d675e165b0",
     "paper/export_config.json": "52a7f8babc7aaf642b160a869b73dc585409345dcc68f714bbc1f10c8e2bf488",
-    "paper/figures/README.md": "923d8eecac723455eb3a1ce2d1c16f573c2fde7648a5ac9f413b1db587c2fc42",
-    "paper/figures/aggregation.pdf": "b5f1db5f05e8fd59df81ba55580bd2f635dc629e25f6cea4f906c92fff720c12",
+    "paper/figures/README.md": "d9dd6cfcbd1fb1d071f118680462c8f59d9fa27a6744905ebda9f6b04c5ea375",
+    "paper/figures/aggregation.pdf": "7052e08ab5e56a58bd36086fd44b5db211e76565e8af3bee7e5db41588f57c88",
     "paper/figures/aggregation.tex": "e3e10dbca427c2e1f9bc700ca3d80958007e88e49c95906f64debc5956276fc0",
-    "paper/figures/figure_manifest.json": "69b3a58043a9dd49f7223bb690c665e89c8c6eccc9b6deddbd43b4078f275181",
-    "paper/figures/motivation.pdf": "4076e296e1b02bcb4df5bf556f7e8c4b284957228ac664c631eb588f4307b6ac",
+    "paper/figures/figure_manifest.json": "ad0275d22ed528f569a7946a33564dd5c3ffa3cbb81f70063eacbaafcc5cfd67",
+    "paper/figures/motivation.pdf": "b2d49fc5e76e4d3d63711e9d22cc87095b54492da1ac0f4d51008d0cb6ba7113",
     "paper/figures/motivation.tex": "6fe7391d5c25cf99ad38750ca4d6b810196c514c822fe8f4ee25d78fdac01296",
-    "paper/figures/overview.pdf": "c13c88abcc3ba72feef3b6adb06dbc824ffb55cccb19ce3af342f59f34d947bd",
+    "paper/figures/overview.pdf": "a8278034c388b5331ff6004a9a66b67ccab652c3a8bf4dc1372808d5cb429050",
     "paper/figures/overview.tex": "4e9f250fe9dd776d889ac96c836a55ea1efec0b96f0a5c64e0b7e6e8e4d87e87",
-    "paper/figures/qualitative_comparison.pdf": "d352b58e8fbd3bc276a3874b39cdadebc15627e86a80d7b8d6c8340237e20c85",
+    "paper/figures/qualitative_comparison.pdf": "100e1d7779748a173dd0fddc27fb87be9b5d609618d0eada156501474aba4145",
     "paper/figures/qualitative_comparison.tex": "65686976326723bef4db06ed3922724ad1e83e9aac50c03479ff05723cdf32e3",
-    "paper/figures/sdf.pdf": "a898a743f1456e38f5fb78f08548ecaccb0b10f85c18735c316aa89816d9994e",
+    "paper/figures/sdf.pdf": "245eaaf0b8bf4dceca1e7869f118b5f80f6f7e339cff75a1ba32a5e60340dc00",
     "paper/figures/sdf.tex": "157a51b26d9bfdc7c5d9d11bfd7cda157e5d255cd66a41aaf885988bd4946fdf",
-    "paper/figures/src/aggregation.drawio": "289c128f1d4eb7f04fe5ec1729df0da7b928acb65cdcd8569ec46e957966fd49",
-    "paper/figures/src/motivation.drawio": "200d321d2e8b9dd0d11d388484f7bc9e9332489e1f32aac323430221c05f8726",
-    "paper/figures/src/overview.drawio": "684556d5c4d121dd189ead4044856eee60e2bf3d231d0d6c3080ac1f368eeb61",
-    "paper/figures/src/qualitative_comparison.drawio": "b43426836c136b84fb0316aa95907035512d54e809866e1dd03682ebd37b5fbb",
-    "paper/figures/src/sdf.drawio": "68d00551f459f234157474bc8012e655d9af25e4b1a9b73961d615594968349e",
+    "paper/figures/src/aggregation.drawio": "9064f74f1813256c748607a74e4e4964ca957929e90daab27a9617f4c373927b",
+    "paper/figures/src/motivation.drawio": "b0a6654f71cf45c69f15ea768080acccd3bc7163aa8fef7f0123dc1496ffc84a",
+    "paper/figures/src/overview.drawio": "9e4f9e91de45c83de23e243d81dc545c17ebb32e4bca6920e0be05c0ba11a56d",
+    "paper/figures/src/qualitative_comparison.drawio": "3236d65bb083265b54d23221a46dcd03f47a1c6fff8cfd6c0edf49e7b54a513d",
+    "paper/figures/src/sdf.drawio": "582657e603496ce9187a0b8652b8e952feb479c524020c4cf95e8c34b373a0be",
     "paper/main.tex": "2ee32290a5d3d568de1acb5a3bc048ce3f13db096c29b5e772280f65b0889838",
     "paper/notes/comparison_audit_20261117.md": "98546cdd40c429e100f9f61b057bd9b5d8278edbc2f9a2194de97990d4b78a33",
     "paper/notes/evaluation_protocol.md": "490038bd9723c59eb051d75857bde1a4aed680147d09c2d5cafdd44d7532cb6d",
     "paper/notes/literature_fill_audit.md": "a6fcc64d30eaf501d05aaf049177404568e1c4759f1eec418b3c20c37474ad19",
-    "paper/notes/manuscript_status.md": "c4bf9cf8991109b50498f65fe1bd56c33476cfeb8bb95f6b8b9b53873ebfe79d",
-    "paper/notes/review.md": "6d23bc73aa1c256e95f91fd0724f01dcf1acee827b53deb09a5af3b67ca566ee",
+    "paper/notes/manuscript_status.md": "f6f32f070ef91c4413401b3a6b7196e6e08a4fecd06d43195adcac005c4c246c",
+    "paper/notes/review.md": "699fb3710a3241badd5cb355df03f4c696e8fedd0a1ceb8eccec7de4a08a1a18",
     "paper/references.bib": "4dae7bb8bb9ac763567e4ee711339f3d1a210586ac33b9a9346892cd08224f34",
     "paper/references_extra.bib": "bfcfa1deff1c748b6bfe9ec2e7aede51551bb087dcf1f6d23331cfafafc4ed52",
     "paper/scripts/README.md": "530e425e97450dd7e0481696e6925ceca5e174d9fdd3c95b5df6d5f95b804443",

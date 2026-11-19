@@ -1,94 +1,88 @@
 <mxfile host="app.diagrams.net" version="32.7.4" type="device">
   <diagram id="aggregation" name="Fig. 3. Dual-Stream Aggregation">
-    <mxGraphModel dx="768" dy="256" grid="1" gridSize="1" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="768" pageHeight="256" math="0" shadow="0" background="#FFFFFF">
+    <mxGraphModel dx="768" dy="340" grid="1" gridSize="1" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="768" pageHeight="340" math="0" shadow="0" background="#FFFFFF">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="aggregation_frame" value="" style="rounded=1;arcSize=28;html=0;fillColor=#FFFFFF;strokeColor=#444444;strokeWidth=1;dashed=1;dashPattern=4 2;absoluteArcSize=1;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="5" y="3" width="758" height="250" />
-        </mxCell>
-        <mxCell id="aggregation_text1" value="Fig. 3. Dual-Stream Aggregation" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=22;fontColor=#111111;fontStyle=1;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="20" y="6" width="728" height="25" />
-        </mxCell>
         <mxCell id="aggregation_region2" value="" style="rounded=1;arcSize=14;absoluteArcSize=1;fillColor=#EDF5FF;gradientColor=#E3EEFF;gradientDirection=south;strokeColor=#BCD6FF;strokeWidth=.8;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="110" y="38" width="229" height="165" />
+          <mxGeometry as="geometry" x="110" y="8" width="229" height="255.75" />
         </mxCell>
         <mxCell id="aggregation_region3" value="" style="rounded=1;arcSize=14;absoluteArcSize=1;fillColor=#F3F9E9;gradientColor=#EAF4DC;gradientDirection=south;strokeColor=#B3D78F;strokeWidth=.8;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="351" y="38" width="295" height="165" />
+          <mxGeometry as="geometry" x="351" y="8" width="295" height="255.75" />
         </mxCell>
         <mxCell id="aggregation_text4" value="Cross-class block" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=17;fontColor=#111111;fontStyle=1;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="122" y="40" width="205" height="22" />
+          <mxGeometry as="geometry" x="122" y="11.1" width="205" height="34.1" />
         </mxCell>
         <mxCell id="aggregation_text5" value="Intra-class block" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=17;fontColor=#111111;fontStyle=1;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="362" y="40" width="273" height="22" />
+          <mxGeometry as="geometry" x="362" y="11.1" width="273" height="34.1" />
         </mxCell>
         <mxCell id="aggregation_box6" value="" style="rounded=1;arcSize=15.789473684210526;absoluteArcSize=0;html=0;fillColor=#E6D7F5;strokeColor=#9A75C0;strokeWidth=.9;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="22" y="72" width="68" height="38" />
+          <mxGeometry as="geometry" x="22" y="60.7" width="68" height="58.9" />
         </mxCell>
         <mxCell id="aggregation_text7" value="Semantic&#10;state" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=14;fontColor=#111111;fontStyle=0;" parent="aggregation_box6" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="64" height="36" />
+          <mxGeometry as="geometry" x="2" y="1.55" width="64" height="55.8" />
         </mxCell>
         <mxCell id="aggregation_box8" value="" style="rounded=1;arcSize=15.789473684210526;absoluteArcSize=0;html=0;fillColor=#C7DEF8;strokeColor=#6699CC;strokeWidth=.9;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="22" y="141" width="68" height="38" />
+          <mxGeometry as="geometry" x="22" y="167.65" width="68" height="58.9" />
         </mxCell>
         <mxCell id="aggregation_text9" value="Feature&#10;state" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=14;fontColor=#111111;fontStyle=0;" parent="aggregation_box8" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="64" height="36" />
+          <mxGeometry as="geometry" x="2" y="1.55" width="64" height="55.8" />
         </mxCell>
         <mxCell id="aggregation_box10" value="" style="rounded=1;arcSize=13.636363636363637;absoluteArcSize=0;html=0;fillColor=#E6D7F5;strokeColor=#9A75C0;strokeWidth=.9;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="139" y="82" width="80" height="44" />
+          <mxGeometry as="geometry" x="139" y="76.2" width="80" height="68.2" />
         </mxCell>
         <mxCell id="aggregation_text11" value="1. Semantic&#10;update" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=14;fontColor=#111111;fontStyle=0;" parent="aggregation_box10" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="76" height="42" />
+          <mxGeometry as="geometry" x="2" y="1.55" width="76" height="65.1" />
         </mxCell>
         <mxCell id="aggregation_box12" value="" style="rounded=1;arcSize=14.634146341463415;absoluteArcSize=0;html=0;fillColor=#C7DEF8;strokeColor=#6699CC;strokeWidth=.9;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="139" y="151" width="80" height="41" />
+          <mxGeometry as="geometry" x="139" y="183.15" width="80" height="63.55" />
         </mxCell>
         <mxCell id="aggregation_text13" value="2. Feature&#10;update" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=14;fontColor=#111111;fontStyle=0;" parent="aggregation_box12" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="76" height="39" />
+          <mxGeometry as="geometry" x="2" y="1.55" width="76" height="60.45" />
         </mxCell>
         <mxCell id="aggregation_box14" value="" style="rounded=1;arcSize=8.333333333333334;absoluteArcSize=0;html=0;fillColor=#FFFFFF;strokeColor=#B5B5BD;strokeWidth=.9;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="219" y="70" width="88" height="72" />
+          <mxGeometry as="geometry" x="219" y="57.6" width="88" height="111.6" />
         </mxCell>
         <mxCell id="aggregation_text15" value="Class tokens&#10;(across prompts)" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11;fontColor=#111111;fontStyle=0;" parent="aggregation_box14" vertex="1">
-          <mxGeometry as="geometry" x="0" y="2" width="88" height="26" />
+          <mxGeometry as="geometry" x="0" y="3.1" width="88" height="40.3" />
         </mxCell>
         <mxCell id="aggregation_token16" value="" style="rounded=0;fillColor=#DEC8F4;strokeColor=#8965AA;strokeWidth=.8;" parent="aggregation_box14" vertex="1">
-          <mxGeometry as="geometry" x="16" y="39" width="10" height="23" />
+          <mxGeometry as="geometry" x="16" y="60.45" width="10" height="35.65" />
         </mxCell>
         <mxCell id="aggregation_token17" value="" style="rounded=0;fillColor=#DEC8F4;strokeColor=#8965AA;strokeWidth=.8;" parent="aggregation_box14" vertex="1">
-          <mxGeometry as="geometry" x="29" y="39" width="10" height="23" />
+          <mxGeometry as="geometry" x="29" y="60.45" width="10" height="35.65" />
         </mxCell>
         <mxCell id="aggregation_token18" value="" style="rounded=0;fillColor=#DEC8F4;strokeColor=#8965AA;strokeWidth=.8;" parent="aggregation_box14" vertex="1">
-          <mxGeometry as="geometry" x="42" y="39" width="10" height="23" />
+          <mxGeometry as="geometry" x="42" y="60.45" width="10" height="35.65" />
         </mxCell>
         <mxCell id="aggregation_text19" value="…" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=18;fontColor=#111111;fontStyle=0;" parent="aggregation_box14" vertex="1">
-          <mxGeometry as="geometry" x="56" y="39" width="24" height="20" />
+          <mxGeometry as="geometry" x="56" y="60.45" width="24" height="31" />
         </mxCell>
         <mxCell id="aggregation_sum20" value="" style="ellipse;fillColor=#FFFFFF;strokeColor=#111111;strokeWidth=1.3;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="314" y="86" width="21" height="21" />
+          <mxGeometry as="geometry" x="314" y="88.175" width="21" height="21" />
         </mxCell>
         <mxCell id="aggregation_text21" value="+" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=21;fontColor=#111111;fontStyle=1;" parent="aggregation_sum20" vertex="1">
-          <mxGeometry as="geometry" x="0" y="0" width="21" height="21" />
+          <mxGeometry as="geometry" x="0" y="-5.775" width="21" height="32.55" />
         </mxCell>
         <mxCell id="aggregation_sum22" value="" style="ellipse;fillColor=#FFFFFF;strokeColor=#111111;strokeWidth=1.3;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="314" y="161" width="21" height="21" />
+          <mxGeometry as="geometry" x="314" y="204.425" width="21" height="21" />
         </mxCell>
         <mxCell id="aggregation_text23" value="+" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=21;fontColor=#111111;fontStyle=1;" parent="aggregation_sum22" vertex="1">
-          <mxGeometry as="geometry" x="0" y="0" width="21" height="21" />
+          <mxGeometry as="geometry" x="0" y="-5.775" width="21" height="32.55" />
         </mxCell>
         <mxCell id="aggregation_edge24" parent="1" edge="1" source="aggregation_box6" target="aggregation_box10" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="104" y="91" />
-              <mxPoint x="104" y="104" />
+              <mxPoint x="104" y="90.15" />
+              <mxPoint x="104" y="110.3" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="aggregation_edge25" parent="1" edge="1" source="aggregation_box8" target="aggregation_box10" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="105" y="160" />
-              <mxPoint x="105" y="104" />
+              <mxPoint x="105" y="197.1" />
+              <mxPoint x="105" y="110.3" />
             </Array>
           </mxGeometry>
         </mxCell>
@@ -101,8 +95,8 @@
         <mxCell id="aggregation_edge28" parent="1" edge="1" source="aggregation_box8" target="aggregation_box12" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="104" y="160" />
-              <mxPoint x="104" y="171.5" />
+              <mxPoint x="104" y="197.1" />
+              <mxPoint x="104" y="214.925" />
             </Array>
           </mxGeometry>
         </mxCell>
@@ -112,50 +106,50 @@
         <mxCell id="aggregation_edge30" parent="1" edge="1" source="aggregation_box6" target="aggregation_sum20" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0.5;entryY=0;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="101" y="91" />
-              <mxPoint x="101" y="67" />
-              <mxPoint x="324.5" y="67" />
+              <mxPoint x="101" y="90.15" />
+              <mxPoint x="101" y="52.95" />
+              <mxPoint x="324.5" y="52.95" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="aggregation_edge31" parent="1" edge="1" source="aggregation_box8" target="aggregation_sum22" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0.5;entryY=1;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="100" y="160" />
-              <mxPoint x="100" y="195" />
-              <mxPoint x="324.5" y="195" />
+              <mxPoint x="100" y="197.1" />
+              <mxPoint x="100" y="251.35" />
+              <mxPoint x="324.5" y="251.35" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="aggregation_box32" value="" style="rounded=1;arcSize=20.689655172413794;absoluteArcSize=0;html=0;fillColor=#F7EAB3;strokeColor=#C18D48;strokeWidth=.9;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="359" y="61" width="77" height="29" />
+          <mxGeometry as="geometry" x="359" y="43.65" width="77" height="44.95" />
         </mxCell>
         <mxCell id="aggregation_text33" value="RemoteCLIP&#10;middle layers" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11;fontColor=#111111;fontStyle=0;" parent="aggregation_box32" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="73" height="27" />
+          <mxGeometry as="geometry" x="2" y="1.55" width="73" height="41.85" />
         </mxCell>
         <mxCell id="aggregation_box34" value="" style="rounded=1;arcSize=30.0;absoluteArcSize=0;html=0;fillColor=#C7DEF8;strokeColor=#6699CC;strokeWidth=.9;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="363" y="187" width="72" height="20" />
+          <mxGeometry as="geometry" x="363" y="238.95" width="72" height="31" />
         </mxCell>
         <mxCell id="aggregation_text35" value="SAM 3 FPN" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=12;fontColor=#111111;fontStyle=0;" parent="aggregation_box34" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="68" height="18" />
+          <mxGeometry as="geometry" x="2" y="1.55" width="68" height="27.9" />
         </mxCell>
         <mxCell id="aggregation_box36" value="" style="rounded=1;arcSize=15.0;absoluteArcSize=0;html=0;fillColor=#E6D7F5;strokeColor=#9A75C0;strokeWidth=.9;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="400" y="93" width="111" height="40" />
+          <mxGeometry as="geometry" x="400" y="93.25" width="111" height="62" />
         </mxCell>
         <mxCell id="aggregation_text37" value="Semantic&#10;regular → shifted" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=14;fontColor=#111111;fontStyle=0;" parent="aggregation_box36" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="107" height="38" />
+          <mxGeometry as="geometry" x="2" y="1.55" width="107" height="58.9" />
         </mxCell>
         <mxCell id="aggregation_box38" value="" style="rounded=1;arcSize=15.0;absoluteArcSize=0;html=0;fillColor=#C7DEF8;strokeColor=#6699CC;strokeWidth=.9;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="400" y="145" width="111" height="40" />
+          <mxGeometry as="geometry" x="400" y="173.85" width="111" height="62" />
         </mxCell>
         <mxCell id="aggregation_text39" value="Feature:&#10;regular → shifted" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=14;fontColor=#111111;fontStyle=0;" parent="aggregation_box38" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="107" height="38" />
+          <mxGeometry as="geometry" x="2" y="1.55" width="107" height="58.9" />
         </mxCell>
         <mxCell id="aggregation_text40" value="Regular" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11;fontColor=#111111;fontStyle=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="514" y="69" width="43" height="16" />
+          <mxGeometry as="geometry" x="514" y="56.05" width="43" height="24.8" />
         </mxCell>
         <mxCell id="aggregation_group41" value="" style="group;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="520" y="89" width="31" height="31" />
+          <mxGeometry as="geometry" x="520" y="95.575" width="31" height="31" />
         </mxCell>
         <mxCell id="aggregation_gridbg42" value="" style="fillColor=#E6D7F5;strokeColor=#8065A5;strokeWidth=.8;" parent="aggregation_group41" vertex="1">
           <mxGeometry as="geometry" x="0" y="0" width="31" height="31" />
@@ -185,10 +179,10 @@
           </mxGeometry>
         </mxCell>
         <mxCell id="aggregation_text47" value="Regular" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11;fontColor=#111111;fontStyle=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="514" y="133" width="43" height="16" />
+          <mxGeometry as="geometry" x="514" y="155.25" width="43" height="24.8" />
         </mxCell>
         <mxCell id="aggregation_group48" value="" style="group;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="520" y="153" width="31" height="31" />
+          <mxGeometry as="geometry" x="520" y="194.775" width="31" height="31" />
         </mxCell>
         <mxCell id="aggregation_gridbg49" value="" style="fillColor=#C7DEF8;strokeColor=#4C9FE8;strokeWidth=.8;" parent="aggregation_group48" vertex="1">
           <mxGeometry as="geometry" x="0" y="0" width="31" height="31" />
@@ -218,10 +212,10 @@
           </mxGeometry>
         </mxCell>
         <mxCell id="aggregation_text54" value="Shifted" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11;fontColor=#111111;fontStyle=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="567" y="69" width="43" height="16" />
+          <mxGeometry as="geometry" x="567" y="56.05" width="43" height="24.8" />
         </mxCell>
         <mxCell id="aggregation_group55" value="" style="group;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="573" y="89" width="31" height="31" />
+          <mxGeometry as="geometry" x="573" y="95.575" width="31" height="31" />
         </mxCell>
         <mxCell id="aggregation_gridbg56" value="" style="fillColor=#E6D7F5;strokeColor=#8065A5;strokeWidth=.8;" parent="aggregation_group55" vertex="1">
           <mxGeometry as="geometry" x="0" y="0" width="31" height="31" />
@@ -251,10 +245,10 @@
           </mxGeometry>
         </mxCell>
         <mxCell id="aggregation_text61" value="Shifted" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11;fontColor=#111111;fontStyle=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="567" y="133" width="43" height="16" />
+          <mxGeometry as="geometry" x="567" y="155.25" width="43" height="24.8" />
         </mxCell>
         <mxCell id="aggregation_group62" value="" style="group;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="573" y="153" width="31" height="31" />
+          <mxGeometry as="geometry" x="573" y="194.775" width="31" height="31" />
         </mxCell>
         <mxCell id="aggregation_gridbg63" value="" style="fillColor=#C7DEF8;strokeColor=#4C9FE8;strokeWidth=.8;" parent="aggregation_group62" vertex="1">
           <mxGeometry as="geometry" x="0" y="0" width="31" height="31" />
@@ -284,46 +278,46 @@
           </mxGeometry>
         </mxCell>
         <mxCell id="aggregation_sum68" value="" style="ellipse;fillColor=#FFFFFF;strokeColor=#111111;strokeWidth=1.3;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="619" y="102" width="21" height="21" />
+          <mxGeometry as="geometry" x="619" y="112.975" width="21" height="21" />
         </mxCell>
         <mxCell id="aggregation_text69" value="+" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=21;fontColor=#111111;fontStyle=1;" parent="aggregation_sum68" vertex="1">
-          <mxGeometry as="geometry" x="0" y="0" width="21" height="21" />
+          <mxGeometry as="geometry" x="0" y="-5.775" width="21" height="32.55" />
         </mxCell>
         <mxCell id="aggregation_sum70" value="" style="ellipse;fillColor=#FFFFFF;strokeColor=#111111;strokeWidth=1.3;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="619" y="166" width="21" height="21" />
+          <mxGeometry as="geometry" x="619" y="212.175" width="21" height="21" />
         </mxCell>
         <mxCell id="aggregation_text71" value="+" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=21;fontColor=#111111;fontStyle=1;" parent="aggregation_sum70" vertex="1">
-          <mxGeometry as="geometry" x="0" y="0" width="21" height="21" />
+          <mxGeometry as="geometry" x="0" y="-5.775" width="21" height="32.55" />
         </mxCell>
         <mxCell id="aggregation_edge72" parent="1" edge="1" source="aggregation_sum20" target="aggregation_box36" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="343" y="96.5" />
-              <mxPoint x="343" y="113" />
+              <mxPoint x="343" y="98.675" />
+              <mxPoint x="343" y="124.25" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="aggregation_edge73" parent="1" edge="1" source="aggregation_sum22" target="aggregation_box38" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="343" y="171.5" />
-              <mxPoint x="343" y="165" />
+              <mxPoint x="343" y="214.925" />
+              <mxPoint x="343" y="204.85" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="aggregation_edge74" parent="1" edge="1" source="aggregation_box32" target="aggregation_box36" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#F07427;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=0.5;exitY=1;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="377" y="90" />
-              <mxPoint x="377" y="113" />
+              <mxPoint x="377" y="88.6" />
+              <mxPoint x="377" y="124.25" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="aggregation_edge75" parent="1" edge="1" source="aggregation_box34" target="aggregation_box38" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#00A7D6;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=0;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="376" y="197" />
-              <mxPoint x="376" y="165" />
+              <mxPoint x="376" y="254.45" />
+              <mxPoint x="376" y="204.85" />
             </Array>
           </mxGeometry>
         </mxCell>
@@ -336,8 +330,8 @@
         <mxCell id="aggregation_edge78" parent="1" edge="1" source="aggregation_group55" target="aggregation_sum68" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="612" y="104.5" />
-              <mxPoint x="612" y="112.5" />
+              <mxPoint x="612" y="111.075" />
+              <mxPoint x="612" y="123.475" />
             </Array>
           </mxGeometry>
         </mxCell>
@@ -350,78 +344,78 @@
         <mxCell id="aggregation_edge81" parent="1" edge="1" source="aggregation_group62" target="aggregation_sum70" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="612" y="168.5" />
-              <mxPoint x="612" y="176.5" />
+              <mxPoint x="612" y="210.275" />
+              <mxPoint x="612" y="222.675" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="aggregation_edge82" parent="1" edge="1" source="aggregation_box36" target="aggregation_sum68" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=0.5;exitY=0;entryX=0.5;entryY=0;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="455.5" y="84" />
-              <mxPoint x="629.5" y="84" />
+              <mxPoint x="455.5" y="79.3" />
+              <mxPoint x="629.5" y="79.3" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="aggregation_edge83" parent="1" edge="1" source="aggregation_box38" target="aggregation_sum70" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=0.5;exitY=1;entryX=0.5;entryY=1;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="455.5" y="191" />
-              <mxPoint x="629.5" y="191" />
+              <mxPoint x="455.5" y="245.15" />
+              <mxPoint x="629.5" y="245.15" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="aggregation_edge84" parent="1" edge="1" source="aggregation_sum20" target="aggregation_box38" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#6900DB;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="347" y="96.5" />
-              <mxPoint x="347" y="165" />
+              <mxPoint x="347" y="98.675" />
+              <mxPoint x="347" y="204.85" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="aggregation_edge85" parent="1" edge="1" source="aggregation_sum22" target="aggregation_box36" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#238BD6;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="347" y="171.5" />
-              <mxPoint x="347" y="113" />
+              <mxPoint x="347" y="214.925" />
+              <mxPoint x="347" y="124.25" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="aggregation_box86" value="" style="rounded=1;arcSize=11.538461538461538;absoluteArcSize=0;html=0;fillColor=#E6D7F5;strokeColor=#A87CCC;strokeWidth=.9;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="658" y="49" width="98" height="52" />
+          <mxGeometry as="geometry" x="658" y="25.05" width="98" height="80.6" />
         </mxCell>
         <mxCell id="aggregation_text87" value="Q / K: both states&#10;V: updated state" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=13;fontColor=#111111;fontStyle=0;" parent="aggregation_box86" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="94" height="50" />
+          <mxGeometry as="geometry" x="2" y="1.55" width="94" height="77.5" />
         </mxCell>
         <mxCell id="aggregation_text88" value="Q: query&#10;K: key&#10;V: value" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=13;fontColor=#111111;fontStyle=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="668" y="108" width="82" height="67" />
+          <mxGeometry as="geometry" x="668" y="116.5" width="82" height="103.85" />
         </mxCell>
         <mxCell id="aggregation_region89" value="" style="rounded=1;arcSize=14;absoluteArcSize=1;fillColor=#F2F2F9;gradientColor=#E9EAF5;gradientDirection=south;strokeColor=none;strokeWidth=.8;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="91" y="215" width="603" height="32" />
+          <mxGeometry as="geometry" x="91" y="282.35" width="603" height="49.6" />
         </mxCell>
         <mxCell id="aggregation_box90" value="" style="rounded=1;arcSize=24.0;absoluteArcSize=0;html=0;fillColor=#C7DEF8;strokeColor=#718EAD;strokeWidth=.9;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="169" y="219" width="89" height="25" />
+          <mxGeometry as="geometry" x="169" y="288.55" width="89" height="38.75" />
         </mxCell>
         <mxCell id="aggregation_text91" value="Cross" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=15;fontColor=#111111;fontStyle=0;" parent="aggregation_box90" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="85" height="23" />
+          <mxGeometry as="geometry" x="2" y="1.55" width="85" height="35.65" />
         </mxCell>
         <mxCell id="aggregation_box92" value="" style="rounded=1;arcSize=24.0;absoluteArcSize=0;html=0;fillColor=#DEECC2;strokeColor=#8FA774;strokeWidth=.9;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="298" y="219" width="89" height="25" />
+          <mxGeometry as="geometry" x="298" y="288.55" width="89" height="38.75" />
         </mxCell>
         <mxCell id="aggregation_text93" value="Intra" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=15;fontColor=#111111;fontStyle=0;" parent="aggregation_box92" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="85" height="23" />
+          <mxGeometry as="geometry" x="2" y="1.55" width="85" height="35.65" />
         </mxCell>
         <mxCell id="aggregation_box94" value="" style="rounded=1;arcSize=24.0;absoluteArcSize=0;html=0;fillColor=#C7DEF8;strokeColor=#718EAD;strokeWidth=.9;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="428" y="219" width="89" height="25" />
+          <mxGeometry as="geometry" x="428" y="288.55" width="89" height="38.75" />
         </mxCell>
         <mxCell id="aggregation_text95" value="Cross" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=15;fontColor=#111111;fontStyle=0;" parent="aggregation_box94" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="85" height="23" />
+          <mxGeometry as="geometry" x="2" y="1.55" width="85" height="35.65" />
         </mxCell>
         <mxCell id="aggregation_box96" value="" style="rounded=1;arcSize=24.0;absoluteArcSize=0;html=0;fillColor=#DEECC2;strokeColor=#8FA774;strokeWidth=.9;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="557" y="219" width="89" height="25" />
+          <mxGeometry as="geometry" x="557" y="288.55" width="89" height="38.75" />
         </mxCell>
         <mxCell id="aggregation_text97" value="Intra" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=15;fontColor=#111111;fontStyle=0;" parent="aggregation_box96" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="85" height="23" />
+          <mxGeometry as="geometry" x="2" y="1.55" width="85" height="35.65" />
         </mxCell>
         <mxCell id="aggregation_edge98" parent="1" edge="1" source="aggregation_box90" target="aggregation_box92" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1" />

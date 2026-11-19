@@ -1,16 +1,16 @@
 # ReCA-SAM3 可编辑论文图
 
-五图按照确认的五图预览重绘：浅色分区、虚线外框、梯形编码器、特征堆叠、黑色前向流、紫色状态流，以及红色虚线训练蒸馏路径。源文件保留原生形状、文字、分组和连接器；论文仅加载同名 PDF。
+五图按照确认的五图预览重绘：浅色分区、梯形编码器、特征堆叠、黑色前向流、紫色状态流，以及红色虚线训练蒸馏路径。源文件保留原生形状、文字、分组和连接器；论文仅加载同名 PDF。五张图均已删除外层虚线框和顶部整图标题，编号与图题由LaTeX的caption统一提供；内部子图/分区名称保留。
 
 | 图 | 可编辑源文件 | 论文图片 | 画布宽×高 |
 | --- | --- | --- | --- |
-| 动机 | [motivation.drawio](src/motivation.drawio) | [motivation.pdf](motivation.pdf) | 1448×172 |
-| 总体框架 | [overview.drawio](src/overview.drawio) | [overview.pdf](overview.pdf) | 1448×360 |
-| 双流聚合 | [aggregation.drawio](src/aggregation.drawio) | [aggregation.pdf](aggregation.pdf) | 768×256 |
-| SDF | [sdf.drawio](src/sdf.drawio) | [sdf.pdf](sdf.pdf) | 675×256 |
-| 定性对比 | [qualitative_comparison.drawio](src/qualitative_comparison.drawio) | [qualitative_comparison.pdf](qualitative_comparison.pdf) | 1448×184 |
+| 动机 | [motivation.drawio](src/motivation.drawio) | [motivation.pdf](motivation.pdf) | 1448×250 |
+| 总体框架 | [overview.drawio](src/overview.drawio) | [overview.pdf](overview.pdf) | 1448×504 |
+| 双流聚合 | [aggregation.drawio](src/aggregation.drawio) | [aggregation.pdf](aggregation.pdf) | 768×340 |
+| SDF | [sdf.drawio](src/sdf.drawio) | [sdf.pdf](sdf.pdf) | 675×336 |
+| 定性对比 | [qualitative_comparison.drawio](src/qualitative_comparison.drawio) | [qualitative_comparison.pdf](qualitative_comparison.pdf) | 1448×302 |
 
-Figure 1保留已确认的三栏内容与几何布局，统一校正原生导出的圆角半径。Figure 2–5继续按同一参考图的模块布局、颜色和内容重绘：总体图上方为SAM 3/FPN/条件特征路径，中间为双流交替聚合，下方单独列出训练蒸馏；聚合细节图包含类别token、普通/移位窗口与跨块顺序；SDF展开两条分支中的四个旋转、共享卷积、逆对齐均值和残差；定性图恢复左侧五列三行与右侧占位说明、共享色标。
+本轮保留五图的模块关系、横向顺序与颜色，增加实际模块高度、纵向间距和定性图片槽高度；文字字号、圆形加号、窗口网格、图标及输入/输出影像保持比例。Figure 1保留三栏内容，Figure 2–5沿用确认的参考设计：总体图上方为SAM 3/FPN/条件特征路径，中间为双流交替聚合，下方单独列出训练蒸馏；聚合细节图包含类别token、普通/移位窗口与跨块顺序；SDF展开两条分支中的四个旋转、共享卷积、逆对齐均值和残差；定性图保留左侧五列三行与右侧占位说明、共享色标，图片槽从144×34调整为144×68。
 
 图中所有遥感影像、GT和预测仍为明确标注的占位图，不是实验结果。选中图片槽后用Edit Image替换；图像已嵌入源文件，无外部占位模板依赖。Figure 1中的矢量图标与内嵌图片保留在源文件内部；仓库不再保存或导出独立SVG文件。
 

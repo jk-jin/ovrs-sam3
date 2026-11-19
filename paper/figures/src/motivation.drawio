@@ -1,132 +1,126 @@
 <mxfile host="app.diagrams.net" version="24.7.17" type="device">
   <diagram id="motivation" name="Figure 1 · Motivation">
-    <mxGraphModel dx="1448" dy="172" grid="1" gridSize="1" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1448" pageHeight="172" math="0" shadow="0" background="#FFFFFF">
+    <mxGraphModel dx="1448" dy="250" grid="1" gridSize="1" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1448" pageHeight="250" math="0" shadow="0" background="#FFFFFF">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="motivation_frame" value="" style="rounded=1;arcSize=28;html=0;fillColor=#FFFFFF;strokeColor=#3D3D3D;strokeWidth=1;dashed=1;dashPattern=4 2;absoluteArcSize=1;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="5" y="3" width="1438" height="166" />
-        </mxCell>
-        <mxCell id="motivation_text1" value="Fig. 1. Motivation: Where Does Interaction Happen?" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=20;fontColor=#111111;fontStyle=1;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="21" y="6" width="1070" height="22" />
-        </mxCell>
         <mxCell id="motivation_panel_a" value="" style="group;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="15" y="32" width="482" height="130" />
+          <mxGeometry as="geometry" x="15" y="8" width="482" height="234" />
         </mxCell>
         <mxCell id="motivation_region2" value="" style="rounded=1;arcSize=26;absoluteArcSize=1;html=0;fillColor=#E8F7F6;gradientColor=#E9F7F6;gradientDirection=south;strokeColor=none;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="0" y="0" width="482" height="130" />
+          <mxGeometry as="geometry" x="0" y="0" width="482" height="234" />
         </mxCell>
         <mxCell id="motivation_text3" value="(a) CLIP-based cost aggregation" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=16;fontColor=#111111;fontStyle=1;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="12" y="3" width="285" height="20" />
+          <mxGeometry as="geometry" x="12" y="5.4" width="285" height="36" />
         </mxCell>
         <mxCell id="motivation_text4" value="Matching-space reasoning" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=13;fontColor=#111111;fontStyle=2;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="300" y="3" width="174" height="19" />
+          <mxGeometry as="geometry" x="300" y="5.4" width="174" height="34.2" />
         </mxCell>
         <mxCell id="motivation_image5" value="" style="shape=image;imageAspect=0;aspect=fixed;image=data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22120%22%20viewBox%3D%220%200%20120%20120%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22p%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%220%22%20y2%3D%221%22%3E%3Cstop%20offset%3D%220%22%20stop-color%3D%22%23BFC1C1%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23969B9C%22%2F%3E%3C%2FlinearGradient%3E%3Cpattern%20id%3D%22checker%22%20width%3D%2210%22%20height%3D%2210%22%20patternUnits%3D%22userSpaceOnUse%22%3E%3Crect%20width%3D%225%22%20height%3D%225%22%20fill%3D%22white%22%2F%3E%3Crect%20x%3D%225%22%20y%3D%225%22%20width%3D%225%22%20height%3D%225%22%20fill%3D%22white%22%2F%3E%3C%2Fpattern%3E%3CclipPath%20id%3D%22corner%22%3E%3Cpath%20d%3D%22M78%20117L117%2078V117Z%22%2F%3E%3C%2FclipPath%3E%3C%2Fdefs%3E%3Crect%20x%3D%221%22%20y%3D%221%22%20width%3D%22118%22%20height%3D%22118%22%20fill%3D%22url%28%23p%29%22%20stroke%3D%22%23D5D7D6%22%20stroke-width%3D%222%22%2F%3E%3Cg%20stroke%3D%22%23E7E9E9%22%20stroke-width%3D%221.7%22%20opacity%3D%22.8%22%3E%3Cpath%20d%3D%22M0%2025L34%200M0%2078L89%200M2%20120L120%2011M47%20120L120%2054M84%20120L120%2088M0%200L120%20104M35%200L120%2072M73%200L120%2040%22%2F%3E%3C%2Fg%3E%3Cg%20clip-path%3D%22url%28%23corner%29%22%20opacity%3D%22.9%22%3E%3Crect%20x%3D%2278%22%20y%3D%2278%22%20width%3D%2240%22%20height%3D%2240%22%20fill%3D%22url%28%23checker%29%22%2F%3E%3C%2Fg%3E%3Crect%20x%3D%221%22%20y%3D%2249%22%20width%3D%22118%22%20height%3D%2223%22%20fill%3D%22%23B4B7B7%22%20opacity%3D%22.5%22%2F%3E%3Ctext%20x%3D%2260%22%20y%3D%2266%22%20font-family%3D%22TeX%20Gyre%20Termes%2CTimes%20New%20Roman%2Cserif%22%20font-weight%3D%22bold%22%20font-size%3D%2212.5%22%20text-anchor%3D%22middle%22%20fill%3D%22black%22%3EPLACEHOLDER%3C%2Ftext%3E%3C%2Fsvg%3E;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="14" y="46" width="68" height="68" />
+          <mxGeometry as="geometry" x="14" y="110" width="68" height="68" />
         </mxCell>
         <mxCell id="motivation_box6_halo" value="" style="rounded=1;arcSize=18;html=0;fillColor=#FFFFFF;strokeColor=#FFFFFF;strokeWidth=3.2;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="111" y="33" width="61" height="20" />
+          <mxGeometry as="geometry" x="111" y="59.4" width="61" height="36" />
         </mxCell>
         <mxCell id="motivation_box6" value="" style="rounded=1;arcSize=25.0;absoluteArcSize=0;html=0;fillColor=#FFFFFF;strokeColor=#71737A;strokeWidth=.9;gradientColor=#F1F1F2;gradientDirection=south;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="111" y="33" width="61" height="20" />
+          <mxGeometry as="geometry" x="111" y="59.4" width="61" height="36" />
         </mxCell>
         <mxCell id="motivation_text7" value="Building" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11.9;fontColor=#111111;fontStyle=0;" parent="motivation_box6" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="57" height="18" />
+          <mxGeometry as="geometry" x="2" y="1.8" width="57" height="32.4" />
         </mxCell>
         <mxCell id="motivation_box8_halo" value="" style="rounded=1;arcSize=18;html=0;fillColor=#FFFFFF;strokeColor=#FFFFFF;strokeWidth=3.2;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="111" y="60" width="61" height="20" />
+          <mxGeometry as="geometry" x="111" y="108" width="61" height="36" />
         </mxCell>
         <mxCell id="motivation_box8" value="" style="rounded=1;arcSize=25.0;absoluteArcSize=0;html=0;fillColor=#FFFFFF;strokeColor=#71737A;strokeWidth=.9;gradientColor=#F1F1F2;gradientDirection=south;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="111" y="60" width="61" height="20" />
+          <mxGeometry as="geometry" x="111" y="108" width="61" height="36" />
         </mxCell>
         <mxCell id="motivation_text9" value="Road" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11.9;fontColor=#111111;fontStyle=0;" parent="motivation_box8" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="57" height="18" />
+          <mxGeometry as="geometry" x="2" y="1.8" width="57" height="32.4" />
         </mxCell>
         <mxCell id="motivation_box10_halo" value="" style="rounded=1;arcSize=18;html=0;fillColor=#FFFFFF;strokeColor=#FFFFFF;strokeWidth=3.2;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="111" y="87" width="61" height="20" />
+          <mxGeometry as="geometry" x="111" y="156.6" width="61" height="36" />
         </mxCell>
         <mxCell id="motivation_box10" value="" style="rounded=1;arcSize=25.0;absoluteArcSize=0;html=0;fillColor=#FFFFFF;strokeColor=#71737A;strokeWidth=.9;gradientColor=#F1F1F2;gradientDirection=south;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="111" y="87" width="61" height="20" />
+          <mxGeometry as="geometry" x="111" y="156.6" width="61" height="36" />
         </mxCell>
         <mxCell id="motivation_text11" value="Vegetation" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11.9;fontColor=#111111;fontStyle=0;" parent="motivation_box10" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="57" height="18" />
+          <mxGeometry as="geometry" x="2" y="1.8" width="57" height="32.4" />
         </mxCell>
         <mxCell id="motivation_box12_halo" value="" style="rounded=1;arcSize=18;html=0;fillColor=#FFFFFF;strokeColor=#FFFFFF;strokeWidth=3.2;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="190" y="56" width="64" height="38" />
+          <mxGeometry as="geometry" x="190" y="100.8" width="64" height="68.4" />
         </mxCell>
         <mxCell id="motivation_box12" value="" style="rounded=1;arcSize=15.789473684210526;absoluteArcSize=0;html=0;fillColor=#FFF7D8;strokeColor=#71737A;strokeWidth=.9;gradientColor=#FBEFC0;gradientDirection=south;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="190" y="56" width="64" height="38" />
+          <mxGeometry as="geometry" x="190" y="100.8" width="64" height="68.4" />
         </mxCell>
         <mxCell id="motivation_text13" value="Image-text&#10;matching" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=12.4;fontColor=#111111;fontStyle=0;" parent="motivation_box12" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="60" height="36" />
+          <mxGeometry as="geometry" x="2" y="1.8" width="60" height="64.8" />
         </mxCell>
         <mxCell id="motivation_box14_halo" value="" style="rounded=1;arcSize=18;html=0;fillColor=#FFFFFF;strokeColor=#FFFFFF;strokeWidth=3.2;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="268" y="56" width="64" height="38" />
+          <mxGeometry as="geometry" x="268" y="100.8" width="64" height="68.4" />
         </mxCell>
         <mxCell id="motivation_box14" value="" style="rounded=1;arcSize=15.789473684210526;absoluteArcSize=0;html=0;fillColor=#F0E6FC;strokeColor=#71737A;strokeWidth=.9;gradientColor=#E6D7F5;gradientDirection=south;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="268" y="56" width="64" height="38" />
+          <mxGeometry as="geometry" x="268" y="100.8" width="64" height="68.4" />
         </mxCell>
         <mxCell id="motivation_text15" value="Cost&#10;aggregation" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=12.4;fontColor=#111111;fontStyle=0;" parent="motivation_box14" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="60" height="36" />
+          <mxGeometry as="geometry" x="2" y="1.8" width="60" height="64.8" />
         </mxCell>
         <mxCell id="motivation_box16_halo" value="" style="rounded=1;arcSize=18;html=0;fillColor=#FFFFFF;strokeColor=#FFFFFF;strokeWidth=3.2;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="346" y="56" width="47" height="38" />
+          <mxGeometry as="geometry" x="346" y="100.8" width="47" height="68.4" />
         </mxCell>
         <mxCell id="motivation_box16" value="" style="rounded=1;arcSize=15.789473684210526;absoluteArcSize=0;html=0;fillColor=#FFE9D5;strokeColor=#71737A;strokeWidth=.9;gradientColor=#F9D9BB;gradientDirection=south;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="346" y="56" width="47" height="38" />
+          <mxGeometry as="geometry" x="346" y="100.8" width="47" height="68.4" />
         </mxCell>
         <mxCell id="motivation_text17" value="Task&#10;decoder" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=12.4;fontColor=#111111;fontStyle=0;" parent="motivation_box16" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="43" height="36" />
+          <mxGeometry as="geometry" x="2" y="1.8" width="43" height="64.8" />
         </mxCell>
         <mxCell id="motivation_image18" value="" style="shape=image;imageAspect=0;aspect=fixed;image=data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22120%22%20viewBox%3D%220%200%20120%20120%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22p%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%220%22%20y2%3D%221%22%3E%3Cstop%20offset%3D%220%22%20stop-color%3D%22%23BFC1C1%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23969B9C%22%2F%3E%3C%2FlinearGradient%3E%3Cpattern%20id%3D%22checker%22%20width%3D%2210%22%20height%3D%2210%22%20patternUnits%3D%22userSpaceOnUse%22%3E%3Crect%20width%3D%225%22%20height%3D%225%22%20fill%3D%22white%22%2F%3E%3Crect%20x%3D%225%22%20y%3D%225%22%20width%3D%225%22%20height%3D%225%22%20fill%3D%22white%22%2F%3E%3C%2Fpattern%3E%3CclipPath%20id%3D%22corner%22%3E%3Cpath%20d%3D%22M78%20117L117%2078V117Z%22%2F%3E%3C%2FclipPath%3E%3C%2Fdefs%3E%3Crect%20x%3D%221%22%20y%3D%221%22%20width%3D%22118%22%20height%3D%22118%22%20fill%3D%22url%28%23p%29%22%20stroke%3D%22%23D5D7D6%22%20stroke-width%3D%222%22%2F%3E%3Cg%20stroke%3D%22%23E7E9E9%22%20stroke-width%3D%221.7%22%20opacity%3D%22.8%22%3E%3Cpath%20d%3D%22M0%2025L34%200M0%2078L89%200M2%20120L120%2011M47%20120L120%2054M84%20120L120%2088M0%200L120%20104M35%200L120%2072M73%200L120%2040%22%2F%3E%3C%2Fg%3E%3Cg%20clip-path%3D%22url%28%23corner%29%22%20opacity%3D%22.9%22%3E%3Crect%20x%3D%2278%22%20y%3D%2278%22%20width%3D%2240%22%20height%3D%2240%22%20fill%3D%22url%28%23checker%29%22%2F%3E%3C%2Fg%3E%3Crect%20x%3D%221%22%20y%3D%2249%22%20width%3D%22118%22%20height%3D%2223%22%20fill%3D%22%23B4B7B7%22%20opacity%3D%22.5%22%2F%3E%3Ctext%20x%3D%2260%22%20y%3D%2266%22%20font-family%3D%22TeX%20Gyre%20Termes%2CTimes%20New%20Roman%2Cserif%22%20font-weight%3D%22bold%22%20font-size%3D%2212.5%22%20text-anchor%3D%22middle%22%20fill%3D%22black%22%3EPLACEHOLDER%3C%2Ftext%3E%3C%2Fsvg%3E;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="408" y="46" width="64" height="64" />
+          <mxGeometry as="geometry" x="408" y="108.4" width="64" height="64" />
         </mxCell>
         <mxCell id="motivation_edge19" parent="motivation_panel_a" edge="1" source="motivation_image5" target="motivation_box6" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.1;strokeColor=#111111;endArrow=none;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="94" y="80" />
-              <mxPoint x="94" y="43.0" />
+              <mxPoint x="94" y="144" />
+              <mxPoint x="94" y="77.4" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="motivation_edge20" parent="motivation_panel_a" edge="1" source="motivation_box6" target="motivation_box12" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.1;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="179" y="43.0" />
-              <mxPoint x="179" y="75" />
+              <mxPoint x="179" y="77.4" />
+              <mxPoint x="179" y="135" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="motivation_edge21" parent="motivation_panel_a" edge="1" source="motivation_image5" target="motivation_box8" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.1;strokeColor=#111111;endArrow=none;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="94" y="80" />
-              <mxPoint x="94" y="70.0" />
+              <mxPoint x="94" y="144" />
+              <mxPoint x="94" y="126" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="motivation_edge22" parent="motivation_panel_a" edge="1" source="motivation_box8" target="motivation_box12" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.1;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="179" y="70.0" />
-              <mxPoint x="179" y="75" />
+              <mxPoint x="179" y="126" />
+              <mxPoint x="179" y="135" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="motivation_edge23" parent="motivation_panel_a" edge="1" source="motivation_image5" target="motivation_box10" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.1;strokeColor=#111111;endArrow=none;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="94" y="80" />
-              <mxPoint x="94" y="97.0" />
+              <mxPoint x="94" y="144" />
+              <mxPoint x="94" y="174.6" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="motivation_edge24" parent="motivation_panel_a" edge="1" source="motivation_box10" target="motivation_box12" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.1;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="179" y="97.0" />
-              <mxPoint x="179" y="75" />
+              <mxPoint x="179" y="174.6" />
+              <mxPoint x="179" y="135" />
             </Array>
           </mxGeometry>
         </mxCell>
@@ -140,76 +134,76 @@
           <mxGeometry as="geometry" relative="1" />
         </mxCell>
         <mxCell id="motivation_dot28" value="" style="ellipse;html=0;fillColor=#111111;strokeColor=none;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="130.4" y="116" width="3.2" height="3.2" />
+          <mxGeometry as="geometry" x="130.4" y="210.08" width="3.2" height="3.2" />
         </mxCell>
         <mxCell id="motivation_dot29" value="" style="ellipse;html=0;fillColor=#111111;strokeColor=none;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="139.4" y="116" width="3.2" height="3.2" />
+          <mxGeometry as="geometry" x="139.4" y="210.08" width="3.2" height="3.2" />
         </mxCell>
         <mxCell id="motivation_dot30" value="" style="ellipse;html=0;fillColor=#111111;strokeColor=none;" parent="motivation_panel_a" vertex="1">
-          <mxGeometry as="geometry" x="148.4" y="116" width="3.2" height="3.2" />
+          <mxGeometry as="geometry" x="148.4" y="210.08" width="3.2" height="3.2" />
         </mxCell>
         <mxCell id="motivation_panel_b" value="" style="group;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="506" y="32" width="420" height="130" />
+          <mxGeometry as="geometry" x="506" y="8" width="420" height="234" />
         </mxCell>
         <mxCell id="motivation_region31" value="" style="rounded=1;arcSize=26;absoluteArcSize=1;html=0;fillColor=#EEF3FD;gradientColor=#EEF3FD;gradientDirection=south;strokeColor=none;" parent="motivation_panel_b" vertex="1">
-          <mxGeometry as="geometry" x="0" y="0" width="420" height="130" />
+          <mxGeometry as="geometry" x="0" y="0" width="420" height="234" />
         </mxCell>
         <mxCell id="motivation_text32" value="(b) Per-class SAM 3" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=16;fontColor=#111111;fontStyle=1;" parent="motivation_panel_b" vertex="1">
-          <mxGeometry as="geometry" x="10" y="3" width="185" height="20" />
+          <mxGeometry as="geometry" x="10" y="5.4" width="185" height="36" />
         </mxCell>
         <mxCell id="motivation_text33" value="Per-class conditional predictions" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=13;fontColor=#111111;fontStyle=2;" parent="motivation_panel_b" vertex="1">
-          <mxGeometry as="geometry" x="210" y="3" width="204" height="19" />
+          <mxGeometry as="geometry" x="210" y="5.4" width="204" height="34.2" />
         </mxCell>
         <mxCell id="motivation_image34" value="" style="shape=image;imageAspect=0;aspect=fixed;image=data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22120%22%20viewBox%3D%220%200%20120%20120%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22p%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%220%22%20y2%3D%221%22%3E%3Cstop%20offset%3D%220%22%20stop-color%3D%22%23BFC1C1%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23969B9C%22%2F%3E%3C%2FlinearGradient%3E%3Cpattern%20id%3D%22checker%22%20width%3D%2210%22%20height%3D%2210%22%20patternUnits%3D%22userSpaceOnUse%22%3E%3Crect%20width%3D%225%22%20height%3D%225%22%20fill%3D%22white%22%2F%3E%3Crect%20x%3D%225%22%20y%3D%225%22%20width%3D%225%22%20height%3D%225%22%20fill%3D%22white%22%2F%3E%3C%2Fpattern%3E%3CclipPath%20id%3D%22corner%22%3E%3Cpath%20d%3D%22M78%20117L117%2078V117Z%22%2F%3E%3C%2FclipPath%3E%3C%2Fdefs%3E%3Crect%20x%3D%221%22%20y%3D%221%22%20width%3D%22118%22%20height%3D%22118%22%20fill%3D%22url%28%23p%29%22%20stroke%3D%22%23D5D7D6%22%20stroke-width%3D%222%22%2F%3E%3Cg%20stroke%3D%22%23E7E9E9%22%20stroke-width%3D%221.7%22%20opacity%3D%22.8%22%3E%3Cpath%20d%3D%22M0%2025L34%200M0%2078L89%200M2%20120L120%2011M47%20120L120%2054M84%20120L120%2088M0%200L120%20104M35%200L120%2072M73%200L120%2040%22%2F%3E%3C%2Fg%3E%3Cg%20clip-path%3D%22url%28%23corner%29%22%20opacity%3D%22.9%22%3E%3Crect%20x%3D%2278%22%20y%3D%2278%22%20width%3D%2240%22%20height%3D%2240%22%20fill%3D%22url%28%23checker%29%22%2F%3E%3C%2Fg%3E%3Crect%20x%3D%221%22%20y%3D%2249%22%20width%3D%22118%22%20height%3D%2223%22%20fill%3D%22%23B4B7B7%22%20opacity%3D%22.5%22%2F%3E%3Ctext%20x%3D%2260%22%20y%3D%2266%22%20font-family%3D%22TeX%20Gyre%20Termes%2CTimes%20New%20Roman%2Cserif%22%20font-weight%3D%22bold%22%20font-size%3D%2212.5%22%20text-anchor%3D%22middle%22%20fill%3D%22black%22%3EPLACEHOLDER%3C%2Ftext%3E%3C%2Fsvg%3E;" parent="motivation_panel_b" vertex="1">
-          <mxGeometry as="geometry" x="9" y="46" width="66" height="67" />
+          <mxGeometry as="geometry" x="9" y="109.6" width="66" height="67" />
         </mxCell>
         <mxCell id="motivation_encoder35" value="" style="shape=stencil(jZHLEoMgDEW/hr2F6Uz31v5HxLQyIjhAffx9obFWmS66y7m5IQ+YKH0LAzJeGOiRiSvjHI20DboYRXki7VQUxG3G4AeUgcQRnIJaI2V8cLbDSTVhrVGmRadCyoqKibIG2T2cfZqGeIDkTFFvxzTSTHVrp2XtfH7jjZxamZ1zm2rZV/5l/fBP89F6OUwgtfW4UQy+a0TId7xbhwdWWtOh9k/krijRN4nqBQ==);html=0;fillColor=#E0EEFF;gradientColor=#C9DFFC;gradientDirection=south;strokeColor=#3F73A5;strokeWidth=1.1;" parent="motivation_panel_b" vertex="1">
-          <mxGeometry as="geometry" x="95" y="52" width="65" height="50" />
+          <mxGeometry as="geometry" x="95" y="93.6" width="65" height="90" />
         </mxCell>
         <mxCell id="motivation_text36" value="SAM 3" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=15;fontColor=#111111;fontStyle=1;" parent="motivation_encoder35" vertex="1">
-          <mxGeometry as="geometry" x="7" y="12" width="51" height="18" />
+          <mxGeometry as="geometry" x="7" y="21.6" width="51" height="32.4" />
         </mxCell>
         <mxCell id="motivation_snow37" value="" style="shape=stencil(vVbBbsIwDP2aXqPYTuLkzLb/6KCMCmhRYYP9/VIFaXUqGDCgp9i1n1+d5zQFTbaLclMVqJtyXRX0UiBum3Y/X5XL6MX4Yp+8oHWyF5ldbjfVdJec8/pQzZJ7u+vaZbWvZ7tjQt0sqq7e9W/ptaDJezldfnTtZzNL9qbsI/vVuv3qGR1Snj3W+RbmWwpd1Y0IVTLYKBGdA2fRSOoMOIUsHPCO6A6uRL+4KT4oTwzOWzbaG2DJis+VYVLkMaYGjcDBG5FLTtnTdZlVrBecJUNee+dkXVCGiVFb27MD5sew8P4cC6OVRYccjAEXY/EhHQ8ik+n2jjtSJgyfyz9cbrsNWfufwCgXhGTEXm4F3WUrRlMY3FVDy3zV0Mam3w99dOD8hX5xV0CrvscEJgoBogJopNDhA6eLolMOOALpwB41yPGK4rAngSQlRBWpaDLOOghARsosV4d5AiUASYkkUj5C4SFbg9mx6ZSYtuBubcT5Y3P07VIhV5yb/2GRiyJjMfqHDJHi4vdGEY38ujFvu2pop/vKMD2PiK50WaLXHw==);fillColor=none;strokeColor=#00A9F5;strokeWidth=1.5;" parent="motivation_encoder35" vertex="1">
-          <mxGeometry as="geometry" x="25" y="29" width="16" height="16" />
+          <mxGeometry as="geometry" x="25" y="58.6" width="16" height="16" />
         </mxCell>
         <mxCell id="motivation_box38_halo" value="" style="rounded=1;arcSize=18;html=0;fillColor=#FFFFFF;strokeColor=#FFFFFF;strokeWidth=3.2;" parent="motivation_panel_b" vertex="1">
-          <mxGeometry as="geometry" x="184" y="34" width="66" height="21" />
+          <mxGeometry as="geometry" x="184" y="61.2" width="66" height="37.8" />
         </mxCell>
         <mxCell id="motivation_box38" value="" style="rounded=1;arcSize=23.80952380952381;absoluteArcSize=0;html=0;fillColor=#FFFFFF;strokeColor=#71737A;strokeWidth=.9;gradientColor=#F1F1F2;gradientDirection=south;" parent="motivation_panel_b" vertex="1">
-          <mxGeometry as="geometry" x="184" y="34" width="66" height="21" />
+          <mxGeometry as="geometry" x="184" y="61.2" width="66" height="37.8" />
         </mxCell>
         <mxCell id="motivation_text39" value="Building" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=12.2;fontColor=#111111;fontStyle=0;" parent="motivation_box38" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="62" height="19" />
+          <mxGeometry as="geometry" x="2" y="1.8" width="62" height="34.2" />
         </mxCell>
         <mxCell id="motivation_box40_halo" value="" style="rounded=1;arcSize=18;html=0;fillColor=#FFFFFF;strokeColor=#FFFFFF;strokeWidth=3.2;" parent="motivation_panel_b" vertex="1">
-          <mxGeometry as="geometry" x="184" y="66" width="66" height="21" />
+          <mxGeometry as="geometry" x="184" y="118.8" width="66" height="37.8" />
         </mxCell>
         <mxCell id="motivation_box40" value="" style="rounded=1;arcSize=23.80952380952381;absoluteArcSize=0;html=0;fillColor=#FFFFFF;strokeColor=#71737A;strokeWidth=.9;gradientColor=#F1F1F2;gradientDirection=south;" parent="motivation_panel_b" vertex="1">
-          <mxGeometry as="geometry" x="184" y="66" width="66" height="21" />
+          <mxGeometry as="geometry" x="184" y="118.8" width="66" height="37.8" />
         </mxCell>
         <mxCell id="motivation_text41" value="Road" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=12.2;fontColor=#111111;fontStyle=0;" parent="motivation_box40" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="62" height="19" />
+          <mxGeometry as="geometry" x="2" y="1.8" width="62" height="34.2" />
         </mxCell>
         <mxCell id="motivation_box42_halo" value="" style="rounded=1;arcSize=18;html=0;fillColor=#FFFFFF;strokeColor=#FFFFFF;strokeWidth=3.2;" parent="motivation_panel_b" vertex="1">
-          <mxGeometry as="geometry" x="184" y="98" width="66" height="21" />
+          <mxGeometry as="geometry" x="184" y="176.4" width="66" height="37.8" />
         </mxCell>
         <mxCell id="motivation_box42" value="" style="rounded=1;arcSize=23.80952380952381;absoluteArcSize=0;html=0;fillColor=#FFFFFF;strokeColor=#71737A;strokeWidth=.9;gradientColor=#F1F1F2;gradientDirection=south;" parent="motivation_panel_b" vertex="1">
-          <mxGeometry as="geometry" x="184" y="98" width="66" height="21" />
+          <mxGeometry as="geometry" x="184" y="176.4" width="66" height="37.8" />
         </mxCell>
         <mxCell id="motivation_text43" value="Vegetation" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=12.2;fontColor=#111111;fontStyle=0;" parent="motivation_box42" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="62" height="19" />
+          <mxGeometry as="geometry" x="2" y="1.8" width="62" height="34.2" />
         </mxCell>
         <mxCell id="motivation_box44_halo" value="" style="rounded=1;arcSize=18;html=0;fillColor=#FFFFFF;strokeColor=#FFFFFF;strokeWidth=3.2;" parent="motivation_panel_b" vertex="1">
-          <mxGeometry as="geometry" x="281" y="57" width="49" height="39" />
+          <mxGeometry as="geometry" x="281" y="102.6" width="49" height="70.2" />
         </mxCell>
         <mxCell id="motivation_box44" value="" style="rounded=1;arcSize=15.384615384615385;absoluteArcSize=0;html=0;fillColor=#EEF6DC;strokeColor=#71737A;strokeWidth=.9;gradientColor=#DEECC2;gradientDirection=south;" parent="motivation_panel_b" vertex="1">
-          <mxGeometry as="geometry" x="281" y="57" width="49" height="39" />
+          <mxGeometry as="geometry" x="281" y="102.6" width="49" height="70.2" />
         </mxCell>
         <mxCell id="motivation_text45" value="Mask&#10;fusion" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=12.4;fontColor=#111111;fontStyle=0;" parent="motivation_box44" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="45" height="37" />
+          <mxGeometry as="geometry" x="2" y="1.8" width="45" height="66.6" />
         </mxCell>
         <mxCell id="motivation_image46" value="" style="shape=image;imageAspect=0;aspect=fixed;image=data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22120%22%20viewBox%3D%220%200%20120%20120%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22p%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%220%22%20y2%3D%221%22%3E%3Cstop%20offset%3D%220%22%20stop-color%3D%22%23BFC1C1%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23969B9C%22%2F%3E%3C%2FlinearGradient%3E%3Cpattern%20id%3D%22checker%22%20width%3D%2210%22%20height%3D%2210%22%20patternUnits%3D%22userSpaceOnUse%22%3E%3Crect%20width%3D%225%22%20height%3D%225%22%20fill%3D%22white%22%2F%3E%3Crect%20x%3D%225%22%20y%3D%225%22%20width%3D%225%22%20height%3D%225%22%20fill%3D%22white%22%2F%3E%3C%2Fpattern%3E%3CclipPath%20id%3D%22corner%22%3E%3Cpath%20d%3D%22M78%20117L117%2078V117Z%22%2F%3E%3C%2FclipPath%3E%3C%2Fdefs%3E%3Crect%20x%3D%221%22%20y%3D%221%22%20width%3D%22118%22%20height%3D%22118%22%20fill%3D%22url%28%23p%29%22%20stroke%3D%22%23D5D7D6%22%20stroke-width%3D%222%22%2F%3E%3Cg%20stroke%3D%22%23E7E9E9%22%20stroke-width%3D%221.7%22%20opacity%3D%22.8%22%3E%3Cpath%20d%3D%22M0%2025L34%200M0%2078L89%200M2%20120L120%2011M47%20120L120%2054M84%20120L120%2088M0%200L120%20104M35%200L120%2072M73%200L120%2040%22%2F%3E%3C%2Fg%3E%3Cg%20clip-path%3D%22url%28%23corner%29%22%20opacity%3D%22.9%22%3E%3Crect%20x%3D%2278%22%20y%3D%2278%22%20width%3D%2240%22%20height%3D%2240%22%20fill%3D%22url%28%23checker%29%22%2F%3E%3C%2Fg%3E%3Crect%20x%3D%221%22%20y%3D%2249%22%20width%3D%22118%22%20height%3D%2223%22%20fill%3D%22%23B4B7B7%22%20opacity%3D%22.5%22%2F%3E%3Ctext%20x%3D%2260%22%20y%3D%2266%22%20font-family%3D%22TeX%20Gyre%20Termes%2CTimes%20New%20Roman%2Cserif%22%20font-weight%3D%22bold%22%20font-size%3D%2212.5%22%20text-anchor%3D%22middle%22%20fill%3D%22black%22%3EPLACEHOLDER%3C%2Ftext%3E%3C%2Fsvg%3E;" parent="motivation_panel_b" vertex="1">
-          <mxGeometry as="geometry" x="346" y="46" width="64" height="64" />
+          <mxGeometry as="geometry" x="346" y="108.4" width="64" height="64" />
         </mxCell>
         <mxCell id="motivation_edge47" parent="motivation_panel_b" edge="1" source="motivation_image34" target="motivation_encoder35" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.1;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1" />
@@ -217,48 +211,48 @@
         <mxCell id="motivation_edge48" parent="motivation_panel_b" edge="1" source="motivation_encoder35" target="motivation_box38" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.1;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="169" y="77" />
-              <mxPoint x="169" y="44.5" />
+              <mxPoint x="169" y="138.6" />
+              <mxPoint x="169" y="80.1" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="motivation_edge49" parent="motivation_panel_b" edge="1" source="motivation_box38" target="motivation_box44" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.1;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="265" y="44.5" />
-              <mxPoint x="265" y="76.5" />
+              <mxPoint x="265" y="80.1" />
+              <mxPoint x="265" y="137.7" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="motivation_edge50" parent="motivation_panel_b" edge="1" source="motivation_encoder35" target="motivation_box40" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.1;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="169" y="77" />
-              <mxPoint x="169" y="76.5" />
+              <mxPoint x="169" y="138.6" />
+              <mxPoint x="169" y="137.7" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="motivation_edge51" parent="motivation_panel_b" edge="1" source="motivation_box40" target="motivation_box44" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.1;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="265" y="76.5" />
-              <mxPoint x="265" y="76.5" />
+              <mxPoint x="265" y="137.7" />
+              <mxPoint x="265" y="137.7" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="motivation_edge52" parent="motivation_panel_b" edge="1" source="motivation_encoder35" target="motivation_box42" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.1;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="169" y="77" />
-              <mxPoint x="169" y="108.5" />
+              <mxPoint x="169" y="138.6" />
+              <mxPoint x="169" y="195.3" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="motivation_edge53" parent="motivation_panel_b" edge="1" source="motivation_box42" target="motivation_box44" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.1;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="265" y="108.5" />
-              <mxPoint x="265" y="76.5" />
+              <mxPoint x="265" y="195.3" />
+              <mxPoint x="265" y="137.7" />
             </Array>
           </mxGeometry>
         </mxCell>
@@ -266,76 +260,76 @@
           <mxGeometry as="geometry" relative="1" />
         </mxCell>
         <mxCell id="motivation_panel_c" value="" style="group;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="935" y="32" width="500" height="130" />
+          <mxGeometry as="geometry" x="935" y="8" width="500" height="234" />
         </mxCell>
         <mxCell id="motivation_region55" value="" style="rounded=1;arcSize=26;absoluteArcSize=1;html=0;fillColor=#F8F1FA;gradientColor=#F5EDF9;gradientDirection=south;strokeColor=none;" parent="motivation_panel_c" vertex="1">
-          <mxGeometry as="geometry" x="0" y="0" width="500" height="130" />
+          <mxGeometry as="geometry" x="0" y="0" width="500" height="234" />
         </mxCell>
         <mxCell id="motivation_text56" value="(c) ReCA-SAM3" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=16;fontColor=#111111;fontStyle=1;" parent="motivation_panel_c" vertex="1">
-          <mxGeometry as="geometry" x="28" y="3" width="190" height="20" />
+          <mxGeometry as="geometry" x="28" y="5.4" width="190" height="36" />
         </mxCell>
         <mxCell id="motivation_text57" value="Guided feature interaction before decoding" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=13;fontColor=#111111;fontStyle=2;" parent="motivation_panel_c" vertex="1">
-          <mxGeometry as="geometry" x="228" y="3" width="265" height="19" />
+          <mxGeometry as="geometry" x="228" y="5.4" width="265" height="34.2" />
         </mxCell>
         <mxCell id="motivation_encoder58" value="" style="shape=stencil(jZFBEoMgDEVPw97CdHoAa+8RMa2MCA5QtbcvTKhVFp3u/v95gQSYqH0PEzJeGRiRiSvjHI20HbqoYrxQdqoq8n3hwU8oA4UzOAWtRqr44OyAi+pC7lGmR6dCqoqGiboFOTycfZqO/ASJTGq0cxpppb5802vvbgRqZXbgNlRG+fl/9vKDPZKfzoxKbT1uLorvGtGUO96tw4NXWtND7Y8oqRjRN4nmDQ==);html=0;fillColor=#FFF9D8;gradientColor=#F7EAB3;gradientDirection=south;strokeColor=#9A8739;strokeWidth=1.1;" parent="motivation_panel_c" vertex="1">
-          <mxGeometry as="geometry" x="14" y="46" width="75" height="62" />
+          <mxGeometry as="geometry" x="14" y="82.8" width="75" height="111.6" />
         </mxCell>
         <mxCell id="motivation_text59" value="RemoteCLIP" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=12.8;fontColor=#111111;fontStyle=1;" parent="motivation_encoder58" vertex="1">
-          <mxGeometry as="geometry" x="6" y="18" width="65" height="19" />
+          <mxGeometry as="geometry" x="6" y="32.4" width="65" height="34.2" />
         </mxCell>
         <mxCell id="motivation_fire60" value="" style="shape=stencil(jZRNcoMwDIVPw962hIFlJg33oInTMCVxxpC/2xdiQSu142aFn2Tx8WSZDNb9oTm7zKhTc3QZvGXG7NswBswYu8WAVirqg9BNf3bbIQavTWib944q+yH4T3drdwPVtKeDC+0wZWGTwXrvg/sI/nLakW67bus7H8bi+HyWZQbqGlZq9VzXce+5md46rY7+On37PW5GiPBHlPCzZnsJcauOyYIsPEgD6bshbShPGknfQdSTNjZFswWnYcVpFXJabjmtLDmtSNJK4DStDMfpkuO0yjlPg+BhksdxOXCaKTgNBcwIc+lWgqCBFTThDUUroeI0TNJyLWg5p830mWY0p6FoJJ/JzvduUePie7Cn67BkUndjgzSp/9yNxQhJlXSN3HUhLkchxnUe79m1tdx1mRyf/Ne4ojjSiuPKiuPmQ3ltWuUAWXGkKM0Bpy2dhD9b+eKZjgv5CxxD8WcMmy8=);strokeColor=none;fillColor=#FF3A0A;" parent="motivation_encoder58" vertex="1">
-          <mxGeometry as="geometry" x="4" y="39" width="15" height="20" />
+          <mxGeometry as="geometry" x="4" y="78.2" width="15" height="20" />
         </mxCell>
         <mxCell id="motivation_box61_halo" value="" style="rounded=1;arcSize=18;html=0;fillColor=#FFFFFF;strokeColor=#FFFFFF;strokeWidth=3.2;" parent="motivation_panel_c" vertex="1">
-          <mxGeometry as="geometry" x="106" y="56" width="61" height="38" />
+          <mxGeometry as="geometry" x="106" y="100.8" width="61" height="68.4" />
         </mxCell>
         <mxCell id="motivation_box61" value="" style="rounded=1;arcSize=15.789473684210526;absoluteArcSize=0;html=0;fillColor=#F0E6FC;strokeColor=#71737A;strokeWidth=.9;gradientColor=#E6D7F5;gradientDirection=south;" parent="motivation_panel_c" vertex="1">
-          <mxGeometry as="geometry" x="106" y="56" width="61" height="38" />
+          <mxGeometry as="geometry" x="106" y="100.8" width="61" height="68.4" />
         </mxCell>
         <mxCell id="motivation_text62" value="Class&#10;guidance" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=12.4;fontColor=#111111;fontStyle=0;" parent="motivation_box61" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="57" height="36" />
+          <mxGeometry as="geometry" x="2" y="1.8" width="57" height="64.8" />
         </mxCell>
         <mxCell id="motivation_box63_halo" value="" style="rounded=1;arcSize=18;html=0;fillColor=#FFFFFF;strokeColor=#FFFFFF;strokeWidth=3.2;" parent="motivation_panel_c" vertex="1">
-          <mxGeometry as="geometry" x="207" y="26" width="103" height="22" />
+          <mxGeometry as="geometry" x="207" y="46.8" width="103" height="39.6" />
         </mxCell>
         <mxCell id="motivation_box63" value="" style="rounded=1;arcSize=27.272727272727273;absoluteArcSize=0;html=0;fillColor=#E1EEFF;strokeColor=#4D83B7;strokeWidth=.9;gradientColor=#C7DEF8;gradientDirection=south;" parent="motivation_panel_c" vertex="1">
-          <mxGeometry as="geometry" x="207" y="26" width="103" height="22" />
+          <mxGeometry as="geometry" x="207" y="46.8" width="103" height="39.6" />
         </mxCell>
         <mxCell id="motivation_text64" value="Class features" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=13.2;fontColor=#111111;fontStyle=0;" parent="motivation_box63" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="99" height="20" />
+          <mxGeometry as="geometry" x="2" y="1.8" width="99" height="36" />
         </mxCell>
         <mxCell id="motivation_box65_halo" value="" style="rounded=1;arcSize=18;html=0;fillColor=#FFFFFF;strokeColor=#FFFFFF;strokeWidth=3.2;" parent="motivation_panel_c" vertex="1">
-          <mxGeometry as="geometry" x="207" y="63" width="103" height="22" />
+          <mxGeometry as="geometry" x="207" y="113.4" width="103" height="39.6" />
         </mxCell>
         <mxCell id="motivation_box65" value="" style="rounded=1;arcSize=27.272727272727273;absoluteArcSize=0;html=0;fillColor=#E1EEFF;strokeColor=#4D83B7;strokeWidth=.9;gradientColor=#C7DEF8;gradientDirection=south;" parent="motivation_panel_c" vertex="1">
-          <mxGeometry as="geometry" x="207" y="63" width="103" height="22" />
+          <mxGeometry as="geometry" x="207" y="113.4" width="103" height="39.6" />
         </mxCell>
         <mxCell id="motivation_text66" value="Class features" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=13.2;fontColor=#111111;fontStyle=0;" parent="motivation_box65" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="99" height="20" />
+          <mxGeometry as="geometry" x="2" y="1.8" width="99" height="36" />
         </mxCell>
         <mxCell id="motivation_box67_halo" value="" style="rounded=1;arcSize=18;html=0;fillColor=#FFFFFF;strokeColor=#FFFFFF;strokeWidth=3.2;" parent="motivation_panel_c" vertex="1">
-          <mxGeometry as="geometry" x="207" y="100" width="103" height="22" />
+          <mxGeometry as="geometry" x="207" y="180" width="103" height="39.6" />
         </mxCell>
         <mxCell id="motivation_box67" value="" style="rounded=1;arcSize=27.272727272727273;absoluteArcSize=0;html=0;fillColor=#E1EEFF;strokeColor=#4D83B7;strokeWidth=.9;gradientColor=#C7DEF8;gradientDirection=south;" parent="motivation_panel_c" vertex="1">
-          <mxGeometry as="geometry" x="207" y="100" width="103" height="22" />
+          <mxGeometry as="geometry" x="207" y="180" width="103" height="39.6" />
         </mxCell>
         <mxCell id="motivation_text68" value="Class features" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=13.2;fontColor=#111111;fontStyle=0;" parent="motivation_box67" vertex="1">
-          <mxGeometry as="geometry" x="2" y="1" width="99" height="20" />
+          <mxGeometry as="geometry" x="2" y="1.8" width="99" height="36" />
         </mxCell>
         <mxCell id="motivation_box69_halo" value="" style="rounded=1;arcSize=18;html=0;fillColor=#FFFFFF;strokeColor=#FFFFFF;strokeWidth=3.2;" parent="motivation_panel_c" vertex="1">
-          <mxGeometry as="geometry" x="346" y="52" width="63" height="52" />
+          <mxGeometry as="geometry" x="346" y="93.6" width="63" height="93.6" />
         </mxCell>
         <mxCell id="motivation_box69" value="" style="rounded=1;arcSize=11.538461538461538;absoluteArcSize=0;html=0;fillColor=#E0EEFF;strokeColor=#4D83B7;strokeWidth=.9;gradientColor=#C9DFFC;gradientDirection=south;" parent="motivation_panel_c" vertex="1">
-          <mxGeometry as="geometry" x="346" y="52" width="63" height="52" />
+          <mxGeometry as="geometry" x="346" y="93.6" width="63" height="93.6" />
         </mxCell>
         <mxCell id="motivation_text70" value="Frozen&#10;decoder" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=12.5;fontColor=#111111;fontStyle=1;" parent="motivation_box69" vertex="1">
-          <mxGeometry as="geometry" x="4" y="4" width="55" height="30" />
+          <mxGeometry as="geometry" x="4" y="7.2" width="55" height="54" />
         </mxCell>
         <mxCell id="motivation_snow71" value="" style="shape=stencil(vVbBbsIwDP2aXqPYTuLkzLb/6KCMCmhRYYP9/VIFaXUqGDCgp9i1n1+d5zQFTbaLclMVqJtyXRX0UiBum3Y/X5XL6MX4Yp+8oHWyF5ldbjfVdJec8/pQzZJ7u+vaZbWvZ7tjQt0sqq7e9W/ptaDJezldfnTtZzNL9qbsI/vVuv3qGR1Snj3W+RbmWwpd1Y0IVTLYKBGdA2fRSOoMOIUsHPCO6A6uRL+4KT4oTwzOWzbaG2DJis+VYVLkMaYGjcDBG5FLTtnTdZlVrBecJUNee+dkXVCGiVFb27MD5sew8P4cC6OVRYccjAEXY/EhHQ8ik+n2jjtSJgyfyz9cbrsNWfufwCgXhGTEXm4F3WUrRlMY3FVDy3zV0Mam3w99dOD8hX5xV0CrvscEJgoBogJopNDhA6eLolMOOALpwB41yPGK4rAngSQlRBWpaDLOOghARsosV4d5AiUASYkkUj5C4SFbg9mx6ZSYtuBubcT5Y3P07VIhV5yb/2GRiyJjMfqHDJHi4vdGEY38ujFvu2pop/vKMD2PiK50WaLXHw==);fillColor=none;strokeColor=#00A9F5;strokeWidth=1.5;" parent="motivation_box69" vertex="1">
-          <mxGeometry as="geometry" x="24" y="35" width="16" height="16" />
+          <mxGeometry as="geometry" x="24" y="69.4" width="16" height="16" />
         </mxCell>
         <mxCell id="motivation_image72" value="" style="shape=image;imageAspect=0;aspect=fixed;image=data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22120%22%20height%3D%22120%22%20viewBox%3D%220%200%20120%20120%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22p%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%220%22%20y2%3D%221%22%3E%3Cstop%20offset%3D%220%22%20stop-color%3D%22%23BFC1C1%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23969B9C%22%2F%3E%3C%2FlinearGradient%3E%3Cpattern%20id%3D%22checker%22%20width%3D%2210%22%20height%3D%2210%22%20patternUnits%3D%22userSpaceOnUse%22%3E%3Crect%20width%3D%225%22%20height%3D%225%22%20fill%3D%22white%22%2F%3E%3Crect%20x%3D%225%22%20y%3D%225%22%20width%3D%225%22%20height%3D%225%22%20fill%3D%22white%22%2F%3E%3C%2Fpattern%3E%3CclipPath%20id%3D%22corner%22%3E%3Cpath%20d%3D%22M78%20117L117%2078V117Z%22%2F%3E%3C%2FclipPath%3E%3C%2Fdefs%3E%3Crect%20x%3D%221%22%20y%3D%221%22%20width%3D%22118%22%20height%3D%22118%22%20fill%3D%22url%28%23p%29%22%20stroke%3D%22%23D5D7D6%22%20stroke-width%3D%222%22%2F%3E%3Cg%20stroke%3D%22%23E7E9E9%22%20stroke-width%3D%221.7%22%20opacity%3D%22.8%22%3E%3Cpath%20d%3D%22M0%2025L34%200M0%2078L89%200M2%20120L120%2011M47%20120L120%2054M84%20120L120%2088M0%200L120%20104M35%200L120%2072M73%200L120%2040%22%2F%3E%3C%2Fg%3E%3Cg%20clip-path%3D%22url%28%23corner%29%22%20opacity%3D%22.9%22%3E%3Crect%20x%3D%2278%22%20y%3D%2278%22%20width%3D%2240%22%20height%3D%2240%22%20fill%3D%22url%28%23checker%29%22%2F%3E%3C%2Fg%3E%3Crect%20x%3D%221%22%20y%3D%2249%22%20width%3D%22118%22%20height%3D%2223%22%20fill%3D%22%23B4B7B7%22%20opacity%3D%22.5%22%2F%3E%3Ctext%20x%3D%2260%22%20y%3D%2266%22%20font-family%3D%22TeX%20Gyre%20Termes%2CTimes%20New%20Roman%2Cserif%22%20font-weight%3D%22bold%22%20font-size%3D%2212.5%22%20text-anchor%3D%22middle%22%20fill%3D%22black%22%3EPLACEHOLDER%3C%2Ftext%3E%3C%2Fsvg%3E;" parent="motivation_panel_c" vertex="1">
-          <mxGeometry as="geometry" x="425" y="46" width="64" height="64" />
+          <mxGeometry as="geometry" x="425" y="108.4" width="64" height="64" />
         </mxCell>
         <mxCell id="motivation_edge73" parent="motivation_panel_c" edge="1" source="motivation_encoder58" target="motivation_box61" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.1;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1" />
@@ -343,8 +337,8 @@
         <mxCell id="motivation_edge74" parent="motivation_panel_c" edge="1" source="motivation_box61" target="motivation_box63" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.1;strokeColor=#6900DB;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="180" y="75" />
-              <mxPoint x="180" y="37" />
+              <mxPoint x="180" y="135" />
+              <mxPoint x="180" y="66.6" />
             </Array>
           </mxGeometry>
         </mxCell>
@@ -354,8 +348,8 @@
         <mxCell id="motivation_edge76" parent="motivation_panel_c" edge="1" source="motivation_box61" target="motivation_box67" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.1;strokeColor=#6900DB;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="180" y="75" />
-              <mxPoint x="180" y="111" />
+              <mxPoint x="180" y="135" />
+              <mxPoint x="180" y="199.8" />
             </Array>
           </mxGeometry>
         </mxCell>
@@ -368,16 +362,16 @@
         <mxCell id="motivation_edge79" parent="motivation_panel_c" edge="1" source="motivation_box65" target="motivation_box63" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.1;strokeColor=#6900DB;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=1;entryY=0.5;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="328" y="74" />
-              <mxPoint x="328" y="37" />
+              <mxPoint x="328" y="133.2" />
+              <mxPoint x="328" y="66.6" />
             </Array>
           </mxGeometry>
         </mxCell>
         <mxCell id="motivation_edge80" parent="motivation_panel_c" edge="1" source="motivation_box65" target="motivation_box67" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.1;strokeColor=#6900DB;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=1;entryY=0.5;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="328" y="74" />
-              <mxPoint x="328" y="111" />
+              <mxPoint x="328" y="133.2" />
+              <mxPoint x="328" y="199.8" />
             </Array>
           </mxGeometry>
         </mxCell>
