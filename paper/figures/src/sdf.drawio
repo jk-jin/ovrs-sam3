@@ -1,286 +1,398 @@
-<mxfile host="app.diagrams.net" version="24.7.17" type="device">
-  <diagram id="sdf" name="Sdf">
-    <mxGraphModel dx="1300" dy="440" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1300" pageHeight="440" math="0" shadow="0" background="#FFFFFF">
+<mxfile host="app.diagrams.net" version="32.7.4" type="device">
+  <diagram id="sdf" name="Fig. 4. Semantic–Detail Fusion (SDF)">
+    <mxGraphModel dx="675" dy="256" grid="1" gridSize="1" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="675" pageHeight="256" math="0" shadow="0" background="#FFFFFF">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
-        <mxCell id="sdf_n1" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FFFFFF;strokeColor=#9AA1AC;strokeWidth=1.5;dashed=1;gradientColor=#F0F4F8;gradientDirection=south;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="8" y="8" width="1284" height="423" />
+        <mxCell id="sdf_frame" value="" style="rounded=1;arcSize=28;html=0;fillColor=#FFFFFF;strokeColor=#444444;strokeWidth=1;dashed=1;dashPattern=4 2;absoluteArcSize=1;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="5" y="3" width="665" height="250" />
         </mxCell>
-        <mxCell id="sdf_txt2" value="Semantic–Detail Fusion · 72 × 72 decoder interface" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=26;fontColor=#263443;fontStyle=1;" parent="sdf_n1" vertex="1">
-          <mxGeometry as="geometry" x="10" y="4" width="1264" height="32" />
+        <mxCell id="sdf_text1" value="Fig. 4. Semantic–Detail Fusion (SDF)" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=22;fontColor=#111111;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="20" y="6" width="635" height="25" />
         </mxCell>
-        <mxCell id="sdf_stack3" value="" style="group;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="27" y="140" width="119" height="102" />
+        <mxCell id="sdf_group2" value="" style="group;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="9" y="78" width="65" height="72" />
         </mxCell>
-        <mxCell id="sdf_n4" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#8D9AAE;strokeWidth=1.5;dashed=0;" parent="sdf_stack3" vertex="1">
-          <mxGeometry as="geometry" x="15.0" y="0.0" width="104" height="87" />
+        <mxCell id="sdf_sheet3" value="" style="rounded=0;html=0;fillColor=#C7DEF8;gradientColor=#F5FAFF;gradientDirection=north;strokeColor=#4D9BEA;strokeWidth=.8;" parent="sdf_group2" vertex="1">
+          <mxGeometry as="geometry" x="16" y="0" width="49" height="56" />
         </mxCell>
-        <mxCell id="sdf_n5" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#8D9AAE;strokeWidth=1.5;dashed=0;" parent="sdf_stack3" vertex="1">
-          <mxGeometry as="geometry" x="10.0" y="5.0" width="104" height="87" />
+        <mxCell id="sdf_sheet4" value="" style="rounded=0;html=0;fillColor=#C7DEF8;gradientColor=#F5FAFF;gradientDirection=north;strokeColor=#4D9BEA;strokeWidth=.8;" parent="sdf_group2" vertex="1">
+          <mxGeometry as="geometry" x="12" y="4" width="49" height="56" />
         </mxCell>
-        <mxCell id="sdf_n6" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#8D9AAE;strokeWidth=1.5;dashed=0;" parent="sdf_stack3" vertex="1">
-          <mxGeometry as="geometry" x="5.0" y="10.0" width="104" height="87" />
+        <mxCell id="sdf_sheet5" value="" style="rounded=0;html=0;fillColor=#C7DEF8;gradientColor=#F5FAFF;gradientDirection=north;strokeColor=#4D9BEA;strokeWidth=.8;" parent="sdf_group2" vertex="1">
+          <mxGeometry as="geometry" x="8" y="8" width="49" height="56" />
         </mxCell>
-        <mxCell id="sdf_n7" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="sdf_stack3" vertex="1">
-          <mxGeometry as="geometry" x="0.0" y="15.0" width="104" height="87" />
+        <mxCell id="sdf_sheet6" value="" style="rounded=0;html=0;fillColor=#C7DEF8;gradientColor=#F5FAFF;gradientDirection=north;strokeColor=#4D9BEA;strokeWidth=.8;" parent="sdf_group2" vertex="1">
+          <mxGeometry as="geometry" x="4" y="12" width="49" height="56" />
         </mxCell>
-        <mxCell id="sdf_txt8" value="Aggregated&#10;feature&#10;36 × 36" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="sdf_n7" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="98" height="83" />
+        <mxCell id="sdf_sheet7" value="" style="rounded=0;html=0;fillColor=#C7DEF8;gradientColor=#F5FAFF;gradientDirection=north;strokeColor=#4D9BEA;strokeWidth=.8;" parent="sdf_group2" vertex="1">
+          <mxGeometry as="geometry" x="0" y="16" width="49" height="56" />
         </mxCell>
-        <mxCell id="sdf_n9" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F1C49F;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="154" y="165" width="102" height="65" />
+        <mxCell id="sdf_text8" value="Aggregated&#10;feature&#10;36 × 36" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11;fontColor=#111111;fontStyle=0;" parent="sdf_sheet7" vertex="1">
+          <mxGeometry as="geometry" x="3" y="2" width="43" height="52" />
         </mxCell>
-        <mxCell id="sdf_txt10" value="Upsample&#10;72 × 72" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=22;fontColor=#263443;fontStyle=0;" parent="sdf_n9" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="96" height="61" />
+        <mxCell id="sdf_box9" value="" style="rounded=1;arcSize=13.636363636363637;absoluteArcSize=0;html=0;fillColor=#F9D9BB;strokeColor=#C08B5C;strokeWidth=.9;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="75" y="108" width="44" height="45" />
         </mxCell>
-        <mxCell id="sdf_edge11" parent="1" edge="1" source="sdf_n7" target="sdf_n9" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+        <mxCell id="sdf_text10" value="Upsample&#10;72 × 72" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=10;fontColor=#111111;fontStyle=0;" parent="sdf_box9" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="40" height="43" />
+        </mxCell>
+        <mxCell id="sdf_edge11" parent="1" edge="1" source="sdf_sheet7" target="sdf_box9" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1" />
         </mxCell>
-        <mxCell id="sdf_n12" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FCFAFF;strokeColor=#9AA1AC;strokeWidth=1.5;dashed=1;gradientColor=#EDE5F8;gradientDirection=south;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="279" y="61" width="717" height="166" />
+        <mxCell id="sdf_region12" value="" style="rounded=1;arcSize=14;absoluteArcSize=1;fillColor=#F8F0FC;gradientColor=#F1E6F8;gradientDirection=south;strokeColor=#DFC4F0;strokeWidth=.8;dashed=0;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="123" y="39" width="391" height="91" />
         </mxCell>
-        <mxCell id="sdf_txt13" value="Semantic branch" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=23;fontColor=#263443;fontStyle=1;" parent="sdf_n12" vertex="1">
-          <mxGeometry as="geometry" x="10" y="4" width="697" height="32" />
+        <mxCell id="sdf_text13" value="Semantic branch" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=14;fontColor=#111111;fontStyle=3;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="137" y="38" width="140" height="20" />
         </mxCell>
-        <mxCell id="sdf_n14" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="295" y="114" width="104" height="37" />
+        <mxCell id="sdf_box14" value="" style="rounded=1;arcSize=28.571428571428573;absoluteArcSize=0;html=0;fillColor=#C7DEF8;strokeColor=#729BC5;strokeWidth=.9;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="131" y="67" width="57" height="21" />
         </mxCell>
-        <mxCell id="sdf_txt15" value="Agg. feature" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=18;fontColor=#263443;fontStyle=0;" parent="sdf_n14" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="98" height="33" />
+        <mxCell id="sdf_text15" value="Agg. feat." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11;fontColor=#111111;fontStyle=0;" parent="sdf_box14" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="53" height="19" />
         </mxCell>
-        <mxCell id="sdf_n16" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="295" y="167" width="147" height="37" />
+        <mxCell id="sdf_box16" value="" style="rounded=1;arcSize=28.571428571428573;absoluteArcSize=0;html=0;fillColor=#C7DEF8;strokeColor=#729BC5;strokeWidth=.9;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="131" y="97" width="57" height="21" />
         </mxCell>
-        <mxCell id="sdf_txt17" value="Original conditional" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=16;fontColor=#263443;fontStyle=0;" parent="sdf_n16" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="141" height="33" />
+        <mxCell id="sdf_text17" value="Cond. feat." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11;fontColor=#111111;fontStyle=0;" parent="sdf_box16" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="53" height="19" />
         </mxCell>
-        <mxCell id="sdf_n18" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F1C49F;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="456" y="114" width="65" height="37" />
+        <mxCell id="sdf_box18" value="" style="rounded=1;arcSize=28.571428571428573;absoluteArcSize=0;html=0;fillColor=#F9D9BB;strokeColor=#C08B5C;strokeWidth=.9;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="197" y="67" width="36" height="21" />
         </mxCell>
-        <mxCell id="sdf_txt19" value="Proj." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="sdf_n18" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="59" height="33" />
+        <mxCell id="sdf_text19" value="Proj." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11;fontColor=#111111;fontStyle=0;" parent="sdf_box18" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="32" height="19" />
         </mxCell>
-        <mxCell id="sdf_n20" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F1C49F;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="456" y="167" width="65" height="37" />
+        <mxCell id="sdf_box20" value="" style="rounded=1;arcSize=28.571428571428573;absoluteArcSize=0;html=0;fillColor=#F9D9BB;strokeColor=#C08B5C;strokeWidth=.9;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="197" y="97" width="36" height="21" />
         </mxCell>
-        <mxCell id="sdf_txt21" value="Proj." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="sdf_n20" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="59" height="33" />
+        <mxCell id="sdf_text21" value="Proj." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11;fontColor=#111111;fontStyle=0;" parent="sdf_box20" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="32" height="19" />
         </mxCell>
-        <mxCell id="sdf_n22" value="" style="ellipse;html=0;fillColor=#FFFFFF;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="541" y="139" width="28" height="28" />
+        <mxCell id="sdf_sum22" value="" style="ellipse;fillColor=#FFFFFF;strokeColor=#111111;strokeWidth=1.3;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="240" y="80" width="20" height="20" />
         </mxCell>
-        <mxCell id="sdf_txt23" value="+" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=23;fontColor=#263443;fontStyle=0;" parent="sdf_n22" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="22" height="24" />
+        <mxCell id="sdf_text23" value="+" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=20;fontColor=#111111;fontStyle=1;" parent="sdf_sum22" vertex="1">
+          <mxGeometry as="geometry" x="0" y="0" width="20" height="20" />
         </mxCell>
-        <mxCell id="sdf_edge24" parent="1" edge="1" source="sdf_n9" target="sdf_n14" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+        <mxCell id="sdf_edge24" parent="1" edge="1" source="sdf_box14" target="sdf_box18" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="sdf_edge25" parent="1" edge="1" source="sdf_box16" target="sdf_box20" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="sdf_edge26" parent="1" edge="1" source="sdf_box18" target="sdf_sum22" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="268" y="197.5" />
-              <mxPoint x="268" y="132.5" />
+              <mxPoint x="239" y="77.5" />
+              <mxPoint x="239" y="90" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="sdf_edge25" parent="1" edge="1" source="sdf_n14" target="sdf_n18" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
-          <mxGeometry as="geometry" relative="1" />
-        </mxCell>
-        <mxCell id="sdf_edge26" parent="1" edge="1" source="sdf_n16" target="sdf_n20" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
-          <mxGeometry as="geometry" relative="1" />
-        </mxCell>
-        <mxCell id="sdf_edge27" parent="1" edge="1" source="sdf_n18" target="sdf_n22" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+        <mxCell id="sdf_edge27" parent="1" edge="1" source="sdf_box20" target="sdf_sum22" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="531" y="132.5" />
-              <mxPoint x="531" y="153" />
+              <mxPoint x="239" y="107.5" />
+              <mxPoint x="239" y="90" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="sdf_edge28" parent="1" edge="1" source="sdf_n20" target="sdf_n22" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+        <mxCell id="sdf_box28" value="" style="rounded=1;arcSize=8.571428571428571;absoluteArcSize=0;html=0;fillColor=#FFFFFF;strokeColor=#967AA8;strokeWidth=.9;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="267" y="51" width="167" height="70" />
+        </mxCell>
+        <mxCell id="sdf_text29" value="Orientation block" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=12;fontColor=#111111;fontStyle=1;" parent="sdf_box28" vertex="1">
+          <mxGeometry as="geometry" x="13" y="0" width="141" height="17" />
+        </mxCell>
+        <mxCell id="sdf_box30" value="" style="rounded=1;arcSize=10.0;absoluteArcSize=0;html=0;fillColor=#F6F6F7;strokeColor=#8A8A91;strokeWidth=.9;" parent="sdf_box28" vertex="1">
+          <mxGeometry as="geometry" x="6" y="18" width="24" height="20" />
+        </mxCell>
+        <mxCell id="sdf_text31" value="0°" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=10;fontColor=#111111;fontStyle=0;" parent="sdf_box30" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="20" height="18" />
+        </mxCell>
+        <mxCell id="sdf_box32" value="" style="rounded=1;arcSize=10.0;absoluteArcSize=0;html=0;fillColor=#F6F6F7;strokeColor=#8A8A91;strokeWidth=.9;" parent="sdf_box28" vertex="1">
+          <mxGeometry as="geometry" x="33" y="18" width="24" height="20" />
+        </mxCell>
+        <mxCell id="sdf_text33" value="90°" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=10;fontColor=#111111;fontStyle=0;" parent="sdf_box32" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="20" height="18" />
+        </mxCell>
+        <mxCell id="sdf_box34" value="" style="rounded=1;arcSize=10.0;absoluteArcSize=0;html=0;fillColor=#F6F6F7;strokeColor=#8A8A91;strokeWidth=.9;" parent="sdf_box28" vertex="1">
+          <mxGeometry as="geometry" x="6" y="43" width="24" height="20" />
+        </mxCell>
+        <mxCell id="sdf_text35" value="180°" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=10;fontColor=#111111;fontStyle=0;" parent="sdf_box34" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="20" height="18" />
+        </mxCell>
+        <mxCell id="sdf_box36" value="" style="rounded=1;arcSize=10.0;absoluteArcSize=0;html=0;fillColor=#F6F6F7;strokeColor=#8A8A91;strokeWidth=.9;" parent="sdf_box28" vertex="1">
+          <mxGeometry as="geometry" x="33" y="43" width="24" height="20" />
+        </mxCell>
+        <mxCell id="sdf_text37" value="270°" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=10;fontColor=#111111;fontStyle=0;" parent="sdf_box36" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="20" height="18" />
+        </mxCell>
+        <mxCell id="sdf_box38" value="" style="rounded=1;arcSize=6.451612903225806;absoluteArcSize=0;html=0;fillColor=#F6F6F7;strokeColor=#71737A;strokeWidth=.9;" parent="sdf_box28" vertex="1">
+          <mxGeometry as="geometry" x="68" y="27" width="35" height="31" />
+        </mxCell>
+        <mxCell id="sdf_text39" value="Shared&#10;Conv" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=10;fontColor=#111111;fontStyle=0;" parent="sdf_box38" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="31" height="29" />
+        </mxCell>
+        <mxCell id="sdf_box40" value="" style="rounded=1;arcSize=4.3478260869565215;absoluteArcSize=0;html=0;fillColor=#F6F6F7;strokeColor=#71737A;strokeWidth=.9;" parent="sdf_box28" vertex="1">
+          <mxGeometry as="geometry" x="114" y="17" width="46" height="49" />
+        </mxCell>
+        <mxCell id="sdf_text41" value="Inverse&#10;align +&#10;Mean" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=10;fontColor=#111111;fontStyle=0;" parent="sdf_box40" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="42" height="47" />
+        </mxCell>
+        <mxCell id="sdf_edge42" parent="1" edge="1" source="sdf_box32" target="sdf_box38" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="531" y="185.5" />
-              <mxPoint x="531" y="153" />
+              <mxPoint x="331" y="79" />
+              <mxPoint x="331" y="93.5" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="sdf_n29" value="" style="rounded=1;arcSize=10;html=0;fillColor=#E3E8EF;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="592" y="119" width="243" height="75" />
-        </mxCell>
-        <mxCell id="sdf_txt30" value="0° 90° 180° 270°&#10;Shared Conv → Inverse align&#10;Mean over orientations" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=19;fontColor=#263443;fontStyle=0;" parent="sdf_n29" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="237" height="71" />
-        </mxCell>
-        <mxCell id="sdf_edge31" parent="1" edge="1" source="sdf_n22" target="sdf_n29" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
-          <mxGeometry as="geometry" relative="1" />
-        </mxCell>
-        <mxCell id="sdf_n32" value="" style="ellipse;html=0;fillColor=#FFFFFF;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="854" y="142" width="28" height="28" />
-        </mxCell>
-        <mxCell id="sdf_txt33" value="+" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=23;fontColor=#263443;fontStyle=0;" parent="sdf_n32" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="22" height="24" />
-        </mxCell>
-        <mxCell id="sdf_edge34" parent="1" edge="1" source="sdf_n29" target="sdf_n32" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
-          <mxGeometry as="geometry" relative="1" />
-        </mxCell>
-        <mxCell id="sdf_edge35" parent="1" edge="1" source="sdf_n22" target="sdf_n32" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=0.5;exitY=0;entryX=0.5;entryY=0;">
+        <mxCell id="sdf_edge43" parent="1" edge="1" source="sdf_box36" target="sdf_box38" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="555" y="105" />
-              <mxPoint x="868" y="105" />
+              <mxPoint x="331" y="104" />
+              <mxPoint x="331" y="93.5" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="sdf_n36" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F1C49F;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="908" y="131" width="73" height="50" />
-        </mxCell>
-        <mxCell id="sdf_txt37" value="Branch&#10;proj." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="sdf_n36" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="67" height="46" />
-        </mxCell>
-        <mxCell id="sdf_edge38" parent="1" edge="1" source="sdf_n32" target="sdf_n36" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+        <mxCell id="sdf_edge44" parent="1" edge="1" source="sdf_box38" target="sdf_box40" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1" />
         </mxCell>
-        <mxCell id="sdf_n39" value="" style="rounded=1;arcSize=10;html=0;fillColor=#FAFCF5;strokeColor=#9AA1AC;strokeWidth=1.5;dashed=1;gradientColor=#E9F1DC;gradientDirection=south;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="279" y="242" width="717" height="166" />
+        <mxCell id="sdf_sum45" value="" style="ellipse;fillColor=#FFFFFF;strokeColor=#111111;strokeWidth=1.3;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="437" y="80" width="20" height="20" />
         </mxCell>
-        <mxCell id="sdf_txt40" value="Detail branch" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=23;fontColor=#263443;fontStyle=1;" parent="sdf_n39" vertex="1">
-          <mxGeometry as="geometry" x="10" y="4" width="697" height="32" />
+        <mxCell id="sdf_text46" value="+" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=20;fontColor=#111111;fontStyle=1;" parent="sdf_sum45" vertex="1">
+          <mxGeometry as="geometry" x="0" y="0" width="20" height="20" />
         </mxCell>
-        <mxCell id="sdf_n41" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="295" y="295" width="104" height="37" />
+        <mxCell id="sdf_box47" value="" style="rounded=1;arcSize=15.384615384615385;absoluteArcSize=0;html=0;fillColor=#F9D9BB;strokeColor=#C08B5C;strokeWidth=.9;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="465" y="71" width="53" height="39" />
         </mxCell>
-        <mxCell id="sdf_txt42" value="Agg. feature" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=18;fontColor=#263443;fontStyle=0;" parent="sdf_n41" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="98" height="33" />
+        <mxCell id="sdf_text48" value="Branch&#10;projection" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11;fontColor=#111111;fontStyle=0;" parent="sdf_box47" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="49" height="37" />
         </mxCell>
-        <mxCell id="sdf_n43" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="295" y="348" width="147" height="37" />
+        <mxCell id="sdf_edge49" parent="1" edge="1" source="sdf_sum22" target="sdf_box28" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
+          <mxGeometry as="geometry" relative="1" />
         </mxCell>
-        <mxCell id="sdf_txt44" value="Image-level FPN72" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=17;fontColor=#263443;fontStyle=0;" parent="sdf_n43" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="141" height="33" />
+        <mxCell id="sdf_edge50" parent="1" edge="1" source="sdf_box28" target="sdf_sum45" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
+          <mxGeometry as="geometry" relative="1" />
         </mxCell>
-        <mxCell id="sdf_n45" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F1C49F;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="456" y="295" width="65" height="37" />
+        <mxCell id="sdf_edge51" parent="1" edge="1" source="sdf_sum45" target="sdf_box47" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
+          <mxGeometry as="geometry" relative="1" />
         </mxCell>
-        <mxCell id="sdf_txt46" value="Proj." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="sdf_n45" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="59" height="33" />
-        </mxCell>
-        <mxCell id="sdf_n47" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F1C49F;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="456" y="348" width="65" height="37" />
-        </mxCell>
-        <mxCell id="sdf_txt48" value="Proj." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="sdf_n47" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="59" height="33" />
-        </mxCell>
-        <mxCell id="sdf_n49" value="" style="ellipse;html=0;fillColor=#FFFFFF;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="541" y="320" width="28" height="28" />
-        </mxCell>
-        <mxCell id="sdf_txt50" value="+" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=23;fontColor=#263443;fontStyle=0;" parent="sdf_n49" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="22" height="24" />
-        </mxCell>
-        <mxCell id="sdf_edge51" parent="1" edge="1" source="sdf_n9" target="sdf_n41" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+        <mxCell id="sdf_edge52" parent="1" edge="1" source="sdf_sum22" target="sdf_sum45" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=0.5;exitY=0;entryX=0.5;entryY=0;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="268" y="197.5" />
-              <mxPoint x="268" y="313.5" />
+              <mxPoint x="250" y="49" />
+              <mxPoint x="447" y="49" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="sdf_edge52" parent="1" edge="1" source="sdf_n41" target="sdf_n45" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
-          <mxGeometry as="geometry" relative="1" />
-        </mxCell>
-        <mxCell id="sdf_edge53" parent="1" edge="1" source="sdf_n43" target="sdf_n47" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
-          <mxGeometry as="geometry" relative="1" />
-        </mxCell>
-        <mxCell id="sdf_edge54" parent="1" edge="1" source="sdf_n45" target="sdf_n49" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+        <mxCell id="sdf_edge53" parent="1" edge="1" source="sdf_box9" target="sdf_box14" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="531" y="313.5" />
-              <mxPoint x="531" y="334" />
+              <mxPoint x="118" y="130.5" />
+              <mxPoint x="118" y="77.5" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="sdf_edge55" parent="1" edge="1" source="sdf_n47" target="sdf_n49" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+        <mxCell id="sdf_region54" value="" style="rounded=1;arcSize=14;absoluteArcSize=1;fillColor=#F2F8E8;gradientColor=#E7F3D9;gradientDirection=south;strokeColor=#BEDAA8;strokeWidth=.8;dashed=0;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="123" y="137" width="391" height="91" />
+        </mxCell>
+        <mxCell id="sdf_text55" value="Detail branch" style="text;html=0;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=14;fontColor=#111111;fontStyle=3;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="137" y="136" width="140" height="20" />
+        </mxCell>
+        <mxCell id="sdf_box56" value="" style="rounded=1;arcSize=28.571428571428573;absoluteArcSize=0;html=0;fillColor=#C7DEF8;strokeColor=#729BC5;strokeWidth=.9;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="131" y="165" width="57" height="21" />
+        </mxCell>
+        <mxCell id="sdf_text57" value="Agg. feat." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11;fontColor=#111111;fontStyle=0;" parent="sdf_box56" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="53" height="19" />
+        </mxCell>
+        <mxCell id="sdf_box58" value="" style="rounded=1;arcSize=28.571428571428573;absoluteArcSize=0;html=0;fillColor=#C7DEF8;strokeColor=#729BC5;strokeWidth=.9;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="131" y="195" width="57" height="21" />
+        </mxCell>
+        <mxCell id="sdf_text59" value="FPN72" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11;fontColor=#111111;fontStyle=0;" parent="sdf_box58" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="53" height="19" />
+        </mxCell>
+        <mxCell id="sdf_box60" value="" style="rounded=1;arcSize=28.571428571428573;absoluteArcSize=0;html=0;fillColor=#F9D9BB;strokeColor=#C08B5C;strokeWidth=.9;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="197" y="165" width="36" height="21" />
+        </mxCell>
+        <mxCell id="sdf_text61" value="Proj." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11;fontColor=#111111;fontStyle=0;" parent="sdf_box60" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="32" height="19" />
+        </mxCell>
+        <mxCell id="sdf_box62" value="" style="rounded=1;arcSize=28.571428571428573;absoluteArcSize=0;html=0;fillColor=#F9D9BB;strokeColor=#C08B5C;strokeWidth=.9;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="197" y="195" width="36" height="21" />
+        </mxCell>
+        <mxCell id="sdf_text63" value="Proj." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11;fontColor=#111111;fontStyle=0;" parent="sdf_box62" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="32" height="19" />
+        </mxCell>
+        <mxCell id="sdf_sum64" value="" style="ellipse;fillColor=#FFFFFF;strokeColor=#111111;strokeWidth=1.3;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="240" y="178" width="20" height="20" />
+        </mxCell>
+        <mxCell id="sdf_text65" value="+" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=20;fontColor=#111111;fontStyle=1;" parent="sdf_sum64" vertex="1">
+          <mxGeometry as="geometry" x="0" y="0" width="20" height="20" />
+        </mxCell>
+        <mxCell id="sdf_edge66" parent="1" edge="1" source="sdf_box56" target="sdf_box60" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="sdf_edge67" parent="1" edge="1" source="sdf_box58" target="sdf_box62" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="sdf_edge68" parent="1" edge="1" source="sdf_box60" target="sdf_sum64" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="531" y="366.5" />
-              <mxPoint x="531" y="334" />
+              <mxPoint x="239" y="175.5" />
+              <mxPoint x="239" y="188" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="sdf_n56" value="" style="rounded=1;arcSize=10;html=0;fillColor=#E3E8EF;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="592" y="300" width="243" height="75" />
-        </mxCell>
-        <mxCell id="sdf_txt57" value="0° 90° 180° 270°&#10;Shared Conv → Inverse align&#10;Mean over orientations" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=19;fontColor=#263443;fontStyle=0;" parent="sdf_n56" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="237" height="71" />
-        </mxCell>
-        <mxCell id="sdf_edge58" parent="1" edge="1" source="sdf_n49" target="sdf_n56" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
-          <mxGeometry as="geometry" relative="1" />
-        </mxCell>
-        <mxCell id="sdf_n59" value="" style="ellipse;html=0;fillColor=#FFFFFF;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="854" y="323" width="28" height="28" />
-        </mxCell>
-        <mxCell id="sdf_txt60" value="+" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=23;fontColor=#263443;fontStyle=0;" parent="sdf_n59" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="22" height="24" />
-        </mxCell>
-        <mxCell id="sdf_edge61" parent="1" edge="1" source="sdf_n56" target="sdf_n59" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
-          <mxGeometry as="geometry" relative="1" />
-        </mxCell>
-        <mxCell id="sdf_edge62" parent="1" edge="1" source="sdf_n49" target="sdf_n59" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=0.5;exitY=0;entryX=0.5;entryY=0;">
+        <mxCell id="sdf_edge69" parent="1" edge="1" source="sdf_box62" target="sdf_sum64" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="555" y="286" />
-              <mxPoint x="868" y="286" />
+              <mxPoint x="239" y="205.5" />
+              <mxPoint x="239" y="188" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="sdf_n63" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F1C49F;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="908" y="312" width="73" height="50" />
+        <mxCell id="sdf_box70" value="" style="rounded=1;arcSize=8.571428571428571;absoluteArcSize=0;html=0;fillColor=#FFFFFF;strokeColor=#91AA6D;strokeWidth=.9;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="267" y="149" width="167" height="70" />
         </mxCell>
-        <mxCell id="sdf_txt64" value="Branch&#10;proj." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=20;fontColor=#263443;fontStyle=0;" parent="sdf_n63" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="67" height="46" />
+        <mxCell id="sdf_text71" value="Orientation block" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=12;fontColor=#111111;fontStyle=1;" parent="sdf_box70" vertex="1">
+          <mxGeometry as="geometry" x="13" y="0" width="141" height="17" />
         </mxCell>
-        <mxCell id="sdf_edge65" parent="1" edge="1" source="sdf_n59" target="sdf_n63" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
-          <mxGeometry as="geometry" relative="1" />
+        <mxCell id="sdf_box72" value="" style="rounded=1;arcSize=10.0;absoluteArcSize=0;html=0;fillColor=#F6F6F7;strokeColor=#8A8A91;strokeWidth=.9;" parent="sdf_box70" vertex="1">
+          <mxGeometry as="geometry" x="6" y="18" width="24" height="20" />
         </mxCell>
-        <mxCell id="sdf_n66" value="" style="ellipse;html=0;fillColor=#FFFFFF;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="1030" y="206" width="28" height="28" />
+        <mxCell id="sdf_text73" value="0°" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=10;fontColor=#111111;fontStyle=0;" parent="sdf_box72" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="20" height="18" />
         </mxCell>
-        <mxCell id="sdf_txt67" value="+" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=23;fontColor=#263443;fontStyle=0;" parent="sdf_n66" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="22" height="24" />
+        <mxCell id="sdf_box74" value="" style="rounded=1;arcSize=10.0;absoluteArcSize=0;html=0;fillColor=#F6F6F7;strokeColor=#8A8A91;strokeWidth=.9;" parent="sdf_box70" vertex="1">
+          <mxGeometry as="geometry" x="33" y="18" width="24" height="20" />
         </mxCell>
-        <mxCell id="sdf_n68" value="" style="rounded=1;arcSize=10;html=0;fillColor=#F1C49F;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="1080" y="184" width="106" height="72" />
+        <mxCell id="sdf_text75" value="90°" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=10;fontColor=#111111;fontStyle=0;" parent="sdf_box74" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="20" height="18" />
         </mxCell>
-        <mxCell id="sdf_txt69" value="Output&#10;projection" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=22;fontColor=#263443;fontStyle=0;" parent="sdf_n68" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="100" height="68" />
+        <mxCell id="sdf_box76" value="" style="rounded=1;arcSize=10.0;absoluteArcSize=0;html=0;fillColor=#F6F6F7;strokeColor=#8A8A91;strokeWidth=.9;" parent="sdf_box70" vertex="1">
+          <mxGeometry as="geometry" x="6" y="43" width="24" height="20" />
         </mxCell>
-        <mxCell id="sdf_n70" value="" style="rounded=1;arcSize=10;html=0;fillColor=#BCD3ED;strokeColor=#263443;strokeWidth=1.5;dashed=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="1210" y="184" width="73" height="72" />
+        <mxCell id="sdf_text77" value="180°" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=10;fontColor=#111111;fontStyle=0;" parent="sdf_box76" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="20" height="18" />
         </mxCell>
-        <mxCell id="sdf_txt71" value="Decoder&#10;input" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=18;fontColor=#263443;fontStyle=0;" parent="sdf_n70" vertex="1">
-          <mxGeometry as="geometry" x="3" y="2" width="67" height="68" />
+        <mxCell id="sdf_box78" value="" style="rounded=1;arcSize=10.0;absoluteArcSize=0;html=0;fillColor=#F6F6F7;strokeColor=#8A8A91;strokeWidth=.9;" parent="sdf_box70" vertex="1">
+          <mxGeometry as="geometry" x="33" y="43" width="24" height="20" />
         </mxCell>
-        <mxCell id="sdf_edge72" parent="1" edge="1" source="sdf_n36" target="sdf_n66" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+        <mxCell id="sdf_text79" value="270°" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=10;fontColor=#111111;fontStyle=0;" parent="sdf_box78" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="20" height="18" />
+        </mxCell>
+        <mxCell id="sdf_box80" value="" style="rounded=1;arcSize=6.451612903225806;absoluteArcSize=0;html=0;fillColor=#F6F6F7;strokeColor=#71737A;strokeWidth=.9;" parent="sdf_box70" vertex="1">
+          <mxGeometry as="geometry" x="68" y="27" width="35" height="31" />
+        </mxCell>
+        <mxCell id="sdf_text81" value="Shared&#10;Conv" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=10;fontColor=#111111;fontStyle=0;" parent="sdf_box80" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="31" height="29" />
+        </mxCell>
+        <mxCell id="sdf_box82" value="" style="rounded=1;arcSize=4.3478260869565215;absoluteArcSize=0;html=0;fillColor=#F6F6F7;strokeColor=#71737A;strokeWidth=.9;" parent="sdf_box70" vertex="1">
+          <mxGeometry as="geometry" x="114" y="17" width="46" height="49" />
+        </mxCell>
+        <mxCell id="sdf_text83" value="Inverse&#10;align +&#10;Mean" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=10;fontColor=#111111;fontStyle=0;" parent="sdf_box82" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="42" height="47" />
+        </mxCell>
+        <mxCell id="sdf_edge84" parent="1" edge="1" source="sdf_box74" target="sdf_box80" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="1010" y="156.0" />
-              <mxPoint x="1010" y="220" />
+              <mxPoint x="331" y="177" />
+              <mxPoint x="331" y="191.5" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="sdf_edge73" parent="1" edge="1" source="sdf_n63" target="sdf_n66" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+        <mxCell id="sdf_edge85" parent="1" edge="1" source="sdf_box78" target="sdf_box80" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1">
             <Array as="points">
-              <mxPoint x="1010" y="337.0" />
-              <mxPoint x="1010" y="220" />
+              <mxPoint x="331" y="202" />
+              <mxPoint x="331" y="191.5" />
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="sdf_edge74" parent="1" edge="1" source="sdf_n66" target="sdf_n68" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+        <mxCell id="sdf_edge86" parent="1" edge="1" source="sdf_box80" target="sdf_box82" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1" />
         </mxCell>
-        <mxCell id="sdf_edge75" parent="1" edge="1" source="sdf_n68" target="sdf_n70" style="edgeStyle=none;html=0;endArrow=block;endFill=1;strokeColor=#263443;strokeWidth=1.7;dashed=0;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+        <mxCell id="sdf_sum87" value="" style="ellipse;fillColor=#FFFFFF;strokeColor=#111111;strokeWidth=1.3;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="437" y="178" width="20" height="20" />
+        </mxCell>
+        <mxCell id="sdf_text88" value="+" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=20;fontColor=#111111;fontStyle=1;" parent="sdf_sum87" vertex="1">
+          <mxGeometry as="geometry" x="0" y="0" width="20" height="20" />
+        </mxCell>
+        <mxCell id="sdf_box89" value="" style="rounded=1;arcSize=15.384615384615385;absoluteArcSize=0;html=0;fillColor=#F9D9BB;strokeColor=#C08B5C;strokeWidth=.9;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="465" y="169" width="53" height="39" />
+        </mxCell>
+        <mxCell id="sdf_text90" value="Branch&#10;projection" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11;fontColor=#111111;fontStyle=0;" parent="sdf_box89" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="49" height="37" />
+        </mxCell>
+        <mxCell id="sdf_edge91" parent="1" edge="1" source="sdf_sum64" target="sdf_box70" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
           <mxGeometry as="geometry" relative="1" />
         </mxCell>
-        <mxCell id="sdf_txt76" value="Weights shared across rotations; independent parameters across branches." style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontFamily=Times New Roman;fontSize=18;fontColor=#263443;fontStyle=0;" parent="1" vertex="1">
-          <mxGeometry as="geometry" x="303" y="411" width="684" height="22" />
+        <mxCell id="sdf_edge92" parent="1" edge="1" source="sdf_box70" target="sdf_sum87" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="sdf_edge93" parent="1" edge="1" source="sdf_sum87" target="sdf_box89" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="sdf_edge94" parent="1" edge="1" source="sdf_sum64" target="sdf_sum87" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=0.5;exitY=0;entryX=0.5;entryY=0;exitPerimeter=0;entryPerimeter=0;dashed=0;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="250" y="147" />
+              <mxPoint x="447" y="147" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="sdf_edge95" parent="1" edge="1" source="sdf_box9" target="sdf_box56" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="118" y="130.5" />
+              <mxPoint x="118" y="175.5" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="sdf_sum96" value="" style="ellipse;fillColor=#FFFFFF;strokeColor=#111111;strokeWidth=1.3;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="524" y="124" width="20" height="20" />
+        </mxCell>
+        <mxCell id="sdf_text97" value="+" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=20;fontColor=#111111;fontStyle=1;" parent="sdf_sum96" vertex="1">
+          <mxGeometry as="geometry" x="0" y="0" width="20" height="20" />
+        </mxCell>
+        <mxCell id="sdf_box98" value="" style="rounded=1;arcSize=18.75;absoluteArcSize=0;html=0;fillColor=#F9D9BB;strokeColor=#C08B5C;strokeWidth=.9;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="555" y="117" width="55" height="32" />
+        </mxCell>
+        <mxCell id="sdf_text99" value="Output&#10;projection" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11;fontColor=#111111;fontStyle=0;" parent="sdf_box98" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="51" height="30" />
+        </mxCell>
+        <mxCell id="sdf_box100" value="" style="rounded=1;arcSize=18.75;absoluteArcSize=0;html=0;fillColor=#C7DEF8;strokeColor=#4D9BEA;strokeWidth=.9;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="623" y="117" width="45" height="32" />
+        </mxCell>
+        <mxCell id="sdf_text101" value="Decoder&#10;input" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=11;fontColor=#111111;fontStyle=0;" parent="sdf_box100" vertex="1">
+          <mxGeometry as="geometry" x="2" y="1" width="41" height="30" />
+        </mxCell>
+        <mxCell id="sdf_edge102" parent="1" edge="1" source="sdf_box47" target="sdf_sum96" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0.5;entryY=0;exitPerimeter=0;entryPerimeter=0;dashed=0;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="534" y="90.5" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="sdf_edge103" parent="1" edge="1" source="sdf_box89" target="sdf_sum96" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0.5;entryY=1;exitPerimeter=0;entryPerimeter=0;dashed=0;">
+          <mxGeometry as="geometry" relative="1">
+            <Array as="points">
+              <mxPoint x="534" y="188.5" />
+              <mxPoint x="534" y="144" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="sdf_edge104" parent="1" edge="1" source="sdf_sum96" target="sdf_box98" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="sdf_edge105" parent="1" edge="1" source="sdf_box98" target="sdf_box100" style="edgeStyle=none;rounded=0;html=0;strokeWidth=1.35;strokeColor=#111111;endArrow=block;endFill=1;endSize=5;startArrow=none;startFill=1;startSize=5;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitPerimeter=0;entryPerimeter=0;dashed=0;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="sdf_text106" value="Independent branches   |   Weights shared across rotations" style="text;html=0;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;spacing=0;fontFamily=Times New Roman;fontSize=13;fontColor=#111111;fontStyle=2;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="130" y="233" width="532" height="18" />
         </mxCell>
       </root>
     </mxGraphModel>

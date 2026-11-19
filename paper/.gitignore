@@ -1,3 +1,6 @@
 build/
 
 generated/
+
+# Paper figures are exported only as PDF.
+figures/*.svg

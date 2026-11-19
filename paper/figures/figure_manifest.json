@@ -1,6 +1,5 @@
 {
   "source": "src/*.drawio",
-  "image_tile": "image_placeholder.svg",
   "figures": [
     {
       "name": "motivation",
@@ -9,118 +8,80 @@
       "native_cells": 103,
       "editable": true,
       "source": "src/motivation.drawio",
-      "svg": "motivation.svg",
       "pdf": "motivation.pdf",
       "placeholders": 5,
-      "reference": "Figure 1 in the user-provided ReCA-SAM3 five-figure design preview",
-      "palette_source": "Reference-specific cyan / blue / purple panels and pastel module fills; overrides the shared palette",
+      "reference": "Figure 1 in the user-approved ReCA-SAM3 five-figure design preview",
+      "palette_source": "Reference-specific cyan / blue / purple panels and pastel module fills",
       "image_tile": "Five embedded square neutral placeholders; editable via Edit Image",
       "native_vector_stencils": [
         "encoder",
         "snowflake",
         "fire"
-      ]
+      ],
+      "source_sha256": "200d321d2e8b9dd0d11d388484f7bc9e9332489e1f32aac323430221c05f8726",
+      "pdf_sha256": "4076e296e1b02bcb4df5bf556f7e8c4b284957228ac664c631eb588f4307b6ac"
     },
     {
       "name": "overview",
-      "width": 1440,
-      "height": 565,
-      "native_cells": 106,
+      "width": 1448,
+      "height": 360,
+      "native_cells": 137,
       "editable": true,
       "source": "src/overview.drawio",
-      "svg": "overview.svg",
       "pdf": "overview.pdf",
-      "placeholders": 2
+      "placeholders": 2,
+      "reference": "Figure 2 in the user-approved ReCA-SAM3 five-figure design preview",
+      "source_sha256": "684556d5c4d121dd189ead4044856eee60e2bf3d231d0d6c3080ac1f368eeb61",
+      "pdf_sha256": "c13c88abcc3ba72feef3b6adb06dbc824ffb55cccb19ce3af342f59f34d947bd"
     },
     {
       "name": "aggregation",
-      "width": 1320,
-      "height": 480,
-      "native_cells": 53,
+      "width": 768,
+      "height": 256,
+      "native_cells": 103,
       "editable": true,
       "source": "src/aggregation.drawio",
-      "svg": "aggregation.svg",
       "pdf": "aggregation.pdf",
-      "placeholders": 0
+      "placeholders": 0,
+      "reference": "Figure 3 in the user-approved ReCA-SAM3 five-figure design preview",
+      "source_sha256": "289c128f1d4eb7f04fe5ec1729df0da7b928acb65cdcd8569ec46e957966fd49",
+      "pdf_sha256": "b5f1db5f05e8fd59df81ba55580bd2f635dc629e25f6cea4f906c92fff720c12"
     },
     {
       "name": "sdf",
-      "width": 1300,
-      "height": 440,
-      "native_cells": 78,
+      "width": 675,
+      "height": 256,
+      "native_cells": 109,
       "editable": true,
       "source": "src/sdf.drawio",
-      "svg": "sdf.svg",
       "pdf": "sdf.pdf",
-      "placeholders": 0
+      "placeholders": 0,
+      "reference": "Figure 4 in the user-approved ReCA-SAM3 five-figure design preview",
+      "source_sha256": "68d00551f459f234157474bc8012e655d9af25e4b1a9b73961d615594968349e",
+      "pdf_sha256": "a898a743f1456e38f5fb78f08548ecaccb0b10f85c18735c316aa89816d9994e"
     },
     {
       "name": "qualitative_comparison",
-      "width": 1160,
-      "height": 415,
-      "native_cells": 51,
+      "width": 1448,
+      "height": 184,
+      "native_cells": 43,
       "editable": true,
       "source": "src/qualitative_comparison.drawio",
-      "svg": "qualitative_comparison.svg",
       "pdf": "qualitative_comparison.pdf",
-      "placeholders": 15
+      "placeholders": 15,
+      "reference": "Figure 5 in the user-approved ReCA-SAM3 five-figure design preview",
+      "source_sha256": "b43426836c136b84fb0316aa95907035512d54e809866e1dd03682ebd37b5fbb",
+      "pdf_sha256": "d352b58e8fbd3bc276a3874b39cdadebc15627e86a80d7b8d6c8340237e20c85"
     }
   ],
-  "notes": "Native editable cells; placeholder image and mask tiles are not experimental results.",
+  "notes": "Native editable draw.io cells. Exported PDFs are the only standalone figure output. All image/prediction tiles are placeholders.",
   "native_cell_count_includes_root": true,
   "color_design": {
-    "region_fill": "vertical gradient; pale start/end colors",
-    "module_fill": "solid; higher saturation than enclosing regions",
-    "palette": {
-      "blue": {
-        "module": "#BCD3ED",
-        "start": "#F8FBFF",
-        "end": "#E5EDF8"
-      },
-      "yellow": {
-        "module": "#FFE29A",
-        "start": "#FFFCF1",
-        "end": "#FFF0CF"
-      },
-      "purple": {
-        "module": "#D4BEED",
-        "start": "#FCFAFF",
-        "end": "#EDE5F8"
-      },
-      "sage": {
-        "module": "#C6DCA9",
-        "start": "#FAFCF5",
-        "end": "#E9F1DC"
-      },
-      "peach": {
-        "module": "#F1C49F",
-        "start": "#FFF9F3",
-        "end": "#F9E6D6"
-      },
-      "teal": {
-        "module": "#BBDDD6",
-        "start": "#F4FCFA",
-        "end": "#E0F1EB"
-      },
-      "gray": {
-        "module": "#E3E8EF",
-        "start": "#FFFFFF",
-        "end": "#EEF2F7"
-      }
-    },
-    "neutral_region": {
-      "start": "#FFFFFF",
-      "end": "#F0F4F8"
-    },
-    "qualitative_headers": [
-      "teal",
-      "sage",
-      "blue",
-      "peach",
-      "purple"
-    ],
-    "qualitative_row_labels": "gray",
-    "image_placeholders": "unchanged neutral gray",
-    "scope": "Shared palette for Figures 2–5; Figure 1 follows its approved preview and has a reference-specific palette."
-  }
+    "region_fill": "Reference-specific pale gradients",
+    "module_fill": "Reference-specific pastel fills",
+    "palette_source": "User-approved ReCA-SAM3 five-figure design preview",
+    "qualitative_headers": "Uniform cyan, as in the reference preview"
+  },
+  "export_format": "pdf",
+  "export_command": "python3 paper/scripts/export_figures.py"
 }

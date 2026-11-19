@@ -1,41 +1,55 @@
 # ReCA-SAM3 可编辑论文图
 
-五图采用同一套浅色渐变分区、对比更明确的纯色模块、虚线边框、编码器梯形和特征堆叠。论文加载矢量PDF；draw.io源文件包含原生形状、独立文字、已连接端点的箭头和可替换图像，不是把预览PNG贴进画布。文字跟随所属模块，特征堆叠使用原生分组。
+五图按照确认的五图预览重绘：浅色分区、虚线外框、梯形编码器、特征堆叠、黑色前向流、紫色状态流，以及红色虚线训练蒸馏路径。源文件保留原生形状、文字、分组和连接器；论文仅加载同名 PDF。
 
-| 图 | 可编辑源文件 | 矢量图 | 画布宽×高 |
+| 图 | 可编辑源文件 | 论文图片 | 画布宽×高 |
 | --- | --- | --- | --- |
-| 动机 | [motivation.drawio](src/motivation.drawio) | [PDF](motivation.pdf) / [SVG](motivation.svg) | 1448×172 |
-| 总体框架 | [overview.drawio](src/overview.drawio) | [PDF](overview.pdf) / [SVG](overview.svg) | 1440×565 |
-| 双流聚合 | [aggregation.drawio](src/aggregation.drawio) | [PDF](aggregation.pdf) / [SVG](aggregation.svg) | 1320×480 |
-| SDF | [sdf.drawio](src/sdf.drawio) | [PDF](sdf.pdf) / [SVG](sdf.svg) | 1300×440 |
-| 定性对比 | [qualitative_comparison.drawio](src/qualitative_comparison.drawio) | [PDF](qualitative_comparison.pdf) / [SVG](qualitative_comparison.svg) | 1160×415 |
+| 动机 | [motivation.drawio](src/motivation.drawio) | [motivation.pdf](motivation.pdf) | 1448×172 |
+| 总体框架 | [overview.drawio](src/overview.drawio) | [overview.pdf](overview.pdf) | 1448×360 |
+| 双流聚合 | [aggregation.drawio](src/aggregation.drawio) | [aggregation.pdf](aggregation.pdf) | 768×256 |
+| SDF | [sdf.drawio](src/sdf.drawio) | [sdf.pdf](sdf.pdf) | 675×256 |
+| 定性对比 | [qualitative_comparison.drawio](src/qualitative_comparison.drawio) | [qualitative_comparison.pdf](qualitative_comparison.pdf) | 1448×184 |
 
-Figure 1按用户提供设计图的第一行重绘：保留外层虚线框、完整标题、青/蓝/紫三栏、白色类别标签、梯形编码器、火焰/雪花标识及紫色双向交互线。五个独立方形灰色图槽均为占位，不代表真实预测。Figure 1使用参考图专属配色；下方共享配色表适用于Figure 2–5，后四张图未随此次重绘修改。
+Figure 1保留已确认的三栏内容与几何布局，统一校正原生导出的圆角半径。Figure 2–5继续按同一参考图的模块布局、颜色和内容重绘：总体图上方为SAM 3/FPN/条件特征路径，中间为双流交替聚合，下方单独列出训练蒸馏；聚合细节图包含类别token、普通/移位窗口与跨块顺序；SDF展开两条分支中的四个旋转、共享卷积、逆对齐均值和残差；定性图恢复左侧五列三行与右侧占位说明、共享色标。
 
-五图都使用跨栏宽度、按原比例缩放。SDF改为跨栏，保证分支和方向模块的文字可读；不把详细结构挤进单栏。图题与图内文字为英文。
+图中所有遥感影像、GT和预测仍为明确标注的占位图，不是实验结果。选中图片槽后用Edit Image替换；图像已嵌入源文件，无外部占位模板依赖。Figure 1中的矢量图标与内嵌图片保留在源文件内部；仓库不再保存或导出独立SVG文件。
 
-## 修改与导出
+## 保存源图后自动生成PDF
 
-1. 在draw.io / diagrams.net中打开对应`.drawio`，修改模块文字、颜色、连线或图像。英文常规字体为Times New Roman；现有矢量导出使用度量相近的TeX Gyre Termes并嵌入字形。
-2. 选中图像槽，用Edit Image替换。Figure 1使用独立内嵌的方形中性占位图，其余图的影像、GT、预测和局部放大槽使用共享占位模板，均明确写PLACEHOLDER；没有真实模型预测。源图自包含内嵌图像，替换共享`image_placeholder.svg`不会自动修改已嵌入的副本。
-3. 通过File → Export As → PDF导出，选择当前页、Crop裁切到内容、关闭网格和阴影，保存为本目录同名PDF。保持少量边框空白，不导出整张A4空画布；可同时导出同名SVG。选项说明见[官方PDF导出文档](https://www.drawio.com/docs/manual/export/export-to-pdf/)。
-4. 保存编辑后的`.drawio`并同步同名PDF/SVG；源文件是后续编辑依据，导出文件只用于显示。图的主体比例改变后，再编译`paper/main.tex`检查页内大小和浮动位置。
+本机需安装draw.io Desktop，并确保`drawio`可执行命令在PATH中；也可用环境变量`DRAWIO`指定可执行文件路径。Python只需标准库。
 
-## 颜色与结构
+在`paper/`目录运行：
 
-大框使用从上至下的浅色渐变，小框采用同一语义色系中更饱和的纯色；两者不共用填充色。外层总框使用白色到冷灰的轻渐变，内部区域按功能保留色系，文字和连线使用深色，避免渐变干扰阅读。draw.io中的渐变是原生`fillColor` / `gradientColor`样式，仍可直接编辑。色值与文件对应关系见`figure_manifest.json`。
+```bash
+latexmk -xelatex -halt-on-error -file-line-error -outdir=build main.tex
+```
 
-| 色系 | 小模块纯色 | 大区域渐变（上 → 下） | 主要用途 |
-| --- | --- | --- | --- |
-| 蓝 | `#BCD3ED` | `#F8FBFF` → `#E5EDF8` | SAM3特征与相关路径 |
-| 黄 | `#FFE29A` | `#FFFCF1` → `#FFF0CF` | RemoteCLIP编码与文本模板 |
-| 紫 | `#D4BEED` | `#FCFAFF` → `#EDE5F8` | 类别指导、语义状态及交互 |
-| 绿 | `#C6DCA9` | `#FAFCF5` → `#E9F1DC` | 类内空间交互与细节分支 |
-| 橙 | `#F1C49F` | `#FFF9F3` → `#F9E6D6` | 投影、卷积与训练区域 |
-| 青 | `#BBDDD6` | `#F4FCFA` → `#E0F1EB` | 类别文本及辅助特征 |
+`.latexmkrc`会在每次执行编译命令时先检查五份源图；内容变化时直接调用draw.io导出PDF，再交给XeLaTeX编译论文。导出只使用PDF格式，不生成中间SVG。若源图和PDF的SHA-256均与清单一致，则跳过导出；因此未修改图时可以直接使用仓库内PDF，不依赖本机draw.io。源图已修改却没有draw.io时，编译会报错，避免误用旧PDF。
 
-SAM3是否冻结仍以frozen标识为准，RemoteCLIP的attention tuning仅表示选择的参数子集可训练。珊瑚色虚线表示训练参考与蒸馏；黑实线为前向数据流，紫色线为语义/指导流。定性图的五列标题依次使用青、绿、蓝、橙、紫，数据集行标签使用冷灰，所有真实图片槽仍为中性灰占位图。
+保存`.drawio`后重新运行上述命令即可看到更新；此配置不启动后台文件监视器。若编辑器的构建工具直接调用`xelatex`，请把构建命令改为`latexmk`，否则不会执行自动导出。
 
-总体图中原始72×72条件特征、FPN72和FPN144/288分别连接SDF或冻结解码器。模板相似度和dense RemoteCLIP特征共同进入guidance embedding。双流先更新语义再更新特征；SDF先统一上采样，再形成独立投影的两个分支。参考输出与学生logits共同进入蒸馏损失，损失不反向充当解码器输入。完整模型图没有presence/实例推理分支。
+也可以在仓库根目录单独导出：
 
-定性图的列为Input / Ground truth / SAM3 / Adapter / ReCA-SAM3，三个样例行是LoveDA、Potsdam、UAVid。完成实验后用相同样本、相同裁块、同数据集共享图例替换，并保留失败案例；此布局不预设任何模型效果。
+```bash
+python3 paper/scripts/export_figures.py
+# 强制重新导出全部五张图
+python3 paper/scripts/export_figures.py --force
+```
+
+手动导出使用draw.io的File → Export As → PDF，选当前页并裁切到内容，保存到本目录对应PDF。自动脚本使用相同的原生渲染器，保留2像素边距；导出成功才替换旧PDF。更新图时同步保存`.drawio`、PDF和`figure_manifest.json`。清单中的哈希用于内容检测，不依赖文件时间戳。
+
+## 配色与连线
+
+| 元素 | 风格 |
+| --- | --- |
+| SAM 3、条件特征、特征流 | 浅蓝；冻结模块带雪花 |
+| RemoteCLIP | 浅黄梯形；火焰表示attention tuning |
+| 类别指导、语义流 | 浅紫；紫色状态连接线 |
+| 类内块、SDF | 浅绿；SDF两条分支分别为浅紫和浅绿分区 |
+| 卷积、投影、采样 | 浅橙 |
+| 输入类别与定性表头 | 浅青 |
+| 训练参考与蒸馏 | 红色虚线，与前向路径分开 |
+
+SDF两条分支参数独立，各分支内部四个旋转共享卷积权重；先逆旋转对齐、求均值再残差相加。双流更新顺序为语义流先、特征流后；Q/K组合两种状态，V来自当前更新状态。Q、K、V分别表示query、key、value。总体图的原始条件特征、FPN72和FPN144/288分别连接相应融合/解码模块，teacher与student输出共同指向蒸馏损失。
+
+五图沿用跨栏加载，保持各自比例。定性列为Input / Ground truth / SAM 3 / Adapter / ReCA-SAM3；数据集行为LoveDA、Potsdam、UAVid。替换真实结果时使用相同样本、相同裁块、各数据集共享类别配色，并包含失败案例。
