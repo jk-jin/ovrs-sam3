@@ -16,6 +16,20 @@ from .semantic_detail_fusion import SemanticDetailFusion
 from .task_modes import OUTPUT_KEYS
 
 
+def realign_rotated_batch(
+    features: torch.Tensor, turns: tuple[int, ...] | None,
+) -> torch.Tensor:
+    """Restore each image's orientation along the final two spatial axes."""
+    if turns is None:
+        return features
+    if len(turns) != features.shape[0]:
+        raise ValueError("Rotation metadata must contain one angle per image.")
+    return torch.stack([
+        torch.rot90(feature, -k, dims=(-2, -1))
+        for feature, k in zip(features, turns)
+    ]).contiguous()
+
+
 class RemoteCLIPGuidedAggregation(nn.Module):
     """Aggregate encoder features at 36×36 with fixed RemoteCLIP Q/K guidance.
 
@@ -105,6 +119,7 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         remoteclip_feat_map: torch.Tensor,
         class_names: List[str],
         sam3_fpn_72: torch.Tensor | None = None,
+        remoteclip_rotation_turns: tuple[int, ...] | None = None,
     ) -> dict[str, torch.Tensor]:
         """Run the full 36×36 aggregation on all prompts simultaneously."""
         if prompt_conditioned_features_72.ndim != 5:
@@ -150,6 +165,10 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         clip_guidance_36, clip_template_scores_36, remoteclip_template_text = self.remoteclip_guidance(
             class_names=class_names, remoteclip_feat_map=remoteclip_feat_map,
         )
+        # Complete the score embedding (including spatial convolutions) in the
+        # rotated view, then align it with the unrotated SAM3 feature stream.
+        clip_guidance_36 = realign_rotated_batch(clip_guidance_36, remoteclip_rotation_turns)
+        clip_template_scores_36 = realign_rotated_batch(clip_template_scores_36, remoteclip_rotation_turns)
         if sam3_fpn_72 is None or tuple(sam3_fpn_72.shape) != (batch_size, 256, 72, 72):
             raise ValueError("SAM3 spatial guidance requires [B, 256, 72, 72] backbone_fpn[2]")
         downsampled = F.interpolate(

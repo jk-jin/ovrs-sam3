@@ -110,6 +110,14 @@ feature_state_36 + semantic_state_36
 4. 两路 256 通道特征再次分别 L2 归一化，拼接为 512 通道，经两个 3×3 Conv（256→256），每层后接 GroupNorm 和 GELU。
 5. 输出 `clip_guidance_36`，直接作为 `semantic_state_36`，不注入 SAM3 FPN。
 
+训练时可用 `model.remoteclip.train_random_rotate` 控制 RemoteCLIP 相对 SAM3 的额外旋转，默认 `False`：
+
+* 开启后，每张图独立等概率选择 0°/90°/180°/270°，只旋转预处理后的 RemoteCLIP 图像；每图仍只编码一个视图。
+* dense feature 保持旋转方向，完成模板相似度及整个 `RemoteCLIPGuidanceEmbedding`（包含两个 3×3 空间卷积）后，才按每图角度逆旋转 `clip_guidance_36`，再送入聚合注意力，与 SAM3 特征对齐。
+* 模板分数调试图同步逆旋转；中间层特征在缓存中保留旋转方向，仅在生成调试输出时对齐；文本特征不旋转。
+* 是否训练由外层模型状态判断，不依赖始终保持 `eval()` 的 RemoteCLIP encoder。验证/推理或开关关闭时不采样角度、不执行额外旋转。
+* 旋转和逆旋转保留梯度；角度使用 Python RNG，沿用训练 RNG 的保存与恢复。该开关参与配置指纹，切换后需使用新训练目录。
+
 文本缓存规则：
 
 * RemoteCLIP 文本分支完全冻结时可缓存 detach 特征。

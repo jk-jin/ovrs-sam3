@@ -15,6 +15,7 @@ model = dict(
         pretrained="weights/RemoteCLIP-ViT-L-14.pt",
         default_output="feat_map",
         image_size=504,
+        train_random_rotate=False,  # Extra RemoteCLIP-only rotation during training.
         image_intermediate_layers=[7, 15],
         normalize_label_for_clip=True,
         text_prompt_batch_size=64,

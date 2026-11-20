@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import random
 from typing import List, Optional, Sequence, Tuple, Union
 
 import torch
@@ -619,19 +620,40 @@ class OpenCLIPImageEncoder(nn.Module):
         raw_images: List[torch.Tensor],
         device: torch.device,
         keep_intermediate_grad: bool = False,
+        random_rotate: bool = False,
     ) -> dict:
         """
-        Full raw-image-to-dense-CLIP-features pipeline.
+        Encode one view per image, keeping features in the sampled orientation.
+
+        The caller selects training augmentation explicitly because this encoder
+        stays in eval mode even while its selected parameters are being trained.
 
         Returns:
             {
                 "feat_map":          [B, D_clip, 36, 36],
                 "mid_features":      List[[B, D_native, 36, 36]],
                 "mid_layer_indices": tuple[int, ...],
+                "rotation_turns":    tuple[int, ...] when rotation is enabled,
             }
         """
         images = self.preprocess_raw_images(raw_images=raw_images, device=device)
-        return self.encode_image_with_intermediate(images, keep_intermediate_grad=keep_intermediate_grad)
+        if not random_rotate:
+            return self.encode_image_with_intermediate(
+                images, keep_intermediate_grad=keep_intermediate_grad
+            )
+
+        turns = [random.randrange(4) for _ in range(images.shape[0])]
+        images = torch.stack([
+            torch.rot90(image, k, dims=(-2, -1))
+            for image, k in zip(images, turns)
+        ])
+        output = self.encode_image_with_intermediate(
+            images, keep_intermediate_grad=keep_intermediate_grad
+        )
+
+        # Spatial score-embedding convolutions must run before inverse rotation.
+        output["rotation_turns"] = tuple(turns)
+        return output
 
     def forward(self, images: torch.Tensor) -> dict:
         return self.encode_image_with_intermediate(images)

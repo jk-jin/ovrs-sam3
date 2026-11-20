@@ -27,6 +27,7 @@ class RemoteCLIPConfig:
     pretrained: Optional[str] = None
     default_output: str = "feat_map"
     image_size: int = 504
+    train_random_rotate: bool = False
 
     image_intermediate_layers: list[int] = field(
         default_factory=lambda: [7, 15]

@@ -260,6 +260,9 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
     ) -> RemoteCLIPConfig:
         remoteclip_cfg = cls._coerce_remoteclip_cfg(remoteclip_cfg)
 
+        if not isinstance(remoteclip_cfg.train_random_rotate, bool):
+            raise TypeError("model.remoteclip.train_random_rotate must be bool.")
+
         if not remoteclip_cfg.enabled:
             return remoteclip_cfg
 
@@ -899,6 +902,7 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
             matcher=None,
             clip_image_encoder=clip_image_encoder,
             clip_text_encoder=clip_text_encoder,
+            remoteclip_train_random_rotate=cfg.remoteclip.train_random_rotate,
             remoteclip_prompt_templates=list(
                 cfg.remoteclip.prompt_templates
             ),

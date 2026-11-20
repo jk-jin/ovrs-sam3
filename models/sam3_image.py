@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 
 from .data_misc import BatchedDatapoint, FindStage
-from .feature_aggregation import RemoteCLIPGuidedAggregation
+from .feature_aggregation import RemoteCLIPGuidedAggregation, realign_rotated_batch
 from .geometry_encoders import Prompt
 from .experiment_variants import semantic_presence_logits
 from .task_modes import OUTPUT_KEYS, TASK_MODE_SEMANTIC, normalize_task_mode
@@ -34,6 +34,7 @@ class Sam3Image(torch.nn.Module):
         num_interactive_steps_val: int = 0,
         clip_image_encoder=None,
         clip_text_encoder=None,
+        remoteclip_train_random_rotate: bool = False,
         remoteclip_prompt_templates: list[str] | None = None,
         normalize_label_for_clip: bool = True,
         text_prompt_batch_size: int = 64,
@@ -71,6 +72,7 @@ class Sam3Image(torch.nn.Module):
 
         self.clip_image_encoder = clip_image_encoder
         self.clip_text_encoder = clip_text_encoder
+        self.remoteclip_train_random_rotate = remoteclip_train_random_rotate
 
         self.task_mode = normalize_task_mode(task_mode)
         if self.task_mode != TASK_MODE_SEMANTIC:
@@ -290,6 +292,7 @@ class Sam3Image(torch.nn.Module):
             raw_images=input.raw_images,
             device=device,
             keep_intermediate_grad=True,
+            random_rotate=self.training and self.remoteclip_train_random_rotate,
         )
 
         if not isinstance(clip_out, dict):
@@ -358,6 +361,7 @@ class Sam3Image(torch.nn.Module):
 
         return {
             "remoteclip_feat_map_native": remoteclip_feat_map,
+            "remoteclip_rotation_turns": clip_out.get("rotation_turns"),
             "remoteclip_grid_hw": clip_grid_hw,
             OUTPUT_KEYS.clip_spatial_guidance_features: clean_mid_features,
             "clip_spatial_guidance_layer_indices": tuple(
@@ -493,6 +497,7 @@ class Sam3Image(torch.nn.Module):
             "remoteclip_feat_map": (
                 remoteclip_image_cache["remoteclip_feat_map_native"]
             ),
+            "remoteclip_rotation_turns": remoteclip_image_cache.get("remoteclip_rotation_turns"),
             OUTPUT_KEYS.clip_spatial_guidance_features:
                 remoteclip_image_cache[
                     OUTPUT_KEYS.clip_spatial_guidance_features
@@ -621,6 +626,7 @@ class Sam3Image(torch.nn.Module):
         remoteclip_feat_map: torch.Tensor,
         prompt_names: List[str],
         sam3_fpn_72: torch.Tensor | None = None,
+        remoteclip_rotation_turns: tuple[int, ...] | None = None,
     ) -> Dict[str, torch.Tensor]:
         """Run the 36×36 aggregation on all prompts simultaneously."""
         return self.feature_aggregation(
@@ -630,6 +636,7 @@ class Sam3Image(torch.nn.Module):
             remoteclip_feat_map=remoteclip_feat_map,
             class_names=prompt_names,
             sam3_fpn_72=sam3_fpn_72,
+            remoteclip_rotation_turns=remoteclip_rotation_turns,
         )
 
     def run_aggregation_lowres_from_cache(
@@ -662,6 +669,7 @@ class Sam3Image(torch.nn.Module):
             remoteclip_feat_map=remoteclip_feat_map,
             prompt_names=batch_prompt_names,
             sam3_fpn_72=aggregation_cache["backbone_fpn"][2],
+            remoteclip_rotation_turns=aggregation_cache.get("remoteclip_rotation_turns"),
         )
 
         result: Dict[str, torch.Tensor] = {
@@ -693,7 +701,9 @@ class Sam3Image(torch.nn.Module):
                         OUTPUT_KEYS.remoteclip_template_text_features
                     ].detach().contiguous(),
                 OUTPUT_KEYS.clip_spatial_guidance_features: [
-                    feat.detach().contiguous()
+                    realign_rotated_batch(
+                        feat.detach(), aggregation_cache.get("remoteclip_rotation_turns")
+                    ).contiguous()
                     for feat in clip_spatial_guidance_features
                 ],
             })
@@ -891,10 +901,6 @@ class Sam3Image(torch.nn.Module):
             for key, value in aggregation_out.items():
                 if key != OUTPUT_KEYS.aggregated_features:
                     result[key] = value
-            result[OUTPUT_KEYS.clip_spatial_guidance_features] = [
-                feat.detach().contiguous()
-                for feat in aggregation_cache[OUTPUT_KEYS.clip_spatial_guidance_features]
-            ]
 
         return result
 

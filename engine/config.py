@@ -312,6 +312,8 @@ def _validate_model_section(model: dict) -> dict:
     )
     if not isinstance(remoteclip.enabled, bool):
         raise TypeError("model.remoteclip.enabled must be bool.")
+    if not isinstance(remoteclip.train_random_rotate, bool):
+        raise TypeError("model.remoteclip.train_random_rotate must be bool.")
     if remoteclip.enabled:
         if not remoteclip.pretrained:
             raise ValueError(

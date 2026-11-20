@@ -152,6 +152,14 @@ configs/sweeps/
 
 64 条 RemoteCLIP 模板集中在 `data/prompt_templates.py`。配置指纹由规范化有效配置生成，排除输出目录、设备、日志、可视化、保存/验证间隔、workers 和数据路径等运行字段。
 
+RemoteCLIP 训练时的额外旋转由 `configs/_base_/model/reca_sam3.py` 中的 `model.remoteclip.train_random_rotate` 控制，默认 `False`，设为 `True` 开启。每张图独立采样 0°/90°/180°/270°，在旋转方向完成 RemoteCLIP 编码与整个 score embedding，再将 embedding 逆旋转回原方向用于聚合；验证/推理不执行额外旋转。此开关独立于数据增强的 `RandomRotate90`，修改后需使用新训练目录。
+
+```bash
+python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
+  --cfg-options model.remoteclip.train_random_rotate=True \
+  --work-dir work_dirs/remoteclip_rotate/seed_42/train
+```
+
 ## 测试
 
 ```bash
