@@ -4,6 +4,8 @@ ReCA-SAM3：RemoteCLIP-guided cross-class feature aggregation for open-vocabular
 
 当前实现以 DLRSD 作为训练集、LoveDA 七类验证集，只支持 semantic 模式。SAM3 backbone、encoder、Pixel Decoder 和 semantic head 冻结；RemoteCLIP 图文分支默认做 attention 微调；`core.feature_aggregation` 完整训练。
 
+当前聚合默认包含 4 个完整块，每块依次执行类间、普通窗口和移位窗口注意力，仅更新 encoder feature。score embedding 保持初值并通过 Q/K 获得梯度；CLIP 中间层仍提取但不参与注意力。DIF/SDF 双支路改为单方向卷积。新版本使用独立实验目录，旧模型权重不能直接加载或恢复。
+
 ## 环境与权重
 
 依赖见 `requirements.txt`。仓库不包含数据集和预训练权重。默认路径：
@@ -43,12 +45,12 @@ UAVid 独立评测入口仍为 `configs/test/uavid.py`，数据版本与协议�
 
 ## 论文实验批量运行
 
-公共训练设置为 batch size 4、10000 步、基础学习率 `2e-6`（RemoteCLIP 保留 0.01 倍率）。先完成 12 项训练，再手选每项权重并批量验证。完整说明与配置项见 [批量实验指南](docs/experiment_suites.md)。
+公共训练设置为 batch size 4、10000 步、基础学习率 `2e-6`（RemoteCLIP 保留 0.01 倍率）。当前只训练新完整模型，随后手选权重并批量验证。旧消融配置和任务已删除。完整说明与配置项见 [批量实验指南](docs/experiment_suites.md)。
 
 ```bash
 python tools/train_experiments.py configs/suites/paper_train.py --dry-run
 python tools/train_experiments.py configs/suites/paper_train.py
-# 编辑 paper_validate.py 的 selections，填写各变体的 checkpoint 后运行：
+# 编辑 paper_validate.py 的 selections，填写新完整模型的 checkpoint 后运行：
 python tools/validate_experiments.py configs/suites/paper_validate.py
 ```
 
@@ -70,7 +72,7 @@ python tools/train.py configs/experiments/main/dlrsd_loveda_full.py --print-conf
 
 ```bash
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
-  --resume-from work_dirs/paper_batch4_10k/full/seed_42/train/latest.pth
+  --resume-from work_dirs/feature_blocks_v3/full/seed_42/train/latest.pth
 ```
 
 短调试入口 `configs/experiments/dev/dlrsd_loveda_4k.py` 的验证是截断的（`val_max_iters=500`），只能产生 partial/draft 结果。
@@ -81,7 +83,7 @@ python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
 
 ```bash
 python tools/train.py configs/test/loveda.py --eval-only \
-  --load-model-from work_dirs/paper_batch4_10k/full/seed_42/train/best.pth
+  --load-model-from work_dirs/feature_blocks_v3/full/seed_42/train/best.pth
 ```
 
 独立评测写出 `results/<eval_id>.json`，不会重新打开或截断训练 `metrics.jsonl`。原生评测记录需要 checkpoint step；若权重文件没有训练元数据，显式传 `--eval-iter`。
@@ -143,7 +145,6 @@ configs/datasets/
 configs/protocols/dlrsd_loveda_semantic.py
 configs/experiments/main/dlrsd_loveda_full.py
 configs/experiments/dev/dlrsd_loveda_4k.py
-configs/experiments/ablation/
 configs/test/
 configs/paths.local.example.py
 configs/sweeps/
@@ -157,7 +158,7 @@ configs/sweeps/
 python -m unittest discover -s tests -v
 ```
 
-测试使用 `tests/fixtures/` 中的合成数据，明确不是真实成绩。覆盖有效配置、LoveDA 七类标签空间、schema、导入导出、多种子统计、结果写入与曲线 attempt 链。不运行模型前向或 GPU 训练。
+测试使用 `tests/fixtures/` 中的合成数据，明确不是真实成绩。覆盖有效配置、LoveDA 七类标签空间、schema、导入导出、多种子统计、结果写入与曲线 attempt 链。包含 CPU 合成张量的注意力、融合和梯度检查；不运行正式权重 GPU 训练。
 
 ## 命名迁移
 

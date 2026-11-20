@@ -5,11 +5,11 @@ experiment = dict(
     method_id="reca_sam3",
     method_name="ReCA-SAM3",
     variant_id="full",
-    implementation_id="reca-sam3-paper-v2",
+    implementation_id="reca-sam3-feature-blocks-v3",
     kind="main",
     factors=dict(
         num_blocks=4,
-        directional_fusion=True,
+        directional_fusion=False,
         present_class_weight=0.8,
         reference_distill_weight=0.5,
     ),
@@ -17,7 +17,7 @@ experiment = dict(
 )
 
 runtime = dict(
-    work_dir="./work_dirs/paper_batch4_10k/full/seed_42/train",
+    work_dir="./work_dirs/feature_blocks_v3/full/seed_42/train",
 )
 
 train_dataloader = dict(

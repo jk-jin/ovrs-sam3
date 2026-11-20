@@ -7,7 +7,7 @@ import torch
 from .data_misc import BatchedDatapoint, FindStage
 from .feature_aggregation import RemoteCLIPGuidedAggregation
 from .geometry_encoders import Prompt
-from .experiment_variants import SimpleAdapter, semantic_presence_logits
+from .experiment_variants import semantic_presence_logits
 from .task_modes import OUTPUT_KEYS, TASK_MODE_SEMANTIC, normalize_task_mode
 from .vl_combiner import SAM3VLBackbone
 
@@ -47,12 +47,6 @@ class Sam3Image(torch.nn.Module):
         aggregation_shift_size: int = 6,
         aggregation_use_checkpoint: bool = True,
         pipeline: str = "reca",
-        cross_class_mode: str = "full",
-        intra_class_enabled: bool = True,
-        semantic_init: str = "remoteclip",
-        update_streams: str = "both",
-        fusion_type: str = "sdf",
-        orientations=(0, 90, 180, 270),
         task_mode: str = TASK_MODE_SEMANTIC,
         **kwargs,
     ):
@@ -126,21 +120,12 @@ class Sam3Image(torch.nn.Module):
             )
 
         self.feature_aggregation = None
-        if pipeline == "adapter":
-            self.feature_aggregation = SimpleAdapter()
-        elif pipeline == "reca":
+        if pipeline == "reca":
             self.feature_aggregation = RemoteCLIPGuidedAggregation(
-                cross_class_mode=cross_class_mode,
-                intra_class_enabled=intra_class_enabled,
-                semantic_init=semantic_init,
-                update_streams=update_streams,
-                fusion_type=fusion_type,
-                orientations=orientations,
                 clip_text_encoder=self.clip_text_encoder,
                 feature_dim=int(aggregation_feature_dim),
                 clip_dim=self.clip_align_dim,
                 semantic_dim=int(aggregation_semantic_dim),
-                remoteclip_native_dim=self.clip_image_native_dim,
                 num_heads=int(aggregation_num_heads),
                 window_size=int(aggregation_window_size),
                 shift_size=int(aggregation_shift_size),
@@ -635,8 +620,6 @@ class Sam3Image(torch.nn.Module):
         prompt_conditioned_features_72: torch.Tensor,
         remoteclip_feat_map: torch.Tensor,
         prompt_names: List[str],
-        clip_spatial_guidance_features: list[torch.Tensor] | None = None,
-        clip_spatial_guidance_layer_indices: tuple[int, ...] | None = None,
         sam3_fpn_72: torch.Tensor | None = None,
     ) -> Dict[str, torch.Tensor]:
         """Run the 36×36 aggregation on all prompts simultaneously."""
@@ -646,10 +629,6 @@ class Sam3Image(torch.nn.Module):
             ),
             remoteclip_feat_map=remoteclip_feat_map,
             class_names=prompt_names,
-            clip_spatial_guidance_features=clip_spatial_guidance_features,
-            clip_spatial_guidance_layer_indices=(
-                clip_spatial_guidance_layer_indices
-            ),
             sam3_fpn_72=sam3_fpn_72,
         )
 
@@ -676,21 +655,12 @@ class Sam3Image(torch.nn.Module):
                 "Cached prompt_names do not match batch.find_text_batch."
             )
 
-        if self.pipeline == "adapter":
-            return {OUTPUT_KEYS.aggregated_features: prompt_conditioned_features_72}
-
         aggregation_out = self._run_aggregation_lowres(
             prompt_conditioned_features_72=(
                 prompt_conditioned_features_72
             ),
             remoteclip_feat_map=remoteclip_feat_map,
             prompt_names=batch_prompt_names,
-            clip_spatial_guidance_features=aggregation_cache[
-                OUTPUT_KEYS.clip_spatial_guidance_features
-            ],
-            clip_spatial_guidance_layer_indices=aggregation_cache[
-                "clip_spatial_guidance_layer_indices"
-            ],
             sam3_fpn_72=aggregation_cache["backbone_fpn"][2],
         )
 
@@ -762,7 +732,7 @@ class Sam3Image(torch.nn.Module):
         backbone_fpn = aggregation_cache["backbone_fpn"]
         batch_size = prompt_conditioned_features_72.shape[0]
         num_prompts = class_end - class_start
-        grid = 72 if self.pipeline == "adapter" else 36
+        grid = 36
         expected_shape = (batch_size, num_prompts, 256, grid, grid)
         if tuple(aggregated_feature_chunk.shape) != expected_shape:
             raise ValueError(

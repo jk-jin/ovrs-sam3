@@ -84,46 +84,6 @@
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "simple_adapter",
-      "dataset": "DLRSD",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "simple_adapter",
-      "dataset": "iSAID",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "simple_adapter",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "simple_adapter",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "simple_adapter",
-      "dataset": "Vaihingen",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "simple_adapter",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "simple_adapter",
-      "dataset": "UDD5",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "simple_adapter",
-      "dataset": "VDD",
-      "reason": "planned_or_not_reported"
-    },
-    {
       "row": "full",
       "dataset": "DLRSD",
       "reason": "planned_or_not_reported"
@@ -184,221 +144,6 @@
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "full",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "full",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "full",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "simple_adapter",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "simple_adapter",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "simple_adapter",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "diagonal_cross_class",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "diagonal_cross_class",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "diagonal_cross_class",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "encoder_only_update",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "encoder_only_update",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "encoder_only_update",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "no_intra_class",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "no_intra_class",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "no_intra_class",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "no_score_prior",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "no_score_prior",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "no_score_prior",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "simple_fusion",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "simple_fusion",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "simple_fusion",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "single_orientation",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "single_orientation",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "single_orientation",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "no_distillation",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "no_distillation",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "no_distillation",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "freeze_both",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "freeze_both",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "freeze_both",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "freeze_params_freeze_both",
-      "metric": "trainable_parameters_m",
-      "reason": "planned_measurement"
-    },
-    {
-      "row": "freeze_text",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "freeze_text",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "freeze_text",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "freeze_params_freeze_text",
-      "metric": "trainable_parameters_m",
-      "reason": "planned_measurement"
-    },
-    {
-      "row": "freeze_image",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "freeze_image",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "freeze_image",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "freeze_params_freeze_image",
-      "metric": "trainable_parameters_m",
-      "reason": "planned_measurement"
-    },
-    {
-      "row": "full",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "full",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "full",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "freeze_params_full",
-      "metric": "trainable_parameters_m",
-      "reason": "planned_measurement"
-    },
-    {
       "row": "cost_semantic_only",
       "metric": "total_parameters_m",
       "reason": "planned_measurement"
@@ -439,26 +184,6 @@
       "reason": "planned_measurement"
     },
     {
-      "row": "cost_simple_adapter",
-      "metric": "total_parameters_m",
-      "reason": "planned_measurement"
-    },
-    {
-      "row": "cost_simple_adapter",
-      "metric": "trainable_parameters_m",
-      "reason": "planned_measurement"
-    },
-    {
-      "row": "cost_simple_adapter",
-      "metric": "time_ms",
-      "reason": "planned_measurement"
-    },
-    {
-      "row": "cost_simple_adapter",
-      "metric": "peak_memory_gb",
-      "reason": "planned_measurement"
-    },
-    {
       "row": "cost_full",
       "metric": "total_parameters_m",
       "reason": "planned_measurement"
@@ -475,26 +200,6 @@
     },
     {
       "row": "cost_full",
-      "metric": "peak_memory_gb",
-      "reason": "planned_measurement"
-    },
-    {
-      "row": "cost_single_orientation",
-      "metric": "total_parameters_m",
-      "reason": "planned_measurement"
-    },
-    {
-      "row": "cost_single_orientation",
-      "metric": "trainable_parameters_m",
-      "reason": "planned_measurement"
-    },
-    {
-      "row": "cost_single_orientation",
-      "metric": "time_ms",
-      "reason": "planned_measurement"
-    },
-    {
-      "row": "cost_single_orientation",
       "metric": "peak_memory_gb",
       "reason": "planned_measurement"
     }
@@ -502,9 +207,7 @@
   "protocol_locked": false,
   "generated_tables": [
     "main_rskt8.tex",
-    "ablation_core.tex",
-    "ablation_freeze.tex",
     "efficiency.tex"
   ],
-  "note": "Four main-text tables only; no supplementary tables, training, or synthetic scores."
+  "note": "Current main and efficiency tables; retired ablations are excluded. No synthetic scores."
 }

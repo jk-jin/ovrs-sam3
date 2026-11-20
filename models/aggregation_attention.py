@@ -53,7 +53,7 @@ class CrossClassAttention(nn.Module):
     """Single-value cross-class attention at each spatial position.
 
     Q/K concatenate pre-normalized semantic state and feature state. Only the
-    selected value stream supplies values; the returned update is added by
+    encoder feature supplies values; the returned update is added by
     the outer block.
     """
 
@@ -63,25 +63,15 @@ class CrossClassAttention(nn.Module):
         semantic_dim: int = 256,
         num_heads: int = 8,
         dropout: float = 0.1,
-        value_stream: str = "feature",
         guidance_dim: int = 0,
-        cross_class_mode: str = "full",
     ):
         super().__init__()
-        self.cross_class_mode = cross_class_mode
         self.feature_dim = int(feature_dim)
         self.semantic_dim = int(semantic_dim)
         self.num_heads = int(num_heads)
         if self.feature_dim % self.num_heads != 0:
             raise ValueError("feature_dim must be divisible by num_heads")
-        if value_stream not in ("feature", "semantic"):
-            raise ValueError("value_stream must be 'feature' or 'semantic'")
-        self.value_stream = value_stream
-        self.value_dim = (
-            self.feature_dim
-            if value_stream == "feature"
-            else self.semantic_dim
-        )
+        self.value_dim = self.feature_dim
         self.guidance_dim = int(guidance_dim)
         qk_in_dim = self.feature_dim + self.semantic_dim + self.guidance_dim
         self.q_proj = nn.Linear(qk_in_dim, self.feature_dim)
@@ -96,7 +86,7 @@ class CrossClassAttention(nn.Module):
         semantic_state: torch.Tensor,
         guidance: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Return the update for the value stream; inputs are [B, P, D, H, W]."""
+        """Return the encoder feature update; inputs are [B, P, D, H, W]."""
         B, P, D, H, W = feature_state.shape
         validate_guidance(guidance, feature_state, self.guidance_dim)
         D_semantic = self.semantic_dim
@@ -116,7 +106,7 @@ class CrossClassAttention(nn.Module):
                 B * N, P, self.guidance_dim
             )
             qk_input = torch.cat([qk_input, g_flat], dim=-1)
-        value = f_flat if self.value_stream == "feature" else s_flat
+        value = f_flat
         head_dim = D // self.num_heads
         q = self.q_proj(qk_input).reshape(
             B * N, P, self.num_heads, head_dim
@@ -128,10 +118,6 @@ class CrossClassAttention(nn.Module):
             B * N, P, self.num_heads, head_dim
         ).permute(0, 2, 1, 3)
         attn = torch.matmul(q, k.transpose(-2, -1)) * (head_dim ** -0.5)
-        if self.cross_class_mode == "diagonal":
-            # P is the expanded prompt axis, including aliases of one class.
-            allowed = torch.eye(P, device=attn.device, dtype=torch.bool)
-            attn = attn.masked_fill(~allowed, float("-inf"))
         attn = self.dropout(F.softmax(attn, dim=-1))
         out = torch.matmul(attn, v).permute(0, 2, 1, 3).reshape(B * N, P, D)
         out = self.dropout(self.out_proj(out))
@@ -144,7 +130,7 @@ class WindowSpatialAttention(nn.Module):
     """Single-value intra-class window attention with relative position bias.
 
     Q/K concatenate pre-normalized semantic state and feature state. Only the
-    selected value stream supplies values. Regular and shifted windows follow
+    encoder feature supplies values. Regular and shifted windows follow
     the original implementation.
     """
 
@@ -156,7 +142,6 @@ class WindowSpatialAttention(nn.Module):
         window_size: int = 12,
         shift_size: int = 0,
         dropout: float = 0.1,
-        value_stream: str = "feature",
         guidance_dim: int = 0,
     ):
         super().__init__()
@@ -177,14 +162,7 @@ class WindowSpatialAttention(nn.Module):
                 f"[0, window_size={window_size})"
             )
 
-        if value_stream not in ("feature", "semantic"):
-            raise ValueError("value_stream must be 'feature' or 'semantic'")
-        self.value_stream = value_stream
-        self.value_dim = (
-            self.feature_dim
-            if value_stream == "feature"
-            else self.semantic_dim
-        )
+        self.value_dim = self.feature_dim
 
         self.guidance_dim = int(guidance_dim)
         qk_in_dim = self.feature_dim + self.semantic_dim + self.guidance_dim
@@ -310,7 +288,7 @@ class WindowSpatialAttention(nn.Module):
         semantic_state: torch.Tensor,
         guidance: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Return the update for the value stream; inputs are [B, P, D, H, W]."""
+        """Return the encoder feature update; inputs are [B, P, D, H, W]."""
         B, P, D, H, W = feature_state.shape
         validate_guidance(guidance, feature_state, self.guidance_dim)
         D_semantic = self.semantic_dim
@@ -363,14 +341,14 @@ class WindowSpatialAttention(nn.Module):
             dtype=feature_state.dtype,
         )
 
-        # Q/K from both streams; values from the selected stream only.
+        # Q/K from both streams; values from encoder features only.
         qk_input = torch.cat([s_windows, f_windows], dim=-1)
         if g_windows is not None:
             qk_input = torch.cat([qk_input, g_windows], dim=-1)
 
         q = self.q_proj(qk_input)
         k = self.k_proj(qk_input)
-        value = f_windows if self.value_stream == "feature" else s_windows
+        value = f_windows
         v = self.v_proj(value)
 
         head_dim = D // self.num_heads
@@ -403,74 +381,6 @@ class WindowSpatialAttention(nn.Module):
         return out.reshape(B, P, self.value_dim, H, W).contiguous()
 
 
-class CrossClassAggregationBlock(nn.Module):
-    """Cross-class block with an optional semantic update, then a feature update.
-
-    Each step has its own pre-norm, projections and dropout. Q/K concatenate
-    [semantic_state, feature_state] at each spatial position; the value and
-    the residual target are the stream being updated. Prompts attend to each
-    other independently per image and spatial position.
-    """
-
-    def __init__(
-        self,
-        feature_dim: int = 256,
-        semantic_dim: int = 256,
-        num_heads: int = 8,
-        dropout: float = 0.1,
-        cross_class_mode: str = "full",
-        update_streams: str = "both",
-    ):
-        super().__init__()
-        if update_streams not in {"both", "feature_only"}:
-            raise ValueError("update_streams must be both or feature_only")
-        self.update_streams = update_streams
-        self.semantic_attention = CrossClassAttention(
-            feature_dim=feature_dim,
-            semantic_dim=semantic_dim,
-            num_heads=num_heads,
-            dropout=dropout,
-            value_stream="semantic",
-            cross_class_mode=cross_class_mode,
-        ) if update_streams == "both" else None
-        self.feature_attention = CrossClassAttention(
-            feature_dim=feature_dim,
-            semantic_dim=semantic_dim,
-            num_heads=num_heads,
-            dropout=dropout,
-            value_stream="feature",
-            cross_class_mode=cross_class_mode,
-        )
-        self.semantic_attention_norm_feature = nn.LayerNorm(feature_dim) if update_streams == "both" else None
-        self.semantic_attention_norm_semantic = nn.LayerNorm(semantic_dim) if update_streams == "both" else None
-        self.feature_attention_norm_feature = nn.LayerNorm(feature_dim)
-        self.feature_attention_norm_semantic = nn.LayerNorm(semantic_dim)
-
-    def forward(
-        self,
-        feature_state_36: torch.Tensor,
-        semantic_state_36: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        if self.semantic_attention is not None:
-            semantic_state_36 = semantic_state_36 + self.semantic_attention(
-                feature_state=apply_layer_norm_bcdhw(
-                    feature_state_36, self.semantic_attention_norm_feature
-                ),
-                semantic_state=apply_layer_norm_bcdhw(
-                    semantic_state_36, self.semantic_attention_norm_semantic
-                ),
-            )
-        feature_state_36 = feature_state_36 + self.feature_attention(
-            feature_state=apply_layer_norm_bcdhw(
-                feature_state_36, self.feature_attention_norm_feature
-            ),
-            semantic_state=apply_layer_norm_bcdhw(
-                semantic_state_36, self.feature_attention_norm_semantic
-            ),
-        )
-        return feature_state_36, semantic_state_36
-
-
 class WindowAttentionUpdate(nn.Module):
     """One pre-normalized window attention update for a single stream."""
 
@@ -482,7 +392,6 @@ class WindowAttentionUpdate(nn.Module):
         window_size: int,
         shift_size: int,
         dropout: float,
-        value_stream: str,
         guidance_dim: int,
     ):
         super().__init__()
@@ -493,7 +402,6 @@ class WindowAttentionUpdate(nn.Module):
             window_size=window_size,
             shift_size=shift_size,
             dropout=dropout,
-            value_stream=value_stream,
             guidance_dim=guidance_dim,
         )
         self.norm_feature = nn.LayerNorm(feature_dim)
@@ -517,12 +425,12 @@ class WindowAttentionUpdate(nn.Module):
         )
 
 
-class IntraClassAggregationBlock(nn.Module):
-    """Intra-class block: optional semantic windows, then both feature windows.
+class AggregationAttentionBlock(nn.Module):
+    """Update encoder features: cross-class, regular window, shifted window.
 
-    Semantic steps use RemoteCLIP spatial guidance; feature steps use SAM3
-    FPN36 guidance. Regular and shifted windows each own independent
-    parameters, and every step re-normalizes and re-projects its inputs.
+    RemoteCLIP semantics stay unchanged and guide every Q/K projection.
+    SAM3 FPN guidance is added to window Q/K only. All three residual
+    updates have independent pre-normalization and attention parameters.
     """
 
     def __init__(
@@ -534,13 +442,17 @@ class IntraClassAggregationBlock(nn.Module):
         shift_size: int = 6,
         dropout: float = 0.1,
         guidance_dim: int = 256,
-        update_streams: str = "both",
     ):
         super().__init__()
-        if update_streams not in {"both", "feature_only"}:
-            raise ValueError("update_streams must be both or feature_only")
-        self.update_streams = update_streams
-        step_kwargs = dict(
+        self.cross_attention = CrossClassAttention(
+            feature_dim=feature_dim,
+            semantic_dim=semantic_dim,
+            num_heads=num_heads,
+            dropout=dropout,
+        )
+        self.cross_norm_feature = nn.LayerNorm(feature_dim)
+        self.cross_norm_semantic = nn.LayerNorm(semantic_dim)
+        window_kwargs = dict(
             feature_dim=feature_dim,
             semantic_dim=semantic_dim,
             num_heads=num_heads,
@@ -548,37 +460,22 @@ class IntraClassAggregationBlock(nn.Module):
             dropout=dropout,
             guidance_dim=guidance_dim,
         )
-        self.semantic_regular = WindowAttentionUpdate(
-            shift_size=0, value_stream="semantic", **step_kwargs
-        ) if update_streams == "both" else None
-        self.semantic_shifted = WindowAttentionUpdate(
-            shift_size=shift_size, value_stream="semantic", **step_kwargs
-        ) if update_streams == "both" else None
-        self.feature_regular = WindowAttentionUpdate(
-            shift_size=0, value_stream="feature", **step_kwargs
-        )
-        self.feature_shifted = WindowAttentionUpdate(
-            shift_size=shift_size, value_stream="feature", **step_kwargs
-        )
+        self.feature_regular = WindowAttentionUpdate(shift_size=0, **window_kwargs)
+        self.feature_shifted = WindowAttentionUpdate(shift_size=shift_size, **window_kwargs)
 
     def forward(
         self,
         feature_state_36: torch.Tensor,
         semantic_state_36: torch.Tensor,
-        clip_spatial_guidance_36: torch.Tensor | None,
         sam3_spatial_guidance_36: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        if self.semantic_regular is not None:
-            semantic_state_36 = semantic_state_36 + self.semantic_regular(
-                feature_state_36, semantic_state_36, clip_spatial_guidance_36
-            )
-            semantic_state_36 = semantic_state_36 + self.semantic_shifted(
-                feature_state_36, semantic_state_36, clip_spatial_guidance_36
-            )
+    ) -> torch.Tensor:
+        feature_state_36 = feature_state_36 + self.cross_attention(
+            feature_state=apply_layer_norm_bcdhw(feature_state_36, self.cross_norm_feature),
+            semantic_state=apply_layer_norm_bcdhw(semantic_state_36, self.cross_norm_semantic),
+        )
         feature_state_36 = feature_state_36 + self.feature_regular(
             feature_state_36, semantic_state_36, sam3_spatial_guidance_36
         )
-        feature_state_36 = feature_state_36 + self.feature_shifted(
+        return feature_state_36 + self.feature_shifted(
             feature_state_36, semantic_state_36, sam3_spatial_guidance_36
         )
-        return feature_state_36, semantic_state_36

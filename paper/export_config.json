@@ -22,17 +22,11 @@
           }
         },
         {
-          "label": "SAM 3 adapter",
-          "match": {
-            "experiment.method_id": "reca_sam3",
-            "experiment.variant_id": "simple_adapter"
-          }
-        },
-        {
           "label": "ReCA-SAM3",
           "match": {
             "experiment.method_id": "reca_sam3",
-            "experiment.variant_id": "full"
+            "experiment.variant_id": "full",
+            "experiment.implementation_id": "reca-sam3-feature-blocks-v3"
           }
         }
       ],
@@ -72,17 +66,11 @@
           }
         },
         {
-          "label": "SAM 3 adapter",
-          "match": {
-            "experiment.method_id": "reca_sam3",
-            "experiment.variant_id": "simple_adapter"
-          }
-        },
-        {
           "label": "ReCA-SAM3",
           "match": {
             "experiment.method_id": "reca_sam3",
-            "experiment.variant_id": "full"
+            "experiment.variant_id": "full",
+            "experiment.implementation_id": "reca-sam3-feature-blocks-v3"
           }
         }
       ],
@@ -122,17 +110,11 @@
           }
         },
         {
-          "label": "SAM 3 adapter",
-          "match": {
-            "experiment.method_id": "reca_sam3",
-            "experiment.variant_id": "simple_adapter"
-          }
-        },
-        {
           "label": "ReCA-SAM3",
           "match": {
             "experiment.method_id": "reca_sam3",
-            "experiment.variant_id": "full"
+            "experiment.variant_id": "full",
+            "experiment.implementation_id": "reca-sam3-feature-blocks-v3"
           }
         }
       ],
@@ -172,17 +154,11 @@
           }
         },
         {
-          "label": "SAM 3 adapter",
-          "match": {
-            "experiment.method_id": "reca_sam3",
-            "experiment.variant_id": "simple_adapter"
-          }
-        },
-        {
           "label": "ReCA-SAM3",
           "match": {
             "experiment.method_id": "reca_sam3",
-            "experiment.variant_id": "full"
+            "experiment.variant_id": "full",
+            "experiment.implementation_id": "reca-sam3-feature-blocks-v3"
           }
         }
       ],
@@ -222,17 +198,11 @@
           }
         },
         {
-          "label": "SAM 3 adapter",
-          "match": {
-            "experiment.method_id": "reca_sam3",
-            "experiment.variant_id": "simple_adapter"
-          }
-        },
-        {
           "label": "ReCA-SAM3",
           "match": {
             "experiment.method_id": "reca_sam3",
-            "experiment.variant_id": "full"
+            "experiment.variant_id": "full",
+            "experiment.implementation_id": "reca-sam3-feature-blocks-v3"
           }
         }
       ],
@@ -272,17 +242,11 @@
           }
         },
         {
-          "label": "SAM 3 adapter",
-          "match": {
-            "experiment.method_id": "reca_sam3",
-            "experiment.variant_id": "simple_adapter"
-          }
-        },
-        {
           "label": "ReCA-SAM3",
           "match": {
             "experiment.method_id": "reca_sam3",
-            "experiment.variant_id": "full"
+            "experiment.variant_id": "full",
+            "experiment.implementation_id": "reca-sam3-feature-blocks-v3"
           }
         }
       ],
@@ -322,17 +286,11 @@
           }
         },
         {
-          "label": "SAM 3 adapter",
-          "match": {
-            "experiment.method_id": "reca_sam3",
-            "experiment.variant_id": "simple_adapter"
-          }
-        },
-        {
           "label": "ReCA-SAM3",
           "match": {
             "experiment.method_id": "reca_sam3",
-            "experiment.variant_id": "full"
+            "experiment.variant_id": "full",
+            "experiment.implementation_id": "reca-sam3-feature-blocks-v3"
           }
         }
       ],
@@ -372,17 +330,11 @@
           }
         },
         {
-          "label": "SAM 3 adapter",
-          "match": {
-            "experiment.method_id": "reca_sam3",
-            "experiment.variant_id": "simple_adapter"
-          }
-        },
-        {
           "label": "ReCA-SAM3",
           "match": {
             "experiment.method_id": "reca_sam3",
-            "experiment.variant_id": "full"
+            "experiment.variant_id": "full",
+            "experiment.implementation_id": "reca-sam3-feature-blocks-v3"
           }
         }
       ],
@@ -422,17 +374,11 @@
           }
         },
         {
-          "label": "SAM 3 adapter",
-          "match": {
-            "experiment.method_id": "reca_sam3",
-            "experiment.variant_id": "simple_adapter"
-          }
-        },
-        {
           "label": "ReCA-SAM3",
           "match": {
             "experiment.method_id": "reca_sam3",
-            "experiment.variant_id": "full"
+            "experiment.variant_id": "full",
+            "experiment.implementation_id": "reca-sam3-feature-blocks-v3"
           }
         }
       ],

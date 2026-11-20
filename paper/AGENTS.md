@@ -23,11 +23,11 @@
 | ReCA-SAM3 | RemoteCLIP-Guided Cross-Class Feature Aggregation for Open-Vocabulary Remote Sensing Semantic Segmentation |
 | SAM 3 | 首次写 Segment Anything Model 3；全文正文保留 SAM 3 的空格 |
 | RemoteCLIP | 面向遥感图像与文本对齐的 CLIP 模型；不推断未经核实的预训练细节 |
-| 特征聚合 | RemoteCLIP-guided feature aggregation；维护语义状态流与特征状态流 |
+| 特征聚合 | RemoteCLIP-guided feature aggregation；固定语义引导参与 Q/K，仅更新条件特征流 |
 | 类间注意力 | CrossClassAttention；同一图像同一位置沿展开提示轴交互，包含同类别同义提示 |
 | 类内注意力 | WindowSpatialAttention；同一提示内部的空间关系，通过普通与移位窗口建模 |
 | 提示条件特征 | `prompt_conditioned_features_72`；完整 SAM 3 编码器及前置提示交叉注意力后的输出，未被聚合模块更新 |
-| Semantic–Detail Fusion | 语义—细节融合模块；`SemanticDetailFusion`，单尺度四方向为当前实现，最终变体 TODO |
+| Semantic–Detail Fusion | 语义—细节融合模块；`SemanticDetailFusion`，单尺度单方向双支路为当前实现 |
 | 冻结与适配 | 当前称“对冻结 SAM 3 的遥感适配”；RemoteCLIP 部分微调，整个系统不能称完全冻结 |
 | mIoU / IoU | 平均交并比 / 交并比；LoveDA 只使用含 background 的七类 mIoU，逐类 IoU 单独保存 |
 | BCE / FFN / FPN / TTA | 首次解释二元交叉熵 / 前馈网络 / 特征金字塔网络 / 测试时增强 |

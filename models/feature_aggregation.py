@@ -9,38 +9,20 @@ from torch.utils.checkpoint import checkpoint
 
 from .remoteclip_guidance import RemoteCLIPGuidanceEmbedding
 from .aggregation_attention import (
-    CrossClassAggregationBlock,
-    IntraClassAggregationBlock,
+    AggregationAttentionBlock,
     apply_layer_norm_bcdhw,
 )
 from .semantic_detail_fusion import SemanticDetailFusion
-from .experiment_variants import ConcatFusion
 from .task_modes import OUTPUT_KEYS
 
 
 class RemoteCLIPGuidedAggregation(nn.Module):
-    """RemoteCLIP-guided cross-class feature aggregation at 36×36.
+    """Aggregate encoder features at 36×36 with fixed RemoteCLIP Q/K guidance.
 
-    Takes the full 6-layer SAM3 encoder output after prompt cross-attention
-    as input. The feature state is the bilinear-downsampled encoder feature
-    without any FPN injection. Blocks alternate cross-class and intra-class
-    attention, starting with cross-class. Fixed RemoteCLIP middle-layer and
-    SAM3 FPN guidance extend intra-class attention Q/K. The semantic state
-    comes directly from RemoteCLIPGuidanceEmbedding without SAM3 FPN fusion.
-
-    The aggregation module outputs 36×36 features. High-resolution decoding
-    is handled by one SemanticDetailFusion at 72×72. After one upsampling,
-    independent semantic/detail branches fuse the aggregated feature with
-    the prompt-conditioned encoder72 and SAM3 FPN72 respectively, without an
-    extra encoder concatenation before the branches. The resulting decoder
-    feature replaces the original Pixel Decoder's last FPN input.
-
-    With update_streams='feature_only', the initial semantic state remains in
-    Q/K without attention updates; CLIP middle-layer semantic guidance is omitted.
-
-    After all blocks, the accumulated 36×36 feature state is normalized once
-    with a channel-wise LayerNorm before being returned. The final semantic
-    state is not post-normalized.
+    Each block runs cross-class, regular-window and shifted-window attention.
+    Only encoder features receive residual updates; the semantic embedding
+    stays trainable through Q/K. SAM3 FPN guides window Q/K. CLIP intermediate
+    features are still extracted by the backbone but are unused here.
     """
 
     def __init__(
@@ -59,22 +41,12 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         use_checkpoint: bool = True,
         text_prompt_batch_size: int = 64,
         text_prompt_use_checkpoint: bool = True,
-        remoteclip_native_dim: int | None = None,
-        cross_class_mode: str = "full",
-        intra_class_enabled: bool = True,
-        semantic_init: str = "remoteclip",
-        update_streams: str = "both",
-        fusion_type: str = "sdf",
-        orientations=(0, 90, 180, 270),
     ):
         super().__init__()
         self.feature_dim = int(feature_dim)
         self.semantic_dim = int(semantic_dim)
         self.use_checkpoint = bool(use_checkpoint)
         self.num_blocks = int(num_blocks)
-        self.intra_class_enabled = intra_class_enabled
-        self.semantic_init = semantic_init
-        self.update_streams = update_streams
         if prompt_templates is None:
             raise ValueError(
                 "prompt_templates must be a list of 64 prompt templates."
@@ -92,52 +64,21 @@ class RemoteCLIPGuidedAggregation(nn.Module):
             feature_dim=int(semantic_dim),
             text_prompt_batch_size=int(text_prompt_batch_size),
             text_prompt_use_checkpoint=bool(text_prompt_use_checkpoint),
-        ) if semantic_init == "remoteclip" else None
-
-        # Alternate cross → intra → cross → intra without sharing parameters.
-        blocks = []
-        for block_index in range(self.num_blocks):
-            if block_index % 2 == 0:
-                blocks.append(
-                    CrossClassAggregationBlock(
-                        feature_dim=self.feature_dim,
-                        semantic_dim=self.semantic_dim,
-                        num_heads=int(num_heads),
-                        dropout=float(dropout),
-                        cross_class_mode=cross_class_mode,
-                        update_streams=update_streams,
-                    )
-                )
-            elif intra_class_enabled:
-                blocks.append(
-                    IntraClassAggregationBlock(
-                        feature_dim=self.feature_dim,
-                        semantic_dim=self.semantic_dim,
-                        num_heads=int(num_heads),
-                        window_size=int(window_size),
-                        shift_size=int(shift_size),
-                        update_streams=update_streams,
-                        dropout=float(dropout),
-                    )
-                )
-        self.blocks = nn.ModuleList(blocks)
-
-        # Final normalization for the accumulated feature residual stream.
-        self.feature_output_norm = nn.LayerNorm(self.feature_dim)
-
-        self.semantic_detail_fusion = (
-            SemanticDetailFusion(use_checkpoint=self.use_checkpoint, orientations=orientations)
-            if fusion_type == "sdf" else ConcatFusion()
         )
-        if remoteclip_native_dim is None or remoteclip_native_dim <= 0:
-            raise ValueError(
-                "remoteclip_native_dim must be positive for RemoteCLIP "
-                "middle-layer guidance"
+
+        self.blocks = nn.ModuleList([
+            AggregationAttentionBlock(
+                feature_dim=self.feature_dim,
+                semantic_dim=self.semantic_dim,
+                num_heads=int(num_heads),
+                window_size=int(window_size),
+                shift_size=int(shift_size),
+                dropout=float(dropout),
             )
-        self.remoteclip_native_dim = int(remoteclip_native_dim)
-        self.clip_spatial_guidance_proj = nn.Conv2d(
-            self.remoteclip_native_dim * 2, 256, kernel_size=1
-        ) if intra_class_enabled and update_streams == "both" else None
+            for _ in range(self.num_blocks)
+        ])
+        self.feature_output_norm = nn.LayerNorm(self.feature_dim)
+        self.semantic_detail_fusion = SemanticDetailFusion(use_checkpoint=self.use_checkpoint)
 
     def fuse_semantic_detail_chunk(
         self,
@@ -163,8 +104,6 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         prompt_conditioned_features_72: torch.Tensor,
         remoteclip_feat_map: torch.Tensor,
         class_names: List[str],
-        clip_spatial_guidance_features: list[torch.Tensor] | None = None,
-        clip_spatial_guidance_layer_indices: tuple[int, ...] | None = None,
         sam3_fpn_72: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Run the full 36×36 aggregation on all prompts simultaneously."""
@@ -208,78 +147,17 @@ class RemoteCLIPGuidedAggregation(nn.Module):
                 f"got {tuple(remoteclip_feat_map.shape[-2:])}."
             )
 
-        if self.remoteclip_guidance is not None:
-            clip_guidance_36, clip_template_scores_36, remoteclip_template_text = self.remoteclip_guidance(
-                class_names=class_names, remoteclip_feat_map=remoteclip_feat_map,
-            )
-        else:
-            clip_guidance_36 = prompt_conditioned_features_72.new_zeros(
-                batch_size, num_prompts, self.semantic_dim, 36, 36
-            )
-            clip_template_scores_36 = clip_guidance_36[:, :, :0]
-            remoteclip_template_text = clip_guidance_36.new_empty(0)
-
-        clip_spatial_guidance_36 = sam3_spatial_guidance_36 = None
-        if self.intra_class_enabled:
-            if self.update_streams == "both":
-                # Project image-level guidance once before broadcasting over prompts.
-                if (
-                    clip_spatial_guidance_features is None
-                    or clip_spatial_guidance_layer_indices is None
-                ):
-                    raise ValueError(
-                        "RemoteCLIP middle guidance requires features and layer "
-                        "indices [7, 15]"
-                    )
-                if len(clip_spatial_guidance_features) != len(
-                    clip_spatial_guidance_layer_indices
-                ) or len(set(clip_spatial_guidance_layer_indices)) != len(
-                    clip_spatial_guidance_layer_indices
-                ):
-                    raise ValueError(
-                        "RemoteCLIP middle feature indices must be unique and match "
-                        "the feature count"
-                    )
-                by_layer = dict(
-                    zip(
-                        clip_spatial_guidance_layer_indices,
-                        clip_spatial_guidance_features,
-                    )
-                )
-                if 7 not in by_layer or 15 not in by_layer:
-                    raise ValueError(
-                        "RemoteCLIP middle guidance requires indices 7 and 15 "
-                        "(layers 8 and 16)"
-                    )
-                mids = [by_layer[7], by_layer[15]]
-                if any(
-                    tuple(x.shape) != (batch_size, self.remoteclip_native_dim, 36, 36)
-                    for x in mids
-                ):
-                    raise ValueError(
-                        "RemoteCLIP middle features must match native channels and "
-                        "the 36×36 grid"
-                    )
-                projected = self.clip_spatial_guidance_proj(torch.cat(mids, dim=1))
-                clip_spatial_guidance_36 = projected[:, None].expand(
-                    -1, num_prompts, -1, -1, -1
-                )
-            if sam3_fpn_72 is None or tuple(sam3_fpn_72.shape) != (
-                batch_size, 256, 72, 72
-            ):
-                raise ValueError(
-                    "SAM3 spatial guidance requires [B, 256, 72, 72] "
-                    "backbone_fpn[2]"
-                )
-            downsampled = F.interpolate(
-                sam3_fpn_72,
-                size=(36, 36),
-                mode="bilinear",
-                align_corners=False,
-            )
-            sam3_spatial_guidance_36 = downsampled[:, None].expand(
-                -1, num_prompts, -1, -1, -1
-            )
+        clip_guidance_36, clip_template_scores_36, remoteclip_template_text = self.remoteclip_guidance(
+            class_names=class_names, remoteclip_feat_map=remoteclip_feat_map,
+        )
+        if sam3_fpn_72 is None or tuple(sam3_fpn_72.shape) != (batch_size, 256, 72, 72):
+            raise ValueError("SAM3 spatial guidance requires [B, 256, 72, 72] backbone_fpn[2]")
+        downsampled = F.interpolate(
+            sam3_fpn_72, size=(36, 36), mode="bilinear", align_corners=False,
+        )
+        sam3_spatial_guidance_36 = downsampled[:, None].expand(
+            -1, num_prompts, -1, -1, -1
+        )
 
         initial_feature_36 = F.interpolate(
             prompt_conditioned_features_72.reshape(
@@ -306,30 +184,11 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         semantic_state_36 = clip_guidance_36
 
         for block in self.blocks:
-            if isinstance(block, IntraClassAggregationBlock):
-                block_args = (
-                    block,
-                    feature_state_36,
-                    semantic_state_36,
-                    clip_spatial_guidance_36,
-                    sam3_spatial_guidance_36,
-                )
-            else:
-                block_args = (
-                    block,
-                    feature_state_36,
-                    semantic_state_36,
-                )
-
+            block_args = (feature_state_36, semantic_state_36, sam3_spatial_guidance_36)
             if self.use_checkpoint and self.training:
-                feature_state_36, semantic_state_36 = checkpoint(
-                    *block_args,
-                    use_reentrant=False,
-                )
+                feature_state_36 = checkpoint(block, *block_args, use_reentrant=False)
             else:
-                feature_state_36, semantic_state_36 = block_args[0](
-                    *block_args[1:]
-                )
+                feature_state_36 = block(*block_args)
 
         # Normalize the accumulated feature state once after all blocks.
         feature_state_36 = apply_layer_norm_bcdhw(

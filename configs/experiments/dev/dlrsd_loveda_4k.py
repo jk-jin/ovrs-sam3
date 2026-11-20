@@ -8,11 +8,11 @@ experiment = dict(
     method_id="reca_sam3",
     method_name="ReCA-SAM3",
     variant_id="full",
-    implementation_id="reca-sam3-paper-v1",
+    implementation_id="reca-sam3-feature-blocks-v3",
     kind="debug",
     factors=dict(
         num_blocks=4,
-        directional_fusion=True,
+        directional_fusion=False,
     ),
     note=(
         "Short development run. train_cfg.val_max_iters=500 means validation "
@@ -21,7 +21,7 @@ experiment = dict(
 )
 
 runtime = dict(
-    work_dir="./work_dirs/dev/dlrsd_loveda_4k",
+    work_dir="./work_dirs/dev/feature_blocks_v3_4k",
 )
 
 train_dataloader = dict(

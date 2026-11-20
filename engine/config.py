@@ -355,26 +355,15 @@ def _validate_model_section(model: dict) -> dict:
         model["aggregation"], AggregationConfig, "model.aggregation"
     )
     pipeline = model["pipeline"]
-    if pipeline not in {"reca", "adapter", "sam3_semantic", "sam3_semantic_presence"}:
+    if pipeline not in {"reca", "sam3_semantic", "sam3_semantic_presence"}:
         raise ValueError(f"Unknown model.pipeline: {pipeline}")
     if aggregation.enabled != (pipeline == "reca"):
         raise ValueError("aggregation.enabled must match pipeline='reca'.")
     if remoteclip.enabled != (pipeline == "reca"):
         raise ValueError("remoteclip.enabled must match pipeline='reca'.")
-    if aggregation.cross_class_mode not in {"full", "diagonal"}:
-        raise ValueError("cross_class_mode must be full or diagonal.")
-    if aggregation.update_streams not in {"both", "feature_only"}:
-        raise ValueError("update_streams must be both or feature_only.")
-    if aggregation.semantic_init not in {"remoteclip", "zeros"}:
-        raise ValueError("semantic_init must be remoteclip or zeros.")
-    if not isinstance(aggregation.intra_class_enabled, bool):
-        raise TypeError("intra_class_enabled must be bool.")
     fusion = _coerce_dataclass(model["fusion"], FusionConfig, "model.fusion")
-    if fusion.type not in {"sdf", "concat"}:
-        raise ValueError("fusion.type must be sdf or concat.")
-    if (not fusion.orientations or len(set(fusion.orientations)) != len(fusion.orientations)
-            or any(type(x) is not int or x not in {0, 90, 180, 270} for x in fusion.orientations)):
-        raise ValueError("fusion.orientations must be unique quarter-turn angles.")
+    if fusion.type != "sdf":
+        raise ValueError("fusion.type must be sdf.")
     model["fusion"] = asdict(fusion)
     if aggregation.num_blocks <= 0:
         raise ValueError("model.aggregation.num_blocks must be positive.")
@@ -940,9 +929,6 @@ def finalize_config(raw_cfg: dict) -> dict:
 
 def config_fingerprint(cfg: dict) -> str:
     semantic = copy.deepcopy(cfg)
-    aggregation = semantic.get("model", {}).get("aggregation", {})
-    if aggregation.get("update_streams") == "both":
-        aggregation.pop("update_streams")
     for path in SEMANTIC_FINGERPRINT_EXCLUDE:
         parts = path.split(".")
         obj = semantic

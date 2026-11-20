@@ -912,12 +912,6 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
                 cfg.remoteclip.text_prompt_use_checkpoint
             ),
             pipeline=cfg.pipeline,
-            cross_class_mode=aggregation_cfg.cross_class_mode,
-            intra_class_enabled=aggregation_cfg.intra_class_enabled,
-            semantic_init=aggregation_cfg.semantic_init,
-            update_streams=aggregation_cfg.update_streams,
-            fusion_type=cfg.fusion.type,
-            orientations=cfg.fusion.orientations,
             aggregation_num_blocks=int(aggregation_cfg.num_blocks),
             aggregation_num_heads=int(aggregation_cfg.num_heads),
             aggregation_dropout=float(aggregation_cfg.dropout),

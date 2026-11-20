@@ -146,27 +146,6 @@ class TestDecodePaths(unittest.TestCase):
                 if not weight or ignore_all:
                     self.assertEqual(losses["loss_reference_distill_bce"].item(), 0)
 
-    def test_adapter_streaming_backprop_without_an_aggregation_graph(self):
-        model, batch = make_model_and_batch()
-        core = model.core
-        core.pipeline = "adapter"
-        core.feature_aggregation = load_module("models.experiment_variants").SimpleAdapter()
-        core.run_aggregation_lowres_from_cache = lambda aggregation_cache, batch, return_debug=False: {
-            OUTPUT_KEYS.aggregated_features: aggregation_cache[OUTPUT_KEYS.prompt_conditioned_features_72]
-        }
-        model.train()
-        trainer = object.__new__(trainer_mod.Trainer)
-        trainer.model = model
-        trainer.cfg = SimpleNamespace(use_amp=False)
-        trainer.device = torch.device("cpu")
-        trainer.scaler = trainer_mod._build_grad_scaler("cpu", False)
-        trainer.criterion = criterion_mod.SemanticCriterion(config_mod.SemanticCriterionConfig())
-        losses = trainer._compute_train_loss_streaming(batch)
-        self.assertTrue(torch.isfinite(losses["total_loss"]))
-        grads = [p.grad for p in core.feature_aggregation.parameters() if p.grad is not None]
-        self.assertTrue(grads)
-        self.assertGreater(sum(g.abs().sum().item() for g in grads), 0)
-
     def test_fixed_weight_shared_by_chunks_at_early_and_late_iterations(self):
         for iteration, expected_weight in ((1, 0.6), (1000, 0.6), (12000, 0.6), (20000, 0.6), (20000, 0.0)):
             with self.subTest(iteration=iteration):

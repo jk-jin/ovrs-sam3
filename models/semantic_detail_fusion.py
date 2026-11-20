@@ -6,42 +6,16 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 
-def aggregate_orientations(
-    feature: torch.Tensor,
-    block: nn.Module,
-    orientations=(0, 90, 180, 270),
-) -> torch.Tensor:
-    """Apply one shared conv block at 0°/90°/180°/270° and average deltas."""
-    spatial_dims = (-2, -1)
-    delta = torch.zeros_like(feature)
-    for angle in orientations:
-        quarter_turns = angle // 90
-        rotated_feature = torch.rot90(feature, quarter_turns, spatial_dims)
-        rotated_delta = block(rotated_feature)
-        # Accumulate every delta back in the input coordinate system.
-        delta = delta + torch.rot90(
-            rotated_delta, -quarter_turns, spatial_dims
-        )
-    return feature + delta / len(orientations)
-
-
 class SemanticDetailFusion(nn.Module):
-    """Fuse aggregated36, prompt-conditioned encoder72 and FPN72 in four orientations.
+    """Fuse aggregated36, encoder72 and FPN72 using single-orientation branches.
 
-    The output replaces the last FPN level consumed by the original SAM3
-    Pixel Decoder. The semantic branch pairs the aggregated feature with the
-    prompt-conditioned encoder72 feature; the detail branch pairs the
-    aggregated feature with the image-level SAM3 FPN72 feature. Each branch
-    keeps independent 256-channel projections and one 256-channel conv block
-    shared across 0°/90°/180°/270° orientations. Inverse-rotated conv deltas
-    are averaged back into the branch input, then both branches are projected,
-    summed with equal weight and pass through a final 1×1 Conv.
+    Independent semantic/detail projections feed one residual conv block each.
+    Their outputs are projected, summed and sent through a final 1×1 conv.
     """
 
-    def __init__(self, use_checkpoint: bool = True, orientations=(0, 90, 180, 270)):
+    def __init__(self, use_checkpoint: bool = True):
         super().__init__()
         self.use_checkpoint = bool(use_checkpoint)
-        self.orientations = tuple(orientations)
         self.semantic_feature_proj = self._projection()
         self.detail_feature_proj = self._projection()
         self.encoder_feature_proj = self._projection()
@@ -97,12 +71,8 @@ class SemanticDetailFusion(nn.Module):
             detail_aggregated + self.sam3_feature_proj(sam3_fpn_72)[:, None]
         ).reshape(num_pairs, 256, 72, 72)
 
-        semantic_feature = aggregate_orientations(
-            semantic_input, self.semantic_block, self.orientations
-        )
-        detail_feature = aggregate_orientations(
-            detail_input, self.detail_block, self.orientations
-        )
+        semantic_feature = semantic_input + self.semantic_block(semantic_input)
+        detail_feature = detail_input + self.detail_block(detail_input)
         return self.fusion_out_proj(
             self.semantic_out_proj(semantic_feature)
             + self.detail_out_proj(detail_feature)

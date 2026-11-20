@@ -1,7 +1,7 @@
 model = dict(
     task_mode="semantic",
     pipeline="reca",
-    fusion=dict(type="sdf", orientations=[0, 90, 180, 270]),
+    fusion=dict(type="sdf"),
     bpe_path="assets/bpe_simple_vocab_16e6.txt.gz",
     checkpoint_path="weights/sam3.pt",
     load_from_hf=False,
@@ -23,11 +23,7 @@ model = dict(
 
     aggregation=dict(
         enabled=True,
-        cross_class_mode="full",
-        intra_class_enabled=True,
-        semantic_init="remoteclip",
-        update_streams="both",
-        num_blocks=4,  # cross -> intra -> cross -> intra; total blocks.
+        num_blocks=4,  # Each block: cross -> regular window -> shifted window.
         num_heads=8,
         dropout=0.1,
         feature_dim=256,

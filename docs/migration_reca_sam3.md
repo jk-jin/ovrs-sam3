@@ -9,12 +9,12 @@
 | `SAM3Segmentor` | `ReCASAM3` | `models/reca_sam3.py` |
 | `ClipScoreEmbedding` | `RemoteCLIPGuidanceEmbedding` | `models/remoteclip_guidance.py` |
 | `ClassConditionedEncoderRefiner` | `RemoteCLIPGuidedAggregation` | `models/feature_aggregation.py` |
-| `RefinerInterBlock` | `CrossClassAggregationBlock` | `models/aggregation_attention.py` |
-| `RefinerIntraBlock` | `IntraClassAggregationBlock` | `models/aggregation_attention.py` |
+| `RefinerInterBlock` | `AggregationAttentionBlock` | `models/aggregation_attention.py` |
+| `RefinerIntraBlock` | `AggregationAttentionBlock` | `models/aggregation_attention.py` |
 | `ClassScoreAttention` | `CrossClassAttention` | `models/aggregation_attention.py` |
 | `WindowScoreAttention` | `WindowSpatialAttention` | `models/aggregation_attention.py` |
 | `DecoderInputFusion` | `SemanticDetailFusion` | `models/semantic_detail_fusion.py` |
-| 四方向残差函数 | `aggregate_orientations` | `models/semantic_detail_fusion.py` |
+| 单方向残差融合 | `SemanticDetailFusion` | `models/semantic_detail_fusion.py` |
 
 ## 2. 配置
 
@@ -52,7 +52,7 @@
 | `base_feature_36` | `initial_feature_36` |
 | `refiner_features_36` | `aggregated_features_36` |
 | `cross_attended_encoder_features_72` | `prompt_conditioned_features_72` |
-| `clip_mid_36` | `clip_spatial_guidance_36` |
+| `clip_mid_36` | 中间层提取/缓存保留，不再投影到聚合指导 |
 | `sam_fpn_36` | `sam3_spatial_guidance_36` |
 | `fused_feature_72` | `decoder_features_72` |
 

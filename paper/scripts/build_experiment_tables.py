@@ -286,6 +286,8 @@ def build(args):
          r'Ablation of feature aggregation, fusion, and supervision (mIoU, \%).'),
         ('freeze_rows','ablation_freeze.tex','tab:ablation_freeze',
          r'Effect of RemoteCLIP encoder adaptation (mIoU, \%).')]:
+        if not spec[key]:
+            continue
         body = []
         for p in spec[key]:
             variant = p['variant_id']
@@ -328,7 +330,7 @@ def build(args):
     report = dict(draft=args.draft,literature_records=len(lit),native_records=len(native),
                   missing_cells=missing,protocol_locked=spec['protocol_locked'],
                   generated_tables=list(outputs),
-                  note='Four main-text tables only; no supplementary tables, training, or synthetic scores.')
+                  note='Current main and efficiency tables; retired ablations are excluded. No synthetic scores.')
     required = {r['row_id'] for r in spec['main_rows'] if r['panel']=='native'}
     required |= {p['variant_id'] for p in spec['ablation_rows'] + spec['freeze_rows']}
     required |= {'freeze_params_' + p['variant_id'] for p in spec['freeze_rows']}

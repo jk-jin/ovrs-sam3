@@ -18,85 +18,61 @@ class TestPaperSuite(unittest.TestCase):
     def setUp(self):
         self.suite = suite_mod.load_suite('configs/suites/paper_train.py')
 
-    def test_all_twelve_variants_share_the_training_budget(self):
+    def test_new_baseline_is_the_only_training_job(self):
         jobs = suite_mod.train_jobs(self.suite)
-        self.assertEqual(len(jobs), 12)
-        self.assertEqual(len({job['signature'] for job in jobs}), 12)
-        configs = {j['variant']: j['cfg'] for j in jobs}
-        for cfg in configs.values():
-            self.assertEqual(cfg['train_dataloader']['batch_size'], 4)
-            self.assertEqual(cfg['train_cfg']['max_iters'], 10000)
-            self.assertEqual(cfg['optimizer']['lr'], 2e-6)
-            self.assertEqual(cfg['param_scheduler'][0]['end'], 500)
-            self.assertEqual(cfg['param_scheduler'][1]['T_max'], 9500)
-            self.assertEqual(cfg['param_scheduler'][1]['min_lr_ratio'], .01)
-            self.assertEqual(cfg['logging']['wandb']['mode'], 'offline')
-        self.assertEqual(configs['encoder_only_update']['model']['aggregation']['update_streams'], 'feature_only')
-        self.assertEqual(configs['simple_adapter']['model']['pipeline'], 'adapter')
-        self.assertEqual(configs['no_score_prior']['model']['aggregation']['semantic_init'], 'zeros')
-        self.assertEqual(configs['no_distillation']['loss']['reference_distill_weight'], 0)
-        combinations = [(configs[v]['model']['freeze']['remoteclip_text_finetune'],
-                         configs[v]['model']['freeze']['remoteclip_image_finetune'])
-                        for v in ('full', 'freeze_both', 'freeze_text', 'freeze_image')]
-        self.assertEqual(len(set(combinations)), 4)
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0]['variant'], 'full')
+        cfg = jobs[0]['cfg']
+        self.assertEqual(cfg['train_dataloader']['batch_size'], 4)
+        self.assertEqual(cfg['train_cfg']['max_iters'], 10000)
+        self.assertEqual(cfg['optimizer']['lr'], 2e-6)
+        self.assertEqual(cfg['param_scheduler'][0]['end'], 500)
+        self.assertEqual(cfg['param_scheduler'][1]['T_max'], 9500)
+        self.assertEqual(cfg['logging']['wandb']['mode'], 'offline')
+        self.assertEqual(cfg['model']['aggregation']['num_blocks'], 4)
+        self.assertFalse((REPO_ROOT / 'configs/experiments/ablation').exists())
 
     def test_manual_selection_restores_architecture_and_all_targets(self):
         with tempfile.TemporaryDirectory() as tmp:
             suite = suite_mod.load_suite('configs/suites/paper_validate.py')
             suite['baselines'] = []
-            source = suite_mod.train_jobs(self.suite, ['simple_adapter'])[0]['cfg']
+            source = suite_mod.train_jobs(self.suite, ['full'])[0]['cfg']
             checkpoint = Path(tmp) / 'iter_0003000.pth'
             checkpoint.write_bytes(b'synthetic checkpoint; no model execution')
             source['meta'] = dict(config_fingerprint=config_mod.config_fingerprint(source))
             (checkpoint.parent / 'config.json').write_text(json.dumps(source))
-            suite['selections'] = [dict(variant='simple_adapter', seed=42, checkpoint=str(checkpoint))]
+            suite['selections'] = [dict(variant='full', seed=42, checkpoint=str(checkpoint))]
             jobs, pending = suite_mod.validation_jobs(suite)
             self.assertEqual(pending, [])
             self.assertEqual(len(jobs), 8)
             self.assertEqual({j['checkpoint_sha256'] for j in jobs}, {suite_mod.sha256_file(checkpoint)})
             for job in jobs:
-                self.assertEqual(job['cfg']['model']['pipeline'], 'adapter')
-                self.assertFalse(job['cfg']['model']['remoteclip']['enabled'])
+                self.assertEqual(job['cfg']['model']['pipeline'], 'reca')
+                self.assertTrue(job['cfg']['model']['remoteclip']['enabled'])
                 self.assertEqual(job['cfg']['training']['dataset'], 'dlrsd')
                 self.assertEqual(job['cfg']['evaluation']['dataset'], job['dataset'])
-            suite['selections'][0]['variant'] = 'full'
-            with self.assertRaisesRegex(ValueError, 'identity'):
+            suite['selections'][0]['variant'] = 'retired_variant'
+            with self.assertRaisesRegex(ValueError, 'Unknown or duplicate'):
                 suite_mod.validation_jobs(suite)
 
     def test_no_automatic_checkpoint_selection(self):
         suite = suite_mod.load_suite('configs/suites/paper_validate.py')
         jobs, pending = suite_mod.validation_jobs(suite, dry_run=True)
         self.assertEqual(len(jobs), 16)
-        self.assertEqual(len(pending), 12)
+        self.assertEqual(len(pending), 1)
         self.assertTrue(all(j['pretrained'] for j in jobs))
 
-    def test_encoder_only_selection_restores_three_ablation_datasets(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            suite = suite_mod.load_suite('configs/suites/paper_validate.py')
-            suite['baselines'] = []
-            source = suite_mod.train_jobs(self.suite, ['encoder_only_update'])[0]['cfg']
-            checkpoint = Path(tmp) / 'iter_0005000.pth'
-            checkpoint.write_bytes(b'synthetic metadata only')
-            source['meta'] = dict(config_fingerprint=config_mod.config_fingerprint(source))
-            (checkpoint.parent / 'config.json').write_text(json.dumps(source))
-            suite['selections'] = [dict(variant='encoder_only_update', seed=42, checkpoint=str(checkpoint))]
-            jobs, pending = suite_mod.validation_jobs(suite)
-            self.assertEqual(pending, [])
-            self.assertEqual({job['dataset'] for job in jobs}, {'loveda', 'potsdam', 'uavid'})
-            for job in jobs:
-                self.assertEqual(job['cfg']['model']['aggregation']['update_streams'], 'feature_only')
-                self.assertEqual(job['cfg']['experiment']['variant_id'], 'encoder_only_update')
-
-    def test_stream_choice_validation_and_experiment_identity(self):
-        cfg = suite_mod.train_jobs(self.suite, ['full'])[0]['cfg']
-        fingerprint = config_mod.config_fingerprint(cfg)
-        previous = copy.deepcopy(cfg)
-        previous['model']['aggregation'].pop('update_streams')
-        self.assertEqual(fingerprint, config_mod.config_fingerprint(previous))
-        cfg['model']['aggregation']['update_streams'] = 'feature_only'
-        self.assertNotEqual(fingerprint, config_mod.config_fingerprint(cfg))
-        cfg['model']['aggregation']['update_streams'] = 'typo'
-        with self.assertRaisesRegex(ValueError, 'update_streams'):
+    def test_retired_ablation_options_are_rejected(self):
+        base = suite_mod.train_jobs(self.suite, ['full'])[0]['cfg']
+        for key, value in dict(update_streams='feature_only', cross_class_mode='diagonal',
+                               semantic_init='zeros', intra_class_enabled=False).items():
+            cfg = copy.deepcopy(base)
+            cfg['model']['aggregation'][key] = value
+            with self.subTest(key=key), self.assertRaises(KeyError):
+                config_mod.finalize_config(cfg)
+        cfg = copy.deepcopy(base)
+        cfg['model']['fusion']['orientations'] = [0]
+        with self.assertRaises(KeyError):
             config_mod.finalize_config(cfg)
 
     def test_skip_resume_changed_config_and_failed_worker(self):

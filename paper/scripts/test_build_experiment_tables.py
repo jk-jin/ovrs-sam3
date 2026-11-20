@@ -75,6 +75,7 @@ class RendererBoundaries(unittest.TestCase):
         selector=dict(eval_ids=['a'],expected_seeds=[9],checkpoint_sha256_by_seed={'9':'a'*64},eval_protocol_id='p',eval_split='val')
         full=next(r for r in config['main_rows'] if r['row_id']=='full')
         full['native_selection']={'LoveDA':selector}
+        config['ablation_rows']=[dict(variant_id='full')]
         config['ablation_native_selection']={'full':{'LoveDA':dict(selector)}}
         m.validate_shared_selections(config)
         config['ablation_native_selection']['full']['LoveDA']=dict(selector,eval_ids=['b'])
@@ -83,13 +84,13 @@ class RendererBoundaries(unittest.TestCase):
         full['native_selection']['Potsdam']=dict(selector,checkpoint_sha256_by_seed={'9':'b'*64})
         with self.assertRaises(m.DataError):m.validate_shared_selections(config)
 
-    def test_four_tables_and_source_audit(self):
+    def test_current_tables_and_source_audit(self):
         paper=Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as d:
             args=SimpleNamespace(spec=paper/'data/table_spec.json',literature=paper/'data/literature_results.csv',
                                  native=Path(d)/'absent.csv',output=Path(d)/'tables',draft=True)
             m.build(args)
-            expected={'main_rskt8.tex','ablation_core.tex','ablation_freeze.tex','efficiency.tex'}
+            expected={'main_rskt8.tex','efficiency.tex'}
             self.assertEqual({p.name for p in args.output.glob('*.tex')},expected)
             for p in args.output.glob('*.tex'):
                 text=p.read_text()

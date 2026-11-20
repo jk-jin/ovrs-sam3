@@ -1,6 +1,6 @@
 \section{方法}
 \subsection{框架概述}
-ReCA-SAM3 由 SAM 3 特征提取、RemoteCLIP 语义引导、双流特征聚合和语义—细节融合四部分组成，如图~\ref{fig:overview} 所示。SAM 3 为各类别提示提取条件特征；RemoteCLIP 的模板级图文相似度与稠密图像特征经卷积融合，形成各提示的指导特征并初始化语义状态。该语义状态与 SAM 3 特征共同构造注意力，聚合模块在低分辨率网格上交替建模提示间关系与提示内空间联系，再通过语义—细节融合（Semantic--Detail Fusion，SDF）将更新特征接入冻结的解码器。
+ReCA-SAM3 由 SAM 3 特征提取、RemoteCLIP 语义引导、语义引导特征聚合和语义—细节融合四部分组成，如图~\ref{fig:overview} 所示。SAM 3 为各类别提示提取条件特征；RemoteCLIP 的模板级图文相似度与稠密图像特征经卷积融合，形成各提示的指导特征并初始化语义状态。该语义状态与 SAM 3 特征共同构造注意力，聚合模块在低分辨率网格上在每个块内依次建模提示间关系与提示内空间联系，再通过语义—细节融合（Semantic--Detail Fusion，SDF）将更新特征接入冻结的解码器。
 
 \input{figures/overview}
 
@@ -31,7 +31,7 @@ The score embedding also incorporates dense image features:
 \end{equation}
 Brackets denote channel concatenation, and $\mathcal N$ acts independently at each position. The intermediate maps $A_p$ and $B_p$ have $D$ channels. Both $\phi_1$ and $\phi_2$ are a $1\times1$ convolution followed by eight-group GroupNorm and GELU; their input widths are $K$ and $D+d_c$, respectively. The function $\phi_3$ uses two $3\times3$ convolutions, each followed by GroupNorm and GELU, mapping $2D$ input channels to $D$ output channels. Parameters are shared across prompts. Stacking and flattening $S_p^0$ gives the initial semantic state $S^0\in\mathbb R^{P\times N\times D}$.
 
-The similarity tensor in Eq.~\eqref{eq:template_scores} is converted into a class-specific guidance representation through Eq.~\eqref{eq:semantic_embedding}. Dense image features are shared across prompts, whereas the template-score input makes $S_p^0$ prompt dependent. For a class with several aliases, each expanded prompt retains its own guidance map. Here, class-specific guidance refers to this similarity-derived semantic state; the intermediate-layer spatial guides introduced below serve an additional role.
+The similarity tensor in Eq.~\eqref{eq:template_scores} is converted into a class-specific guidance representation through Eq.~\eqref{eq:semantic_embedding}. Dense image features are shared across prompts, whereas the template-score input makes $S_p^0$ prompt dependent. For a class with several aliases, each expanded prompt retains its own guidance map. This similarity-derived semantic state remains unchanged during aggregation and supplies guidance to every attention step.
 
 The feature state starts from the original conditional features:
 \begin{equation}
@@ -40,22 +40,10 @@ The feature state starts from the original conditional features:
 \end{equation}
 where $\mathcal D$ is bilinear resizing from $72\times72$ to $36\times36$. Stacking and flattening yields $F^0\in\mathbb R^{P\times N\times D}$. Superscript $0$ denotes initialization before aggregation: $S^0$ represents RemoteCLIP alignment information, whereas $F^0$ retains the SAM 3 conditional representation.
 
-\subsection{双流特征聚合}
-The two states pass through four alternating blocks (Fig.~\ref{fig:aggregation}):
-\begin{equation}
-\begin{aligned}
- (F^{j+1},S^{j+1})&=\mathcal B_j(F^j,S^j),\\
- F^{\mathrm{agg}}&=\operatorname{LN}_{\mathrm{out}}(F^L),
- \qquad L=4.
-\end{aligned}
-\label{eq:aggregation_stack}
-\end{equation}
-The index $j=0,\ldots,L-1$ identifies a block; $\mathcal B_j$ is cross-class for even $j$ and intra-class for odd $j$. Superscripts count completed blocks. The final channel-wise LayerNorm $\operatorname{LN}_{\mathrm{out}}$ acts only on $F^L$, producing $F^{\mathrm{agg}}$. Blocks have independent parameters and no additional feed-forward network after attention.
+\subsection{语义引导特征聚合}
+The encoder feature state passes through four complete aggregation blocks. Every block applies cross-class attention, regular-window attention, and shifted-window attention in that order. Each step adds a residual increment to the current encoder feature; the next step consumes the updated feature. The RemoteCLIP semantic state remains equal to its initialization throughout the stack. It is not detached, so gradients through queries and keys train its embedding module and the selected RemoteCLIP parameters. After all four blocks, a channel-wise LayerNorm produces the aggregated feature, denoted by $F^{\mathrm{agg}}$.
 
-
-\input{figures/aggregation}
-
-Cost-aggregation approaches contextualize image--text matching embeddings and decode the aggregated cost representation~\cite{choCATSegCostAggregation2024,liExploringEfficientOpenVocabulary2026}. ReCA-SAM3 maintains the semantic guidance $S$ alongside a separate SAM 3 feature state $F$. Both states determine attention affinities. When updating $F$, the values come from $F$, allowing similarity-derived semantic evidence to guide the redistribution of conditional segmentation features. When updating $S$, the values come from $S$, adapting the guidance to the evolving feature context. The final decoder input is derived from $F^{\mathrm{agg}}$ through SDF. The distinction is thus the jointly updated representations and their connection to the pretrained segmentation decoder.
+Cost-aggregation approaches contextualize image--text matching embeddings and decode the aggregated cost representation~\cite{choCATSegCostAggregation2024,liExploringEfficientOpenVocabulary2026}. Here similarity-derived semantics guide the aggregation of SAM 3 conditional segmentation features, which are then reconnected to the pretrained segmentation decoder through SDF. Blocks and attention steps have independent parameters and no additional feed-forward network.
 
 \paragraph{Attention formulation.}
 Each sub-update normalizes its current states along channels as $\bar S=\operatorname{LN}_S(S)$ and $\bar F=\operatorname{LN}_F(F)$. An optional spatial guide $G$ is independently normalized as $\bar G=\operatorname{LN}_G(G)$. Queries and keys use
@@ -69,7 +57,7 @@ Each sub-update normalizes its current states along channels as $\bar S=\operato
 \end{equation}
 At a fixed spatial position, cross-class attention takes $P$ tokens and an input width $2D$. Within a fixed prompt and window, window attention takes $w^2$ tokens and width $3D$, with window side length $w=12$. Image-level guides are broadcast across prompts before window partitioning.
 
-Let $r\in\{\mathrm S,\mathrm F\}$ identify the updated state, and $\bar R$ be its normalized value, either $\bar S$ or $\bar F$. Head $h=1,\ldots,n_h$ computes
+Only encoder features supply values: $\bar R=\bar F$, where $\bar R$ denotes the normalized value input. Head $h=1,\ldots,n_h$ computes
 \begin{equation}
 \begin{aligned}
  Q_h &= X_{\mathrm{qk}}W_h^Q+b_h^Q,\\
@@ -91,41 +79,10 @@ The residual increment is
  \right),
  \label{eq:attention_output}
 \end{equation}
-where head outputs are concatenated along channels, $W^O\in\mathbb R^{D\times D}$ and $b^O\in\mathbb R^D$ form the output projection, and $\operatorname{Drop}_o$ is output dropout. Both dropout operations use probability 0.1 during training and are disabled for inference. The raw target state is denoted by $R$, and its increment $\Delta R$ has the same shape. A guide affects Q/K but contributes neither values nor a direct residual. Semantic/feature sub-updates, regular/shifted steps, and different blocks each have separate normalization and projection parameters.
+where head outputs are concatenated along channels, $W^O\in\mathbb R^{D\times D}$ and $b^O\in\mathbb R^D$ form the output projection, and $\operatorname{Drop}_o$ is output dropout. Both dropout operations use probability 0.1 during training and are disabled for inference. The raw target state is denoted by $R$, and its increment $\Delta R$ has the same shape. A guide affects Q/K but contributes neither values nor a direct residual. Cross-class, regular-window, shifted-window steps and different blocks each have separate normalization and projection parameters.
 
-\paragraph{Cross-class block.}
-Let $\mathcal A_{\mathrm{cls}}^r$ denote the attention increment in Eqs.~\eqref{eq:attention_input}--\eqref{eq:attention_output} along the prompt axis, with target stream $r$. It forms a $P\times P$ attention matrix per spatial position and performs
-\begin{equation}
-\begin{aligned}
- S' &= S+\mathcal A_{\mathrm{cls}}^{\mathrm S}(F,S),\\
- F' &= F+\mathcal A_{\mathrm{cls}}^{\mathrm F}(F,S').
-\end{aligned}
-\label{eq:cross_class_updates}
-\end{equation}
-Primes denote the states after these residual updates. The feature update uses the already updated semantic state $S'$, so semantic refinement changes the context for aggregating conditional features. The two attention matrices are computed independently, without a class-specific output classifier or fixed prompt ordering.
-
-\paragraph{Intra-class block.}
-The spatial guides are
-\begin{equation}
-\begin{aligned}
- G_C &= \Pi_C([U^{(8)};U^{(16)}]),\\
- G_J &= \mathcal D(J^{72}).
-\end{aligned}
-\label{eq:spatial_guides}
-\end{equation}
-The maps $U^{(8)}$ and $U^{(16)}$ are RemoteCLIP's native visual features from layers 8 and 16 (zero-based indices 7 and 15), each on the $36\times36$ grid. Their native channels are concatenated, and the learned $1\times1$ convolution $\Pi_C$ projects them to $D$ channels. The map $G_C$ guides semantic updates. The feature guide $G_J$ is downsampled FPN72, not a separate native FPN36 output. Both guides are computed once per image and reused across prompts and blocks. They are not updated by aggregation, while gradients may still reach the RemoteCLIP encoder generating them.
-
-Write $\mathcal W_\delta^r(F,S;G)$ for the attention increment in a window, with target stream $r$, guide $G$, and cyclic shift $\delta$ in each spatial direction. Its attention matrix is $w^2\times w^2$. The four sub-steps are
-\begin{equation}
-\begin{aligned}
- S_1 &= S+\mathcal W_0^{\mathrm S}(F,S;G_C),\\
- S_2 &= S_1+\mathcal W_6^{\mathrm S}(F,S_1;G_C),\\
- F_1 &= F+\mathcal W_0^{\mathrm F}(F,S_2;G_J),\\
- F_2 &= F_1+\mathcal W_6^{\mathrm F}(F_1,S_2;G_J).
-\end{aligned}
-\label{eq:intra_class_updates}
-\end{equation}
-Subscripts 1 and 2 denote intermediate states within this block. Shift 0 is regular and shift 6 is shifted; shifted outputs are restored to the original coordinates before residual addition. The block returns $(F_2,S_2)$. Each state therefore receives regular and shifted updates, while spatial attention remains separate across prompts.
+\paragraph{Cross-class and window updates.}
+Cross-class attention forms a prompt-by-prompt matrix at every spatial position and adds its output to the encoder feature state. Window attention then applies two successive feature updates, first without a shift and then with a six-pixel cyclic shift. The image-level guide is the bilinearly downsampled SAM 3 FPN72 feature. This guide is computed once, broadcast across prompts, and concatenated into window queries and keys only. Regular and shifted windows retain learned relative position bias; the shifted step also masks cyclic-boundary interactions and restores output coordinates before residual addition. RemoteCLIP intermediate features are still extracted and cached by the implementation but are not inputs to these attention updates.
 
 \subsection{语义—细节融合与解码}
 SDF reconnects aggregated features to the original decoder at $72\times72$, as illustrated in Fig.~\ref{fig:sdf}. With $\mathcal U$ denoting bilinear upsampling from $36\times36$ to $72\times72$, prompt $p$ has branch inputs
@@ -141,13 +98,9 @@ Here $F_p^{\mathrm{agg}}$ is the reshaped feature slice, $A_p^{72}$ its upsample
 
 \input{figures/sdf}
 
-For branch $b\in\{s,d\}$, orientation aggregation is
-\begin{equation}
- \mathcal R_b(X)=X+\frac{1}{|\Theta|}
- \sum_{\theta\in\Theta}T_{-\theta}\bigl(g_b(T_\theta(X))\bigr).
- \label{eq:sdf_orientations}
-\end{equation}
-The symbol $X$ denotes a branch input, $\Theta=\{0^\circ,90^\circ,180^\circ,270^\circ\}$ the orientation set, and $|\Theta|=4$ its cardinality. The rotation $T_\theta$ changes the feature orientation and $T_{-\theta}$ restores its coordinates. The block $g_b$ comprises a $3\times3$ convolution, GroupNorm, GELU, a $1\times1$ convolution, and GroupNorm. Parameters are shared across orientations within one branch; $g_s$ and $g_d$ are independent. The aligned feature-space responses are averaged and added as a residual.
+Let $\mathcal R_b(X)=X+g_b(X)$ denote the single-direction residual branch operation. Here $b$ indexes the semantic or detail branch, $X$ is its input feature map, and $g_b$ is its independently parameterized convolution block.
+
+Each branch applies its independent convolution block once in the original orientation and adds the result to its input. The block comprises a $3\times3$ convolution, GroupNorm, GELU, a $1\times1$ convolution, and GroupNorm. There is no feature rotation or averaging across orientations.
 
 The fused decoder feature and student logits are
 \begin{equation}

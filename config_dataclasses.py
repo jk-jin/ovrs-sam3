@@ -45,7 +45,7 @@ class RemoteCLIPConfig:
 class AggregationConfig:
     enabled: bool = True
 
-    num_blocks: int = 4  # Total blocks: cross → intra → cross → intra.
+    num_blocks: int = 4  # Each block: cross → regular window → shifted window.
     num_heads: int = 8
     dropout: float = 0.1
 
@@ -59,16 +59,11 @@ class AggregationConfig:
     shift_size: int = 6
 
     use_checkpoint: bool = True
-    cross_class_mode: str = "full"
-    intra_class_enabled: bool = True
-    semantic_init: str = "remoteclip"
-    update_streams: str = "both"
 
 
 @dataclass
 class FusionConfig:
     type: str = "sdf"
-    orientations: list[int] = field(default_factory=lambda: [0, 90, 180, 270])
 
 
 @dataclass
@@ -216,7 +211,7 @@ class ExperimentConfig:
     method_id: str = "reca_sam3"
     method_name: str = "ReCA-SAM3"
     variant_id: str = "full"
-    implementation_id: str = "reca-sam3-paper-v1"
+    implementation_id: str = "reca-sam3-feature-blocks-v3"
     kind: str = "main"
     factors: Dict = field(default_factory=dict)
     note: Optional[str] = None

@@ -1,155 +1,40 @@
 {
-  "date": "2026-11-19",
+  "date": "2026-11-20",
   "branch": "master",
-  "base_commit": "e28303d6ee38b2973705ed35ff0ae9a64e712418",
-  "scope": "Remove the five outer dashed frames and top-level figure titles; increase actual vertical content spacing, module heights, and qualitative tile height. Preserve text styles, semantic graph, captions and all manuscript/model/data sources.",
-  "current_state": "paper/notes/manuscript_status.md",
-  "figure_editing": "paper/figures/README.md",
+  "base_commit": "4f2c0170d1dea4261a035ceca3c0114e3c8c6bdf",
+  "implementation_id": "reca-sam3-feature-blocks-v3",
+  "scope": "Encoder-only complete aggregation blocks, single-direction SDF, and retirement of the previous ablation design.",
   "validation": {
-    "figures": {
-      "motivation": {
-        "native_cells": 101,
-        "removed_nodes": [
-          "motivation_frame",
-          "motivation_text1"
-        ],
-        "canvas": [
-          1448,
-          250
-        ],
-        "pdf_height_increase_at_equal_width_percent": 41.6,
-        "text_styles_and_connections_unchanged": true,
-        "image_tiles": 5
-      },
-      "overview": {
-        "native_cells": 135,
-        "removed_nodes": [
-          "overview_frame",
-          "overview_text1"
-        ],
-        "canvas": [
-          1448,
-          504
-        ],
-        "pdf_height_increase_at_equal_width_percent": 41.0,
-        "text_styles_and_connections_unchanged": true,
-        "image_tiles": 2
-      },
-      "aggregation": {
-        "native_cells": 101,
-        "removed_nodes": [
-          "aggregation_frame",
-          "aggregation_text1"
-        ],
-        "canvas": [
-          768,
-          340
-        ],
-        "pdf_height_increase_at_equal_width_percent": 33.5,
-        "text_styles_and_connections_unchanged": true,
-        "image_tiles": 0
-      },
-      "sdf": {
-        "native_cells": 107,
-        "removed_nodes": [
-          "sdf_frame",
-          "sdf_text1"
-        ],
-        "canvas": [
-          675,
-          336
-        ],
-        "pdf_height_increase_at_equal_width_percent": 28.7,
-        "text_styles_and_connections_unchanged": true,
-        "image_tiles": 0
-      },
-      "qualitative_comparison": {
-        "native_cells": 41,
-        "removed_nodes": [
-          "qualitative_comparison_frame",
-          "qualitative_comparison_text1"
-        ],
-        "canvas": [
-          1448,
-          302
-        ],
-        "pdf_height_increase_at_equal_width_percent": 67.3,
-        "text_styles_and_connections_unchanged": true,
-        "image_tiles": 15
-      }
-    },
-    "model_latex_captions_data_and_pdf_export_unchanged": true,
-    "no_standalone_svg": true,
-    "pdf_pages": 9,
-    "overfull_warnings": 0,
-    "missing_glyphs": 0,
-    "undefined_references": 0,
-    "latexmk_complete": true,
-    "no_model_runs": true
+    "cpu_tests": 94,
+    "paper_renderer_tests": 8,
+    "training_suite_dry_run": "passed; full only",
+    "validation_suite_dry_run": "passed; full pending and 16 original SAM3 evaluations",
+    "effective_config": "passed",
+    "latex": "blocked: missing xelatex.fmt in environment",
+    "gpu_training": "not run",
+    "figures": "existing draw.io/PDF retained; architecture redraw pending"
   },
-  "visual_review": "Inspected all five native PDF exports and the nine-page manuscript contact sheet, including readable-size aggregation and qualitative pages. No outside frame/title, connector loss, text overlap, or abnormal float whitespace observed.",
-  "official_model_runs": false,
   "sha256": {
-    "DESIGN.md": "411a43f4c0b9cf23f8eb2cd31cef372fcd1be511e620cb50c735ef9556d90219",
-    "config_dataclasses.py": "77c91bda44d11ac44c75f1464b3ab6819e2d35d9229ec07f0fc91c7f220b1307",
-    "configs/_base_/loss/semantic.py": "70778463d980794cb3e6eafd4b19cac3f519f0e8236899e0ec45e6d990aefaa1",
-    "configs/_base_/model/reca_sam3.py": "0ef5d2afa2baef7615677a28b79bba5d9b38bceec9f3518baab83e89bb3d203e",
-    "configs/experiments/main/dlrsd_loveda_full.py": "1c87a4c8b9943289036c4f4872cc78b399618deebdfc26181479077a48d0775d",
-    "losses/semantic_criterion.py": "2e4b5bc975e648e746a47837421cf34ef70c79aa724a990457db9bf92d0140c6",
-    "models/aggregation_attention.py": "b111e2dea31543b42ae4dbfdc97f2354ddfb62931687ec94a5ed3b7f5bf4fe5a",
-    "models/feature_aggregation.py": "7b981797d53e222a11bf83150fdd280dc1d45e89c05cc79b04be08bd7f6b715a",
-    "models/remoteclip_guidance.py": "59e8fa4cf05f259f7c7a326cf3de1b4430578d1a42467404680622a15f7f720c",
-    "models/sam3_image.py": "faec9fc63f60c8d52e0a775eb8f230d3af60229e31b28ac2ee5159a32ec40194",
-    "models/semantic_detail_fusion.py": "428c16cd803800bd34a81678e52b540dd68887c79363a1cd06926192f878aa76",
-    "paper/.gitignore": "51ee851bec2e668ea8a4297fa72976493d02e3e603220a060ad7640753df7723",
-    "paper/.latexmkrc": "cb517f77dc9678c647acb482bb3d2cfcd8e54b43c5a98983f218eead7df50220",
-    "paper/AGENTS.md": "026550643daf511ec9a721f6855cd6fdb6cd19d8b2d6ebe0ebd54cab78437881",
-    "paper/README.md": "ea9bc32588b0b3072a76ab3ef1605a7f140cd96400e3d7dbc3bef9d19f3f2d94",
-    "paper/data/comparison_audit_20261117.json": "710e189b41c3b6385edcc89e60b41cf8f11daa9ccfc14aaf897407c14dae28f5",
-    "paper/data/experiment_plan.csv": "7318707af04b37c6c4cd77070d7d460f698bcc0854b453241a9a42c5c7cf2e2a",
-    "paper/data/literature_inventory.csv": "9a1bc3328ce66da15087e0b43a7ab1bc1d5a29c5e8691fbdb6954d964daf1469",
-    "paper/data/literature_results.csv": "5d559c2a5045cc4e11b66764ed6d7696313a01bded65ba17ecccc53cc414e509",
-    "paper/data/table_spec.json": "ef911e33a4accfafa243c4b3ea79e654c9d107244fb9f716c83084d675e165b0",
-    "paper/export_config.json": "52a7f8babc7aaf642b160a869b73dc585409345dcc68f714bbc1f10c8e2bf488",
-    "paper/figures/README.md": "d9dd6cfcbd1fb1d071f118680462c8f59d9fa27a6744905ebda9f6b04c5ea375",
-    "paper/figures/aggregation.pdf": "7052e08ab5e56a58bd36086fd44b5db211e76565e8af3bee7e5db41588f57c88",
-    "paper/figures/aggregation.tex": "e3e10dbca427c2e1f9bc700ca3d80958007e88e49c95906f64debc5956276fc0",
-    "paper/figures/figure_manifest.json": "ad0275d22ed528f569a7946a33564dd5c3ffa3cbb81f70063eacbaafcc5cfd67",
-    "paper/figures/motivation.pdf": "b2d49fc5e76e4d3d63711e9d22cc87095b54492da1ac0f4d51008d0cb6ba7113",
-    "paper/figures/motivation.tex": "6fe7391d5c25cf99ad38750ca4d6b810196c514c822fe8f4ee25d78fdac01296",
-    "paper/figures/overview.pdf": "a8278034c388b5331ff6004a9a66b67ccab652c3a8bf4dc1372808d5cb429050",
-    "paper/figures/overview.tex": "4e9f250fe9dd776d889ac96c836a55ea1efec0b96f0a5c64e0b7e6e8e4d87e87",
-    "paper/figures/qualitative_comparison.pdf": "100e1d7779748a173dd0fddc27fb87be9b5d609618d0eada156501474aba4145",
-    "paper/figures/qualitative_comparison.tex": "65686976326723bef4db06ed3922724ad1e83e9aac50c03479ff05723cdf32e3",
-    "paper/figures/sdf.pdf": "245eaaf0b8bf4dceca1e7869f118b5f80f6f7e339cff75a1ba32a5e60340dc00",
-    "paper/figures/sdf.tex": "157a51b26d9bfdc7c5d9d11bfd7cda157e5d255cd66a41aaf885988bd4946fdf",
-    "paper/figures/src/aggregation.drawio": "9064f74f1813256c748607a74e4e4964ca957929e90daab27a9617f4c373927b",
-    "paper/figures/src/motivation.drawio": "b0a6654f71cf45c69f15ea768080acccd3bc7163aa8fef7f0123dc1496ffc84a",
-    "paper/figures/src/overview.drawio": "9e4f9e91de45c83de23e243d81dc545c17ebb32e4bca6920e0be05c0ba11a56d",
-    "paper/figures/src/qualitative_comparison.drawio": "3236d65bb083265b54d23221a46dcd03f47a1c6fff8cfd6c0edf49e7b54a513d",
-    "paper/figures/src/sdf.drawio": "582657e603496ce9187a0b8652b8e952feb479c524020c4cf95e8c34b373a0be",
-    "paper/main.tex": "2ee32290a5d3d568de1acb5a3bc048ce3f13db096c29b5e772280f65b0889838",
-    "paper/notes/comparison_audit_20261117.md": "98546cdd40c429e100f9f61b057bd9b5d8278edbc2f9a2194de97990d4b78a33",
-    "paper/notes/evaluation_protocol.md": "490038bd9723c59eb051d75857bde1a4aed680147d09c2d5cafdd44d7532cb6d",
-    "paper/notes/literature_fill_audit.md": "a6fcc64d30eaf501d05aaf049177404568e1c4759f1eec418b3c20c37474ad19",
-    "paper/notes/manuscript_status.md": "f6f32f070ef91c4413401b3a6b7196e6e08a4fecd06d43195adcac005c4c246c",
-    "paper/notes/review.md": "699fb3710a3241badd5cb355df03f4c696e8fedd0a1ceb8eccec7de4a08a1a18",
-    "paper/references.bib": "4dae7bb8bb9ac763567e4ee711339f3d1a210586ac33b9a9346892cd08224f34",
-    "paper/references_extra.bib": "bfcfa1deff1c748b6bfe9ec2e7aede51551bb087dcf1f6d23331cfafafc4ed52",
-    "paper/scripts/README.md": "530e425e97450dd7e0481696e6925ceca5e174d9fdd3c95b5df6d5f95b804443",
-    "paper/scripts/build_experiment_tables.py": "ce7bb49a48f17cb2af2a3d8c456d0e418bb2dae65ad311dbb17cd447c85dc26a",
-    "paper/scripts/export_figures.py": "e3f9389ddabccc88c16ae86f28b40f51f769ab8a13f42f2ee98d6f6a71d575ff",
-    "paper/scripts/test_build_experiment_tables.py": "234afe7f63af2f3e807267da6289212f52a98d7f28d2a94908449cdaedd51074",
-    "paper/sections/abstract.tex": "cbf709af5aee796e91face5ade3e316d9cdeeb8b1ca09d89083c365588a05146",
-    "paper/sections/conclusion.tex": "90feea31128502b0a0b1441a56540f56c8b514400a70a3783dfddda204f9b48b",
-    "paper/sections/experiments.tex": "d6178e13d5e4220f10e925d5c14c5d1ddbdcdcf6bbbcbcdf172b46f3f1c5f6c0",
-    "paper/sections/introduction.tex": "a234aeb4451729c46b13a396892cc9b949c2cad1731b62429d38d0cfbc9661d4",
-    "paper/sections/method.tex": "76b1f73dbbbcfde1164323546a43952dd8299d9d4ddc32167953e57b4cd54fab",
+    "DESIGN.md": "17f8af2430a29cced87daf56ccb0bc347bf6f5e50ebe53e1e61cef6cff65fb1a",
+    "config_dataclasses.py": "dd8cbc0ec82e219ee8b3068832660a362de3bc44403d8f4066ee7ee7dd166a82",
+    "models/aggregation_attention.py": "0b489ef0c8a4603a345c17f560305a44d4791ad6b6c7cd5d82c5845333d5f501",
+    "models/feature_aggregation.py": "4e3c4f2a9fabaae8b980062f10f25ed60a5aa88f9111e015e545fd80226d9243",
+    "models/semantic_detail_fusion.py": "44614103dd01735359effeacf9744b3a6ece5b453dfe379556525f8e38c78e76",
+    "models/sam3_image.py": "bdfb80a333e3736d8abe095612aba61938afc7a554fb5fa727799e74413ca0fa",
+    "model_builder.py": "7e143db5877315a7c877059f1ebe51ce646e965c70f8b26c51aee2bae71c037a",
+    "engine/config.py": "ea4e0d1471676c1fde2683ec78dcddaea27f4430c28863dee463a48a383c91fb",
+    "configs/_base_/model/reca_sam3.py": "48a9ea934f47b5c9a4bac0d6afc195b231e9bec98d24a006dcd44ca645e2611b",
+    "configs/experiments/_base_/dlrsd_loveda.py": "86bd2f713fadfec0e8cfddbca5efc6ccc157295546a7b9f84fbb99ee74877f1b",
+    "configs/suites/_paper.py": "647a122f7a3c4ff84d056fdfebe85563aa468c10677251ef67ff6883c5d10c3b",
+    "configs/suites/paper_validate.py": "e0d42d0b39b78be021c6567d94c0ee7149d16bcaa5b18b0331b003931159cd93",
+    "paper/sections/abstract.tex": "3c93536bda88ddc7933830456fbf60787fa89f4502378e781e9f56d3bec8c95d",
+    "paper/sections/conclusion.tex": "e5940565052919d46cac4ba6479eca0ea935cd7628e1d252dac2e9cea0dcc709",
+    "paper/sections/experiments.tex": "d71c6db3b7cf4de2b48f4f88e8d34349843cea344a89d315a19d46b29eba3ce7",
+    "paper/sections/introduction.tex": "67665477c8d9e793cd3c2108251e00cc53e3f84f79d08c005d7586b0127d1c1b",
+    "paper/sections/method.tex": "3a99ac4cadd569358f2979f66a8e9589267f1d862ecaf92086f6d3d24734f9f8",
     "paper/sections/related_work.tex": "d43c573e738d4f076fd12a59db11192ec200a61fca5c4272e8a3728b99a2e856",
-    "paper/tables/ablation_core.tex": "0ddd09623cda817ab7bb1d35a4acbffabb41d30176f232b3ac2772015d53d37d",
-    "paper/tables/ablation_freeze.tex": "985e0fb489db6cbdb41a0846c50c5d47480246444594b542bd2138c12e9b10e3",
-    "paper/tables/build_report.json": "a03bc176ad4c437f63a1265dbc3e0c57a2c88f52ff3343ea92e88f42063869ba",
-    "paper/tables/efficiency.tex": "41f367bde6794c09419a71f1035c68599b54f3cb05efa7d6a4c1ad7860807c69",
-    "paper/tables/main_rskt8.tex": "f05cfa248662f57149abbcc8c00c231fa5ff062cb799802d672c7f4011b6fedc"
+    "paper/data/table_spec.json": "fbf9a0cc9c78dd13d34b103a9d06cdcea5a3bc2f44d9e780f4b79ee349be684c",
+    "paper/data/experiment_plan.csv": "2b13746c27ca51901b0bb4278621c6e0a9c161cd3683653815b8ee8eb6c9f2e7",
+    "paper/export_config.json": "feaac9abe17f0b237e45c4114f490c171e3af42b952e7325ae303c92f21c1362"
   }
 }
