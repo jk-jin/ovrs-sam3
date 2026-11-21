@@ -7,33 +7,21 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
+from ..config_dataclasses import WINDOW_SCALES
 from .remoteclip_guidance import RemoteCLIPGuidanceEmbedding
 from .aggregation_attention import (
     AggregationAttentionBlock,
     apply_layer_norm_bcdhw,
+    resize_prompt_features,
 )
 from .semantic_detail_fusion import SemanticDetailFusion
 from .task_modes import OUTPUT_KEYS
 
 
-def realign_rotated_batch(
-    features: torch.Tensor, turns: tuple[int, ...] | None,
-) -> torch.Tensor:
-    """Restore each image's orientation along the final two spatial axes."""
-    if turns is None:
-        return features
-    if len(turns) != features.shape[0]:
-        raise ValueError("Rotation metadata must contain one angle per image.")
-    return torch.stack([
-        torch.rot90(feature, -k, dims=(-2, -1))
-        for feature, k in zip(features, turns)
-    ]).contiguous()
-
-
 class RemoteCLIPGuidedAggregation(nn.Module):
     """Aggregate encoder features at 36×36 with fixed RemoteCLIP Q/K guidance.
 
-    Each block runs cross-class, regular-window and shifted-window attention.
+    Each block runs cross-class attention and two multiscale window passes.
     Only encoder features receive residual updates; the semantic embedding
     stays trainable through Q/K. SAM3 FPN guides window Q/K. CLIP intermediate
     features are still extracted by the backbone but are unused here.
@@ -48,13 +36,14 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         num_heads: int = 8,
         window_size: int = 12,
         shift_size: int = 6,
-        num_blocks: int = 4,
+        num_blocks: int = 2,
         dropout: float = 0.1,
         prompt_templates: list[str] | None = None,
         normalize_label_for_clip: bool = True,
         use_checkpoint: bool = True,
         text_prompt_batch_size: int = 64,
         text_prompt_use_checkpoint: bool = True,
+        share_window_weights_across_scales: bool = True,
     ):
         super().__init__()
         self.feature_dim = int(feature_dim)
@@ -88,6 +77,7 @@ class RemoteCLIPGuidedAggregation(nn.Module):
                 window_size=int(window_size),
                 shift_size=int(shift_size),
                 dropout=float(dropout),
+                share_window_weights_across_scales=share_window_weights_across_scales,
             )
             for _ in range(self.num_blocks)
         ])
@@ -119,7 +109,6 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         remoteclip_feat_map: torch.Tensor,
         class_names: List[str],
         sam3_fpn_72: torch.Tensor | None = None,
-        remoteclip_rotation_turns: tuple[int, ...] | None = None,
     ) -> dict[str, torch.Tensor]:
         """Run the full 36×36 aggregation on all prompts simultaneously."""
         if prompt_conditioned_features_72.ndim != 5:
@@ -165,45 +154,24 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         clip_guidance_36, clip_template_scores_36, remoteclip_template_text = self.remoteclip_guidance(
             class_names=class_names, remoteclip_feat_map=remoteclip_feat_map,
         )
-        # Complete the score embedding (including spatial convolutions) in the
-        # rotated view, then align it with the unrotated SAM3 feature stream.
-        clip_guidance_36 = realign_rotated_batch(clip_guidance_36, remoteclip_rotation_turns)
-        clip_template_scores_36 = realign_rotated_batch(clip_template_scores_36, remoteclip_rotation_turns)
         if sam3_fpn_72 is None or tuple(sam3_fpn_72.shape) != (batch_size, 256, 72, 72):
             raise ValueError("SAM3 spatial guidance requires [B, 256, 72, 72] backbone_fpn[2]")
-        downsampled = F.interpolate(
+        fpn_36 = F.interpolate(
             sam3_fpn_72, size=(36, 36), mode="bilinear", align_corners=False,
+        )[:, None]
+        # Guidance is fixed across passes and blocks. Resize FPN per image before broadcasting.
+        semantic_scales = tuple(
+            resize_prompt_features(clip_guidance_36, size) for size in WINDOW_SCALES
         )
-        sam3_spatial_guidance_36 = downsampled[:, None].expand(
-            -1, num_prompts, -1, -1, -1
-        )
-
-        initial_feature_36 = F.interpolate(
-            prompt_conditioned_features_72.reshape(
-                batch_size * num_prompts,
-                hidden_dim,
-                72,
-                72,
-            ),
-            size=(36, 36),
-            mode="bilinear",
-            align_corners=False,
-        ).reshape(
-            batch_size,
-            num_prompts,
-            hidden_dim,
-            36,
-            36,
+        spatial_scales = tuple(
+            resize_prompt_features(fpn_36, size).expand(-1, num_prompts, -1, -1, -1)
+            for size in WINDOW_SCALES
         )
 
-        feature_state_36 = initial_feature_36
-
-        # The semantic state produced by remoteclip_guidance.py is used
-        # directly. No SAM3 FPN injection is performed before attention.
-        semantic_state_36 = clip_guidance_36
+        feature_state_36 = resize_prompt_features(prompt_conditioned_features_72, WINDOW_SCALES[0])
 
         for block in self.blocks:
-            block_args = (feature_state_36, semantic_state_36, sam3_spatial_guidance_36)
+            block_args = (feature_state_36, semantic_scales, spatial_scales)
             if self.use_checkpoint and self.training:
                 feature_state_36 = checkpoint(block, *block_args, use_reentrant=False)
             else:
@@ -217,7 +185,7 @@ class RemoteCLIPGuidedAggregation(nn.Module):
 
         return {
             OUTPUT_KEYS.aggregated_features: feature_state_36,
-            OUTPUT_KEYS.semantic_state_36: semantic_state_36,
+            OUTPUT_KEYS.semantic_state_36: clip_guidance_36,
             OUTPUT_KEYS.clip_guidance_36: clip_guidance_36,
             OUTPUT_KEYS.clip_template_scores_36: clip_template_scores_36,
             OUTPUT_KEYS.remoteclip_template_text_features:

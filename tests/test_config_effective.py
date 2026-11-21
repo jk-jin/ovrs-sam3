@@ -49,7 +49,7 @@ class TestEffectiveConfig(unittest.TestCase):
             ["core.feature_aggregation"],
         )
         self.assertEqual(
-            cfg["model"]["aggregation"]["num_blocks"], 4
+            cfg["model"]["aggregation"]["num_blocks"], 2
         )
         self.assertEqual(
             cfg["optimizer"]["paramwise_cfg"]["custom_keys"][
@@ -62,6 +62,25 @@ class TestEffectiveConfig(unittest.TestCase):
         self.assertEqual(cfg["loss"]["reference_distill_weight"], 0.5)
         self.assertEqual(cfg["param_scheduler"][1]["min_lr_ratio"], 0.01)
         self.assertNotIn("eta_min", cfg["param_scheduler"][1])
+
+    def test_window_sharing_option_validation_and_fingerprint(self):
+        key = "share_window_weights_across_scales"
+        original, fingerprint = self._load()
+        self.assertIs(original["model"]["aggregation"][key], True)
+        separate, other = config_mod.build_effective_config(
+            self.main_config, cfg_options=[f"model.aggregation.{key}=False"]
+        )
+        self.assertIs(separate["model"]["aggregation"][key], False)
+        self.assertIs(separate["experiment"]["factors"][key], False)
+        self.assertNotEqual(other, fingerprint)
+        for invalid in (1, None, "False"):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(TypeError, key):
+                separate["model"]["aggregation"][key] = invalid
+                config_mod.finalize_config(separate)
+        with self.assertRaisesRegex(ValueError, "window_size"):
+            config_mod.build_effective_config(
+                self.main_config, cfg_options=["model.aggregation.window_size=9"]
+            )
 
     def test_prompt_templates_are_64(self):
         self.assertEqual(
@@ -100,6 +119,7 @@ class TestEffectiveConfig(unittest.TestCase):
 
     def test_deleted_options_are_rejected(self):
         for option in (
+            "model.remoteclip.train_random_rotate=True",
             "loss.present_ignore_suppression_weight=0.0",
             "loss.absent_class_weight=0.2",
             "loss.reference_distill_start_iter=1000",
@@ -135,7 +155,7 @@ class TestEffectiveConfig(unittest.TestCase):
         self.assertFalse(dataset["background_cfg"]["enabled"])
         self.assertFalse(dataset["reduce_zero_label"])
         self.assertEqual(
-            cfg["runtime"]["work_dir"], "./work_dirs/feature_blocks_v3/full/seed_42/train"
+            cfg["runtime"]["work_dir"], "./work_dirs/multiscale_windows/full/seed_42/train"
         )
         self.assertEqual(
             cfg["logging"]["wandb"]["tags"][1], "dlrsd-train"

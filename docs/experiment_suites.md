@@ -1,6 +1,6 @@
 # 新基线批量训练与验证
 
-聚合默认 4 个完整块，每块依次执行类间、普通窗口、移位窗口，只更新 encoder feature。DIF/SDF 为单方向双支路融合。旧消融配置、任务及选择已删除，新消融待后续重新设计。
+聚合默认 2 个完整块，每块依次执行类间注意力、三尺度普通窗口注意力、三尺度移位窗口注意力。每轮类内注意力将三个尺度的更新量对齐到 36×36，求均值后更新 encoder feature。每轮默认跨尺度共享参数。
 
 ## 训练
 
@@ -9,7 +9,7 @@ python tools/train_experiments.py configs/suites/paper_train.py --dry-run
 python tools/train_experiments.py configs/suites/paper_train.py
 ```
 
-当前只有 Full，batch 4、10000 步、LR 2e-6、RemoteCLIP 学习率乘 0.01、500 步预热、9500 步相对余弦调度，W&B offline。每 2000 步保存并在 LoveDA 七类上验证。新实验目录为 `work_dirs/feature_blocks_v3/full/seed_42/train`，实现标识为 `reca-sam3-feature-blocks-v3`。
+Full 使用 batch 4、10000 步、LR 1e-4，RemoteCLIP 学习率乘 0.01。前 500 步预热，后 9500 步相对余弦衰减，W&B 使用离线模式。每 1000 步保存并在 LoveDA 七类上验证。实验目录为 `work_dirs/multiscale_windows/full/seed_42/train`，实现标识为 `reca-sam3-multiscale-windows-v1`。
 
 `--devices cuda:0 cuda:1` 为每个独立任务分配设备；种子由清单 `seeds=[42]` 控制。`--resume` 继续配置一致的新实验并跳过已完成任务；旧结构不能恢复到新结构。
 
@@ -19,7 +19,7 @@ python tools/train_experiments.py configs/suites/paper_train.py
 
 ```python
 selections=[dict(variant="full", seed=42,
-    checkpoint="work_dirs/feature_blocks_v3/full/seed_42/train/best.pth")]
+    checkpoint="work_dirs/multiscale_windows/full/seed_42/train/best.pth")]
 ```
 
 ```bash

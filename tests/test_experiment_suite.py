@@ -25,11 +25,11 @@ class TestPaperSuite(unittest.TestCase):
         cfg = jobs[0]['cfg']
         self.assertEqual(cfg['train_dataloader']['batch_size'], 4)
         self.assertEqual(cfg['train_cfg']['max_iters'], 10000)
-        self.assertEqual(cfg['optimizer']['lr'], 2e-6)
+        self.assertEqual(cfg['optimizer']['lr'], 1e-4)
         self.assertEqual(cfg['param_scheduler'][0]['end'], 500)
         self.assertEqual(cfg['param_scheduler'][1]['T_max'], 9500)
         self.assertEqual(cfg['logging']['wandb']['mode'], 'offline')
-        self.assertEqual(cfg['model']['aggregation']['num_blocks'], 4)
+        self.assertEqual(cfg['model']['aggregation']['num_blocks'], 2)
         self.assertFalse((REPO_ROOT / 'configs/experiments/ablation').exists())
 
     def test_manual_selection_restores_architecture_and_all_targets(self):
@@ -37,6 +37,8 @@ class TestPaperSuite(unittest.TestCase):
             suite = suite_mod.load_suite('configs/suites/paper_validate.py')
             suite['baselines'] = []
             source = suite_mod.train_jobs(self.suite, ['full'])[0]['cfg']
+            source['model']['aggregation']['share_window_weights_across_scales'] = False
+            source = config_mod.finalize_config(source)
             checkpoint = Path(tmp) / 'iter_0003000.pth'
             checkpoint.write_bytes(b'synthetic checkpoint; no model execution')
             source['meta'] = dict(config_fingerprint=config_mod.config_fingerprint(source))
@@ -49,6 +51,7 @@ class TestPaperSuite(unittest.TestCase):
             for job in jobs:
                 self.assertEqual(job['cfg']['model']['pipeline'], 'reca')
                 self.assertTrue(job['cfg']['model']['remoteclip']['enabled'])
+                self.assertFalse(job['cfg']['model']['aggregation']['share_window_weights_across_scales'])
                 self.assertEqual(job['cfg']['training']['dataset'], 'dlrsd')
                 self.assertEqual(job['cfg']['evaluation']['dataset'], job['dataset'])
             suite['selections'][0]['variant'] = 'retired_variant'

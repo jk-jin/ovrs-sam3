@@ -16,7 +16,7 @@ experiment = dict(
     method_id="reca_sam3",
     method_name="ReCA-SAM3",
     variant_id="full",
-    implementation_id="reca-sam3-paper-v1",
+    implementation_id="reca-sam3-multiscale-windows-v1",
     kind="evaluation",
     factors=dict(),
 )

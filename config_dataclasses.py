@@ -7,6 +7,9 @@ from typing import Dict, Optional
 from .data.prompt_templates import REMOTECLIP_PROMPT_TEMPLATES
 
 
+WINDOW_SCALES = (36, 24, 12)
+
+
 @dataclass
 class FreezeConfig:
     train_adapters_only: bool = False
@@ -27,7 +30,6 @@ class RemoteCLIPConfig:
     pretrained: Optional[str] = None
     default_output: str = "feat_map"
     image_size: int = 504
-    train_random_rotate: bool = False
 
     image_intermediate_layers: list[int] = field(
         default_factory=lambda: [7, 15]
@@ -46,7 +48,7 @@ class RemoteCLIPConfig:
 class AggregationConfig:
     enabled: bool = True
 
-    num_blocks: int = 4  # Each block: cross → regular window → shifted window.
+    num_blocks: int = 2
     num_heads: int = 8
     dropout: float = 0.1
 
@@ -58,8 +60,17 @@ class AggregationConfig:
 
     window_size: int = 12
     shift_size: int = 6
+    share_window_weights_across_scales: bool = True
 
     use_checkpoint: bool = True
+
+    def validate_windows(self) -> None:
+        if not isinstance(self.share_window_weights_across_scales, bool):
+            raise TypeError("model.aggregation.share_window_weights_across_scales must be bool.")
+        if self.window_size <= 0 or any(size % self.window_size for size in WINDOW_SCALES):
+            raise ValueError("model.aggregation.window_size must be positive and divide 36, 24 and 12.")
+        if not 0 <= self.shift_size < self.window_size:
+            raise ValueError("model.aggregation.shift_size must satisfy 0 <= shift_size < window_size.")
 
 
 @dataclass
@@ -212,7 +223,7 @@ class ExperimentConfig:
     method_id: str = "reca_sam3"
     method_name: str = "ReCA-SAM3"
     variant_id: str = "full"
-    implementation_id: str = "reca-sam3-feature-blocks-v3"
+    implementation_id: str = "reca-sam3-multiscale-windows-v1"
     kind: str = "main"
     factors: Dict = field(default_factory=dict)
     note: Optional[str] = None

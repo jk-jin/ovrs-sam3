@@ -5,10 +5,9 @@ experiment = dict(
     method_id="reca_sam3",
     method_name="ReCA-SAM3",
     variant_id="full",
-    implementation_id="reca-sam3-feature-blocks-v3",
+    implementation_id="reca-sam3-multiscale-windows-v1",
     kind="main",
     factors=dict(
-        num_blocks=4,
         directional_fusion=False,
         present_class_weight=0.8,
         reference_distill_weight=0.5,
@@ -17,7 +16,7 @@ experiment = dict(
 )
 
 runtime = dict(
-    work_dir="./work_dirs/feature_blocks_v3/full/seed_42/train",
+    work_dir="./work_dirs/multiscale_windows/full/seed_42/train",
 )
 
 train_dataloader = dict(

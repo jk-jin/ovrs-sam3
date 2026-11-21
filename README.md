@@ -4,7 +4,7 @@ ReCA-SAM3：RemoteCLIP-guided cross-class feature aggregation for open-vocabular
 
 当前实现以 DLRSD 作为训练集、LoveDA 七类验证集，只支持 semantic 模式。SAM3 backbone、encoder、Pixel Decoder 和 semantic head 冻结；RemoteCLIP 图文分支默认做 attention 微调；`core.feature_aggregation` 完整训练。
 
-当前聚合默认包含 4 个完整块，每块依次执行类间、普通窗口和移位窗口注意力，仅更新 encoder feature。score embedding 保持初值并通过 Q/K 获得梯度；CLIP 中间层仍提取但不参与注意力。DIF/SDF 双支路改为单方向卷积。新版本使用独立实验目录，旧模型权重不能直接加载或恢复。
+聚合默认包含 2 个块。每块先在 36×36 上做类间注意力，再用 12×12 窗口对 36×36、24×24、12×12 三个尺度做两轮类内注意力。每轮将三路注意力输出对齐、求均值，并残差更新 encoder feature。第二轮在较大的两个尺度移位 6 格。RemoteCLIP 与 SAM3 使用同一空间朝向的图像，score embedding 通过注意力的查询与键获得梯度。最后在 72×72 做一次语义与细节融合。
 
 ## 环境与权重
 
@@ -45,7 +45,7 @@ UAVid 独立评测入口仍为 `configs/test/uavid.py`，数据版本与协议�
 
 ## 论文实验批量运行
 
-公共训练设置为 batch size 4、10000 步、基础学习率 `2e-6`（RemoteCLIP 保留 0.01 倍率）。当前只训练新完整模型，随后手选权重并批量验证。旧消融配置和任务已删除。完整说明与配置项见 [批量实验指南](docs/experiment_suites.md)。
+公共训练设置为 batch size 4、10000 步、基础学习率 `1e-4`。RemoteCLIP 图文参数组的学习率为其 0.01 倍。批量入口训练完整模型，可手选权重进行验证。[批量实验指南](docs/experiment_suites.md)
 
 ```bash
 python tools/train_experiments.py configs/suites/paper_train.py --dry-run
@@ -72,7 +72,7 @@ python tools/train.py configs/experiments/main/dlrsd_loveda_full.py --print-conf
 
 ```bash
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
-  --resume-from work_dirs/feature_blocks_v3/full/seed_42/train/latest.pth
+  --resume-from work_dirs/multiscale_windows/full/seed_42/train/latest.pth
 ```
 
 短调试入口 `configs/experiments/dev/dlrsd_loveda_4k.py` 的验证是截断的（`val_max_iters=500`），只能产生 partial/draft 结果。
@@ -83,7 +83,7 @@ python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
 
 ```bash
 python tools/train.py configs/test/loveda.py --eval-only \
-  --load-model-from work_dirs/feature_blocks_v3/full/seed_42/train/best.pth
+  --load-model-from work_dirs/multiscale_windows/full/seed_42/train/best.pth
 ```
 
 独立评测写出 `results/<eval_id>.json`，不会重新打开或截断训练 `metrics.jsonl`。原生评测记录需要 checkpoint step；若权重文件没有训练元数据，显式传 `--eval-iter`。
@@ -152,12 +152,12 @@ configs/sweeps/
 
 64 条 RemoteCLIP 模板集中在 `data/prompt_templates.py`。配置指纹由规范化有效配置生成，排除输出目录、设备、日志、可视化、保存/验证间隔、workers 和数据路径等运行字段。
 
-RemoteCLIP 训练时的额外旋转由 `configs/_base_/model/reca_sam3.py` 中的 `model.remoteclip.train_random_rotate` 控制，默认 `False`，设为 `True` 开启。每张图独立采样 0°/90°/180°/270°，在旋转方向完成 RemoteCLIP 编码与整个 score embedding，再将 embedding 逆旋转回原方向用于聚合；验证/推理不执行额外旋转。此开关独立于数据增强的 `RandomRotate90`，修改后需使用新训练目录。
+`configs/_base_/model/reca_sam3.py` 中的 `model.aggregation.share_window_weights_across_scales` 默认为 `True`，每层的普通窗口与移位窗口各有一套参数，在本轮的三个尺度间共享。要训练每轮三个尺度独立学习参数的模型，可使用单独的输出目录。
 
 ```bash
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
-  --cfg-options model.remoteclip.train_random_rotate=True \
-  --work-dir work_dirs/remoteclip_rotate/seed_42/train
+  --cfg-options model.aggregation.share_window_weights_across_scales=False \
+  --work-dir work_dirs/multiscale_windows/unshared/seed_42/train
 ```
 
 ## 测试

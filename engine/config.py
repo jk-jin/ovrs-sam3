@@ -312,8 +312,6 @@ def _validate_model_section(model: dict) -> dict:
     )
     if not isinstance(remoteclip.enabled, bool):
         raise TypeError("model.remoteclip.enabled must be bool.")
-    if not isinstance(remoteclip.train_random_rotate, bool):
-        raise TypeError("model.remoteclip.train_random_rotate must be bool.")
     if remoteclip.enabled:
         if not remoteclip.pretrained:
             raise ValueError(
@@ -387,18 +385,7 @@ def _validate_model_section(model: dict) -> dict:
         raise ValueError(
             "model.aggregation.aggregation_hw * 2 must equal encoder_hw."
         )
-    if (
-        aggregation.window_size <= 0
-        or aggregation.aggregation_hw % aggregation.window_size != 0
-    ):
-        raise ValueError(
-            "model.aggregation.window_size must divide aggregation_hw."
-        )
-    if not 0 <= aggregation.shift_size < aggregation.window_size:
-        raise ValueError(
-            "model.aggregation.shift_size must satisfy "
-            "0 <= shift_size < window_size."
-        )
+    aggregation.validate_windows()
 
     freeze = _coerce_dataclass(
         model["freeze"], FreezeConfig, "model.freeze"
@@ -900,6 +887,12 @@ def finalize_config(raw_cfg: dict) -> dict:
     cfg["experiment"] = _validate_experiment(cfg["experiment"])
     cfg["training"] = _validate_training(cfg["training"])
     cfg["model"] = _validate_model_section(cfg["model"])
+    if cfg["model"]["pipeline"] == "reca":
+        aggregation = cfg["model"]["aggregation"]
+        cfg["experiment"]["factors"].update(
+            num_blocks=aggregation["num_blocks"],
+            share_window_weights_across_scales=aggregation["share_window_weights_across_scales"],
+        )
     cfg["loss"] = _validate_loss_section(cfg["loss"])
     cfg["evaluation"] = _validate_evaluation(
         cfg["evaluation"], cfg["loss"]

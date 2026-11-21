@@ -38,7 +38,7 @@ RemoteCLIP template scores + dense feature
   → 作为 semantic_state_36 初值
 
 feature_state_36 + semantic_state_36
-  → 4 个聚合块（每块 cross → regular window → shifted window）
+  → 2 个聚合块（每块先做类间注意力，再做两轮三尺度窗口注意力）
   → feature_output_norm
   → aggregated_features_36 [B, P, 256, 36, 36]
 
@@ -110,14 +110,6 @@ feature_state_36 + semantic_state_36
 4. 两路 256 通道特征再次分别 L2 归一化，拼接为 512 通道，经两个 3×3 Conv（256→256），每层后接 GroupNorm 和 GELU。
 5. 输出 `clip_guidance_36`，直接作为 `semantic_state_36`，不注入 SAM3 FPN。
 
-训练时可用 `model.remoteclip.train_random_rotate` 控制 RemoteCLIP 相对 SAM3 的额外旋转，默认 `False`：
-
-* 开启后，每张图独立等概率选择 0°/90°/180°/270°，只旋转预处理后的 RemoteCLIP 图像；每图仍只编码一个视图。
-* dense feature 保持旋转方向，完成模板相似度及整个 `RemoteCLIPGuidanceEmbedding`（包含两个 3×3 空间卷积）后，才按每图角度逆旋转 `clip_guidance_36`，再送入聚合注意力，与 SAM3 特征对齐。
-* 模板分数调试图同步逆旋转；中间层特征在缓存中保留旋转方向，仅在生成调试输出时对齐；文本特征不旋转。
-* 是否训练由外层模型状态判断，不依赖始终保持 `eval()` 的 RemoteCLIP encoder。验证/推理或开关关闭时不采样角度、不执行额外旋转。
-* 旋转和逆旋转保留梯度；角度使用 Python RNG，沿用训练 RNG 的保存与恢复。该开关参与配置指纹，切换后需使用新训练目录。
-
 文本缓存规则：
 
 * RemoteCLIP 文本分支完全冻结时可缓存 detach 特征。
@@ -136,20 +128,20 @@ feature_state_36 + semantic_state_36
 * SAM3 类内指导：`backbone_fpn[2]`（72×72）双线性下采样到 36×36，保留 256 通道，广播到提示维；缺失或尺寸不符直接报错。
 * RemoteCLIP 中间层 `[7, 15]` 的提取、缓存和调试输出保留，但不传入 aggregation，不构建对应投影或指导更新分支。
 
-### 5.2 统一聚合块
+### 5.2 类间与多尺度类内注意力
 
-默认 `num_blocks=4`，每个块均执行以下三步，块间、步骤间不共享参数：
+默认 `num_blocks=2`。每块先在 36×36 网格的每个位置沿完整提示轴计算类间注意力，再做两轮类内注意力。每步都把更新量加到 encoder feature 上。
 
-| 步骤 | Q/K 拼接 | Value 与残差目标 |
-| --- | --- | --- |
-| 类间注意力 | score embedding + 当前 encoder feature（512 通道） | encoder feature |
-| 普通窗口类内注意力 | score embedding + 当前 encoder feature + SAM3 FPN 指导（768 通道） | encoder feature |
-| 移位窗口类内注意力 | score embedding + 当前 encoder feature + SAM3 FPN 指导（768 通道） | encoder feature |
+| 类内轮次 | 36×36 分支 | 24×24 分支 | 12×12 分支 |
+| --- | --- | --- | --- |
+| 普通窗口 | 9 个窗口 | 4 个窗口 | 1 个全图窗口 |
+| 移位窗口 | 双轴各移 6 格 | 双轴各移 6 格 | 1 个全图窗口，移位量为 0 |
 
-* 每一步重新 pre-norm、Q/K/V 投影，直接残差更新 feature；后一步使用前一步更新后的 feature。
-* 类间沿每张图每个位置的完整展开提示轴交互；类内使用 12×12 窗口、6 像素移位，保留相对位置偏置和 shift mask。
-* 无 FFN；全部块后仅对 feature 执行一次通道 LayerNorm。
-* `num_blocks` 表示完整三步块的数量，不再表示交替的单类注意力块数量。
+* 每轮从当前 encoder feature 分别采样三个尺度，各用 12×12 窗口计算注意力。移位分支使用移位掩码，计算结束后还原空间位置。全图窗口允许全部 144 个位置相互关注。
+* 每路输出是注意力更新量。将三路更新量对齐到 36×36，逐元素求均值，再加到本轮的输入。第二轮从第一轮残差更新的结果重新生成三个尺度。各处双线性插值均使用 `align_corners=False`。
+* 类间注意力用 score embedding 和当前 encoder feature 构造查询与键。类内注意力还拼接对应尺度的 SAM3 FPN 引导。所有注意力的值都取自 encoder feature。两份引导的多尺度特征在一次聚合前向中生成一次，由各层复用。
+* `model.aggregation.share_window_weights_across_scales=True` 时，每轮的三个尺度共用同一套预归一化、注意力投影和相对位置偏置。每层两轮分别学习参数，层间也各自学习。设为 `False` 时，每轮三个尺度各学一套，每层共六套窗口参数。各尺度的注意力分数根据本尺度输入计算。
+* 所有聚合块结束后，对特征执行一次通道 LayerNorm。
 
 ### 5.3 Semantic–Detail Fusion
 
@@ -175,11 +167,11 @@ feature_state_36 + semantic_state_36
 
 有效基线以 `configs/experiments/main/dlrsd_loveda_full.py` 合并结果为准：
 
-* AdamW 基础学习率 `2e-6`；RemoteCLIP 图文乘 `0.01`；normalization 无 weight decay。
+* AdamW 基础学习率为 `1e-4`。RemoteCLIP 图文参数组使用 `0.01` 倍率，归一化层的权重衰减为 0。
 * 梯度裁剪 `0.01`；AMP 开启。
 * warmup 500 步（0.1 → 1.0），余弦衰减 9500 步，总计 10000 步。
-* 余弦使用 `RelativeCosineAnnealingLR`，`min_lr_ratio=0.01`；下限按各参数组预热目标学习率独立计算，保持组间比例。主模块从 `2e-6` 降至 `2e-8`，RemoteCLIP 图文从 `2e-8` 降至 `2e-10`。预热分别从目标学习率的 0.1 倍开始，预热结束衔接目标学习率；4K 调试计划采用相同规则。
-* 每 2000 步保存与验证；`val_max_iters=None` 表示完整验证。
+* 余弦使用 `RelativeCosineAnnealingLR`，`min_lr_ratio=0.01`。主模块预热到 `1e-4` 后衰减至 `1e-6`，RemoteCLIP 图文参数组预热到 `1e-6` 后衰减至 `1e-8`。各组预热起点为对应目标的 0.1 倍。4K 调试计划采用相同规则。
+* 每 1000 步保存并做完整验证（`val_max_iters=None`）。
 * batch size 4；训练 workers 8；验证 workers 2。
 * 64 个固定 RemoteCLIP 文本模板。
 * dropout 0.1；8 注意力头；窗口 12；移位 6。
@@ -350,9 +342,9 @@ work_dirs/<experiment>/
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py --print-config
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
-  --resume-from work_dirs/feature_blocks_v3/full/seed_42/train/latest.pth
+  --resume-from work_dirs/multiscale_windows/full/seed_42/train/latest.pth
 python tools/train.py configs/test/loveda.py --eval-only \
-  --load-model-from work_dirs/feature_blocks_v3/full/seed_42/train/best.pth
+  --load-model-from work_dirs/multiscale_windows/full/seed_42/train/best.pth
 
 python tools/collect_experiments.py work_dirs/paper \
   --output paper/generated/data/results_long.csv
@@ -399,7 +391,7 @@ UAVid 采用合并车辆的七类标签：background、building、road、tree、
 
 1. 提示块覆盖完整、无重复、按原顺序拼接。
 2. SAM3 encoder / aggregation / RemoteCLIP 网格固定 72×72 / 36×36 / 36×36。
-3. 特征通道固定 256；模板固定 64；聚合默认 4 块。
+3. 特征通道为 256，模板数为 64，聚合默认 2 块。
 4. `clip_guidance_36` 完全由 RemoteCLIP 模板分数与 dense 特征生成，不注入 SAM3 FPN。
 5. 两次拼接前分别执行逐像素通道 L2 归一化。
 6. 类内使用 SAM3 FPN36 指导；RemoteCLIP 中间层仅保留提取与缓存，不参与聚合。
@@ -438,8 +430,8 @@ CPU 回归测试：`python -m unittest discover -s tests -v`。测试覆盖有�
 
 ## 14. 新基线与实验清理
 
-* 公共配置仍为 batch 4、10000 步、LR 2e-6、固定蒸馏 0.5、W&B offline；数据增强与损失不变。
-* `implementation_id="reca-sam3-feature-blocks-v3"`，新目录为 `work_dirs/feature_blocks_v3/full/seed_42/train`；不能从旧权重恢复新结构。
+* 公共配置为 batch 4、10000 步、LR 1e-4、固定蒸馏系数 0.5、W&B offline。SAM3、RemoteCLIP 与标签共享数据增强的空间朝向。
+* `implementation_id="reca-sam3-multiscale-windows-v1"`，新目录为 `work_dirs/multiscale_windows/full/seed_42/train`；不能从旧权重恢复新结构。
 * 旧消融配置、专用模型分支、批量任务/权重选择、论文消融计划和表格均已清理；不自动迁移旧消融或旧 Full 成绩。
 * 批量训练仅保留新 Full；独立验证保留 Full 与两个原始 SAM3 对比，继续使用相同八数据集。
 * 删除 `cross_class_mode`、`intra_class_enabled`、`semantic_init`、`update_streams`、融合 `orientations`、concat fusion 和 simple adapter 开关；旧字段由配置校验拒绝。

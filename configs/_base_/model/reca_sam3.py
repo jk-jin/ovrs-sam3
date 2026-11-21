@@ -15,7 +15,6 @@ model = dict(
         pretrained="weights/RemoteCLIP-ViT-L-14.pt",
         default_output="feat_map",
         image_size=504,
-        train_random_rotate=False,  # Extra RemoteCLIP-only rotation during training.
         image_intermediate_layers=[7, 15],
         normalize_label_for_clip=True,
         text_prompt_batch_size=64,
@@ -24,7 +23,7 @@ model = dict(
 
     aggregation=dict(
         enabled=True,
-        num_blocks=4,  # Each block: cross -> regular window -> shifted window.
+        num_blocks=2,
         num_heads=8,
         dropout=0.1,
         feature_dim=256,
@@ -33,6 +32,7 @@ model = dict(
         encoder_hw=72,
         window_size=12,
         shift_size=6,
+        share_window_weights_across_scales=True,  # Within each regular or shifted pass.
         use_checkpoint=True,
     ),
 

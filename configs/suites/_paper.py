@@ -1,6 +1,6 @@
-# Each block updates encoder features with cross/regular/shifted attention.
+# Each block updates encoder features with cross-class and two multiscale window updates.
 suite = dict(
-    root="work_dirs/feature_blocks_v3",
+    root="work_dirs/multiscale_windows",
     seeds=[42],
     devices=["cuda:0"],
     experiments=[dict(

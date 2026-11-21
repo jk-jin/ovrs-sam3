@@ -4,6 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ..config_dataclasses import WINDOW_SCALES
+
 
 def flatten_batch_class(
     features: torch.Tensor,
@@ -27,6 +29,15 @@ def unflatten_batch_class(
     return features.reshape(
         batch_size, num_prompts, channels, height, width
     ).contiguous()
+
+
+def resize_prompt_features(features: torch.Tensor, size: int) -> torch.Tensor:
+    """Bilinearly resize each image-prompt feature map independently."""
+    if features.shape[-2:] == (size, size):
+        return features
+    flat, batch_size, num_prompts = flatten_batch_class(features)
+    resized = F.interpolate(flat, size=(size, size), mode="bilinear", align_corners=False)
+    return unflatten_batch_class(resized, batch_size, num_prompts)
 
 
 def apply_layer_norm_bcdhw(
@@ -244,15 +255,15 @@ class WindowSpatialAttention(nn.Module):
         self,
         padded_h: int,
         padded_w: int,
+        shift: int,
         bc: int,
         device: torch.device,
         dtype: torch.dtype,
     ) -> torch.Tensor | None:
-        if self.shift_size == 0:
+        if shift == 0:
             return None
 
         ws = self.window_size
-        shift = self.shift_size
 
         img_mask = torch.zeros(
             (1, padded_h, padded_w), device=device, dtype=torch.float32
@@ -315,7 +326,8 @@ class WindowSpatialAttention(nn.Module):
 
         pad_h, pad_w = f_flat.shape[-2], f_flat.shape[-1]
 
-        shift = self.shift_size
+        # A single global window has no window boundary to shift or mask.
+        shift = 0 if pad_h == pad_w == ws else self.shift_size
         if shift > 0:
             f_flat = torch.roll(f_flat, shifts=(-shift, -shift), dims=(-2, -1))
             s_flat = torch.roll(s_flat, shifts=(-shift, -shift), dims=(-2, -1))
@@ -336,6 +348,7 @@ class WindowSpatialAttention(nn.Module):
         attn_mask = self._build_shift_attn_mask(
             padded_h=pad_h,
             padded_w=pad_w,
+            shift=shift,
             bc=bc,
             device=feature_state.device,
             dtype=feature_state.dtype,
@@ -410,28 +423,53 @@ class WindowAttentionUpdate(nn.Module):
 
     def forward(
         self,
-        feature_state_36: torch.Tensor,
-        semantic_state_36: torch.Tensor,
+        feature_state: torch.Tensor,
+        semantic_state: torch.Tensor,
         guidance: torch.Tensor,
     ) -> torch.Tensor:
         return self.attn(
             feature_state=apply_layer_norm_bcdhw(
-                feature_state_36, self.norm_feature
+                feature_state, self.norm_feature
             ),
             semantic_state=apply_layer_norm_bcdhw(
-                semantic_state_36, self.norm_semantic
+                semantic_state, self.norm_semantic
             ),
             guidance=apply_layer_norm_bcdhw(guidance, self.norm_guidance),
         )
 
 
-class AggregationAttentionBlock(nn.Module):
-    """Update encoder features: cross-class, regular window, shifted window.
+class MultiscaleWindowUpdate(nn.Module):
+    """Return the mean of three window-attention increments on the 36×36 grid."""
 
-    RemoteCLIP semantics stay unchanged and guide every Q/K projection.
-    SAM3 FPN guidance is added to window Q/K only. All three residual
-    updates have independent pre-normalization and attention parameters.
-    """
+    def __init__(self, share_weights: bool, **window_kwargs):
+        super().__init__()
+        self.share_weights = share_weights
+        self.windows = nn.ModuleList(
+            WindowAttentionUpdate(**window_kwargs)
+            for _ in range(1 if share_weights else len(WINDOW_SCALES))
+        )
+
+    def forward(
+        self,
+        features: torch.Tensor,
+        semantic_scales: tuple[torch.Tensor, ...],
+        spatial_scales: tuple[torch.Tensor, ...],
+    ) -> torch.Tensor:
+        update_sum = None
+        for index, size in enumerate(WINDOW_SCALES):
+            window = self.windows[0 if self.share_weights else index]
+            update = window(
+                resize_prompt_features(features, size),
+                semantic_scales[index],
+                spatial_scales[index],
+            )
+            aligned = resize_prompt_features(update, features.shape[-1])
+            update_sum = aligned if update_sum is None else update_sum + aligned
+        return update_sum / len(WINDOW_SCALES)
+
+
+class AggregationAttentionBlock(nn.Module):
+    """Cross-class update followed by separate regular and shifted multiscale updates."""
 
     def __init__(
         self,
@@ -442,6 +480,7 @@ class AggregationAttentionBlock(nn.Module):
         shift_size: int = 6,
         dropout: float = 0.1,
         guidance_dim: int = 256,
+        share_window_weights_across_scales: bool = True,
     ):
         super().__init__()
         self.cross_attention = CrossClassAttention(
@@ -459,23 +498,24 @@ class AggregationAttentionBlock(nn.Module):
             window_size=window_size,
             dropout=dropout,
             guidance_dim=guidance_dim,
+            share_weights=share_window_weights_across_scales,
         )
-        self.feature_regular = WindowAttentionUpdate(shift_size=0, **window_kwargs)
-        self.feature_shifted = WindowAttentionUpdate(shift_size=shift_size, **window_kwargs)
+        self.feature_regular = MultiscaleWindowUpdate(shift_size=0, **window_kwargs)
+        self.feature_shifted = MultiscaleWindowUpdate(shift_size=shift_size, **window_kwargs)
 
     def forward(
         self,
         feature_state_36: torch.Tensor,
-        semantic_state_36: torch.Tensor,
-        sam3_spatial_guidance_36: torch.Tensor,
+        semantic_scales: tuple[torch.Tensor, ...],
+        spatial_scales: tuple[torch.Tensor, ...],
     ) -> torch.Tensor:
         feature_state_36 = feature_state_36 + self.cross_attention(
             feature_state=apply_layer_norm_bcdhw(feature_state_36, self.cross_norm_feature),
-            semantic_state=apply_layer_norm_bcdhw(semantic_state_36, self.cross_norm_semantic),
+            semantic_state=apply_layer_norm_bcdhw(semantic_scales[0], self.cross_norm_semantic),
         )
         feature_state_36 = feature_state_36 + self.feature_regular(
-            feature_state_36, semantic_state_36, sam3_spatial_guidance_36
+            feature_state_36, semantic_scales, spatial_scales
         )
         return feature_state_36 + self.feature_shifted(
-            feature_state_36, semantic_state_36, sam3_spatial_guidance_36
+            feature_state_36, semantic_scales, spatial_scales
         )

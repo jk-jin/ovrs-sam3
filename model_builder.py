@@ -260,9 +260,6 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
     ) -> RemoteCLIPConfig:
         remoteclip_cfg = cls._coerce_remoteclip_cfg(remoteclip_cfg)
 
-        if not isinstance(remoteclip_cfg.train_random_rotate, bool):
-            raise TypeError("model.remoteclip.train_random_rotate must be bool.")
-
         if not remoteclip_cfg.enabled:
             return remoteclip_cfg
 
@@ -323,19 +320,7 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
                 f"got {cfg.num_heads}."
             )
 
-        if (
-            cfg.window_size <= 0
-            or cfg.aggregation_hw % cfg.window_size != 0
-        ):
-            raise ValueError(
-                "model.aggregation.window_size must be positive and divide "
-                "aggregation_hw."
-            )
-        if not 0 <= cfg.shift_size < cfg.window_size:
-            raise ValueError(
-                "model.aggregation.shift_size must satisfy "
-                "0 <= shift_size < window_size."
-            )
+        cfg.validate_windows()
 
         if cfg.encoder_hw != 72:
             raise ValueError(
@@ -902,7 +887,6 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
             matcher=None,
             clip_image_encoder=clip_image_encoder,
             clip_text_encoder=clip_text_encoder,
-            remoteclip_train_random_rotate=cfg.remoteclip.train_random_rotate,
             remoteclip_prompt_templates=list(
                 cfg.remoteclip.prompt_templates
             ),
@@ -923,6 +907,7 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
             aggregation_semantic_dim=int(aggregation_cfg.semantic_dim),
             aggregation_window_size=int(aggregation_cfg.window_size),
             aggregation_shift_size=int(aggregation_cfg.shift_size),
+            share_window_weights_across_scales=aggregation_cfg.share_window_weights_across_scales,
             aggregation_use_checkpoint=bool(
                 aggregation_cfg.use_checkpoint
             ),
