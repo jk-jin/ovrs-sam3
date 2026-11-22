@@ -4,7 +4,7 @@ ReCA-SAM3：RemoteCLIP-guided cross-class feature aggregation for open-vocabular
 
 当前实现以 DLRSD 作为训练集、LoveDA 七类验证集，只支持 semantic 模式。SAM3 backbone、encoder、Pixel Decoder 和 semantic head 冻结；RemoteCLIP 图文分支默认做 attention 微调；`core.feature_aggregation` 完整训练。
 
-聚合默认包含 2 个块。每块先在 36×36 上做类间注意力，输出乘以本层的可学习系数后加回 encoder feature。再从这份特征生成 36×36、24×24 和 12×12 三个尺度，各做一次 12×12 普通窗口注意力，其中 12×12 尺度覆盖全图。将三路输出对齐到 36×36，各乘以本尺度的可学习系数，求和后加回 encoder feature。每块的四个系数均从 0.1 开始训练。RemoteCLIP 与 SAM3 使用同一空间朝向的图像，score embedding 通过注意力的查询与键获得梯度。最后在 72×72 做一次语义与细节融合。
+聚合默认包含 2 个块。每块先在 36×36 上做类间注意力，输出直接加回 encoder feature。再从这份特征生成 36×36、24×24 和 12×12 三个尺度，各做一次 12×12 普通窗口注意力，其中 12×12 尺度覆盖全图。将三路输出对齐到 36×36，用 Softmax 权重加权求和后加回 encoder feature。每层独立学习三个融合 logits，全部初始化为 0，对应初始权重各为 1/3。RemoteCLIP 与 SAM3 使用同一空间朝向的图像，score embedding 通过注意力的查询与键获得梯度。最后在 72×72 做一次语义与细节融合。
 
 ## 环境与权重
 
@@ -152,9 +152,7 @@ configs/sweeps/
 
 64 条 RemoteCLIP 模板集中在 `data/prompt_templates.py`。配置指纹由规范化有效配置生成，排除输出目录、设备、日志、可视化、保存/验证间隔、workers 和数据路径等运行字段。
 
-`configs/_base_/model/reca_sam3.py` 中的 `model.aggregation.residual_weight_init` 控制每层四个可学习残差系数的初始值，默认为 `0.1`。例如设为 `0.25` 后，所有层的类间系数和三个尺度的系数都从 `0.25` 开始独立训练。恢复权重时使用权重文件中保存的系数值。
-
-`configs/_base_/model/reca_sam3.py` 中的 `model.aggregation.share_window_weights_across_scales` 默认为 `True`，同一层三个尺度共用一套窗口注意力参数。设为 `False` 后，每层的三个尺度各自学习一套注意力参数。两种设置下，各尺度的残差系数都独立训练。可用以下命令训练独立窗口注意力。
+`configs/_base_/model/reca_sam3.py` 中的 `model.aggregation.share_window_weights_across_scales` 默认为 `True`，同一层三个尺度共用一套窗口注意力参数。设为 `False` 后，每层的三个尺度各自学习一套注意力参数。两种设置下，每层的三个 Softmax 融合参数都独立训练。可用以下命令训练独立窗口注意力。
 
 ```bash
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \

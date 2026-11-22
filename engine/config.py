@@ -892,7 +892,6 @@ def finalize_config(raw_cfg: dict) -> dict:
         cfg["experiment"]["factors"].update(
             num_blocks=aggregation["num_blocks"],
             share_window_weights_across_scales=aggregation["share_window_weights_across_scales"],
-            residual_weight_init=aggregation["residual_weight_init"],
         )
     cfg["loss"] = _validate_loss_section(cfg["loss"])
     cfg["evaluation"] = _validate_evaluation(

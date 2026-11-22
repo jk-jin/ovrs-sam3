@@ -1,4 +1,4 @@
-# Each block learns separate residual weights for its cross-class and three window updates.
+# Each block adds a cross-class residual and a softmax fusion of three window updates.
 suite = dict(
     root="work_dirs/reca_sam3",
     seeds=[42],

@@ -1,6 +1,6 @@
 # 新基线批量训练与验证
 
-聚合默认 2 层。每层从类间注意力更新后的 encoder feature 生成 36×36、24×24、12×12 三个尺度，各做一次 12×12 普通窗口注意力。类间更新量和三个尺度的更新量各乘以一个可学习标量，初始值均为 0.1。三个空间分支对齐到 36×36 后加权求和，再加回 encoder feature。默认每层共享一套窗口注意力参数，`model.aggregation.share_window_weights_across_scales=False` 时各尺度独立学习注意力参数。残差系数始终按层、按分支独立学习。
+聚合默认 2 层。每层从类间注意力更新后的 encoder feature 生成 36×36、24×24、12×12 三个尺度，各做一次 12×12 普通窗口注意力。类间注意力的更新量直接残差到 encoder feature。三个窗口分支对齐到 36×36 后，通过三个可学习 logits 的 Softmax 权重加权融合，再残差到 encoder feature。logits 全部从 0 开始，对应初始融合权重各为 1/3。默认每层共享一套窗口注意力参数，`model.aggregation.share_window_weights_across_scales=False` 时各尺度独立学习注意力参数。每层独立学习三个 Softmax 融合参数。
 
 ## 训练
 

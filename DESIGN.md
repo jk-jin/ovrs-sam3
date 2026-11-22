@@ -130,7 +130,7 @@ feature_state_36 + semantic_state_36
 
 ### 5.2 类间与多尺度类内注意力
 
-默认 `num_blocks=2`。每块先在 36×36 网格的每个位置沿完整提示轴计算类间注意力。将更新量乘以本层的类间残差系数，再加到 encoder feature 上。三个尺度的类内注意力都从这份更新后的特征出发。
+默认 `num_blocks=2`。每块先在 36×36 网格的每个位置沿完整提示轴计算类间注意力。将更新量直接加到 encoder feature 上。三个尺度的类内注意力都从这份更新后的特征出发。
 
 | 特征尺度 | 并行分支 | 每个分支的 12×12 窗口数 |
 | --- | --- | --- |
@@ -139,10 +139,10 @@ feature_state_36 + semantic_state_36
 | 12×12 | 全图窗口 | 1 |
 
 * 保留 36×36 特征，从中分别双线性插值得到 24×24 和 12×12。每个尺度各做一次普通窗口注意力。12×12 的全图窗口只计算一次，全部 144 个位置可以相互关注。
-* 保留 36×36 分支的更新量，将 24×24 和 12×12 两路的更新量分别上采样到 36×36。三路各乘以本尺度的可学习标量，逐元素求和，再一次性加回类间注意力更新后的 encoder feature。所有双线性插值均使用 `align_corners=False`。
-* 每层独立学习四个残差系数，分别对应类间注意力和三个尺度。`model.aggregation.residual_weight_init` 统一设置初始值，默认 `0.1`，接受有限数值。主路径的 encoder feature 系数固定为 1。恢复权重时加载已训练的系数值。
+* 保留 36×36 分支的更新量，将 24×24 和 12×12 两路的更新量分别上采样到 36×36。三路通过本层学习的 Softmax 权重加权求和，再直接加回类间注意力更新后的 encoder feature。所有双线性插值均使用 `align_corners=False`。
+* 每层用 `window_update.scale_logits` 独立学习三个融合参数，顺序对应 36×36、24×24、12×12。logits 全部初始化为 0，在尺度轴做 Softmax 后，初始权重各为 1/3，训练时三个权重非负且总和为 1。
 * 类间注意力用 score embedding 和当前 encoder feature 构造查询与键。类内注意力还拼接对应尺度的 SAM3 FPN 引导。所有注意力的值都取自 encoder feature。两份引导的多尺度特征在一次聚合前向中生成一次，由各层复用。
-* `model.aggregation.share_window_weights_across_scales=True`（默认）时，同一层三个尺度共用一套预归一化、查询/键/值投影、输出投影和相对位置偏置。设为 `False` 时，每个分支独立学习上述全部参数，每层共三套。两种模式下，各尺度的残差系数都独立训练。
+* `model.aggregation.share_window_weights_across_scales=True`（默认）时，同一层三个尺度共用一套预归一化、查询/键/值投影、输出投影和相对位置偏置。设为 `False` 时，每个分支独立学习上述全部参数，每层共三套。两种模式下，每层的三个 Softmax 融合参数都独立训练。
 * 所有聚合块结束后，对特征执行一次通道 LayerNorm。
 
 ### 5.3 Semantic–Detail Fusion
@@ -438,4 +438,4 @@ UAVid 采用合并车辆的七类标签：background、building、road、tree、
 * 批量训练仅保留新 Full；独立验证保留 Full 与两个原始 SAM3 对比，继续使用相同八数据集。
 * 删除 `cross_class_mode`、`intra_class_enabled`、`semantic_init`、`update_streams`、融合 `orientations`、concat fusion 和 simple adapter 开关；旧字段由配置校验拒绝。
 * 两个原始 SAM3 比较仍由 `sam3_semantic` / `sam3_semantic_presence` 实现，不构建 RemoteCLIP 或聚合模块。
-* CPU 检查覆盖三路普通窗口的覆盖范围、各残差系数的初始化和加权求和、两种参数共享设置的梯度、固定语义引导梯度、checkpoint 输出与梯度一致性、单方向融合、配置与批量入口。
+* CPU 检查覆盖三路普通窗口的覆盖范围、Softmax 融合的等权初始化和加权求和、两种参数共享设置的梯度、固定语义引导梯度、checkpoint 输出与梯度一致性、单方向融合、配置与批量入口。

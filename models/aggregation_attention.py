@@ -341,18 +341,16 @@ class WindowAttentionUpdate(nn.Module):
 
 
 class MultiscaleWindowUpdate(nn.Module):
-    """Weight and sum the aligned window updates from the three feature scales."""
+    """Fuse aligned window updates with learned softmax weights over three scales."""
 
-    def __init__(self, share_weights: bool, residual_weight_init: float = 0.1, **window_kwargs):
+    def __init__(self, share_weights: bool, **window_kwargs):
         super().__init__()
         self.share_weights = share_weights
         self.windows = nn.ModuleList(
             WindowAttentionUpdate(**window_kwargs)
             for _ in range(1 if share_weights else len(WINDOW_SCALES))
         )
-        self.residual_weights = nn.ParameterList(
-            nn.Parameter(torch.tensor(float(residual_weight_init))) for _ in WINDOW_SCALES
-        )
+        self.scale_logits = nn.Parameter(torch.zeros(len(WINDOW_SCALES)))
 
     def forward(
         self,
@@ -360,6 +358,7 @@ class MultiscaleWindowUpdate(nn.Module):
         semantic_scales: tuple[torch.Tensor, ...],
         spatial_scales: tuple[torch.Tensor, ...],
     ) -> torch.Tensor:
+        scale_weights = self.scale_logits.softmax(dim=0)
         update_sum = None
         for index, size in enumerate(WINDOW_SCALES):
             window = self.windows[0 if self.share_weights else index]
@@ -367,13 +366,13 @@ class MultiscaleWindowUpdate(nn.Module):
                 resize_prompt_features(features, size), semantic_scales[index], spatial_scales[index],
             )
             aligned = resize_prompt_features(update, features.shape[-1])
-            weighted = self.residual_weights[index] * aligned
+            weighted = scale_weights[index] * aligned
             update_sum = weighted if update_sum is None else update_sum + weighted
         return update_sum
 
 
 class AggregationAttentionBlock(nn.Module):
-    """Apply a learned residual weight to each cross-class and spatial update."""
+    """Add a cross-class residual followed by softmax-fused spatial updates."""
 
     def __init__(
         self,
@@ -384,7 +383,6 @@ class AggregationAttentionBlock(nn.Module):
         dropout: float = 0.1,
         guidance_dim: int = 256,
         share_window_weights_across_scales: bool = True,
-        residual_weight_init: float = 0.1,
     ):
         super().__init__()
         self.cross_attention = CrossClassAttention(
@@ -395,7 +393,6 @@ class AggregationAttentionBlock(nn.Module):
         )
         self.cross_norm_feature = nn.LayerNorm(feature_dim)
         self.cross_norm_semantic = nn.LayerNorm(semantic_dim)
-        self.cross_residual_weight = nn.Parameter(torch.tensor(float(residual_weight_init)))
         self.window_update = MultiscaleWindowUpdate(
             feature_dim=feature_dim,
             semantic_dim=semantic_dim,
@@ -404,7 +401,6 @@ class AggregationAttentionBlock(nn.Module):
             dropout=dropout,
             guidance_dim=guidance_dim,
             share_weights=share_window_weights_across_scales,
-            residual_weight_init=residual_weight_init,
         )
 
     def forward(
@@ -417,7 +413,7 @@ class AggregationAttentionBlock(nn.Module):
             feature_state=apply_layer_norm_bcdhw(feature_state_36, self.cross_norm_feature),
             semantic_state=apply_layer_norm_bcdhw(semantic_scales[0], self.cross_norm_semantic),
         )
-        feature_state_36 = feature_state_36 + self.cross_residual_weight * cross_update
+        feature_state_36 = feature_state_36 + cross_update
         return feature_state_36 + self.window_update(
             feature_state_36, semantic_scales, spatial_scales
         )

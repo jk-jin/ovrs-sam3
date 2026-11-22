@@ -1,6 +1,6 @@
 # ReCA-SAM3 论文工作区
 
-当前代码基线为 `reca-sam3-multiscale-windows`。默认两层，每层用类间注意力和三个尺度的普通窗口注意力更新 SAM3 encoder feature。四路更新量分别乘以独立学习的残差系数，初始值均为 0.1。
+当前代码基线为 `reca-sam3-multiscale-windows`。默认两层，每层用类间注意力和三个尺度的普通窗口注意力更新 SAM3 encoder feature。类间更新量直接残差到 encoder feature，三尺度窗口输出对齐后通过 Softmax 加权融合再残差。每层独立学习三个融合 logits，全部初始化为 0。
 
 旧消融配置、实验计划行、权重选择与消融表已删除。当前仅保留完整模型、两个原始 SAM3 对比及外部文献行；实验数值未运行的部分仍为 `--`，不沿用旧 Full 或旧消融成绩。训练与手选权重验证见 [批量实验说明](../docs/experiment_suites.md)。
 

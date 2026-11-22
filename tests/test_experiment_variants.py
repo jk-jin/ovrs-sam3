@@ -35,7 +35,7 @@ class TestAggregationDesign(unittest.TestCase):
         expected = (semantic[:, :2].sigmoid() * presence[:, :2].sigmoid()).amax(1)
         torch.testing.assert_close(scores[:, :2].amax(1), expected)
 
-    def test_independently_weighted_windows_use_the_weighted_cross_class_state(self):
+    def test_softmax_windows_use_one_post_cross_input_and_a_normalized_sum(self):
         block = attention.AggregationAttentionBlock(
             feature_dim=8, semantic_dim=8, num_heads=2,
             window_size=12, dropout=0, guidance_dim=4,
@@ -49,12 +49,9 @@ class TestAggregationDesign(unittest.TestCase):
         guides = tuple(resize(guidance, size) for size in sizes)
         calls = []
         (shared_window,) = block.window_update.windows
-        cross_weight = 0.4
-        scale_weights = (0.25, -0.5, 1.5)
+        scale_weights = (0.2, 0.3, 0.5)
         with torch.no_grad():
-            block.cross_residual_weight.fill_(cross_weight)
-            for parameter, weight in zip(block.window_update.residual_weights, scale_weights, strict=True):
-                parameter.fill_(weight)
+            block.window_update.scale_logits.copy_(torch.tensor(scale_weights).log())
 
         def record_call(module, args):
             calls.append(args[0].shape[-2:])
@@ -64,7 +61,7 @@ class TestAggregationDesign(unittest.TestCase):
         self.assertEqual(calls, [(size, size) for size in sizes])
 
         with torch.no_grad():
-            cross = features + cross_weight * block.cross_attention(
+            cross = features + block.cross_attention(
                 attention.apply_layer_norm_bcdhw(features, block.cross_norm_feature),
                 attention.apply_layer_norm_bcdhw(semantic, block.cross_norm_semantic),
             )
@@ -84,11 +81,6 @@ class TestAggregationDesign(unittest.TestCase):
         changed = features.detach().clone()
         changed[:, 1:] = torch.randn_like(changed[:, 1:]) * 10
         self.assertFalse(torch.allclose(result[:, 0], block(changed, semantics, guides)[:, 0]))
-        with torch.no_grad():
-            block.cross_residual_weight.zero_()
-            for weight in block.window_update.residual_weights:
-                weight.zero_()
-            torch.testing.assert_close(block(features, semantics, guides), features, atol=0, rtol=0)
 
     def test_three_independent_windows_learn_separately_and_sum_to_shared_gradient(self):
         torch.manual_seed(25)
@@ -96,10 +88,9 @@ class TestAggregationDesign(unittest.TestCase):
         shared = attention.AggregationAttentionBlock(**kwargs)
         separate = attention.AggregationAttentionBlock(**kwargs, share_window_weights_across_scales=False)
         for block in (shared, separate):
-            weights = [block.cross_residual_weight, *block.window_update.residual_weights]
-            self.assertEqual(len({w.data_ptr() for w in weights}), 4)
-            for weight in weights:
-                torch.testing.assert_close(weight, torch.tensor(0.1))
+            logits = block.window_update.scale_logits
+            torch.testing.assert_close(logits, torch.zeros(3))
+            torch.testing.assert_close(logits.softmax(0), torch.full((3,), 1 / 3))
         separate.load_state_dict(shared.state_dict(), strict=False)
         (shared_window,) = shared.window_update.windows
         windows = separate.window_update.windows
@@ -115,10 +106,10 @@ class TestAggregationDesign(unittest.TestCase):
         torch.testing.assert_close(combined, independent)
         combined.square().mean().backward()
         independent.square().mean().backward()
-        for name, weight in shared.named_parameters():
-            if 'residual_weight' in name:
-                self.assertGreater(weight.grad.abs().item(), 0)
-                torch.testing.assert_close(weight.grad, separate.get_parameter(name).grad)
+        shared_logits = shared.window_update.scale_logits
+        separate_logits = separate.window_update.scale_logits
+        self.assertTrue((shared_logits.grad.abs() > 0).all())
+        torch.testing.assert_close(shared_logits.grad, separate_logits.grad)
         for name, param in shared_window.named_parameters():
             branch_params = [window.get_parameter(name) for window in windows]
             self.assertEqual(len({p.data_ptr() for p in branch_params}), 3, msg=name)
@@ -126,6 +117,7 @@ class TestAggregationDesign(unittest.TestCase):
             torch.testing.assert_close(param.grad, torch.stack(grads).sum(0), msg=name)
         # Starting from identical weights, the three scales learn different updates.
         torch.optim.SGD(separate.parameters(), lr=0.1).step()
+        self.assertFalse(torch.equal(separate_logits, torch.zeros(3)))
         for first, second in combinations(windows, 2):
             self.assertFalse(torch.equal(first.attn.v_proj.weight, second.attn.v_proj.weight))
 
@@ -178,6 +170,7 @@ class TestAggregationDesign(unittest.TestCase):
         ).train()
         self.assertEqual(len(model.blocks), 2)
         self.assertIsNot(model.blocks[0].window_update.windows[0], model.blocks[1].window_update.windows[0])
+        self.assertIsNot(model.blocks[0].window_update.scale_logits, model.blocks[1].window_update.scale_logits)
         self.assertTrue(all(isinstance(b, attention.AggregationAttentionBlock) for b in model.blocks))
         self.assertFalse(hasattr(model, 'clip_spatial_guidance_proj'))
         dense = torch.randn(1, 4, 36, 36, requires_grad=True)
