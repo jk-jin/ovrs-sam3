@@ -34,7 +34,7 @@ class TestAggregationDesign(unittest.TestCase):
         expected = (semantic[:, :2].sigmoid() * presence[:, :2].sigmoid()).amax(1)
         torch.testing.assert_close(scores[:, :2].amax(1), expected)
 
-    def test_complete_block_order_residual_inputs_and_semantic_gradients(self):
+    def test_five_windows_use_one_post_cross_input_and_one_mean_residual(self):
         block = attention.AggregationAttentionBlock(
             feature_dim=8, semantic_dim=8, num_heads=2,
             window_size=12, shift_size=6, dropout=0, guidance_dim=4,
@@ -47,24 +47,27 @@ class TestAggregationDesign(unittest.TestCase):
         semantics = tuple(resize(semantic, size) for size in sizes)
         guides = tuple(resize(guidance, size) for size in sizes)
         calls = []
-        for name in ('cross_attention', 'feature_regular', 'feature_shifted'):
-            getattr(block, name).register_forward_hook(
-                lambda module, args, out, name=name: calls.append(name)
+        (shared_window,) = block.window_update.windows
+
+        def record_call(module, args, kwargs):
+            calls.append((args[0].shape[-1], kwargs['shift_size']))
+
+        with shared_window.register_forward_pre_hook(record_call, with_kwargs=True):
+            result = block(features, semantics, guides)
+        geometry = [(36, 0), (36, 6), (24, 0), (24, 6), (12, 0)]
+        self.assertEqual(calls, geometry)
+
+        with torch.no_grad():
+            cross = features + block.cross_attention(
+                attention.apply_layer_norm_bcdhw(features, block.cross_norm_feature),
+                attention.apply_layer_norm_bcdhw(semantic, block.cross_norm_semantic),
             )
-        result = block(features, semantics, guides)
-        self.assertEqual(calls, ['cross_attention', 'feature_regular', 'feature_shifted'])
-        cross = features + block.cross_attention(
-            attention.apply_layer_norm_bcdhw(features, block.cross_norm_feature),
-            attention.apply_layer_norm_bcdhw(semantic, block.cross_norm_semantic),
-        )
-        # Explicit three-branch reference. Resample from the newest residual each pass.
-        expected = cross
-        for stage in (block.feature_regular, block.feature_shifted):
             outputs = [
-                resize(stage.windows[0](resize(expected, size), prior, guide), 36)
-                for size, prior, guide in zip(sizes, semantics, guides)
+                resize(shared_window(resize(cross, size), resize(semantic, size),
+                                     resize(guidance, size), shift_size=shift), 36)
+                for size, shift in geometry
             ]
-            expected = expected + torch.stack(outputs).mean(0)
+            expected = cross + torch.stack(outputs).mean(0)
         torch.testing.assert_close(result, expected)
         torch.testing.assert_close(semantic, original_semantic)
         self.assertFalse(any('semantic_attention' in name for name, _ in block.named_parameters()))
@@ -76,51 +79,51 @@ class TestAggregationDesign(unittest.TestCase):
         changed[:, 1:] = torch.randn_like(changed[:, 1:]) * 10
         self.assertFalse(torch.allclose(result[:, 0], block(changed, semantics, guides)[:, 0]))
 
-    def test_shared_window_gradients_sum_over_independent_scales(self):
+    def test_five_independent_windows_learn_separately_and_sum_to_shared_gradient(self):
+        torch.manual_seed(25)
         kwargs = dict(feature_dim=4, semantic_dim=4, num_heads=1, guidance_dim=4, dropout=0)
         shared = attention.AggregationAttentionBlock(**kwargs)
         separate = attention.AggregationAttentionBlock(**kwargs, share_window_weights_across_scales=False)
         separate.load_state_dict(shared.state_dict(), strict=False)
-        stages = list(zip((shared.feature_regular, shared.feature_shifted),
-                          (separate.feature_regular, separate.feature_shifted)))
-        self.assertEqual(len({id(w) for stage, _ in stages for w in stage.windows}), 2)
-        self.assertEqual(len({id(w) for _, stage in stages for w in stage.windows}), 6)
-        for shared_stage, separate_stage in stages:
-            for window in separate_stage.windows:
-                window.load_state_dict(shared_stage.windows[0].state_dict())
+        (shared_window,) = shared.window_update.windows
+        windows = separate.window_update.windows
+        self.assertEqual(len(windows), 5)
+        for window in windows:
+            window.load_state_dict(shared_window.state_dict())
 
-        features = torch.randn(1, 2, 4, 36, 36)
-        semantic = tuple(torch.randn(1, 2, 4, n, n) for n in (36, 24, 12))
+        features = torch.randn(2, 2, 4, 36, 36)
+        semantic = tuple(torch.randn(2, 2, 4, n, n) for n in (36, 24, 12))
         spatial = tuple(torch.randn_like(level) for level in semantic)
         combined = shared(features, semantic, spatial)
         independent = separate(features, semantic, spatial)
         torch.testing.assert_close(combined, independent)
         combined.square().mean().backward()
         independent.square().mean().backward()
-        for shared_stage, separate_stage in stages:
-            for name, param in shared_stage.windows[0].named_parameters():
-                grads = [w.get_parameter(name).grad for w in separate_stage.windows]
-                torch.testing.assert_close(param.grad, torch.stack(grads).sum(0), msg=name)
+        for name, param in shared_window.named_parameters():
+            branch_params = [window.get_parameter(name) for window in windows]
+            self.assertEqual(len({p.data_ptr() for p in branch_params}), 5, msg=name)
+            grads = [p.grad for p in branch_params]
+            torch.testing.assert_close(param.grad, torch.stack(grads).sum(0), msg=name)
+        # Starting from identical weights, regular and shifted windows learn different updates.
+        torch.optim.SGD(separate.parameters(), lr=0.1).step()
+        for regular, shifted in ((windows[0], windows[1]), (windows[2], windows[3])):
+            self.assertFalse(torch.equal(regular.attn.v_proj.weight, shifted.attn.v_proj.weight))
 
     def test_shift_masks_only_local_windows_and_does_not_wrap_image_edges(self):
-        def uniform_attention(shift):
-            window = attention.WindowSpatialAttention(
-                feature_dim=1, semantic_dim=1, num_heads=1, shift_size=shift, dropout=0,
-            ).eval()
-            with torch.no_grad():
-                for param in window.parameters():
-                    param.zero_()
-                window.v_proj.weight.fill_(1)
-                window.out_proj.weight.fill_(1)
-            return window
-
-        regular, shifted = uniform_attention(0), uniform_attention(6)
+        window = attention.WindowSpatialAttention(
+            feature_dim=1, semantic_dim=1, num_heads=1, dropout=0,
+        ).eval()
+        with torch.no_grad():
+            for param in window.parameters():
+                param.zero_()
+            window.v_proj.weight.fill_(1)
+            window.out_proj.weight.fill_(1)
         for size in (36, 24, 12):
             with self.subTest(size=size), torch.no_grad():
                 impulse = torch.zeros(1, 1, 1, size, size)
                 impulse[..., 0, 0] = 1
-                ordinary = regular(impulse, torch.zeros_like(impulse))
-                moved = shifted(impulse, torch.zeros_like(impulse))
+                ordinary = window(impulse, torch.zeros_like(impulse), shift_size=0)
+                moved = window(impulse, torch.zeros_like(impulse), shift_size=6)
                 if size == 12:
                     torch.testing.assert_close(moved, torch.full_like(moved, 1 / 144))
                     torch.testing.assert_close(moved, ordinary)
@@ -129,8 +132,8 @@ class TestAggregationDesign(unittest.TestCase):
                     self.assertAlmostEqual(moved[..., -1, -1].item(), 0)
                     impulse.zero_()
                     impulse[..., 11, 11] = 1
-                    self.assertAlmostEqual(regular(impulse, impulse)[..., 12, 12].item(), 0)
-                    self.assertAlmostEqual(shifted(impulse, impulse)[..., 12, 12].item(), 1 / 144)
+                    self.assertAlmostEqual(window(impulse, impulse, shift_size=0)[..., 12, 12].item(), 0)
+                    self.assertAlmostEqual(window(impulse, impulse, shift_size=6)[..., 12, 12].item(), 1 / 144)
 
     def test_remoteclip_encodes_the_preprocessed_orientation_in_train_and_eval(self):
         encoder_type = load_module('models.openclip_image_encoder').OpenCLIPImageEncoder
@@ -162,6 +165,7 @@ class TestAggregationDesign(unittest.TestCase):
             prompt_templates=['{}'] * 64, dropout=0, use_checkpoint=True,
         ).train()
         self.assertEqual(len(model.blocks), 2)
+        self.assertIsNot(model.blocks[0].window_update.windows[0], model.blocks[1].window_update.windows[0])
         self.assertTrue(all(isinstance(b, attention.AggregationAttentionBlock) for b in model.blocks))
         self.assertFalse(hasattr(model, 'clip_spatial_guidance_proj'))
         dense = torch.randn(1, 4, 36, 36, requires_grad=True)

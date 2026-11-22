@@ -155,7 +155,7 @@ class TestEffectiveConfig(unittest.TestCase):
         self.assertFalse(dataset["background_cfg"]["enabled"])
         self.assertFalse(dataset["reduce_zero_label"])
         self.assertEqual(
-            cfg["runtime"]["work_dir"], "./work_dirs/multiscale_windows/full/seed_42/train"
+            cfg["runtime"]["work_dir"], "./work_dirs/multiscale_windows_v2/full/seed_42/train"
         )
         self.assertEqual(
             cfg["logging"]["wandb"]["tags"][1], "dlrsd-train"

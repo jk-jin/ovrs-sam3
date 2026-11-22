@@ -8,7 +8,7 @@ experiment = dict(
     method_id="reca_sam3",
     method_name="ReCA-SAM3",
     variant_id="full",
-    implementation_id="reca-sam3-multiscale-windows-v1",
+    implementation_id="reca-sam3-multiscale-windows-v2",
     kind="debug",
     factors=dict(
         directional_fusion=False,
@@ -20,7 +20,7 @@ experiment = dict(
 )
 
 runtime = dict(
-    work_dir="./work_dirs/dev/multiscale_windows_4k",
+    work_dir="./work_dirs/dev/multiscale_windows_v2_4k",
 )
 
 train_dataloader = dict(

@@ -141,8 +141,7 @@ class WindowSpatialAttention(nn.Module):
     """Single-value intra-class window attention with relative position bias.
 
     Q/K concatenate pre-normalized semantic state and feature state. Only the
-    encoder feature supplies values. Regular and shifted windows follow
-    the original implementation.
+    encoder feature supplies values. The caller chooses the shift for each view.
     """
 
     def __init__(
@@ -151,7 +150,6 @@ class WindowSpatialAttention(nn.Module):
         semantic_dim: int = 256,
         num_heads: int = 8,
         window_size: int = 12,
-        shift_size: int = 0,
         dropout: float = 0.1,
         guidance_dim: int = 0,
     ):
@@ -160,19 +158,12 @@ class WindowSpatialAttention(nn.Module):
         self.semantic_dim = int(semantic_dim)
         self.num_heads = int(num_heads)
         self.window_size = int(window_size)
-        self.shift_size = int(shift_size)
 
         if self.feature_dim % self.num_heads != 0:
             raise ValueError(
                 f"feature_dim={feature_dim} not divisible by "
                 f"num_heads={num_heads}"
             )
-        if not 0 <= self.shift_size < self.window_size:
-            raise ValueError(
-                f"shift_size={shift_size} must be in "
-                f"[0, window_size={window_size})"
-            )
-
         self.value_dim = self.feature_dim
 
         self.guidance_dim = int(guidance_dim)
@@ -298,12 +289,16 @@ class WindowSpatialAttention(nn.Module):
         feature_state: torch.Tensor,
         semantic_state: torch.Tensor,
         guidance: torch.Tensor | None = None,
+        *,
+        shift_size: int = 0,
     ) -> torch.Tensor:
         """Return the encoder feature update; inputs are [B, P, D, H, W]."""
         B, P, D, H, W = feature_state.shape
         validate_guidance(guidance, feature_state, self.guidance_dim)
         D_semantic = self.semantic_dim
 
+        if not 0 <= shift_size < self.window_size:
+            raise ValueError(f"shift_size must be in [0, {self.window_size}), got {shift_size}.")
         if H % self.window_size != 0 or W % self.window_size != 0:
             raise ValueError(
                 "WindowSpatialAttention expects H/W divisible by "
@@ -327,7 +322,7 @@ class WindowSpatialAttention(nn.Module):
         pad_h, pad_w = f_flat.shape[-2], f_flat.shape[-1]
 
         # A single global window has no window boundary to shift or mask.
-        shift = 0 if pad_h == pad_w == ws else self.shift_size
+        shift = 0 if pad_h == pad_w == ws else shift_size
         if shift > 0:
             f_flat = torch.roll(f_flat, shifts=(-shift, -shift), dims=(-2, -1))
             s_flat = torch.roll(s_flat, shifts=(-shift, -shift), dims=(-2, -1))
@@ -403,7 +398,6 @@ class WindowAttentionUpdate(nn.Module):
         semantic_dim: int,
         num_heads: int,
         window_size: int,
-        shift_size: int,
         dropout: float,
         guidance_dim: int,
     ):
@@ -413,7 +407,6 @@ class WindowAttentionUpdate(nn.Module):
             semantic_dim=semantic_dim,
             num_heads=num_heads,
             window_size=window_size,
-            shift_size=shift_size,
             dropout=dropout,
             guidance_dim=guidance_dim,
         )
@@ -426,6 +419,8 @@ class WindowAttentionUpdate(nn.Module):
         feature_state: torch.Tensor,
         semantic_state: torch.Tensor,
         guidance: torch.Tensor,
+        *,
+        shift_size: int,
     ) -> torch.Tensor:
         return self.attn(
             feature_state=apply_layer_norm_bcdhw(
@@ -435,18 +430,25 @@ class WindowAttentionUpdate(nn.Module):
                 semantic_state, self.norm_semantic
             ),
             guidance=apply_layer_norm_bcdhw(guidance, self.norm_guidance),
+            shift_size=shift_size,
         )
 
 
 class MultiscaleWindowUpdate(nn.Module):
-    """Return the mean of three window-attention increments on the 36×36 grid."""
+    """Average five window updates computed from the same post-cross-class features."""
 
-    def __init__(self, share_weights: bool, **window_kwargs):
+    def __init__(self, share_weights: bool, shift_size: int, **window_kwargs):
         super().__init__()
         self.share_weights = share_weights
+        # (index into WINDOW_SCALES, shift in both spatial axes)
+        self.branches = (
+            (0, 0), (0, shift_size),  # 36×36
+            (1, 0), (1, shift_size),  # 24×24
+            (2, 0),                   # 12×12
+        )
         self.windows = nn.ModuleList(
             WindowAttentionUpdate(**window_kwargs)
-            for _ in range(1 if share_weights else len(WINDOW_SCALES))
+            for _ in range(1 if share_weights else len(self.branches))
         )
 
     def forward(
@@ -455,21 +457,21 @@ class MultiscaleWindowUpdate(nn.Module):
         semantic_scales: tuple[torch.Tensor, ...],
         spatial_scales: tuple[torch.Tensor, ...],
     ) -> torch.Tensor:
+        feature_scales = tuple(resize_prompt_features(features, size) for size in WINDOW_SCALES)
         update_sum = None
-        for index, size in enumerate(WINDOW_SCALES):
-            window = self.windows[0 if self.share_weights else index]
+        for branch, (scale, shift) in enumerate(self.branches):
+            window = self.windows[0 if self.share_weights else branch]
             update = window(
-                resize_prompt_features(features, size),
-                semantic_scales[index],
-                spatial_scales[index],
+                feature_scales[scale], semantic_scales[scale], spatial_scales[scale],
+                shift_size=shift,
             )
             aligned = resize_prompt_features(update, features.shape[-1])
             update_sum = aligned if update_sum is None else update_sum + aligned
-        return update_sum / len(WINDOW_SCALES)
+        return update_sum / len(self.branches)
 
 
 class AggregationAttentionBlock(nn.Module):
-    """Cross-class update followed by separate regular and shifted multiscale updates."""
+    """Cross-class residual followed by one five-branch spatial residual."""
 
     def __init__(
         self,
@@ -491,17 +493,16 @@ class AggregationAttentionBlock(nn.Module):
         )
         self.cross_norm_feature = nn.LayerNorm(feature_dim)
         self.cross_norm_semantic = nn.LayerNorm(semantic_dim)
-        window_kwargs = dict(
+        self.window_update = MultiscaleWindowUpdate(
             feature_dim=feature_dim,
             semantic_dim=semantic_dim,
             num_heads=num_heads,
             window_size=window_size,
+            shift_size=shift_size,
             dropout=dropout,
             guidance_dim=guidance_dim,
             share_weights=share_window_weights_across_scales,
         )
-        self.feature_regular = MultiscaleWindowUpdate(shift_size=0, **window_kwargs)
-        self.feature_shifted = MultiscaleWindowUpdate(shift_size=shift_size, **window_kwargs)
 
     def forward(
         self,
@@ -513,9 +514,6 @@ class AggregationAttentionBlock(nn.Module):
             feature_state=apply_layer_norm_bcdhw(feature_state_36, self.cross_norm_feature),
             semantic_state=apply_layer_norm_bcdhw(semantic_scales[0], self.cross_norm_semantic),
         )
-        feature_state_36 = feature_state_36 + self.feature_regular(
-            feature_state_36, semantic_scales, spatial_scales
-        )
-        return feature_state_36 + self.feature_shifted(
+        return feature_state_36 + self.window_update(
             feature_state_36, semantic_scales, spatial_scales
         )

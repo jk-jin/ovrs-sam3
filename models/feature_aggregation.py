@@ -21,7 +21,7 @@ from .task_modes import OUTPUT_KEYS
 class RemoteCLIPGuidedAggregation(nn.Module):
     """Aggregate encoder features at 36×36 with fixed RemoteCLIP Q/K guidance.
 
-    Each block runs cross-class attention and two multiscale window passes.
+    Each block runs cross-class attention and averages five parallel window updates.
     Only encoder features receive residual updates; the semantic embedding
     stays trainable through Q/K. SAM3 FPN guides window Q/K. CLIP intermediate
     features are still extracted by the backbone but are unused here.
@@ -159,7 +159,7 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         fpn_36 = F.interpolate(
             sam3_fpn_72, size=(36, 36), mode="bilinear", align_corners=False,
         )[:, None]
-        # Guidance is fixed across passes and blocks. Resize FPN per image before broadcasting.
+        # Guidance is fixed across branches and blocks. Resize FPN per image before broadcasting.
         semantic_scales = tuple(
             resize_prompt_features(clip_guidance_36, size) for size in WINDOW_SCALES
         )

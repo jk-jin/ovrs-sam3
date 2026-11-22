@@ -32,7 +32,7 @@ model = dict(
         encoder_hw=72,
         window_size=12,
         shift_size=6,
-        share_window_weights_across_scales=True,  # Within each regular or shifted pass.
+        share_window_weights_across_scales=True,  # One module per block if True, five if False.
         use_checkpoint=True,
     ),
 
