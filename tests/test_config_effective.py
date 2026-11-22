@@ -119,6 +119,7 @@ class TestEffectiveConfig(unittest.TestCase):
 
     def test_deleted_options_are_rejected(self):
         for option in (
+            "model.aggregation.shift_size=6",
             "model.remoteclip.train_random_rotate=True",
             "loss.present_ignore_suppression_weight=0.0",
             "loss.absent_class_weight=0.2",
@@ -155,7 +156,7 @@ class TestEffectiveConfig(unittest.TestCase):
         self.assertFalse(dataset["background_cfg"]["enabled"])
         self.assertFalse(dataset["reduce_zero_label"])
         self.assertEqual(
-            cfg["runtime"]["work_dir"], "./work_dirs/multiscale_windows_v2/full/seed_42/train"
+            cfg["runtime"]["work_dir"], "./work_dirs/multiscale_windows_v3/full/seed_42/train"
         )
         self.assertEqual(
             cfg["logging"]["wandb"]["tags"][1], "dlrsd-train"

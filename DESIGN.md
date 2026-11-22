@@ -38,7 +38,7 @@ RemoteCLIP template scores + dense feature
   → 作为 semantic_state_36 初值
 
 feature_state_36 + semantic_state_36
-  → 2 个聚合块（每块先做类间注意力，再并行计算三尺度的五路窗口注意力）
+  → 2 个聚合块（每块先做类间注意力，再并行计算三个尺度的普通窗口注意力）
   → feature_output_norm
   → aggregated_features_36 [B, P, 256, 36, 36]
 
@@ -130,18 +130,18 @@ feature_state_36 + semantic_state_36
 
 ### 5.2 类间与多尺度类内注意力
 
-默认 `num_blocks=2`。每块先在 36×36 网格的每个位置沿完整提示轴计算类间注意力，将结果加到 encoder feature 上。五路类内注意力都从这份更新后的特征出发。
+默认 `num_blocks=2`。每块先在 36×36 网格的每个位置沿完整提示轴计算类间注意力，将结果加到 encoder feature 上。三个尺度的类内注意力都从这份更新后的特征出发。
 
 | 特征尺度 | 并行分支 | 每个分支的 12×12 窗口数 |
 | --- | --- | --- |
-| 36×36 | 普通窗口、移位窗口 | 9 |
-| 24×24 | 普通窗口、移位窗口 | 4 |
+| 36×36 | 普通窗口 | 9 |
+| 24×24 | 普通窗口 | 4 |
 | 12×12 | 全图窗口 | 1 |
 
-* 保留 36×36 特征，从中分别双线性插值得到 24×24 和 12×12。同一尺度的普通与移位分支读取同一份输入。移位分支在两个空间轴上各移 6 格，用掩码隔开图像两端，计算后还原空间位置。12×12 的全图窗口只计算一次，全部 144 个位置可以相互关注。
-* 将各路更新量对齐到 36×36，逐元素求五路均值，再一次性加回类间注意力更新后的 encoder feature。每路权重为 20%。所有双线性插值均使用 `align_corners=False`。
+* 保留 36×36 特征，从中分别双线性插值得到 24×24 和 12×12。每个尺度各做一次普通窗口注意力。12×12 的全图窗口只计算一次，全部 144 个位置可以相互关注。
+* 保留 36×36 分支的更新量，将 24×24 和 12×12 两路的更新量分别上采样到 36×36。三路逐元素求和，每路系数为 1，再一次性加回类间注意力更新后的 encoder feature。所有双线性插值均使用 `align_corners=False`。
 * 类间注意力用 score embedding 和当前 encoder feature 构造查询与键。类内注意力还拼接对应尺度的 SAM3 FPN 引导。所有注意力的值都取自 encoder feature。两份引导的多尺度特征在一次聚合前向中生成一次，由各层复用。
-* `model.aggregation.share_window_weights_across_scales=True`（默认）时，同一层五路共用一套预归一化、查询/键/值投影、输出投影和相对位置偏置。设为 `False` 时，每个分支独立学习上述全部参数，每层共五套。不同层各自学习参数。
+* `model.aggregation.share_window_weights_across_scales=True`（默认）时，同一层三个尺度共用一套预归一化、查询/键/值投影、输出投影和相对位置偏置。设为 `False` 时，每个分支独立学习上述全部参数，每层共三套。不同层各自学习参数。
 * 所有聚合块结束后，对特征执行一次通道 LayerNorm。
 
 ### 5.3 Semantic–Detail Fusion
@@ -175,7 +175,7 @@ feature_state_36 + semantic_state_36
 * 每 1000 步保存并做完整验证（`val_max_iters=None`）。
 * batch size 4；训练 workers 8；验证 workers 2。
 * 64 个固定 RemoteCLIP 文本模板。
-* dropout 0.1；8 注意力头；窗口 12；移位 6。
+* dropout 为 0.1，使用 8 个注意力头和 12×12 普通窗口。
 
 ### 7.2 数据增强
 
@@ -343,9 +343,9 @@ work_dirs/<experiment>/
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py --print-config
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
-  --resume-from work_dirs/multiscale_windows_v2/full/seed_42/train/latest.pth
+  --resume-from work_dirs/multiscale_windows_v3/full/seed_42/train/latest.pth
 python tools/train.py configs/test/loveda.py --eval-only \
-  --load-model-from work_dirs/multiscale_windows_v2/full/seed_42/train/best.pth
+  --load-model-from work_dirs/multiscale_windows_v3/full/seed_42/train/best.pth
 
 python tools/collect_experiments.py work_dirs/paper \
   --output paper/generated/data/results_long.csv
@@ -419,7 +419,7 @@ UAVid 采用合并车辆的七类标签：background、building、road、tree、
 * `SAM3Segmentor` → `ReCASAM3`；`core.encoder_refiner` → `core.feature_aggregation`。
 * `ClipScoreEmbedding` → `RemoteCLIPGuidanceEmbedding`。
 * `ClassConditionedEncoderRefiner` → `RemoteCLIPGuidedAggregation`。
-* 聚合块统一为 `AggregationAttentionBlock`，类间注意力更新后接五路并行的类内窗口注意力。
+* 聚合块统一为 `AggregationAttentionBlock`，类间注意力更新后接三路并行的普通窗口注意力。
 * `ClassScoreAttention` → `CrossClassAttention`；`WindowScoreAttention` → `WindowSpatialAttention`。
 * `DecoderInputFusion` → `SemanticDetailFusion`；方向聚合函数已删除。
 * 配置：`encoder_refiner_cfg` → `aggregation`；`openclip_cfg` → `remoteclip`；`freeze_cfg` → `freeze`；`criterion_cfg` → 根 `loss`。
@@ -432,9 +432,9 @@ UAVid 采用合并车辆的七类标签：background、building、road、tree、
 ## 14. 新基线与实验清理
 
 * 公共配置为 batch 4、10000 步、LR 1e-4、固定蒸馏系数 0.5、W&B offline。SAM3、RemoteCLIP 与标签共享数据增强的空间朝向。
-* 五路并行版本使用 `implementation_id="reca-sam3-multiscale-windows-v2"`。默认训练写入 `work_dirs/multiscale_windows_v2/full/seed_42/train`，与此前两轮类内注意力的训练记录分开。
+* 三尺度求和版本使用 `implementation_id="reca-sam3-multiscale-windows-v3"`。默认训练写入 `work_dirs/multiscale_windows_v3/full/seed_42/train`。
 * 旧消融配置、专用模型分支、批量任务/权重选择、论文消融计划和表格均已清理；不自动迁移旧消融或旧 Full 成绩。
 * 批量训练仅保留新 Full；独立验证保留 Full 与两个原始 SAM3 对比，继续使用相同八数据集。
 * 删除 `cross_class_mode`、`intra_class_enabled`、`semantic_init`、`update_streams`、融合 `orientations`、concat fusion 和 simple adapter 开关；旧字段由配置校验拒绝。
 * 两个原始 SAM3 比较仍由 `sam3_semantic` / `sam3_semantic_presence` 实现，不构建 RemoteCLIP 或聚合模块。
-* CPU 检查覆盖五路窗口的输入和移位、均值残差、两种参数共享设置的梯度、固定语义引导梯度、checkpoint 输出与梯度一致性、单方向融合、配置与批量入口。
+* CPU 检查覆盖三路普通窗口的覆盖范围、求和残差、两种参数共享设置的梯度、固定语义引导梯度、checkpoint 输出与梯度一致性、单方向融合、配置与批量入口。

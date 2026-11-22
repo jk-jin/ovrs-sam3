@@ -31,8 +31,7 @@ model = dict(
         aggregation_hw=36,
         encoder_hw=72,
         window_size=12,
-        shift_size=6,
-        share_window_weights_across_scales=True,  # One module per block if True, five if False.
+        share_window_weights_across_scales=True,  # One module per block if shared, one per scale otherwise.
         use_checkpoint=True,
     ),
 

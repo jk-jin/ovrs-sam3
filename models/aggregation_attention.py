@@ -141,7 +141,7 @@ class WindowSpatialAttention(nn.Module):
     """Single-value intra-class window attention with relative position bias.
 
     Q/K concatenate pre-normalized semantic state and feature state. Only the
-    encoder feature supplies values. The caller chooses the shift for each view.
+    encoder feature supplies values. Each window covers a fixed region of the grid.
     """
 
     def __init__(
@@ -203,15 +203,6 @@ class WindowSpatialAttention(nn.Module):
         relative_position_index = relative_coords.sum(-1)
         self.register_buffer("relative_position_index", relative_position_index)
 
-    @staticmethod
-    def _pad_to_window(x: torch.Tensor, window_size: int):
-        H, W = x.shape[-2], x.shape[-1]
-        pad_h = (window_size - H % window_size) % window_size
-        pad_w = (window_size - W % window_size) % window_size
-        if pad_h == 0 and pad_w == 0:
-            return x, H, W
-        return F.pad(x, (0, pad_w, 0, pad_h)), H, W
-
     def _window_partition(self, x: torch.Tensor):
         B, D, H, W = x.shape
         ws = self.window_size
@@ -242,63 +233,17 @@ class WindowSpatialAttention(nn.Module):
         ).contiguous()
         return relative_position_bias
 
-    def _build_shift_attn_mask(
-        self,
-        padded_h: int,
-        padded_w: int,
-        shift: int,
-        bc: int,
-        device: torch.device,
-        dtype: torch.dtype,
-    ) -> torch.Tensor | None:
-        if shift == 0:
-            return None
-
-        ws = self.window_size
-
-        img_mask = torch.zeros(
-            (1, padded_h, padded_w), device=device, dtype=torch.float32
-        )
-
-        h_slices = (slice(0, -ws), slice(-ws, -shift), slice(-shift, None))
-        w_slices = (slice(0, -ws), slice(-ws, -shift), slice(-shift, None))
-
-        cnt = 0
-        for h in h_slices:
-            for w in w_slices:
-                img_mask[:, h, w] = cnt
-                cnt += 1
-
-        mask_windows = self._window_partition(img_mask.unsqueeze(0))
-        mask_windows = mask_windows.squeeze(-1)
-
-        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
-        attn_mask = attn_mask.masked_fill(attn_mask != 0, -100.0)
-        attn_mask = attn_mask.masked_fill(attn_mask == 0, 0.0)
-
-        win_per_img = attn_mask.shape[0]
-        attn_mask = attn_mask.unsqueeze(0).expand(
-            bc, win_per_img, ws * ws, ws * ws
-        )
-        attn_mask = attn_mask.reshape(bc * win_per_img, ws * ws, ws * ws)
-
-        return attn_mask.to(dtype=dtype)
-
     def forward(
         self,
         feature_state: torch.Tensor,
         semantic_state: torch.Tensor,
         guidance: torch.Tensor | None = None,
-        *,
-        shift_size: int = 0,
     ) -> torch.Tensor:
         """Return the encoder feature update; inputs are [B, P, D, H, W]."""
         B, P, D, H, W = feature_state.shape
         validate_guidance(guidance, feature_state, self.guidance_dim)
         D_semantic = self.semantic_dim
 
-        if not 0 <= shift_size < self.window_size:
-            raise ValueError(f"shift_size must be in [0, {self.window_size}), got {shift_size}.")
         if H % self.window_size != 0 or W % self.window_size != 0:
             raise ValueError(
                 "WindowSpatialAttention expects H/W divisible by "
@@ -311,43 +256,13 @@ class WindowSpatialAttention(nn.Module):
             )
 
         bc = B * P
-        ws = self.window_size
-
-        f_flat = feature_state.reshape(bc, D, H, W)
-        s_flat = semantic_state.reshape(bc, D_semantic, H, W)
-
-        f_flat, orig_h, orig_w = self._pad_to_window(f_flat, ws)
-        s_flat, _, _ = self._pad_to_window(s_flat, ws)
-
-        pad_h, pad_w = f_flat.shape[-2], f_flat.shape[-1]
-
-        # A single global window has no window boundary to shift or mask.
-        shift = 0 if pad_h == pad_w == ws else shift_size
-        if shift > 0:
-            f_flat = torch.roll(f_flat, shifts=(-shift, -shift), dims=(-2, -1))
-            s_flat = torch.roll(s_flat, shifts=(-shift, -shift), dims=(-2, -1))
-
-        f_windows = self._window_partition(f_flat)   # [num_win, ws*ws, D]
-        s_windows = self._window_partition(s_flat)   # [num_win, ws*ws, D_sem]
+        f_windows = self._window_partition(feature_state.reshape(bc, D, H, W))
+        s_windows = self._window_partition(semantic_state.reshape(bc, D_semantic, H, W))
 
         g_windows = None
         if guidance is not None:
             g_flat = guidance.reshape(bc, self.guidance_dim, H, W)
-            g_flat, _, _ = self._pad_to_window(g_flat, ws)
-            if shift > 0:
-                g_flat = torch.roll(
-                    g_flat, shifts=(-shift, -shift), dims=(-2, -1)
-                )
             g_windows = self._window_partition(g_flat)
-
-        attn_mask = self._build_shift_attn_mask(
-            padded_h=pad_h,
-            padded_w=pad_w,
-            shift=shift,
-            bc=bc,
-            device=feature_state.device,
-            dtype=feature_state.dtype,
-        )
 
         # Q/K from both streams; values from encoder features only.
         qk_input = torch.cat([s_windows, f_windows], dim=-1)
@@ -373,19 +288,13 @@ class WindowSpatialAttention(nn.Module):
         )
         attn = attn + rel_pos_bias.unsqueeze(0)
 
-        if attn_mask is not None:
-            attn = attn + attn_mask.unsqueeze(1)
-
         attn = F.softmax(attn, dim=-1)
         attn = self.dropout(attn)
 
         out = torch.matmul(attn, v)
         out = out.permute(0, 2, 1, 3).reshape(num_win, N, D)
         out = self.dropout(self.out_proj(out))
-        out = self._window_reverse(out, bc, pad_h, pad_w)
-        if shift > 0:
-            out = torch.roll(out, shifts=(shift, shift), dims=(-2, -1))
-        out = out[:, :, :orig_h, :orig_w]
+        out = self._window_reverse(out, bc, H, W)
         return out.reshape(B, P, self.value_dim, H, W).contiguous()
 
 
@@ -419,8 +328,6 @@ class WindowAttentionUpdate(nn.Module):
         feature_state: torch.Tensor,
         semantic_state: torch.Tensor,
         guidance: torch.Tensor,
-        *,
-        shift_size: int,
     ) -> torch.Tensor:
         return self.attn(
             feature_state=apply_layer_norm_bcdhw(
@@ -430,25 +337,18 @@ class WindowAttentionUpdate(nn.Module):
                 semantic_state, self.norm_semantic
             ),
             guidance=apply_layer_norm_bcdhw(guidance, self.norm_guidance),
-            shift_size=shift_size,
         )
 
 
 class MultiscaleWindowUpdate(nn.Module):
-    """Average five window updates computed from the same post-cross-class features."""
+    """Sum the aligned regular-window updates from the three encoder feature scales."""
 
-    def __init__(self, share_weights: bool, shift_size: int, **window_kwargs):
+    def __init__(self, share_weights: bool, **window_kwargs):
         super().__init__()
         self.share_weights = share_weights
-        # (index into WINDOW_SCALES, shift in both spatial axes)
-        self.branches = (
-            (0, 0), (0, shift_size),  # 36×36
-            (1, 0), (1, shift_size),  # 24×24
-            (2, 0),                   # 12×12
-        )
         self.windows = nn.ModuleList(
             WindowAttentionUpdate(**window_kwargs)
-            for _ in range(1 if share_weights else len(self.branches))
+            for _ in range(1 if share_weights else len(WINDOW_SCALES))
         )
 
     def forward(
@@ -457,21 +357,19 @@ class MultiscaleWindowUpdate(nn.Module):
         semantic_scales: tuple[torch.Tensor, ...],
         spatial_scales: tuple[torch.Tensor, ...],
     ) -> torch.Tensor:
-        feature_scales = tuple(resize_prompt_features(features, size) for size in WINDOW_SCALES)
         update_sum = None
-        for branch, (scale, shift) in enumerate(self.branches):
-            window = self.windows[0 if self.share_weights else branch]
+        for index, size in enumerate(WINDOW_SCALES):
+            window = self.windows[0 if self.share_weights else index]
             update = window(
-                feature_scales[scale], semantic_scales[scale], spatial_scales[scale],
-                shift_size=shift,
+                resize_prompt_features(features, size), semantic_scales[index], spatial_scales[index],
             )
             aligned = resize_prompt_features(update, features.shape[-1])
             update_sum = aligned if update_sum is None else update_sum + aligned
-        return update_sum / len(self.branches)
+        return update_sum
 
 
 class AggregationAttentionBlock(nn.Module):
-    """Cross-class residual followed by one five-branch spatial residual."""
+    """Cross-class residual followed by the sum of three spatial updates."""
 
     def __init__(
         self,
@@ -479,7 +377,6 @@ class AggregationAttentionBlock(nn.Module):
         semantic_dim: int = 256,
         num_heads: int = 8,
         window_size: int = 12,
-        shift_size: int = 6,
         dropout: float = 0.1,
         guidance_dim: int = 256,
         share_window_weights_across_scales: bool = True,
@@ -498,7 +395,6 @@ class AggregationAttentionBlock(nn.Module):
             semantic_dim=semantic_dim,
             num_heads=num_heads,
             window_size=window_size,
-            shift_size=shift_size,
             dropout=dropout,
             guidance_dim=guidance_dim,
             share_weights=share_window_weights_across_scales,

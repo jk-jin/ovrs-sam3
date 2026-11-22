@@ -21,7 +21,7 @@ from .task_modes import OUTPUT_KEYS
 class RemoteCLIPGuidedAggregation(nn.Module):
     """Aggregate encoder features at 36×36 with fixed RemoteCLIP Q/K guidance.
 
-    Each block runs cross-class attention and averages five parallel window updates.
+    Each block runs cross-class attention and sums three parallel window updates.
     Only encoder features receive residual updates; the semantic embedding
     stays trainable through Q/K. SAM3 FPN guides window Q/K. CLIP intermediate
     features are still extracted by the backbone but are unused here.
@@ -35,7 +35,6 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         semantic_dim: int = 256,
         num_heads: int = 8,
         window_size: int = 12,
-        shift_size: int = 6,
         num_blocks: int = 2,
         dropout: float = 0.1,
         prompt_templates: list[str] | None = None,
@@ -75,7 +74,6 @@ class RemoteCLIPGuidedAggregation(nn.Module):
                 semantic_dim=self.semantic_dim,
                 num_heads=int(num_heads),
                 window_size=int(window_size),
-                shift_size=int(shift_size),
                 dropout=float(dropout),
                 share_window_weights_across_scales=share_window_weights_across_scales,
             )

@@ -59,7 +59,6 @@ class AggregationConfig:
     encoder_hw: int = 72
 
     window_size: int = 12
-    shift_size: int = 6
     share_window_weights_across_scales: bool = True
 
     use_checkpoint: bool = True
@@ -69,8 +68,6 @@ class AggregationConfig:
             raise TypeError("model.aggregation.share_window_weights_across_scales must be bool.")
         if self.window_size <= 0 or any(size % self.window_size for size in WINDOW_SCALES):
             raise ValueError("model.aggregation.window_size must be positive and divide 36, 24 and 12.")
-        if not 0 <= self.shift_size < self.window_size:
-            raise ValueError("model.aggregation.shift_size must satisfy 0 <= shift_size < window_size.")
 
 
 @dataclass
@@ -223,7 +220,7 @@ class ExperimentConfig:
     method_id: str = "reca_sam3"
     method_name: str = "ReCA-SAM3"
     variant_id: str = "full"
-    implementation_id: str = "reca-sam3-multiscale-windows-v2"
+    implementation_id: str = "reca-sam3-multiscale-windows-v3"
     kind: str = "main"
     factors: Dict = field(default_factory=dict)
     note: Optional[str] = None
