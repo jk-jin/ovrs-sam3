@@ -220,7 +220,7 @@ class ExperimentConfig:
     method_id: str = "reca_sam3"
     method_name: str = "ReCA-SAM3"
     variant_id: str = "full"
-    implementation_id: str = "reca-sam3-multiscale-windows-v3"
+    implementation_id: str = "reca-sam3-multiscale-windows"
     kind: str = "main"
     factors: Dict = field(default_factory=dict)
     note: Optional[str] = None

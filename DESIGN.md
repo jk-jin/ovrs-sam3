@@ -130,7 +130,7 @@ feature_state_36 + semantic_state_36
 
 ### 5.2 类间与多尺度类内注意力
 
-默认 `num_blocks=2`。每块先在 36×36 网格的每个位置沿完整提示轴计算类间注意力，将结果加到 encoder feature 上。三个尺度的类内注意力都从这份更新后的特征出发。
+默认 `num_blocks=2`。每块先在 36×36 网格的每个位置沿完整提示轴计算类间注意力。将更新量乘以本层的类间残差系数，再加到 encoder feature 上。三个尺度的类内注意力都从这份更新后的特征出发。
 
 | 特征尺度 | 并行分支 | 每个分支的 12×12 窗口数 |
 | --- | --- | --- |
@@ -139,9 +139,10 @@ feature_state_36 + semantic_state_36
 | 12×12 | 全图窗口 | 1 |
 
 * 保留 36×36 特征，从中分别双线性插值得到 24×24 和 12×12。每个尺度各做一次普通窗口注意力。12×12 的全图窗口只计算一次，全部 144 个位置可以相互关注。
-* 保留 36×36 分支的更新量，将 24×24 和 12×12 两路的更新量分别上采样到 36×36。三路逐元素求和，每路系数为 1，再一次性加回类间注意力更新后的 encoder feature。所有双线性插值均使用 `align_corners=False`。
+* 保留 36×36 分支的更新量，将 24×24 和 12×12 两路的更新量分别上采样到 36×36。三路各乘以本尺度的可学习标量，逐元素求和，再一次性加回类间注意力更新后的 encoder feature。所有双线性插值均使用 `align_corners=False`。
+* 每层独立学习四个残差系数，分别对应类间注意力和三个尺度。四个系数都初始化为 `0.1`。主路径的 encoder feature 系数固定为 1。
 * 类间注意力用 score embedding 和当前 encoder feature 构造查询与键。类内注意力还拼接对应尺度的 SAM3 FPN 引导。所有注意力的值都取自 encoder feature。两份引导的多尺度特征在一次聚合前向中生成一次，由各层复用。
-* `model.aggregation.share_window_weights_across_scales=True`（默认）时，同一层三个尺度共用一套预归一化、查询/键/值投影、输出投影和相对位置偏置。设为 `False` 时，每个分支独立学习上述全部参数，每层共三套。不同层各自学习参数。
+* `model.aggregation.share_window_weights_across_scales=True`（默认）时，同一层三个尺度共用一套预归一化、查询/键/值投影、输出投影和相对位置偏置。设为 `False` 时，每个分支独立学习上述全部参数，每层共三套。两种模式下，各尺度的残差系数都独立训练。
 * 所有聚合块结束后，对特征执行一次通道 LayerNorm。
 
 ### 5.3 Semantic–Detail Fusion
@@ -343,18 +344,18 @@ work_dirs/<experiment>/
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py --print-config
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
-  --resume-from work_dirs/multiscale_windows_v3/full/seed_42/train/latest.pth
+  --resume-from work_dirs/reca_sam3/full/seed_42/train/latest.pth
 python tools/train.py configs/test/loveda.py --eval-only \
-  --load-model-from work_dirs/multiscale_windows_v3/full/seed_42/train/best.pth
+  --load-model-from work_dirs/reca_sam3/full/seed_42/train/best.pth
 
-python tools/collect_experiments.py work_dirs/paper \
+python tools/collect_experiments.py work_dirs/reca_sam3 \
   --output paper/generated/data/results_long.csv
 python tools/import_results.py --input external/baseline.csv \
   --mapping external/mapping.json --protocol external/protocol.json \
-  --input-unit percent --output-dir work_dirs/paper/imported
-python tools/export_paper_results.py --root work_dirs/paper \
+  --input-unit percent --output-dir work_dirs/reca_sam3/imported
+python tools/export_paper_results.py --root work_dirs/reca_sam3 \
   --spec paper/export_config.json --output paper/generated
-python tools/export_paper_results.py --root work_dirs/paper \
+python tools/export_paper_results.py --root work_dirs/reca_sam3 \
   --spec paper/export_config.json --output paper/generated --tables-only
 ```
 
@@ -432,9 +433,9 @@ UAVid 采用合并车辆的七类标签：background、building、road、tree、
 ## 14. 新基线与实验清理
 
 * 公共配置为 batch 4、10000 步、LR 1e-4、固定蒸馏系数 0.5、W&B offline。SAM3、RemoteCLIP 与标签共享数据增强的空间朝向。
-* 三尺度求和版本使用 `implementation_id="reca-sam3-multiscale-windows-v3"`。默认训练写入 `work_dirs/multiscale_windows_v3/full/seed_42/train`。
+* 完整模型的实现标识为 `reca-sam3-multiscale-windows`。默认训练写入 `work_dirs/reca_sam3/full/seed_42/train`。
 * 旧消融配置、专用模型分支、批量任务/权重选择、论文消融计划和表格均已清理；不自动迁移旧消融或旧 Full 成绩。
 * 批量训练仅保留新 Full；独立验证保留 Full 与两个原始 SAM3 对比，继续使用相同八数据集。
 * 删除 `cross_class_mode`、`intra_class_enabled`、`semantic_init`、`update_streams`、融合 `orientations`、concat fusion 和 simple adapter 开关；旧字段由配置校验拒绝。
 * 两个原始 SAM3 比较仍由 `sam3_semantic` / `sam3_semantic_presence` 实现，不构建 RemoteCLIP 或聚合模块。
-* CPU 检查覆盖三路普通窗口的覆盖范围、求和残差、两种参数共享设置的梯度、固定语义引导梯度、checkpoint 输出与梯度一致性、单方向融合、配置与批量入口。
+* CPU 检查覆盖三路普通窗口的覆盖范围、各残差系数的初始化和加权求和、两种参数共享设置的梯度、固定语义引导梯度、checkpoint 输出与梯度一致性、单方向融合、配置与批量入口。

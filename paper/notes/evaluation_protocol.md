@@ -1,8 +1,8 @@
 # 当前评测协议
 
-当前实现为 `reca-sam3-feature-blocks-v3`。DLRSD 官方 5601 张训练图像用于适配，1401 张验证图像用于源域评测；LoveDA 七类验证用于模型选择。其他目标为 iSAID、Potsdam、Vaihingen、UAVid、UDD5、VDD。保持当前数据配置中的类别映射、背景规则与阈值。
+当前实现为 `reca-sam3-multiscale-windows`。DLRSD 官方 5601 张训练图像用于适配，1401 张验证图像用于源域评测；LoveDA 七类验证用于模型选择。其他目标为 iSAID、Potsdam、Vaihingen、UAVid、UDD5、VDD。保持当前数据配置中的类别映射、背景规则与阈值。
 
-训练预算为 batch 4、10000 步、基础 LR 2e-6、RemoteCLIP 倍率 0.01、500 步预热与 9500 步相对余弦；每 2000 步保存/验证，W&B offline。新 Full 单独训练、单独保存，不使用旧结构权重恢复。
+训练预算为 batch 4、10000 步、基础 LR 1e-4、RemoteCLIP 倍率 0.01、500 步预热与 9500 步相对余弦；每 1000 步保存/验证，W&B offline。新 Full 单独训练、单独保存，不使用旧结构权重恢复。
 
 同一次训练只选择一份权重，用于全部八域及不同表格。`paper_validate.py` 中 `None` 表示待选，不自动挑选 best/latest。两个原始 SAM3 比较只使用原始权重，training-free、step 0，无 DLRSD 适配。
 

@@ -107,10 +107,10 @@ native completed 额外要求：
 ```bash
 python tools/import_results.py --input external/baseline.csv \
   --mapping external/mapping.json --protocol external/protocol.json \
-  --input-unit percent --output-dir work_dirs/paper/imported
+  --input-unit percent --output-dir work_dirs/reca_sam3/imported
 
 python tools/import_results.py --input external/standard_result.json \
-  --output-dir work_dirs/paper/imported
+  --output-dir work_dirs/reca_sam3/imported
 ```
 
 * CSV 输入必须提供 `--input-unit` 与 mapping；JSON 已声明 `metrics.unit` 时可不重复指定。
@@ -124,13 +124,13 @@ python tools/import_results.py --input external/standard_result.json \
 ## 5. 汇总与论文导出
 
 ```bash
-python tools/collect_experiments.py work_dirs/paper \
+python tools/collect_experiments.py work_dirs/reca_sam3 \
   --output paper/generated/data/results_long.csv
 
-python tools/export_paper_results.py --root work_dirs/paper \
+python tools/export_paper_results.py --root work_dirs/reca_sam3 \
   --spec paper/export_config.json --output paper/generated
 
-python tools/export_paper_results.py --root work_dirs/paper \
+python tools/export_paper_results.py --root work_dirs/reca_sam3 \
   --spec paper/export_config.json --output paper/generated --tables-only
 ```
 

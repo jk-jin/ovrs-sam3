@@ -35,7 +35,7 @@ class TestAggregationDesign(unittest.TestCase):
         expected = (semantic[:, :2].sigmoid() * presence[:, :2].sigmoid()).amax(1)
         torch.testing.assert_close(scores[:, :2].amax(1), expected)
 
-    def test_three_windows_use_one_post_cross_input_and_one_sum_residual(self):
+    def test_independently_weighted_windows_use_the_weighted_cross_class_state(self):
         block = attention.AggregationAttentionBlock(
             feature_dim=8, semantic_dim=8, num_heads=2,
             window_size=12, dropout=0, guidance_dim=4,
@@ -49,6 +49,12 @@ class TestAggregationDesign(unittest.TestCase):
         guides = tuple(resize(guidance, size) for size in sizes)
         calls = []
         (shared_window,) = block.window_update.windows
+        cross_weight = 0.4
+        scale_weights = (0.25, -0.5, 1.5)
+        with torch.no_grad():
+            block.cross_residual_weight.fill_(cross_weight)
+            for parameter, weight in zip(block.window_update.residual_weights, scale_weights, strict=True):
+                parameter.fill_(weight)
 
         def record_call(module, args):
             calls.append(args[0].shape[-2:])
@@ -58,14 +64,14 @@ class TestAggregationDesign(unittest.TestCase):
         self.assertEqual(calls, [(size, size) for size in sizes])
 
         with torch.no_grad():
-            cross = features + block.cross_attention(
+            cross = features + cross_weight * block.cross_attention(
                 attention.apply_layer_norm_bcdhw(features, block.cross_norm_feature),
                 attention.apply_layer_norm_bcdhw(semantic, block.cross_norm_semantic),
             )
             outputs = [
-                resize(shared_window(resize(cross, size), resize(semantic, size),
-                                     resize(guidance, size)), 36)
-                for size in sizes
+                weight * resize(shared_window(resize(cross, size), resize(semantic, size),
+                                              resize(guidance, size)), 36)
+                for size, weight in zip(sizes, scale_weights)
             ]
             expected = cross + torch.stack(outputs).sum(0)
         torch.testing.assert_close(result, expected)
@@ -78,12 +84,22 @@ class TestAggregationDesign(unittest.TestCase):
         changed = features.detach().clone()
         changed[:, 1:] = torch.randn_like(changed[:, 1:]) * 10
         self.assertFalse(torch.allclose(result[:, 0], block(changed, semantics, guides)[:, 0]))
+        with torch.no_grad():
+            block.cross_residual_weight.zero_()
+            for weight in block.window_update.residual_weights:
+                weight.zero_()
+            torch.testing.assert_close(block(features, semantics, guides), features, atol=0, rtol=0)
 
     def test_three_independent_windows_learn_separately_and_sum_to_shared_gradient(self):
         torch.manual_seed(25)
         kwargs = dict(feature_dim=4, semantic_dim=4, num_heads=1, guidance_dim=4, dropout=0)
         shared = attention.AggregationAttentionBlock(**kwargs)
         separate = attention.AggregationAttentionBlock(**kwargs, share_window_weights_across_scales=False)
+        for block in (shared, separate):
+            weights = [block.cross_residual_weight, *block.window_update.residual_weights]
+            self.assertEqual(len({w.data_ptr() for w in weights}), 4)
+            for weight in weights:
+                torch.testing.assert_close(weight, torch.tensor(0.1))
         separate.load_state_dict(shared.state_dict(), strict=False)
         (shared_window,) = shared.window_update.windows
         windows = separate.window_update.windows
@@ -99,6 +115,10 @@ class TestAggregationDesign(unittest.TestCase):
         torch.testing.assert_close(combined, independent)
         combined.square().mean().backward()
         independent.square().mean().backward()
+        for name, weight in shared.named_parameters():
+            if 'residual_weight' in name:
+                self.assertGreater(weight.grad.abs().item(), 0)
+                torch.testing.assert_close(weight.grad, separate.get_parameter(name).grad)
         for name, param in shared_window.named_parameters():
             branch_params = [window.get_parameter(name) for window in windows]
             self.assertEqual(len({p.data_ptr() for p in branch_params}), 3, msg=name)

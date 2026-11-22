@@ -6,6 +6,8 @@ import torch.nn.functional as F
 
 from ..config_dataclasses import WINDOW_SCALES
 
+RESIDUAL_WEIGHT_INIT = 0.1
+
 
 def flatten_batch_class(
     features: torch.Tensor,
@@ -341,7 +343,7 @@ class WindowAttentionUpdate(nn.Module):
 
 
 class MultiscaleWindowUpdate(nn.Module):
-    """Sum the aligned regular-window updates from the three encoder feature scales."""
+    """Weight and sum the aligned window updates from the three feature scales."""
 
     def __init__(self, share_weights: bool, **window_kwargs):
         super().__init__()
@@ -349,6 +351,9 @@ class MultiscaleWindowUpdate(nn.Module):
         self.windows = nn.ModuleList(
             WindowAttentionUpdate(**window_kwargs)
             for _ in range(1 if share_weights else len(WINDOW_SCALES))
+        )
+        self.residual_weights = nn.ParameterList(
+            nn.Parameter(torch.tensor(RESIDUAL_WEIGHT_INIT)) for _ in WINDOW_SCALES
         )
 
     def forward(
@@ -364,12 +369,13 @@ class MultiscaleWindowUpdate(nn.Module):
                 resize_prompt_features(features, size), semantic_scales[index], spatial_scales[index],
             )
             aligned = resize_prompt_features(update, features.shape[-1])
-            update_sum = aligned if update_sum is None else update_sum + aligned
+            weighted = self.residual_weights[index] * aligned
+            update_sum = weighted if update_sum is None else update_sum + weighted
         return update_sum
 
 
 class AggregationAttentionBlock(nn.Module):
-    """Cross-class residual followed by the sum of three spatial updates."""
+    """Apply a learned residual weight to each cross-class and spatial update."""
 
     def __init__(
         self,
@@ -390,6 +396,7 @@ class AggregationAttentionBlock(nn.Module):
         )
         self.cross_norm_feature = nn.LayerNorm(feature_dim)
         self.cross_norm_semantic = nn.LayerNorm(semantic_dim)
+        self.cross_residual_weight = nn.Parameter(torch.tensor(RESIDUAL_WEIGHT_INIT))
         self.window_update = MultiscaleWindowUpdate(
             feature_dim=feature_dim,
             semantic_dim=semantic_dim,
@@ -406,10 +413,11 @@ class AggregationAttentionBlock(nn.Module):
         semantic_scales: tuple[torch.Tensor, ...],
         spatial_scales: tuple[torch.Tensor, ...],
     ) -> torch.Tensor:
-        feature_state_36 = feature_state_36 + self.cross_attention(
+        cross_update = self.cross_attention(
             feature_state=apply_layer_norm_bcdhw(feature_state_36, self.cross_norm_feature),
             semantic_state=apply_layer_norm_bcdhw(semantic_scales[0], self.cross_norm_semantic),
         )
+        feature_state_36 = feature_state_36 + self.cross_residual_weight * cross_update
         return feature_state_36 + self.window_update(
             feature_state_36, semantic_scales, spatial_scales
         )

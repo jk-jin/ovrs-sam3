@@ -21,7 +21,7 @@ from .task_modes import OUTPUT_KEYS
 class RemoteCLIPGuidedAggregation(nn.Module):
     """Aggregate encoder features at 36×36 with fixed RemoteCLIP Q/K guidance.
 
-    Each block runs cross-class attention and sums three parallel window updates.
+    Each block weights its cross-class and three parallel window updates independently.
     Only encoder features receive residual updates; the semantic embedding
     stays trainable through Q/K. SAM3 FPN guides window Q/K. CLIP intermediate
     features are still extracted by the backbone but are unused here.

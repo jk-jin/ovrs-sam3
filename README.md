@@ -4,7 +4,7 @@ ReCA-SAM3：RemoteCLIP-guided cross-class feature aggregation for open-vocabular
 
 当前实现以 DLRSD 作为训练集、LoveDA 七类验证集，只支持 semantic 模式。SAM3 backbone、encoder、Pixel Decoder 和 semantic head 冻结；RemoteCLIP 图文分支默认做 attention 微调；`core.feature_aggregation` 完整训练。
 
-聚合默认包含 2 个块。每块先在 36×36 上做类间注意力，再从更新后的 encoder feature 生成 36×36、24×24 和 12×12 三个尺度。每个尺度做一次 12×12 普通窗口注意力，其中 12×12 尺度覆盖全图。将较小两路的输出上采样到 36×36，三路逐元素求和后加回 encoder feature。RemoteCLIP 与 SAM3 使用同一空间朝向的图像，score embedding 通过注意力的查询与键获得梯度。最后在 72×72 做一次语义与细节融合。
+聚合默认包含 2 个块。每块先在 36×36 上做类间注意力，输出乘以本层的可学习系数后加回 encoder feature。再从这份特征生成 36×36、24×24 和 12×12 三个尺度，各做一次 12×12 普通窗口注意力，其中 12×12 尺度覆盖全图。将三路输出对齐到 36×36，各乘以本尺度的可学习系数，求和后加回 encoder feature。每块的四个系数均从 0.1 开始训练。RemoteCLIP 与 SAM3 使用同一空间朝向的图像，score embedding 通过注意力的查询与键获得梯度。最后在 72×72 做一次语义与细节融合。
 
 ## 环境与权重
 
@@ -72,7 +72,7 @@ python tools/train.py configs/experiments/main/dlrsd_loveda_full.py --print-conf
 
 ```bash
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
-  --resume-from work_dirs/multiscale_windows_v3/full/seed_42/train/latest.pth
+  --resume-from work_dirs/reca_sam3/full/seed_42/train/latest.pth
 ```
 
 短调试入口 `configs/experiments/dev/dlrsd_loveda_4k.py` 的验证是截断的（`val_max_iters=500`），只能产生 partial/draft 结果。
@@ -83,7 +83,7 @@ python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
 
 ```bash
 python tools/train.py configs/test/loveda.py --eval-only \
-  --load-model-from work_dirs/multiscale_windows_v3/full/seed_42/train/best.pth
+  --load-model-from work_dirs/reca_sam3/full/seed_42/train/best.pth
 ```
 
 独立评测写出 `results/<eval_id>.json`，不会重新打开或截断训练 `metrics.jsonl`。原生评测记录需要 checkpoint step；若权重文件没有训练元数据，显式传 `--eval-iter`。
@@ -112,20 +112,20 @@ wandb/            # 可选离线文件
 
 ```bash
 # 标准结果收集
-python tools/collect_experiments.py work_dirs/paper \
+python tools/collect_experiments.py work_dirs/reca_sam3 \
   --output paper/generated/data/results_long.csv
 
 # 外部 CSV 导入（input-unit 必填；mapping / protocol 显式提供）
 python tools/import_results.py --input external/baseline.csv \
   --mapping external/mapping.json --protocol external/protocol.json \
-  --input-unit percent --output-dir work_dirs/paper/imported
+  --input-unit percent --output-dir work_dirs/reca_sam3/imported
 
 # 严格导出论文表格和曲线
-python tools/export_paper_results.py --root work_dirs/paper \
+python tools/export_paper_results.py --root work_dirs/reca_sam3 \
   --spec paper/export_config.json --output paper/generated
 
 # 只导出表格，不依赖 matplotlib
-python tools/export_paper_results.py --root work_dirs/paper \
+python tools/export_paper_results.py --root work_dirs/reca_sam3 \
   --spec paper/export_config.json --output paper/generated --tables-only
 ```
 
@@ -152,12 +152,12 @@ configs/sweeps/
 
 64 条 RemoteCLIP 模板集中在 `data/prompt_templates.py`。配置指纹由规范化有效配置生成，排除输出目录、设备、日志、可视化、保存/验证间隔、workers 和数据路径等运行字段。
 
-`configs/_base_/model/reca_sam3.py` 中的 `model.aggregation.share_window_weights_across_scales` 默认为 `True`，同一层三个尺度共用一套窗口参数，各层独立学习。设为 `False` 后，每层的三个尺度各自学习一套参数。可用以下命令训练该配置。
+`configs/_base_/model/reca_sam3.py` 中的 `model.aggregation.share_window_weights_across_scales` 默认为 `True`，同一层三个尺度共用一套窗口注意力参数。设为 `False` 后，每层的三个尺度各自学习一套注意力参数。两种设置下，各尺度的残差系数都独立训练。可用以下命令训练独立窗口注意力。
 
 ```bash
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
   --cfg-options model.aggregation.share_window_weights_across_scales=False \
-  --work-dir work_dirs/multiscale_windows_v3/unshared/seed_42/train
+  --work-dir work_dirs/reca_sam3/unshared/seed_42/train
 ```
 
 ## 测试

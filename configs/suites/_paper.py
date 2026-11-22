@@ -1,6 +1,6 @@
-# Each block adds a cross-class update followed by the sum of three regular-window updates.
+# Each block learns separate residual weights for its cross-class and three window updates.
 suite = dict(
-    root="work_dirs/multiscale_windows_v3",
+    root="work_dirs/reca_sam3",
     seeds=[42],
     devices=["cuda:0"],
     experiments=[dict(

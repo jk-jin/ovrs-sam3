@@ -90,10 +90,10 @@
 新工具：
 
 ```bash
-python tools/collect_experiments.py work_dirs/paper --output paper/generated/data/results_long.csv
+python tools/collect_experiments.py work_dirs/reca_sam3 --output paper/generated/data/results_long.csv
 python tools/import_results.py --input external/baseline.csv --mapping external/mapping.json \
-  --protocol external/protocol.json --input-unit percent --output-dir work_dirs/paper/imported
-python tools/export_paper_results.py --root work_dirs/paper \
+  --protocol external/protocol.json --input-unit percent --output-dir work_dirs/reca_sam3/imported
+python tools/export_paper_results.py --root work_dirs/reca_sam3 \
   --spec paper/export_config.json --output paper/generated
 ```
 
