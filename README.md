@@ -152,6 +152,8 @@ configs/sweeps/
 
 64 条 RemoteCLIP 模板集中在 `data/prompt_templates.py`。配置指纹由规范化有效配置生成，排除输出目录、设备、日志、可视化、保存/验证间隔、workers 和数据路径等运行字段。
 
+`configs/_base_/model/reca_sam3.py` 中的 `model.aggregation.residual_weight_init` 控制每层四个可学习残差系数的初始值，默认为 `0.1`。例如设为 `0.25` 后，所有层的类间系数和三个尺度的系数都从 `0.25` 开始独立训练。恢复权重时使用权重文件中保存的系数值。
+
 `configs/_base_/model/reca_sam3.py` 中的 `model.aggregation.share_window_weights_across_scales` 默认为 `True`，同一层三个尺度共用一套窗口注意力参数。设为 `False` 后，每层的三个尺度各自学习一套注意力参数。两种设置下，各尺度的残差系数都独立训练。可用以下命令训练独立窗口注意力。
 
 ```bash

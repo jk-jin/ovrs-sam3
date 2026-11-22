@@ -82,6 +82,23 @@ class TestEffectiveConfig(unittest.TestCase):
                 self.main_config, cfg_options=["model.aggregation.window_size=9"]
             )
 
+    def test_residual_weight_init_validation_and_fingerprint(self):
+        key = "residual_weight_init"
+        original, fingerprint = self._load()
+        self.assertEqual(original["model"]["aggregation"][key], 0.1)
+        for initial in (0, 0.25, -0.2):
+            changed, other = config_mod.build_effective_config(
+                self.main_config, cfg_options=[f"model.aggregation.{key}={initial}"]
+            )
+            self.assertEqual(changed["model"]["aggregation"][key], initial)
+            self.assertEqual(changed["experiment"]["factors"][key], initial)
+            self.assertNotEqual(fingerprint, other)
+        for invalid in (True, "0.1", None, float("nan"), float("inf"), -float("inf")):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex((TypeError, ValueError), key):
+                changed = copy.deepcopy(original)
+                changed["model"]["aggregation"][key] = invalid
+                config_mod.finalize_config(changed)
+
     def test_prompt_templates_are_64(self):
         self.assertEqual(
             len(templates_mod.REMOTECLIP_PROMPT_TEMPLATES), 64

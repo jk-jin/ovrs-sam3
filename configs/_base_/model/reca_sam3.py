@@ -32,6 +32,7 @@ model = dict(
         encoder_hw=72,
         window_size=12,
         share_window_weights_across_scales=True,  # One module per block if shared, one per scale otherwise.
+        residual_weight_init=0.1,
         use_checkpoint=True,
     ),
 

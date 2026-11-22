@@ -38,6 +38,7 @@ class TestPaperSuite(unittest.TestCase):
             suite['baselines'] = []
             source = suite_mod.train_jobs(self.suite, ['full'])[0]['cfg']
             source['model']['aggregation']['share_window_weights_across_scales'] = False
+            source['model']['aggregation']['residual_weight_init'] = 0.25
             source = config_mod.finalize_config(source)
             checkpoint = Path(tmp) / 'iter_0003000.pth'
             checkpoint.write_bytes(b'synthetic checkpoint; no model execution')
@@ -52,6 +53,7 @@ class TestPaperSuite(unittest.TestCase):
                 self.assertEqual(job['cfg']['model']['pipeline'], 'reca')
                 self.assertTrue(job['cfg']['model']['remoteclip']['enabled'])
                 self.assertFalse(job['cfg']['model']['aggregation']['share_window_weights_across_scales'])
+                self.assertEqual(job['cfg']['model']['aggregation']['residual_weight_init'], 0.25)
                 self.assertEqual(job['cfg']['training']['dataset'], 'dlrsd')
                 self.assertEqual(job['cfg']['evaluation']['dataset'], job['dataset'])
             suite['selections'][0]['variant'] = 'retired_variant'

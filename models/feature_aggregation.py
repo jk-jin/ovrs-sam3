@@ -43,6 +43,7 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         text_prompt_batch_size: int = 64,
         text_prompt_use_checkpoint: bool = True,
         share_window_weights_across_scales: bool = True,
+        residual_weight_init: float = 0.1,
     ):
         super().__init__()
         self.feature_dim = int(feature_dim)
@@ -76,6 +77,7 @@ class RemoteCLIPGuidedAggregation(nn.Module):
                 window_size=int(window_size),
                 dropout=float(dropout),
                 share_window_weights_across_scales=share_window_weights_across_scales,
+                residual_weight_init=residual_weight_init,
             )
             for _ in range(self.num_blocks)
         ])

@@ -6,8 +6,6 @@ import torch.nn.functional as F
 
 from ..config_dataclasses import WINDOW_SCALES
 
-RESIDUAL_WEIGHT_INIT = 0.1
-
 
 def flatten_batch_class(
     features: torch.Tensor,
@@ -345,7 +343,7 @@ class WindowAttentionUpdate(nn.Module):
 class MultiscaleWindowUpdate(nn.Module):
     """Weight and sum the aligned window updates from the three feature scales."""
 
-    def __init__(self, share_weights: bool, **window_kwargs):
+    def __init__(self, share_weights: bool, residual_weight_init: float = 0.1, **window_kwargs):
         super().__init__()
         self.share_weights = share_weights
         self.windows = nn.ModuleList(
@@ -353,7 +351,7 @@ class MultiscaleWindowUpdate(nn.Module):
             for _ in range(1 if share_weights else len(WINDOW_SCALES))
         )
         self.residual_weights = nn.ParameterList(
-            nn.Parameter(torch.tensor(RESIDUAL_WEIGHT_INIT)) for _ in WINDOW_SCALES
+            nn.Parameter(torch.tensor(float(residual_weight_init))) for _ in WINDOW_SCALES
         )
 
     def forward(
@@ -386,6 +384,7 @@ class AggregationAttentionBlock(nn.Module):
         dropout: float = 0.1,
         guidance_dim: int = 256,
         share_window_weights_across_scales: bool = True,
+        residual_weight_init: float = 0.1,
     ):
         super().__init__()
         self.cross_attention = CrossClassAttention(
@@ -396,7 +395,7 @@ class AggregationAttentionBlock(nn.Module):
         )
         self.cross_norm_feature = nn.LayerNorm(feature_dim)
         self.cross_norm_semantic = nn.LayerNorm(semantic_dim)
-        self.cross_residual_weight = nn.Parameter(torch.tensor(RESIDUAL_WEIGHT_INIT))
+        self.cross_residual_weight = nn.Parameter(torch.tensor(float(residual_weight_init)))
         self.window_update = MultiscaleWindowUpdate(
             feature_dim=feature_dim,
             semantic_dim=semantic_dim,
@@ -405,6 +404,7 @@ class AggregationAttentionBlock(nn.Module):
             dropout=dropout,
             guidance_dim=guidance_dim,
             share_weights=share_window_weights_across_scales,
+            residual_weight_init=residual_weight_init,
         )
 
     def forward(

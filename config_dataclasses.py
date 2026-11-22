@@ -60,10 +60,15 @@ class AggregationConfig:
 
     window_size: int = 12
     share_window_weights_across_scales: bool = True
+    residual_weight_init: float = 0.1
 
     use_checkpoint: bool = True
 
     def validate_windows(self) -> None:
+        if isinstance(self.residual_weight_init, bool) or not isinstance(self.residual_weight_init, (int, float)):
+            raise TypeError("model.aggregation.residual_weight_init must be a finite number.")
+        if not math.isfinite(self.residual_weight_init):
+            raise ValueError("model.aggregation.residual_weight_init must be a finite number.")
         if not isinstance(self.share_window_weights_across_scales, bool):
             raise TypeError("model.aggregation.share_window_weights_across_scales must be bool.")
         if self.window_size <= 0 or any(size % self.window_size for size in WINDOW_SCALES):

@@ -907,6 +907,7 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
             aggregation_semantic_dim=int(aggregation_cfg.semantic_dim),
             aggregation_window_size=int(aggregation_cfg.window_size),
             share_window_weights_across_scales=aggregation_cfg.share_window_weights_across_scales,
+            aggregation_residual_weight_init=aggregation_cfg.residual_weight_init,
             aggregation_use_checkpoint=bool(
                 aggregation_cfg.use_checkpoint
             ),
