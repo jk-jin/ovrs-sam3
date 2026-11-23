@@ -30,9 +30,6 @@ def build_eval_semantic_pred(
 
     background_enabled = bool(getattr(metadata, "background_enabled", False))
     background_class_id = int(getattr(metadata, "background_class_id", 0))
-    exclude_from_forward = bool(
-        getattr(metadata, "background_exclude_from_forward", False)
-    )
 
     eval_num_classes = int(
         getattr(metadata, "eval_num_classes", None)
@@ -48,40 +45,19 @@ def build_eval_semantic_pred(
         max_score, pred_model = score_map.max(dim=1)
     else:
         pred_model = outputs[OUTPUT_KEYS.final_pred].long()
-        forward_channels = int(pred_model.max().item()) + 1 if pred_model.numel() > 0 else 1
+        forward_channels = int(getattr(metadata, "num_classes", eval_num_classes))
         max_score = None
 
     # Shape invariant checks.
-    if background_enabled and exclude_from_forward:
-        if forward_channels != eval_num_classes - 1:
-            raise ValueError(
-                "Shape invariant violation: background excluded from forward, so "
-                f"forward channels ({forward_channels}) must equal "
-                f"eval_num_classes ({eval_num_classes}) - 1."
-            )
-    else:
-        if forward_channels != eval_num_classes:
-            raise ValueError(
-                "Shape invariant violation: forward channels ({forward_channels}) "
-                f"must equal eval_num_classes ({eval_num_classes})."
-            )
+    if forward_channels != eval_num_classes:
+        raise ValueError(
+            "Shape invariant violation: forward channels "
+            f"({forward_channels}) must equal eval_num_classes ({eval_num_classes})."
+        )
 
-    if not background_enabled:
-        return pred_model.long(), eval_num_classes, eval_class_names
-
-    if not exclude_from_forward:
-        pred_eval = pred_model.long()
-
-        if background_prob_threshold is not None and max_score is not None:
-            pred_eval = pred_eval.clone()
-            pred_eval[max_score <= float(background_prob_threshold)] = background_class_id
-
-        return pred_eval, eval_num_classes, eval_class_names
-
-    pred_eval = pred_model.long().clone()
-    pred_eval[pred_eval >= background_class_id] += 1
-
-    if background_prob_threshold is not None and max_score is not None:
+    pred_eval = pred_model.long()
+    if background_enabled and background_prob_threshold is not None and max_score is not None:
+        pred_eval = pred_eval.clone()
         pred_eval[max_score <= float(background_prob_threshold)] = background_class_id
 
     return pred_eval, eval_num_classes, eval_class_names

@@ -88,6 +88,21 @@ python tools/train.py configs/test/loveda.py --eval-only \
 
 独立评测写出 `results/<eval_id>.json`，不会重新打开或截断训练 `metrics.jsonl`。原生评测记录需要 checkpoint step；若权重文件没有训练元数据，显式传 `--eval-iter`。
 
+所有数据集都对 `classes` 中的全部类别运行前向，包含配置中的背景类；前向和评测使用相同的类别顺序。`reduce_zero_label` 仍用于原始标签编号转换，例如 LoveDA 原始 1..7 转换为包含 background 的 0..6，原始 0 转换为忽略值 255。
+
+每个 `configs/test/<dataset>.py` 都在 `evaluation` 中独立设置预测概率阈值，初始为 0.5：
+
+```python
+evaluation = dict(
+    # 该数据集原有的评测设置
+    postprocess=dict(
+        prediction_prob_threshold=0.5,
+    ),
+)
+```
+
+分别修改各文件即可使用不同阈值，批量验证同样读取这些设置。合并同义提示后，低于阈值的类别概率置零，等于阈值保留；`None` 关闭。无背景数据集跳过过滤。`evaluation.background_prob_threshold` 独立控制低分位置的背景回填，默认 0.0，使全部类别被过滤为零的位置回填为该数据集的背景 ID。
+
 ## 实验记录
 
 每个训练目录包含：

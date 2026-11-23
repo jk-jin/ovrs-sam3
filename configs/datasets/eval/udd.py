@@ -19,7 +19,6 @@ val_dataloader = dict(
             enabled=True,
             class_id=4,
             class_name='background',
-            exclude_from_forward=False,
         ),
     ),
 )

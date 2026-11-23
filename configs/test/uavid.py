@@ -13,6 +13,9 @@ runtime = dict(
 )
 
 evaluation = dict(
+    postprocess=dict(
+        prediction_prob_threshold=0.5,
+    ),
     dataset="uavid",
     split="val",
     data_version="prepared-uavid7-v2",

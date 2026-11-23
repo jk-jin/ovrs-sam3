@@ -79,9 +79,6 @@ class OVSemanticSegDataset(Dataset):
         self.background_enabled = bool(bg_cfg.get("enabled", False))
         self.background_class_id = int(bg_cfg.get("class_id", 0))
         self.background_class_name = bg_cfg.get("class_name", None)
-        self.background_exclude_from_forward = bool(
-            bg_cfg.get("exclude_from_forward", False)
-        )
 
         if self.background_enabled:
             bg_id = self.background_class_id
@@ -99,32 +96,11 @@ class OVSemanticSegDataset(Dataset):
                         f"classes[{bg_id}]={actual!r}."
                     )
 
-        if self.background_enabled and self.background_exclude_from_forward:
-            bg_id = self.background_class_id
-            self.classes = (
-                self.eval_classes[:bg_id] + self.eval_classes[bg_id + 1:]
-            )
-        else:
-            self.classes = list(self.eval_classes)
+        self.classes = list(self.eval_classes)
 
         self.prompt_names, self.prompt_to_class_id = (
             expand_class_prompts(self.classes)
         )
-
-        if self.background_enabled and self.background_exclude_from_forward:
-            if len(self.classes) != len(self.eval_classes) - 1:
-                raise ValueError(
-                    "background exclusion assertion failed: "
-                    f"forward classes ({len(self.classes)}) != "
-                    f"eval classes ({len(self.eval_classes)}) - 1."
-                )
-        else:
-            if len(self.classes) != len(self.eval_classes):
-                raise ValueError(
-                    "class list assertion failed: "
-                    f"forward classes ({len(self.classes)}) != "
-                    f"eval classes ({len(self.eval_classes)})."
-                )
 
         if not self.img_dir.exists():
             raise FileNotFoundError(f"img_dir not found: {self.img_dir}")
@@ -156,25 +132,6 @@ class OVSemanticSegDataset(Dataset):
             label_map[bg_mask] = self.ignore_index
 
         return label_map
-
-    def _apply_background_exclusion_for_forward(
-        self, label_map: torch.Tensor
-    ) -> torch.Tensor:
-        if not self.background_enabled:
-            return label_map
-        if not self.background_exclude_from_forward:
-            return label_map
-
-        out = label_map.clone()
-        valid = out != self.ignore_index
-
-        bg_mask = out == self.background_class_id
-        shift_mask = valid & (out > self.background_class_id)
-
-        out[bg_mask] = self.ignore_index
-        out[shift_mask] -= 1
-
-        return out
 
     def __getitem__(self, index):
         if isinstance(index, tuple) and len(index) == 2:
@@ -213,7 +170,7 @@ class OVSemanticSegDataset(Dataset):
         raw_label_map = _load_label_map(seg_path)
 
         eval_label_map = self._apply_reduce_zero_label(raw_label_map)
-        label_map = self._apply_background_exclusion_for_forward(eval_label_map)
+        label_map = eval_label_map.clone()
 
         sample = {
             "image": image,
@@ -225,7 +182,6 @@ class OVSemanticSegDataset(Dataset):
                 "enabled": self.background_enabled,
                 "class_id": self.background_class_id,
                 "class_name": self.background_class_name,
-                "exclude_from_forward": self.background_exclude_from_forward,
             },
             "image_id": index,
             "original_size": image.size[::-1],

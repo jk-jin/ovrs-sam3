@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import copy
+import runpy
 import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
 import torch
+from PIL import Image
 
 from tests._bootstrap import REPO_ROOT, load_module
 
 
 config_mod = load_module("engine.config")
 dataset_mod = load_module("data.dataset")
+collate_mod = load_module("data.collate")
 evaluator_mod = load_module("engine.evaluator")
 templates_mod = load_module("data.prompt_templates")
 task_modes = load_module("models.task_modes")
@@ -267,86 +271,76 @@ class TestEffectiveConfig(unittest.TestCase):
                 config_mod.Config.fromfile(tmp / "a.py")
 
 
-class TestLoveDALabelSpace(unittest.TestCase):
-    def _make_dataset(self):
-        ds = object.__new__(dataset_mod.OVSemanticSegDataset)
-        ds.reduce_zero_label = False
-        ds.ignore_index = 255
-        ds.background_enabled = True
-        ds.background_class_id = 0
-        ds.background_exclude_from_forward = True
-        return ds
+class TestDatasetClassSpace(unittest.TestCase):
+    def test_all_dataset_classes_and_labels_reach_forward_unchanged(self):
+        for path in sorted((REPO_ROOT / "configs/test").glob("*.py")):
+            with self.subTest(dataset=path.stem), tempfile.TemporaryDirectory() as tmp:
+                cfg, _ = config_mod.build_effective_config(path)
+                dataset_cfg = copy.deepcopy(cfg["val_dataloader"]["dataset"])
+                dataset_cfg.pop("type")
+                names = dataset_cfg["classes"]
+                labels = list(range(len(names)))
+                raw = [value + 1 if dataset_cfg["reduce_zero_label"] else value
+                       for value in labels] + [255]
+                expected = labels + [255]
+                if dataset_cfg["reduce_zero_label"]:
+                    raw.append(0)
+                    expected.append(255)
+                root = Path(tmp)
+                (root / "images").mkdir()
+                (root / "labels").mkdir()
+                Image.new("RGB", (len(raw), 1)).save(root / "images/sample.png")
+                Image.fromarray(np.array([raw], dtype=np.uint8)).save(root / "labels/sample.png")
+                dataset_cfg.update(img_dir=str(root / "images"), ann_dir=str(root / "labels"),
+                                   img_suffix=".png", seg_suffix=".png", transforms=[dict(type="ToTensor")])
+                dataset = dataset_mod.OVSemanticSegDataset(**dataset_cfg)
+                sample = dataset[0]
+                self.assertEqual(dataset.classes, names)
+                self.assertEqual(sample["label_map"].tolist(), [expected])
+                torch.testing.assert_close(sample["label_map"], sample["eval_label_map"])
+                batch = collate_mod.OVSemanticCollator()([sample])
+                metadata = batch.find_metadatas[0]
+                self.assertEqual(metadata.class_names, names)
+                self.assertEqual(metadata.eval_class_names, names)
+                self.assertEqual(metadata.num_classes, len(names))
+                self.assertEqual(set(metadata.prompt_to_class_id.tolist()), set(labels))
+                torch.testing.assert_close(batch.find_targets[0].semantic_label_map,
+                                           batch.find_targets[0].semantic_eval_label_map)
 
-    def test_background_is_not_removed_twice(self):
-        ds = self._make_dataset()
-        raw = torch.tensor([[0, 1, 2, 3, 4, 5, 6, 255]])
-
-        eval_labels = ds._apply_reduce_zero_label(raw)
-        self.assertEqual(
-            eval_labels.tolist(),
-            [[0, 1, 2, 3, 4, 5, 6, 255]],
-        )
-
-        forward_labels = ds._apply_background_exclusion_for_forward(
-            eval_labels
-        )
-        self.assertEqual(
-            forward_labels.tolist(),
-            [[255, 0, 1, 2, 3, 4, 5, 255]],
-        )
-
-    def test_eval_mapping_restores_seven_class_ids(self):
-        eval_labels = torch.tensor([[0, 1, 2, 3, 4, 5, 6, 255]])
-        forward_labels = torch.tensor(
-            [[255, 0, 1, 2, 3, 4, 5, 255]]
-        )
-        self.assertEqual(
-            forward_labels.tolist()[0][1:7],
-            list(range(6)),
-        )
-
-        # Build one row: background and six foreground positions plus ignore.
-        scores = torch.zeros(1, 6, 8, 1)
-        for forward_class in range(6):
-            scores[0, forward_class, forward_class + 1, 0] = 0.9
-
-        metadata = type("Metadata", (), {
-            "background_enabled": True,
-            "background_class_id": 0,
-            "background_exclude_from_forward": True,
-            "eval_num_classes": 7,
-            "eval_class_names": [
-                "background",
-                "building",
-                "road",
-                "water",
-                "barren",
-                "forest",
-                "agricultural",
-            ],
-        })()
-
-        pred_eval, num_classes, names = (
-            evaluator_mod.build_eval_semantic_pred(
-                outputs={
-                    task_modes.OUTPUT_KEYS.final_score_map: scores
-                },
-                metadata=metadata,
-                background_prob_threshold=0.0,
-            )
+    def test_eval_uses_all_seven_class_ids_directly(self):
+        cfg, _ = config_mod.build_effective_config(REPO_ROOT / "configs/test/loveda.py")
+        names = cfg["val_dataloader"]["dataset"]["classes"]
+        scores = torch.zeros(1, 7, 1, 8)
+        for class_id in range(7):
+            scores[0, class_id, 0, class_id] = 0.9
+        metadata = type("Metadata", (), dict(
+            background_enabled=True, background_class_id=0,
+            num_classes=7, eval_num_classes=7, eval_class_names=names,
+        ))()
+        pred, num_classes, _ = evaluator_mod.build_eval_semantic_pred(
+            {task_modes.OUTPUT_KEYS.final_score_map: scores}, metadata,
+            background_prob_threshold=0.0,
         )
         self.assertEqual(num_classes, 7)
-        self.assertEqual(len(names), 7)
-        pred_eval_2d = pred_eval.squeeze(-1)
-        self.assertEqual(
-            pred_eval_2d.tolist(),
-            [[0, 1, 2, 3, 4, 5, 6, 0]],
+        self.assertEqual(pred.tolist(), [[[0, 1, 2, 3, 4, 5, 6, 0]]])
+        # A prediction map need not contain every class to use the full class space.
+        pred, _, _ = evaluator_mod.build_eval_semantic_pred(
+            {task_modes.OUTPUT_KEYS.final_pred: torch.tensor([[[1, 2]]])}, metadata,
         )
-        # All seven valid eval positions match the GT eval labels.
-        valid = eval_labels != 255
-        self.assertTrue(
-            bool((pred_eval_2d[valid] == eval_labels[valid]).all().item())
-        )
+        self.assertEqual(pred.tolist(), [[[1, 2]]])
+
+    def test_each_test_config_has_an_independent_threshold_override(self):
+        for path in sorted((REPO_ROOT / "configs/test").glob("*.py")):
+            with self.subTest(dataset=path.stem):
+                declared = runpy.run_path(str(path))
+                self.assertEqual(declared["evaluation"]["postprocess"]["prediction_prob_threshold"], 0.5)
+                cfg, fingerprint = config_mod.build_effective_config(path)
+                changed, other = config_mod.build_effective_config(
+                    path, cfg_options=["evaluation.postprocess.prediction_prob_threshold=0.35"],
+                )
+                self.assertEqual(changed["evaluation"]["postprocess"]["prediction_prob_threshold"], 0.35)
+                self.assertEqual(cfg["evaluation"]["postprocess"]["prediction_prob_threshold"], 0.5)
+                self.assertNotEqual(fingerprint, other)
 
 
 if __name__ == "__main__":

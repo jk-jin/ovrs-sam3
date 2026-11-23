@@ -13,6 +13,9 @@ runtime = dict(
 )
 
 evaluation = dict(
+    postprocess=dict(
+        prediction_prob_threshold=0.5,
+    ),
     dataset="deepglobe",
     split="train",
     data_version="prepared-v1",

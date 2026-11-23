@@ -217,12 +217,6 @@ class OVSemanticCollator:
                 "class_name",
                 None,
             ),
-            background_exclude_from_forward=bool(
-                shared_background_cfg.get(
-                    "exclude_from_forward",
-                    False,
-                )
-            ),
         )
 
         raw_images = self._collect_optional_images(samples, "raw_image")

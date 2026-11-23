@@ -21,7 +21,6 @@ val_dataloader = dict(
             enabled=True,
             class_id=6,
             class_name='unknown',
-            exclude_from_forward=True,
         ),
     ),
 )

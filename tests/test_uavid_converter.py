@@ -134,7 +134,6 @@ class TestUAVidConverter(unittest.TestCase):
         cfg = runpy.run_path(str(REPO_ROOT / 'configs/datasets/eval/uavid.py'))
         dataset = cfg['val_dataloader']['dataset']
         self.assertEqual(dataset['classes'], list(converter.UAVID_CLASSES))
-        self.assertFalse(dataset['background_cfg']['exclude_from_forward'])
         names, mapping = prompts.expand_class_prompts(dataset['classes'])
         self.assertEqual(names, ['background', 'building', 'road', 'tree', 'low vegetation', 'car', 'human'])
         self.assertEqual(mapping, list(range(7)))

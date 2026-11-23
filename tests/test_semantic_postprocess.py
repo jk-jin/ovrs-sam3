@@ -14,19 +14,16 @@ OUTPUT_KEYS = load_module("models.task_modes").OUTPUT_KEYS
 
 
 def make_metadata(background_enabled: bool):
+    names = ["building", "water"] + (["background"] if background_enabled else [])
     return SimpleNamespace(
-        num_prompts=2,
-        num_classes=2,
-        prompt_to_class_id=[0, 1],
-        class_names=["building", "water"],
+        num_prompts=len(names),
+        num_classes=len(names),
+        prompt_to_class_id=list(range(len(names))),
+        class_names=names,
         background_enabled=background_enabled,
-        background_class_id=0,
-        background_exclude_from_forward=background_enabled,
-        eval_num_classes=3 if background_enabled else 2,
-        eval_class_names=(
-            ["background", "building", "water"]
-            if background_enabled else ["building", "water"]
-        ),
+        background_class_id=2 if background_enabled else 0,
+        eval_num_classes=len(names),
+        eval_class_names=names,
     )
 
 
@@ -37,12 +34,17 @@ class TestPredictionProbabilityFilter(unittest.TestCase):
             prediction_prob_threshold=0.5,
         )
 
+    def scores_for(self, background_enabled: bool):
+        if background_enabled:
+            return torch.cat([self.scores, torch.full_like(self.scores[:, :1], 0.05)], dim=1)
+        return self.scores
+
     def infer(self, background_enabled: bool):
         batch = SimpleNamespace(
             find_metadatas=[make_metadata(background_enabled)],
         )
         return self.adapter(
-            raw_outputs={OUTPUT_KEYS.final_logits: self.scores.logit()},
+            raw_outputs={OUTPUT_KEYS.final_logits: self.scores_for(background_enabled).logit()},
             batch=batch,
             output_mode="infer",
         )
@@ -56,28 +58,39 @@ class TestPredictionProbabilityFilter(unittest.TestCase):
             outputs[OUTPUT_KEYS.final_pred].tolist(), [[[1, 0]]],
         )
 
-    def test_background_filters_and_restores_background_id(self):
+    def test_background_filters_without_shifting_class_ids(self):
         outputs = self.infer(True)
         torch.testing.assert_close(
             outputs[OUTPUT_KEYS.final_score_map],
-            torch.tensor([[[[0.0, 0.5]], [[0.0, 0.0]]]]),
+            torch.tensor([[[[0.0, 0.5]], [[0.0, 0.0]], [[0.0, 0.0]]]]),
         )
         torch.testing.assert_close(
-            outputs[OUTPUT_KEYS.raw_final_score_map], self.scores,
+            outputs[OUTPUT_KEYS.raw_final_score_map], self.scores_for(True),
         )
         pred, num_classes, _ = evaluator_mod.build_eval_semantic_pred(
             outputs, make_metadata(True), background_prob_threshold=0.0,
         )
         self.assertEqual(num_classes, 3)
-        self.assertEqual(pred.tolist(), [[[0, 1]]])
+        self.assertEqual(pred.tolist(), [[[2, 0]]])
+
+    def test_different_thresholds_change_background_fallback(self):
+        predictions = []
+        for threshold in (0.3, 0.5):
+            adapter = adapter_mod.SemanticSegAdapter(prediction_prob_threshold=threshold)
+            outputs = adapter.build_infer_score_outputs(self.scores_for(True), make_metadata(True))
+            pred, _, _ = evaluator_mod.build_eval_semantic_pred(
+                outputs, make_metadata(True), background_prob_threshold=0.0,
+            )
+            predictions.append(pred.tolist())
+        self.assertEqual(predictions, [[[[1, 0]]], [[[2, 0]]]])
 
     def test_none_threshold_disables_prediction_filter(self):
         adapter = adapter_mod.SemanticSegAdapter()
         outputs = adapter.build_infer_score_outputs(
-            self.scores, make_metadata(True),
+            self.scores_for(True), make_metadata(True),
         )
         torch.testing.assert_close(
-            outputs[OUTPUT_KEYS.final_score_map], self.scores,
+            outputs[OUTPUT_KEYS.final_score_map], self.scores_for(True),
         )
 
     def test_tta_uses_current_dataset_background_setting(self):
@@ -97,7 +110,7 @@ class TestPredictionProbabilityFilter(unittest.TestCase):
         for background_enabled in (False, True):
             with self.subTest(background_enabled=background_enabled):
                 batch = SimpleNamespace(
-                    img_batch=self.scores,
+                    img_batch=self.scores_for(background_enabled),
                     raw_images=None,
                     find_metadatas=[make_metadata(background_enabled)],
                 )

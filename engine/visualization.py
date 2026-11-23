@@ -150,7 +150,6 @@ class BaseSemanticOverlayTask(VisualizationTask):
 
             bg_enabled = bool(getattr(metadata, "background_enabled", False))
             bg_class_id = int(getattr(metadata, "background_class_id", 0))
-            bg_excl = bool(getattr(metadata, "background_exclude_from_forward", False))
 
             with open(sample_dir / "visualization_sources.txt", "w", encoding="utf-8") as f:
                 f.write("item\tsource\n")
@@ -161,7 +160,6 @@ class BaseSemanticOverlayTask(VisualizationTask):
                         f"background_prob_threshold={manager.background_prob_threshold}, "
                         f"background_enabled={bg_enabled}, "
                         f"background_class_id={bg_class_id}, "
-                        f"background_exclude_from_forward={bg_excl}, "
                         f"eval_num_classes={eval_num_classes}\n"
                     )
                     f.write(
@@ -170,7 +168,6 @@ class BaseSemanticOverlayTask(VisualizationTask):
                         f"background_prob_threshold={manager.background_prob_threshold}, "
                         f"background_enabled={bg_enabled}, "
                         f"background_class_id={bg_class_id}, "
-                        f"background_exclude_from_forward={bg_excl}, "
                         f"eval_num_classes={eval_num_classes}\n"
                     )
                 f.write(
@@ -179,7 +176,6 @@ class BaseSemanticOverlayTask(VisualizationTask):
                     f"background_prob_threshold={manager.background_prob_threshold}, "
                     f"background_enabled={bg_enabled}, "
                     f"background_class_id={bg_class_id}, "
-                    f"background_exclude_from_forward={bg_excl}, "
                     f"eval_num_classes={eval_num_classes}\n"
                 )
                 f.write(
@@ -188,7 +184,6 @@ class BaseSemanticOverlayTask(VisualizationTask):
                     f"background_prob_threshold={manager.background_prob_threshold}, "
                     f"background_enabled={bg_enabled}, "
                     f"background_class_id={bg_class_id}, "
-                    f"background_exclude_from_forward={bg_excl}, "
                     f"eval_num_classes={eval_num_classes}\n"
                 )
                 f.write(f"final_score_heatmaps\t{final_source}\n")
@@ -743,7 +738,7 @@ class VisualizationManager:
         with open(sample_dir / "branch_score_summary.txt", "w", encoding="utf-8") as f:
             f.write(
                 "# Score channels are in forward (model output) class space.\n"
-                "# When exclude_from_forward=True, background is absent from this table.\n"
+                "# Includes every configured dataset class, including background.\n"
             )
             f.write(
                 "rank\tclass_id\tclass_name\t"

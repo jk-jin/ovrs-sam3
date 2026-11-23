@@ -19,7 +19,6 @@ train_dataloader = dict(
             enabled=False,
             class_id=0,
             class_name=None,
-            exclude_from_forward=False,
         ),
     ),
 )

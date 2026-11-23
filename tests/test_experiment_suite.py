@@ -65,6 +65,24 @@ class TestPaperSuite(unittest.TestCase):
         self.assertEqual(len(pending), 1)
         self.assertTrue(all(j['pretrained'] for j in jobs))
 
+    def test_validation_uses_target_dataset_threshold(self):
+        source = suite_mod.train_jobs(self.suite)[0]['cfg']
+        source['evaluation']['postprocess']['prediction_prob_threshold'] = 0.9
+        original_build = suite_mod.build_effective_config
+
+        def build_target(path):
+            cfg, fingerprint = original_build(path)
+            threshold = 0.35 if Path(path).stem == 'loveda' else 0.65
+            cfg['evaluation']['postprocess']['prediction_prob_threshold'] = threshold
+            return cfg, fingerprint
+
+        with patch.object(suite_mod, 'build_effective_config', side_effect=build_target):
+            loveda = suite_mod.evaluation_config(source, 'loveda', '/tmp/eval_loveda')
+            potsdam = suite_mod.evaluation_config(source, 'potsdam', '/tmp/eval_potsdam')
+        self.assertEqual(loveda['evaluation']['postprocess']['prediction_prob_threshold'], 0.35)
+        self.assertEqual(potsdam['evaluation']['postprocess']['prediction_prob_threshold'], 0.65)
+        self.assertEqual(source['evaluation']['postprocess']['prediction_prob_threshold'], 0.9)
+
     def test_retired_ablation_options_are_rejected(self):
         base = suite_mod.train_jobs(self.suite, ['full'])[0]['cfg']
         for key, value in dict(update_streams='feature_only', cross_class_mode='diagonal',

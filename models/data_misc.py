@@ -47,7 +47,7 @@ class BatchedInferenceMetadata:
     original_size: MyTensor
     original_size__type = torch.long
 
-    # Original forward class space after optional background exclusion.
+    # All configured dataset classes, in dataset order.
     num_classes: int
     class_names: List[str]
 
@@ -65,7 +65,6 @@ class BatchedInferenceMetadata:
     background_enabled: bool = False
     background_class_id: int = 0
     background_class_name: Optional[str] = None
-    background_exclude_from_forward: bool = False
 
 
 @dataclass

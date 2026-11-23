@@ -248,9 +248,9 @@ loss = dict(
 
 LoveDA 评测类别顺序固定为 background、building、road、water、barren、forest、agricultural。
 
-* `configs/datasets/eval/loveda.py` 使用 `reduce_zero_label=False`、`background_cfg.enabled=True`、`exclude_from_forward=True`。
-* 标签空间只执行一次变换：原始 0 保留为评测背景；模型前向删除背景并把前景 1..6 映射为 0..5；评测后处理把前景预测 +1，低分位置回填背景 0。
-* 不再叠加 `reduce_zero_label`，否则会二次删除背景并平移类别索引。
+* `configs/datasets/eval/loveda.py` 使用 `reduce_zero_label=True`、`background_cfg.enabled=True`，全部七类参与前向。
+* 读取原始标签时仅执行一次编号转换：原始 0 为无标注像素，转换为 255；原始 1..7 转换为 0..6，其中 background 对应 0。原有 255 保持忽略。
+* 模型前向与评测共用这份七类标签，不再删除背景提示或额外平移类别编号。背景既可直接预测，也可由低分位置回填。
 * `train_cfg.monitor="semantic.miou"`、`monitor_mode="max"`；训练选择与独立评测同一七类口径。
 * 完整评测 `val_max_iters=None`。显式截断的调试结果为 partial，不进入正式表格。
 * `evaluation.metric_groups=[]`；不再生成六类前景组。逐类指标包含背景。
@@ -333,6 +333,8 @@ work_dirs/<experiment>/
 * `runtime` 是 seed/device/AMP/work_dir 的唯一权威来源；model 与 train_cfg 不保存可编辑副本。
 * 64 条模板集中在 `data/prompt_templates.py`；最终 `config.json` 展开实际字符串。
 * `evaluation.background_prob_threshold` 用于背景回填，`evaluation.postprocess.prediction_prob_threshold` 用于学生预测过滤；关闭均用 `None`。
+* `configs/test/` 下每个数据集入口显式覆盖 `evaluation.postprocess.prediction_prob_threshold`，初始均为 0.5，可独立调整。批量验证也从各数据集入口读取该阈值；无背景数据集仍跳过预测概率过滤。
+* 数据集 `classes` 中的所有类别均参与前向，顺序与评测类别一致。`background_cfg` 仅保留 `enabled`、`class_id`、`class_name`，用于识别背景和低分回填；数据读取所需的 `reduce_zero_label` 编号转换独立保留。
 * 解析顺序：继承 → `--cfg-options` → 专用 CLI（`--seed`、`--device`、`--work-dir`）→ 默认值 → 校验 → 打印/保存/构建。专用 CLI 优先于同名 `--cfg-options`。
 * `--print-config` 输出最终有效配置，包含实际 seed、路径、默认值和阈值。
 * 配置指纹由规范化有效配置生成；排除输出目录、设备、日志、可视化、显示名称、保存/验证间隔、workers 和数据路径等运行字段。batch size、模型、损失、优化器、调度、训练/评测协议和阈值参与指纹。
@@ -364,7 +366,7 @@ DLRSD 预处理：`python tools/datasets_converters/dlrsd.py data/datasets/DLRSD
 
 训练仅保留 DLRSD：使用 `data/datasets/DLRSD/{img_dir,ann_dir}/train`，保留官方 OVRSISBench 划分（5601 train / 1401 val / 7002 all），17 类且不启用背景。LoveDA 验证沿用七类口径。iSAID 保留独立评测配置与数据处理脚本。
 
-UAVid 采用合并车辆的七类标签：background、building、road、tree、low vegetation、car、human（0..6）。原始 moving/static car 的 ID 5/6 均映射为 5，human 由 7 映射为 6；忽略值保持 255。前向排除背景，使用六个类别提示。重新转换命令：`python tools/datasets_converters/uavid.py data/datasets/UAVid -o data/datasets/UAVid --overwrite`。脚本从原始八类 RGB/索引标签重建，清理旧 `img_dir`/`ann_dir`，保留原始数据，并写出七类映射元数据；独立评测协议更新为 `uavid_7class_merged_car_val_resize1008_v2`。
+UAVid 采用合并车辆的七类标签：background、building、road、tree、low vegetation、car、human（0..6）。原始 moving/static car 的 ID 5/6 均映射为 5，human 由 7 映射为 6；忽略值保持 255。全部七类均参与前向。重新转换命令：`python tools/datasets_converters/uavid.py data/datasets/UAVid -o data/datasets/UAVid --overwrite`。脚本从原始八类 RGB/索引标签重建，清理旧 `img_dir`/`ann_dir`，保留原始数据，并写出七类映射元数据；独立评测协议为 `uavid_7class_merged_car_val_resize1008_v2`。
 
 ## 11. 主要实现文件
 
@@ -403,7 +405,7 @@ UAVid 采用合并车辆的七类标签：background、building、road、tree、
 10. 每个 batch 只执行一次 optimizer/scaler/scheduler 更新；不使用 `retain_graph=True`。
 11. `backbone_fpn` 顺序固定为 `[288, 144, 72]`；FPN 按图像投影后按提示广播。
 12. 最终 logits 由冻结 SAM3 `semantic_seg_head` 生成。
-13. LoveDA 标签只执行一次背景删除/索引平移；不得叠加 `reduce_zero_label` 与 `background_cfg` 的删除。
+13. 所有配置类别均参与前向；原始标签编号只按 `reduce_zero_label` 转换一次，前向和评测不再额外平移类别编号。
 14. 配置指纹与恢复校验覆盖语义设置；日志、路径、可视化差异不改变指纹。
 15. 标准结果缺少必需字段、未知主版本、单位不明或指标越界时拒绝导入/导出。
 

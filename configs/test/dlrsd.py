@@ -13,6 +13,9 @@ runtime = dict(
 )
 
 evaluation = dict(
+    postprocess=dict(
+        prediction_prob_threshold=0.5,
+    ),
     dataset="dlrsd",
     split="val",
     data_version="ovrsisbench-dlrsd-official-v1",

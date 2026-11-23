@@ -31,4 +31,6 @@ python tools/validate_experiments.py configs/suites/paper_validate.py
 
 两项原始 SAM3 对比（Semantic-only、Semantic × Presence）仅进入验证队列，使用原始预训练权重，保持 training-free 和 step 0。数据协议、日志与结果 schema 不变。独立验证按变体、种子、数据集保存，不覆盖训练记录。
 
+每个数据集都使用完整的配置类别进行前向，包含其中的背景类。批量验证读取 `configs/test/<dataset>.py` 中的 `evaluation.postprocess.prediction_prob_threshold`，每个文件初始为 0.5，可分别调整；该值覆盖训练配置中的预测过滤阈值。无背景数据集仍跳过概率过滤，背景回填由独立的 `evaluation.background_prob_threshold` 控制。
+
 CPU 合成检查不产生论文成绩；正式预训练权重的 GPU 训练和八域评测需在数据就绪的机器上执行。
