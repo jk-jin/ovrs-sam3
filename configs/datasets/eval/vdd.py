@@ -10,7 +10,7 @@ val_dataloader = dict(
         'road',
         'vegetation',
         'vehicle',
-        'roof',
+        'roof,rooftop,building top',
         'water'
         ],
         img_suffix=".JPG",
