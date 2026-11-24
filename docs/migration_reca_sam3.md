@@ -52,7 +52,7 @@
 | `base_feature_36` | `initial_feature_36` |
 | `refiner_features_36` | `aggregated_features_36` |
 | `cross_attended_encoder_features_72` | `prompt_conditioned_features_72` |
-| `clip_mid_36` | 中间层提取/缓存保留，不再投影到聚合指导 |
+| `clip_mid_36` | 已删除中间层提取、配置、缓存及调试输出 |
 | `sam_fpn_36` | `sam3_spatial_guidance_36` |
 | `fused_feature_72` | `decoder_features_72` |
 

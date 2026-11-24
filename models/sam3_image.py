@@ -45,6 +45,10 @@ class Sam3Image(torch.nn.Module):
         aggregation_semantic_dim: int = 256,
         aggregation_window_size: int = 12,
         share_window_weights_across_scales: bool = True,
+        cross_class_mode: str = "all",
+        intra_class_enabled: bool = True,
+        window_scales=(36, 24, 12),
+        use_remoteclip_guidance: bool = True,
         aggregation_use_checkpoint: bool = True,
         pipeline: str = "reca",
         task_mode: str = TASK_MODE_SEMANTIC,
@@ -113,7 +117,7 @@ class Sam3Image(torch.nn.Module):
                 )
             self.clip_align_dim = self.clip_text_dim
 
-        if self.clip_align_dim is None and pipeline == "reca":
+        if self.clip_align_dim is None and pipeline == "reca" and use_remoteclip_guidance:
             raise RuntimeError(
                 "RemoteCLIP image/text encoders are required by the "
                 "feature aggregation module."
@@ -129,6 +133,10 @@ class Sam3Image(torch.nn.Module):
                 num_heads=int(aggregation_num_heads),
                 window_size=int(aggregation_window_size),
                 share_window_weights_across_scales=share_window_weights_across_scales,
+                cross_class_mode=cross_class_mode,
+                intra_class_enabled=intra_class_enabled,
+                window_scales=window_scales,
+                use_remoteclip_guidance=use_remoteclip_guidance,
                 num_blocks=int(aggregation_num_blocks),
                 dropout=float(aggregation_dropout),
                 prompt_templates=list(remoteclip_prompt_templates or []),
@@ -142,7 +150,6 @@ class Sam3Image(torch.nn.Module):
         self._text_cache: Optional[Dict[str, torch.Tensor]] = None
         self._text_cache_key: Optional[Tuple[str, ...]] = None
         self._text_cache_device: Optional[str] = None
-        self._last_clip_grid_hw: Optional[Tuple[int, int]] = None
 
     @property
     def device(self):
@@ -273,97 +280,15 @@ class Sam3Image(torch.nn.Module):
             "clip_image_encoder must expose a positive integer `output_dim`."
         )
 
-    def _build_remoteclip_image_cache(
-        self,
-        input: BatchedDatapoint,
-        device: torch.device,
-    ) -> Optional[Dict[str, torch.Tensor]]:
+    def _build_remoteclip_image_cache(self, input, device):
         if self.clip_image_encoder is None:
-            return None
+            return {"remoteclip_feat_map_native": None}
         if input.raw_images is None:
-            raise ValueError(
-                "clip_image_encoder is enabled, but "
-                "BatchedDatapoint.raw_images is None."
-            )
-
-        clip_out = self.clip_image_encoder.encode_raw_images(
-            raw_images=input.raw_images,
-            device=device,
-            keep_intermediate_grad=True,
-        )
-
-        if not isinstance(clip_out, dict):
-            raise TypeError(
-                "clip_image_encoder must return a dict with keys "
-                "'feat_map', 'mid_features', and 'mid_layer_indices'."
-            )
-
-        remoteclip_feat_map = clip_out["feat_map"]
-        clip_spatial_guidance_features = clip_out["mid_features"]
-        clip_spatial_guidance_layer_indices = clip_out["mid_layer_indices"]
-
-        if (
-            not isinstance(remoteclip_feat_map, torch.Tensor)
-            or remoteclip_feat_map.ndim != 4
-        ):
-            raise ValueError(
-                "clip_out['feat_map'] must be [B, D_clip, Hc, Wc]."
-            )
-
-        if not isinstance(clip_spatial_guidance_features, list):
-            raise TypeError(
-                "clip_out['mid_features'] must be a list of tensors."
-            )
-
-        image_encoder_trainable = (
-            hasattr(self.clip_image_encoder, "has_trainable_params")
-            and self.clip_image_encoder.has_trainable_params()
-        )
-
-        keep_image_graph = bool(
-            torch.is_grad_enabled() and image_encoder_trainable
-        )
-
-        if keep_image_graph:
-            remoteclip_feat_map = remoteclip_feat_map.contiguous()
-        else:
-            remoteclip_feat_map = remoteclip_feat_map.detach().contiguous()
-        clip_grid_hw = (
-            int(remoteclip_feat_map.shape[-2]),
-            int(remoteclip_feat_map.shape[-1]),
-        )
-
-        clean_mid_features = []
-        for i, feat in enumerate(clip_spatial_guidance_features):
-            if not isinstance(feat, torch.Tensor) or feat.ndim != 4:
-                raise ValueError(
-                    f"clip_spatial_guidance_features[{i}] must be "
-                    f"[B, D, Hc, Wc], got "
-                    f"{None if not isinstance(feat, torch.Tensor) else tuple(feat.shape)}."
-                )
-            if int(feat.shape[0]) != int(remoteclip_feat_map.shape[0]):
-                raise ValueError(
-                    f"clip_spatial_guidance_features[{i}] batch mismatch: "
-                    f"{feat.shape[0]} vs {remoteclip_feat_map.shape[0]}."
-                )
-            if tuple(feat.shape[-2:]) != clip_grid_hw:
-                raise ValueError(
-                    f"clip_spatial_guidance_features[{i}] spatial size "
-                    f"mismatch: {tuple(feat.shape[-2:])} vs {clip_grid_hw}."
-                )
-            clean_mid_features.append(
-                feat.contiguous() if keep_image_graph
-                else feat.detach().contiguous()
-            )
-
-        return {
-            "remoteclip_feat_map_native": remoteclip_feat_map,
-            "remoteclip_grid_hw": clip_grid_hw,
-            OUTPUT_KEYS.clip_spatial_guidance_features: clean_mid_features,
-            "clip_spatial_guidance_layer_indices": tuple(
-                int(x) for x in clip_spatial_guidance_layer_indices
-            ),
-        }
+            raise ValueError("RemoteCLIP requires raw_images.")
+        features = self.clip_image_encoder.encode_raw_images(input.raw_images, device)["feat_map"]
+        if not (torch.is_grad_enabled() and self.clip_image_encoder.has_trainable_params()):
+            features = features.detach()
+        return {"remoteclip_feat_map_native": features.contiguous()}
 
     def build_aggregation_cache(
         self,
@@ -403,9 +328,6 @@ class Sam3Image(torch.nn.Module):
             input=input,
             device=device,
         )
-        if remoteclip_image_cache is None:
-            remoteclip_image_cache = dict(remoteclip_feat_map_native=None,
-                clip_spatial_guidance_features=[], clip_spatial_guidance_layer_indices=())
         baseline_logits = []
 
         encoder_feature_chunks: list[torch.Tensor] = []
@@ -492,15 +414,6 @@ class Sam3Image(torch.nn.Module):
             "backbone_fpn": backbone_fpn,
             "remoteclip_feat_map": (
                 remoteclip_image_cache["remoteclip_feat_map_native"]
-            ),
-            OUTPUT_KEYS.clip_spatial_guidance_features:
-                remoteclip_image_cache[
-                    OUTPUT_KEYS.clip_spatial_guidance_features
-                ],
-            "clip_spatial_guidance_layer_indices": (
-                remoteclip_image_cache[
-                    "clip_spatial_guidance_layer_indices"
-                ]
             ),
             "prompt_names": prompt_names,
             "prompt_ids": merged_prompt_ids,
@@ -670,33 +583,9 @@ class Sam3Image(torch.nn.Module):
         }
 
         if return_debug:
-            clip_spatial_guidance_features = aggregation_cache[
-                OUTPUT_KEYS.clip_spatial_guidance_features
-            ]
-            result.update({
-                OUTPUT_KEYS.prompt_conditioned_features_72:
-                    prompt_conditioned_features_72.detach().contiguous(),
-                OUTPUT_KEYS.semantic_state_36:
-                    aggregation_out[
-                        OUTPUT_KEYS.semantic_state_36
-                    ].detach().contiguous(),
-                OUTPUT_KEYS.clip_guidance_36:
-                    aggregation_out[
-                        OUTPUT_KEYS.clip_guidance_36
-                    ].detach().contiguous(),
-                OUTPUT_KEYS.clip_template_scores_36:
-                    aggregation_out[
-                        OUTPUT_KEYS.clip_template_scores_36
-                    ].detach().contiguous(),
-                OUTPUT_KEYS.remoteclip_template_text_features:
-                    aggregation_out[
-                        OUTPUT_KEYS.remoteclip_template_text_features
-                    ].detach().contiguous(),
-                OUTPUT_KEYS.clip_spatial_guidance_features: [
-                    feat.detach().contiguous()
-                    for feat in clip_spatial_guidance_features
-                ],
-            })
+            result[OUTPUT_KEYS.prompt_conditioned_features_72] = prompt_conditioned_features_72.detach()
+            result.update({key: value.detach() for key, value in aggregation_out.items()
+                           if key != OUTPUT_KEYS.aggregated_features})
 
         return result
 

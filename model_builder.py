@@ -603,9 +603,6 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
         image_encoder = OpenCLIPImageEncoder(
             visual=clip_model.visual,
             default_output=remoteclip_cfg.default_output,
-            intermediate_layers=list(
-                remoteclip_cfg.image_intermediate_layers
-            ),
             image_size=int(remoteclip_cfg.image_size),
         )
 
@@ -839,13 +836,6 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
         cfg: SegmentorBuildConfig,
     ) -> nn.Module:
         aggregation_cfg = cfg.aggregation
-        if not {7, 15}.issubset(
-            cfg.remoteclip.image_intermediate_layers
-        ):
-            raise ValueError(
-                "RemoteCLIP spatial guidance requires "
-                "image_intermediate_layers to include [7, 15]."
-            )
         bpe_path = resolve_bpe_path(cfg.bpe_path)
         compile_mode = "default" if cfg.compile else None
 
@@ -907,6 +897,10 @@ class ReCASAM3ModelBuilder(FrozenModuleMixin):
             aggregation_semantic_dim=int(aggregation_cfg.semantic_dim),
             aggregation_window_size=int(aggregation_cfg.window_size),
             share_window_weights_across_scales=aggregation_cfg.share_window_weights_across_scales,
+            cross_class_mode=aggregation_cfg.cross_class_mode,
+            intra_class_enabled=aggregation_cfg.intra_class_enabled,
+            window_scales=aggregation_cfg.window_scales,
+            use_remoteclip_guidance=aggregation_cfg.use_remoteclip_guidance,
             aggregation_use_checkpoint=bool(
                 aggregation_cfg.use_checkpoint
             ),

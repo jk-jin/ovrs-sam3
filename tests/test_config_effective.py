@@ -117,7 +117,7 @@ class TestEffectiveConfig(unittest.TestCase):
                 cfg, _ = config_mod.build_effective_config(path)
                 self.assertEqual(cfg["training"]["dataset"], "dlrsd")
         cfg, _ = config_mod.build_effective_config(
-            REPO_ROOT / "configs/test/isaid.py"
+            REPO_ROOT / "configs/test/isaid_15_ignbg.py"
         )
         self.assertEqual(cfg["evaluation"]["dataset"], "isaid")
 
@@ -161,7 +161,7 @@ class TestEffectiveConfig(unittest.TestCase):
         self.assertFalse(dataset["background_cfg"]["enabled"])
         self.assertFalse(dataset["reduce_zero_label"])
         self.assertEqual(
-            cfg["runtime"]["work_dir"], "./work_dirs/reca_sam3/full/seed_42/train"
+            cfg["runtime"]["work_dir"], "./work_dirs/reca_sam3_paper/full/seed_42/train"
         )
         self.assertEqual(
             cfg["logging"]["wandb"]["tags"][1], "dlrsd-train"
@@ -333,13 +333,14 @@ class TestDatasetClassSpace(unittest.TestCase):
         for path in sorted((REPO_ROOT / "configs/test").glob("*.py")):
             with self.subTest(dataset=path.stem):
                 declared = runpy.run_path(str(path))
-                self.assertEqual(declared["evaluation"]["postprocess"]["prediction_prob_threshold"], 0.5)
+                threshold = declared["evaluation"]["postprocess"]["prediction_prob_threshold"]
+                self.assertTrue(0 <= threshold <= 1)
                 cfg, fingerprint = config_mod.build_effective_config(path)
                 changed, other = config_mod.build_effective_config(
                     path, cfg_options=["evaluation.postprocess.prediction_prob_threshold=0.35"],
                 )
                 self.assertEqual(changed["evaluation"]["postprocess"]["prediction_prob_threshold"], 0.35)
-                self.assertEqual(cfg["evaluation"]["postprocess"]["prediction_prob_threshold"], 0.5)
+                self.assertEqual(cfg["evaluation"]["postprocess"]["prediction_prob_threshold"], threshold)
                 self.assertNotEqual(fingerprint, other)
 
 

@@ -23,8 +23,7 @@ class RemoteCLIPGuidedAggregation(nn.Module):
 
     Each block adds a cross-class update and a softmax-weighted fusion of three window updates.
     Only encoder features receive residual updates; the semantic embedding
-    stays trainable through Q/K. SAM3 FPN guides window Q/K. CLIP intermediate
-    features are still extracted by the backbone but are unused here.
+    stays trainable through Q/K when enabled. SAM3 FPN guides window Q/K.
     """
 
     def __init__(
@@ -43,17 +42,23 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         text_prompt_batch_size: int = 64,
         text_prompt_use_checkpoint: bool = True,
         share_window_weights_across_scales: bool = True,
+        cross_class_mode: str = "all",
+        intra_class_enabled: bool = True,
+        window_scales=WINDOW_SCALES,
+        use_remoteclip_guidance: bool = True,
     ):
         super().__init__()
         self.feature_dim = int(feature_dim)
-        self.semantic_dim = int(semantic_dim)
+        self.semantic_dim = int(semantic_dim) if use_remoteclip_guidance else 0
+        self.window_scales = tuple(window_scales)
+        self.intra_class_enabled = intra_class_enabled
         self.use_checkpoint = bool(use_checkpoint)
         self.num_blocks = int(num_blocks)
-        if prompt_templates is None:
+        if use_remoteclip_guidance and prompt_templates is None:
             raise ValueError(
                 "prompt_templates must be a list of 64 prompt templates."
             )
-        if len(prompt_templates) != 64:
+        if use_remoteclip_guidance and len(prompt_templates) != 64:
             raise ValueError(
                 f"Expected 64 prompt templates, got {len(prompt_templates)}."
             )
@@ -66,7 +71,7 @@ class RemoteCLIPGuidedAggregation(nn.Module):
             feature_dim=int(semantic_dim),
             text_prompt_batch_size=int(text_prompt_batch_size),
             text_prompt_use_checkpoint=bool(text_prompt_use_checkpoint),
-        )
+        ) if use_remoteclip_guidance else None
 
         self.blocks = nn.ModuleList([
             AggregationAttentionBlock(
@@ -76,6 +81,9 @@ class RemoteCLIPGuidedAggregation(nn.Module):
                 window_size=int(window_size),
                 dropout=float(dropout),
                 share_window_weights_across_scales=share_window_weights_across_scales,
+                cross_class_mode=cross_class_mode,
+                intra_class_enabled=intra_class_enabled,
+                window_scales=self.window_scales,
             )
             for _ in range(self.num_blocks)
         ])
@@ -104,7 +112,7 @@ class RemoteCLIPGuidedAggregation(nn.Module):
     def forward(
         self,
         prompt_conditioned_features_72: torch.Tensor,
-        remoteclip_feat_map: torch.Tensor,
+        remoteclip_feat_map: torch.Tensor | None,
         class_names: List[str],
         sam3_fpn_72: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
@@ -131,27 +139,20 @@ class RemoteCLIPGuidedAggregation(nn.Module):
                 f"encoder features, got {(height, width)}."
             )
 
-        if remoteclip_feat_map.ndim != 4:
-            raise ValueError(
-                "remoteclip_feat_map must be [B, D_clip, 36, 36], "
-                f"got {tuple(remoteclip_feat_map.shape)}."
+        guidance_outputs = {}
+        clip_guidance_36 = None
+        if self.remoteclip_guidance is not None:
+            if remoteclip_feat_map is None or remoteclip_feat_map.ndim != 4 or remoteclip_feat_map.shape[0] != batch_size or remoteclip_feat_map.shape[-2:] != (36, 36):
+                raise ValueError("RemoteCLIP features must be [B, D_clip, 36, 36].")
+            clip_guidance_36, scores, texts = self.remoteclip_guidance(
+                class_names=class_names, remoteclip_feat_map=remoteclip_feat_map,
             )
-
-        if remoteclip_feat_map.shape[0] != batch_size:
-            raise ValueError(
-                "remoteclip_feat_map batch mismatch: expected "
-                f"{batch_size}, got {remoteclip_feat_map.shape[0]}."
-            )
-
-        if tuple(remoteclip_feat_map.shape[-2:]) != (36, 36):
-            raise ValueError(
-                "remoteclip_feat_map must be 36×36, "
-                f"got {tuple(remoteclip_feat_map.shape[-2:])}."
-            )
-
-        clip_guidance_36, clip_template_scores_36, remoteclip_template_text = self.remoteclip_guidance(
-            class_names=class_names, remoteclip_feat_map=remoteclip_feat_map,
-        )
+            guidance_outputs = {
+                OUTPUT_KEYS.semantic_state_36: clip_guidance_36,
+                OUTPUT_KEYS.clip_guidance_36: clip_guidance_36,
+                OUTPUT_KEYS.clip_template_scores_36: scores,
+                OUTPUT_KEYS.remoteclip_template_text_features: texts,
+            }
         if sam3_fpn_72 is None or tuple(sam3_fpn_72.shape) != (batch_size, 256, 72, 72):
             raise ValueError("SAM3 spatial guidance requires [B, 256, 72, 72] backbone_fpn[2]")
         fpn_36 = F.interpolate(
@@ -159,11 +160,12 @@ class RemoteCLIPGuidedAggregation(nn.Module):
         )[:, None]
         # Guidance is fixed across branches and blocks. Resize FPN per image before broadcasting.
         semantic_scales = tuple(
-            resize_prompt_features(clip_guidance_36, size) for size in WINDOW_SCALES
+            resize_prompt_features(clip_guidance_36, size) if clip_guidance_36 is not None else None
+            for size in self.window_scales
         )
         spatial_scales = tuple(
             resize_prompt_features(fpn_36, size).expand(-1, num_prompts, -1, -1, -1)
-            for size in WINDOW_SCALES
+            for size in self.window_scales
         )
 
         feature_state_36 = resize_prompt_features(prompt_conditioned_features_72, WINDOW_SCALES[0])
@@ -181,11 +183,4 @@ class RemoteCLIPGuidedAggregation(nn.Module):
             self.feature_output_norm,
         )
 
-        return {
-            OUTPUT_KEYS.aggregated_features: feature_state_36,
-            OUTPUT_KEYS.semantic_state_36: clip_guidance_36,
-            OUTPUT_KEYS.clip_guidance_36: clip_guidance_36,
-            OUTPUT_KEYS.clip_template_scores_36: clip_template_scores_36,
-            OUTPUT_KEYS.remoteclip_template_text_features:
-                remoteclip_template_text,
-        }
+        return {OUTPUT_KEYS.aggregated_features: feature_state_36, **guidance_outputs}

@@ -5,3 +5,5 @@ model = dict(pipeline="sam3_semantic_presence", remoteclip=dict(enabled=False), 
 experiment = dict(name="semantic_presence", method_id="sam3_semantic", method_name="SAM 3",
     variant_id="semantic_presence", implementation_id="sam3-original-semantic-v1", kind="baseline")
 training = dict(regime="training_free", dataset="none", split=None, protocol_id="sam3_original_pretrained")
+
+loss = dict(reference_distill_weight=0.0)

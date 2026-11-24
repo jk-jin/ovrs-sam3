@@ -2,7 +2,7 @@
 
 ## 数据与权重选择
 
-源码基准：master `f4db558257ce4e4316d4d4b349af916d45bdf543`，实现标识 `reca-sam3-multiscale-windows`。最终设计不使用 RemoteCLIP 中间层；当前未使用的提取与缓存仍待下一轮工程清理。
+实现标识 `reca-sam3-paper-ablation-v1`。RemoteCLIP中间层配置、提取与缓存已删除；默认Full设计不变，十个训练变体和两个评测基线已提供代码与配置。
 
 DLRSD 官方 5601 张训练图像用于适配，1401 张验证图像用于源域评测。LoveDA 七类验证用于 checkpoint 选择，是开发域。其余 iSAID、Potsdam、Vaihingen、UAVid、UDD5、VDD 为目标域。消融重点展示 LoveDA、Potsdam、UAVid；LoveDA 不作为独立目标域证据。
 
@@ -39,10 +39,10 @@ DLRSD 官方 5601 张训练图像用于适配，1401 张验证图像用于源域
 
 五张表均在实验章节引用。核心结构表7行，图文组合表4行，共10个不同训练变体；效率表包括两个基线、Full、单尺度、独立权重。LoveDA逐类表只使用本地三方法的相同评测选择。
 
-正式填数要求实际 eval_id、seed、checkpoint SHA-256、数据划分与协议，且评测完整。文献与本地分区，不混算综合平均；原报告来源不改写。效率统一设备、精度、输入、提示数量、批量、预热、同步和缓存条件，在未使用的中间层提取代码清理后测量。缺失值为 --，不是0。
+正式填数要求实际 eval_id、seed、checkpoint SHA-256、数据划分与协议，且评测完整。文献与本地分区，不混算综合平均；原报告来源不改写。效率统一设备、精度、输入、提示数量、批量、预热、同步和缓存条件，在相同推理条件下实际测量。缺失值为 --，不是0。
 
 ## 比较与双协议结果选择
 
 文献引用、iSAID 两列、UAVid 七／八类与未知来源展示统一遵循[comparison_policy.md](comparison_policy.md)，不在此重复维护。主表本地结果的 iSAID 选择键为 iSAID-15-IgnBG 与 iSAID-16-BG；标准结果仍为 eval_dataset=isaid，以不同 eval_protocol_id 区分，复用同一种子／权重。
 
-含背景验证入口尚未实现，本文件的当前默认阈值不自动等于新 BG 协议的最终设置。实际工程与实验任务只维护于[manuscript_status.md](manuscript_status.md)。
+含背景验证入口已实现：configs/test/isaid_16_bg.py，背景参与前向，prediction_prob_threshold=0.5，background_prob_threshold=0.0；15类入口为isaid_15_ignbg.py，背景忽略。两种协议读取相同原始标签，采用各自固定映射。实际工程与实验任务只维护于[manuscript_status.md](manuscript_status.md)。

@@ -327,11 +327,6 @@ def _validate_model_section(model: dict) -> dict:
                     "model.remoteclip.prompt_templates"
                     f"[{idx}] must contain '{{}}'."
                 )
-        if list(remoteclip.image_intermediate_layers) != [7, 15]:
-            raise ValueError(
-                "model.remoteclip.image_intermediate_layers must be [7, 15] "
-                "for fixed CLIP spatial guidance."
-            )
         if int(remoteclip.image_size) != 504:
             raise ValueError("model.remoteclip.image_size must be 504.")
         if int(remoteclip.text_prompt_batch_size) <= 0:
@@ -359,8 +354,8 @@ def _validate_model_section(model: dict) -> dict:
         raise ValueError(f"Unknown model.pipeline: {pipeline}")
     if aggregation.enabled != (pipeline == "reca"):
         raise ValueError("aggregation.enabled must match pipeline='reca'.")
-    if remoteclip.enabled != (pipeline == "reca"):
-        raise ValueError("remoteclip.enabled must match pipeline='reca'.")
+    if remoteclip.enabled != (pipeline == "reca" and aggregation.use_remoteclip_guidance):
+        raise ValueError("remoteclip.enabled must match the ReCA guidance path.")
     fusion = _coerce_dataclass(model["fusion"], FusionConfig, "model.fusion")
     if fusion.type != "sdf":
         raise ValueError("fusion.type must be sdf.")
@@ -892,8 +887,18 @@ def finalize_config(raw_cfg: dict) -> dict:
         cfg["experiment"]["factors"].update(
             num_blocks=aggregation["num_blocks"],
             share_window_weights_across_scales=aggregation["share_window_weights_across_scales"],
+            cross_class_mode=aggregation["cross_class_mode"],
+            intra_class_enabled=aggregation["intra_class_enabled"],
+            window_scales=",".join(str(size) for size in aggregation["window_scales"]),
+            use_remoteclip_guidance=aggregation["use_remoteclip_guidance"],
+            image_encoder=cfg["model"]["freeze"]["remoteclip_image_finetune"],
+            text_encoder=cfg["model"]["freeze"]["remoteclip_text_finetune"],
         )
     cfg["loss"] = _validate_loss_section(cfg["loss"])
+    cfg["experiment"]["factors"].update(
+        reference_distill_weight=cfg["loss"]["reference_distill_weight"],
+        present_class_weight=cfg["loss"]["present_class_weight"],
+    )
     cfg["evaluation"] = _validate_evaluation(
         cfg["evaluation"], cfg["loss"]
     )

@@ -43,18 +43,21 @@ python tools/datasets_converters/uavid.py data/datasets/UAVid \
 
 UAVid 独立评测入口仍为 `configs/test/uavid.py`，数据版本与协议标识已更新为七类版本；旧八类成绩不能与新七类成绩混用。
 
-## 论文实验批量运行
+## 论文实验与消融
 
-公共训练设置为 batch size 4、10000 步、基础学习率 `1e-4`。RemoteCLIP 图文参数组的学习率为其 0.01 倍。批量入口训练完整模型，可手选权重进行验证。[批量实验指南](docs/experiment_suites.md)
+提供 Full 与九个消融配置，统一 DLRSD 训练、LoveDA 七类选权重；两个原始 SAM3 基线仅验证。RemoteCLIP 中间层提取、缓存与配置已删除。完整清单、批量方式及 iSAID 双协议见[实验运行指南](docs/experiment_suites.md)。
 
 ```bash
-python tools/train_experiments.py configs/suites/paper_train.py --dry-run
-python tools/train_experiments.py configs/suites/paper_train.py
-# 编辑 paper_validate.py 的 selections，填写新完整模型的 checkpoint 后运行：
-python tools/validate_experiments.py configs/suites/paper_validate.py
+# 只训练严格提示对角消融
+python tools/train_experiments.py configs/suites/paper_train.py --only self_only --seed 42 --devices cuda:0
+# 在 LoveDA 上加载该消融的指定权重，只验证这一个任务
+python tools/validate_experiments.py configs/suites/paper_validate.py \
+  --only self_only --seed 42 \
+  --checkpoint work_dirs/reca_sam3_paper/self_only/seed_42/train/best.pth \
+  --datasets loveda --devices cuda:0
 ```
 
-默认单卡顺序执行；`--devices cuda:0 cuda:1` 每卡一个实验；`--resume` 继续未完成任务并跳过已完成任务。训练结果按变体/seed 保存，验证结果另外按数据集保存。未填写权重的项保持待选，两个原始 SAM3 基线仅验证。训练期间仍保留 LoveDA 定期验证及 best.pth；不会自动按目标域最高分选权重。
+训练配置保存在权重旁的 config.json，验证据此恢复消融结构。修改权重选择时可用 --validation-name 创建新的验证目录。
 
 ## 训练
 
@@ -72,7 +75,7 @@ python tools/train.py configs/experiments/main/dlrsd_loveda_full.py --print-conf
 
 ```bash
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
-  --resume-from work_dirs/reca_sam3/full/seed_42/train/latest.pth
+  --resume-from work_dirs/reca_sam3_paper/full/seed_42/train/latest.pth
 ```
 
 短调试入口 `configs/experiments/dev/dlrsd_loveda_4k.py` 的验证是截断的（`val_max_iters=500`），只能产生 partial/draft 结果。
@@ -81,16 +84,21 @@ python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
 
 ## 独立评测
 
+推荐使用 suite 恢复指定权重的真实结构，避免把消融权重加载到 Full：
+
 ```bash
-python tools/train.py configs/test/loveda.py --eval-only \
-  --load-model-from work_dirs/reca_sam3/full/seed_42/train/best.pth
+python tools/validate_experiments.py configs/suites/paper_validate.py \
+  --only full --seed 42 --datasets loveda \
+  --checkpoint work_dirs/reca_sam3_paper/full/seed_42/train/best.pth
 ```
+
+iSAID 目标为 isaid_15_ignbg 或 isaid_16_bg，分别统计十五类忽略背景和十六类含背景；两者复用同一权重。UAVid 始终为七类。
 
 独立评测写出 `results/<eval_id>.json`，不会重新打开或截断训练 `metrics.jsonl`。原生评测记录需要 checkpoint step；若权重文件没有训练元数据，显式传 `--eval-iter`。
 
 所有数据集都对 `classes` 中的全部类别运行前向，包含配置中的背景类；前向和评测使用相同的类别顺序。`reduce_zero_label` 仍用于原始标签编号转换，例如 LoveDA 原始 1..7 转换为包含 background 的 0..6，原始 0 转换为忽略值 255。
 
-每个 `configs/test/<dataset>.py` 都在 `evaluation` 中独立设置预测概率阈值，初始为 0.5：
+每个 `configs/test/<target>.py` 在 `evaluation` 中独立设置预测概率阈值；例如：
 
 ```python
 evaluation = dict(
@@ -133,7 +141,7 @@ python tools/collect_experiments.py work_dirs/reca_sam3 \
 # 外部 CSV 导入（input-unit 必填；mapping / protocol 显式提供）
 python tools/import_results.py --input external/baseline.csv \
   --mapping external/mapping.json --protocol external/protocol.json \
-  --input-unit percent --output-dir work_dirs/reca_sam3/imported
+  --input-unit percent --output-dir work_dirs/reca_sam3_paper/imported
 
 # 严格导出论文表格和曲线
 python tools/export_paper_results.py --root work_dirs/reca_sam3 \
@@ -172,7 +180,7 @@ configs/sweeps/
 ```bash
 python tools/train.py configs/experiments/main/dlrsd_loveda_full.py \
   --cfg-options model.aggregation.share_window_weights_across_scales=False \
-  --work-dir work_dirs/reca_sam3/unshared/seed_42/train
+  --work-dir work_dirs/reca_sam3_paper/unshared/seed_42/train
 ```
 
 ## 测试

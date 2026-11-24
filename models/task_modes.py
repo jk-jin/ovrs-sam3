@@ -34,7 +34,6 @@ class ModelOutputKeys:
     remoteclip_template_text_features: str = (
         "remoteclip_template_text_features"
     )
-    clip_spatial_guidance_features: str = "clip_spatial_guidance_features"
 
     # Frozen SAM3 teacher logits — per-chunk temporary output during training
     # for distillation only.

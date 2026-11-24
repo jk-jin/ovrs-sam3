@@ -18,7 +18,7 @@ python paper/scripts/build_experiment_tables.py --draft
 - iSAID 本地选择键为 `iSAID-15-IgnBG` 与 `iSAID-16-BG`，每方法／种子同一权重、不同协议 ID；真实结果的 eval_dataset 仍为 isaid。
 - `dataset_protocols` 是当前配置的人工核对快照，配置改变后须同步核对类别、提示数量与阈值。
 
-所有训练变体及两个仅评测基线的 ID 见 `paper/data/experiment_plan.csv`。当前十个训练变体中，严格提示对角、无引导、无类内、单尺度仍需工程实现；CSV 不自动生成这些模型。三尺度独立权重、图文冻结组合及关闭蒸馏已有对应配置能力，仍需创建并验证正式实验入口。
+所有训练变体及两个仅评测基线的 ID 见 `paper/data/experiment_plan.csv`。十个训练变体及对应模型路径均已实现；实际命令见 docs/experiment_suites.md。计划 CSV 不代表实验已经运行，只有真实标准结果可填数。
 
 不带 `--draft` 时要求全部必需本地成绩、参数测量、效率和协议锁齐全。draft 只为缺失值提供占位，非法数值、身份冲突或协议冲突仍报错。单种子只显示数值，多种子显示均值与样本标准差。直接修改生成的 TeX 可用于排版草稿，但重新生成前应先将正式数值回写结果记录与选择器。
 

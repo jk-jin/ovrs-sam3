@@ -338,7 +338,6 @@ class SemanticSegAdapter(nn.Module):
             OUTPUT_KEYS.clip_guidance_36,
             OUTPUT_KEYS.remoteclip_template_text_features,
             OUTPUT_KEYS.clip_template_scores_36,
-            OUTPUT_KEYS.clip_spatial_guidance_features,
         ):
             if key in raw_outputs:
                 outputs[key] = raw_outputs[key]

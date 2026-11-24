@@ -40,4 +40,4 @@ latexmk -xelatex -halt-on-error -file-line-error -outdir=build main.tex
 - notes/experiment_config_snapshot.json：有效配置快照；notes/source_snapshot.json：源码、论文哈希及最新验证结果。
 - references.bib 保持 Zotero 自动导出；references_extra.bib 保存人工补充。未引用条目不会进入参考文献。
 
-当前实现、尚未实现的双协议验证入口与模型／图稿同步工作见 manuscript_status.md。旧的已解决调查、日期式问题清单和重复手抄主表已清理；旧内容通过 Git 历史查阅。
+消融与iSAID双协议入口已实现，运行方式见 ../docs/experiment_suites.md；实际未运行的实验与模型／图稿同步工作见 notes/manuscript_status.md。旧的已解决调查、日期式问题清单和重复手抄主表已清理；旧内容通过 Git 历史查阅。

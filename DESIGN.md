@@ -126,7 +126,7 @@ feature_state_36 + semantic_state_36
 * `initial_feature_36 = bilinear(prompt_conditioned_features_72)`，作为 feature state 初值。
 * `semantic_state_36 = clip_guidance_36`，聚合全过程保持相同张量，不执行任何 score embed 注意力更新；不 detach、不冻结，梯度通过 Q/K 回传到 embedding 与 RemoteCLIP。
 * SAM3 类内指导：`backbone_fpn[2]`（72×72）双线性下采样到 36×36，保留 256 通道，广播到提示维；缺失或尺寸不符直接报错。
-* RemoteCLIP 中间层 `[7, 15]` 的提取、缓存和调试输出保留，但不传入 aggregation，不构建对应投影或指导更新分支。
+* RemoteCLIP 仅提取最终 dense feature；中间层提取、配置、缓存与调试输出已删除。无引导消融不构建 RemoteCLIP 或 score embedding。
 
 ### 5.2 类间与多尺度类内注意力
 
@@ -398,7 +398,7 @@ UAVid 采用合并车辆的七类标签：background、building、road、tree、
 3. 特征通道为 256，模板数为 64，聚合默认 2 块。
 4. `clip_guidance_36` 完全由 RemoteCLIP 模板分数与 dense 特征生成，不注入 SAM3 FPN。
 5. 两次拼接前分别执行逐像素通道 L2 归一化。
-6. 类内使用 SAM3 FPN36 指导；RemoteCLIP 中间层仅保留提取与缓存，不参与聚合。
+6. 类内使用 SAM3 FPN36 指导；RemoteCLIP 仅保留最终 dense feature，中间层提取已删除。
 7. 聚合先在全部提示上执行，再按 chunk 高分辨率解码；聚合不能放进 chunk 循环。
 8. 教师使用 `prompt_conditioned_features_72`，必须 `no_grad()` 并 detach；学生不得使用 `no_grad()`/`detach()`/`enable_grad()`。
 9. SemanticDetailFusion 只在 72×72 执行一次；每条支路在原方向调用一次独立卷积块；输出替换 Pixel Decoder 最后一层 FPN 输入。
@@ -432,12 +432,17 @@ UAVid 采用合并车辆的七类标签：background、building、road、tree、
 可用 `python -m unittest discover -s tests -v` 运行 CPU 回归测试，覆盖合成特征的前向与反向传播、有效配置、标签空间、schema、导入导出、多种子统计和结果记录。
 
 
-## 14. 新基线与实验清理
+## 14. 论文实验配置
 
-* 公共配置为 batch 4、10000 步、LR 1e-4、固定蒸馏系数 0.5、W&B offline。SAM3、RemoteCLIP 与标签共享数据增强的空间朝向。
-* 完整模型的实现标识为 `reca-sam3-multiscale-windows`。默认训练写入 `work_dirs/reca_sam3/full/seed_42/train`。
-* 旧消融配置、专用模型分支、批量任务/权重选择、论文消融计划和表格均已清理；不自动迁移旧消融或旧 Full 成绩。
-* 批量训练仅保留新 Full；独立验证保留 Full 与两个原始 SAM3 对比，继续使用相同八数据集。
-* 删除 `cross_class_mode`、`intra_class_enabled`、`semantic_init`、`update_streams`、融合 `orientations`、concat fusion 和 simple adapter 开关；旧字段由配置校验拒绝。
-* 两个原始 SAM3 比较仍由 `sam3_semantic` / `sam3_semantic_presence` 实现，不构建 RemoteCLIP 或聚合模块。
-* CPU 检查覆盖三路普通窗口的覆盖范围、Softmax 融合的等权初始化和加权求和、两种参数共享设置的梯度、固定语义引导梯度、checkpoint 输出与梯度一致性、单方向融合、配置与批量入口。
+实现标识：`reca-sam3-paper-ablation-v1`。Full 使用原有两块、共享三尺度普通窗口、Softmax融合、唯一score embedding指导与最终SDF；公共训练预算不变。中间层配置、提取、缓存和调试输出均已删除。
+
+- `cross_class_mode="all"/"self"`：完整交互或展开提示轴严格对角屏蔽，包含同类同义提示；保持值投影、输出投影与残差。
+- `intra_class_enabled=False`：不构建／运行类内模块，保留类间与SDF。
+- `window_scales=[36]`：仅一次36×36上的12×12普通窗口，无尺度融合参数；默认[36,24,12]。
+- `share_window_weights_across_scales=False`：三套窗口参数分别学习，其他三尺度路径不变。
+- `use_remoteclip_guidance=False`与`remoteclip.enabled=False`一致：无score embedding／RemoteCLIP模块，Q/K不拼接语义指导，类内SAM3 FPN指导保留。
+- 图文冻结模式仍采用`frozen`／`attention`；无蒸馏以`reference_distill_weight=0.0`控制并跳过教师。
+
+configs/experiments/ablation/提供九个单因素配置，继承Full。训练suite含十个变体，两个sam3原始基线只验证。输出使用work_dirs/reca_sam3_paper，实验因素从最终生效配置生成，旧的semantic_init、update_streams、方向融合与移位窗口字段仍不支持。
+
+验证从指定权重旁config.json恢复结构，支持--only、--checkpoint、--datasets、--seed及--validation-name。iSAID的15类忽略背景与16类含背景使用显式目标与协议ID，真实数据集名仍为isaid；不变换标量成绩。完整命令见docs/experiment_suites.md。正式训练和数据集成绩须在数据／权重齐备的GPU机器运行，CPU合成测试不代表论文成绩。

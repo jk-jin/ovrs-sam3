@@ -145,12 +145,12 @@ class TestAggregationDesign(unittest.TestCase):
         visual.width = visual.output_dim = 1
         visual.transformer = torch.nn.Module()
         visual.transformer.resblocks = torch.nn.ModuleList([torch.nn.Identity()])
-        encoder = encoder_type(visual, intermediate_layers=[0], image_size=4)
+        encoder = encoder_type(visual, image_size=4)
         raw = [torch.arange(48, dtype=torch.float32).view(3, 4, 4) / 48]
         expected = encoder.preprocess_raw_images(raw, torch.device('cpu'))
         for training in (True, False):
             encoder.train(training)
-            with patch.object(encoder, 'encode_image_with_intermediate') as encode:
+            with patch.object(encoder, 'encode_image') as encode:
                 self.assertIs(encoder.encode_raw_images(raw, torch.device('cpu')), encode.return_value)
                 encode.assert_called_once()
                 torch.testing.assert_close(encode.call_args.args[0], expected)

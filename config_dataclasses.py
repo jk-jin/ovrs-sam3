@@ -31,10 +31,6 @@ class RemoteCLIPConfig:
     default_output: str = "feat_map"
     image_size: int = 504
 
-    image_intermediate_layers: list[int] = field(
-        default_factory=lambda: [7, 15]
-    )
-
     prompt_templates: list[str] = field(
         default_factory=lambda: list(REMOTECLIP_PROMPT_TEMPLATES)
     )
@@ -60,13 +56,23 @@ class AggregationConfig:
 
     window_size: int = 12
     share_window_weights_across_scales: bool = True
+    cross_class_mode: str = "all"
+    intra_class_enabled: bool = True
+    window_scales: list[int] = field(default_factory=lambda: list(WINDOW_SCALES))
+    use_remoteclip_guidance: bool = True
 
     use_checkpoint: bool = True
 
     def validate_windows(self) -> None:
         if not isinstance(self.share_window_weights_across_scales, bool):
             raise TypeError("model.aggregation.share_window_weights_across_scales must be bool.")
-        if self.window_size <= 0 or any(size % self.window_size for size in WINDOW_SCALES):
+        if self.cross_class_mode not in {"all", "self"}:
+            raise ValueError("cross_class_mode must be all or self.")
+        if not isinstance(self.intra_class_enabled, bool) or not isinstance(self.use_remoteclip_guidance, bool):
+            raise TypeError("intra_class_enabled and use_remoteclip_guidance must be bool.")
+        if not isinstance(self.window_scales, list) or any(type(n) is not int for n in self.window_scales) or self.window_scales not in ([36, 24, 12], [36]):
+            raise ValueError("window_scales must be [36, 24, 12] or [36].")
+        if self.window_size <= 0 or any(size % self.window_size for size in self.window_scales):
             raise ValueError("model.aggregation.window_size must be positive and divide 36, 24 and 12.")
 
 
@@ -220,7 +226,7 @@ class ExperimentConfig:
     method_id: str = "reca_sam3"
     method_name: str = "ReCA-SAM3"
     variant_id: str = "full"
-    implementation_id: str = "reca-sam3-multiscale-windows"
+    implementation_id: str = "reca-sam3-paper-ablation-v1"
     kind: str = "main"
     factors: Dict = field(default_factory=dict)
     note: Optional[str] = None

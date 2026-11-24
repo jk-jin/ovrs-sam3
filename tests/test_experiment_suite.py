@@ -18,9 +18,9 @@ class TestPaperSuite(unittest.TestCase):
     def setUp(self):
         self.suite = suite_mod.load_suite('configs/suites/paper_train.py')
 
-    def test_new_baseline_is_the_only_training_job(self):
+    def test_all_ten_training_variants_share_the_full_budget(self):
         jobs = suite_mod.train_jobs(self.suite)
-        self.assertEqual(len(jobs), 1)
+        self.assertEqual(len(jobs), 10)
         self.assertEqual(jobs[0]['variant'], 'full')
         cfg = jobs[0]['cfg']
         self.assertEqual(cfg['train_dataloader']['batch_size'], 4)
@@ -30,7 +30,7 @@ class TestPaperSuite(unittest.TestCase):
         self.assertEqual(cfg['param_scheduler'][1]['T_max'], 9500)
         self.assertEqual(cfg['logging']['wandb']['mode'], 'offline')
         self.assertEqual(cfg['model']['aggregation']['num_blocks'], 2)
-        self.assertFalse((REPO_ROOT / 'configs/experiments/ablation').exists())
+        self.assertTrue((REPO_ROOT / 'configs/experiments/ablation').is_dir())
 
     def test_manual_selection_restores_architecture_and_all_targets(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -46,14 +46,14 @@ class TestPaperSuite(unittest.TestCase):
             suite['selections'] = [dict(variant='full', seed=42, checkpoint=str(checkpoint))]
             jobs, pending = suite_mod.validation_jobs(suite)
             self.assertEqual(pending, [])
-            self.assertEqual(len(jobs), 8)
+            self.assertEqual(len(jobs), 9)
             self.assertEqual({j['checkpoint_sha256'] for j in jobs}, {suite_mod.sha256_file(checkpoint)})
             for job in jobs:
                 self.assertEqual(job['cfg']['model']['pipeline'], 'reca')
                 self.assertTrue(job['cfg']['model']['remoteclip']['enabled'])
                 self.assertFalse(job['cfg']['model']['aggregation']['share_window_weights_across_scales'])
                 self.assertEqual(job['cfg']['training']['dataset'], 'dlrsd')
-                self.assertEqual(job['cfg']['evaluation']['dataset'], job['dataset'])
+                self.assertEqual(job['cfg']['evaluation']['dataset'], job['eval_dataset'])
             suite['selections'][0]['variant'] = 'retired_variant'
             with self.assertRaisesRegex(ValueError, 'Unknown or duplicate'):
                 suite_mod.validation_jobs(suite)
@@ -61,8 +61,8 @@ class TestPaperSuite(unittest.TestCase):
     def test_no_automatic_checkpoint_selection(self):
         suite = suite_mod.load_suite('configs/suites/paper_validate.py')
         jobs, pending = suite_mod.validation_jobs(suite, dry_run=True)
-        self.assertEqual(len(jobs), 16)
-        self.assertEqual(len(pending), 1)
+        self.assertEqual(len(jobs), 18)
+        self.assertEqual(len(pending), 10)
         self.assertTrue(all(j['pretrained'] for j in jobs))
 
     def test_validation_uses_target_dataset_threshold(self):
@@ -85,8 +85,7 @@ class TestPaperSuite(unittest.TestCase):
 
     def test_retired_ablation_options_are_rejected(self):
         base = suite_mod.train_jobs(self.suite, ['full'])[0]['cfg']
-        for key, value in dict(update_streams='feature_only', cross_class_mode='diagonal',
-                               semantic_init='zeros', intra_class_enabled=False).items():
+        for key, value in dict(update_streams='feature_only', semantic_init='zeros', shifted_windows=True).items():
             cfg = copy.deepcopy(base)
             cfg['model']['aggregation'][key] = value
             with self.subTest(key=key), self.assertRaises(KeyError):

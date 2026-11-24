@@ -75,8 +75,10 @@ class CrossClassAttention(nn.Module):
         num_heads: int = 8,
         dropout: float = 0.1,
         guidance_dim: int = 0,
+        cross_class_mode: str = "all",
     ):
         super().__init__()
+        self.cross_class_mode = cross_class_mode
         self.feature_dim = int(feature_dim)
         self.semantic_dim = int(semantic_dim)
         self.num_heads = int(num_heads)
@@ -101,17 +103,13 @@ class CrossClassAttention(nn.Module):
         B, P, D, H, W = feature_state.shape
         validate_guidance(guidance, feature_state, self.guidance_dim)
         D_semantic = self.semantic_dim
-        if tuple(semantic_state.shape) != (B, P, D_semantic, H, W):
-            raise ValueError(
-                "semantic_state shape must match feature_state's "
-                "batch/prompt/grid"
-            )
+        validate_guidance(semantic_state, feature_state, D_semantic)
         N = H * W
         f_flat = feature_state.permute(0, 3, 4, 1, 2).reshape(B * N, P, D)
-        s_flat = semantic_state.permute(0, 3, 4, 1, 2).reshape(
-            B * N, P, D_semantic
-        )
-        qk_input = torch.cat([s_flat, f_flat], dim=-1)
+        qk_input = f_flat
+        if semantic_state is not None:
+            s_flat = semantic_state.permute(0, 3, 4, 1, 2).reshape(B * N, P, D_semantic)
+            qk_input = torch.cat([s_flat, f_flat], dim=-1)
         if guidance is not None:
             g_flat = guidance.permute(0, 3, 4, 1, 2).reshape(
                 B * N, P, self.guidance_dim
@@ -129,6 +127,9 @@ class CrossClassAttention(nn.Module):
             B * N, P, self.num_heads, head_dim
         ).permute(0, 2, 1, 3)
         attn = torch.matmul(q, k.transpose(-2, -1)) * (head_dim ** -0.5)
+        if self.cross_class_mode == "self":
+            diagonal = torch.eye(P, dtype=torch.bool, device=attn.device)
+            attn = attn.masked_fill(~diagonal, float("-inf"))
         attn = self.dropout(F.softmax(attn, dim=-1))
         out = torch.matmul(attn, v).permute(0, 2, 1, 3).reshape(B * N, P, D)
         out = self.dropout(self.out_proj(out))
@@ -249,15 +250,13 @@ class WindowSpatialAttention(nn.Module):
                 "WindowSpatialAttention expects H/W divisible by "
                 f"window_size={self.window_size}, got H={H}, W={W}."
             )
-        if tuple(semantic_state.shape) != (B, P, D_semantic, H, W):
-            raise ValueError(
-                f"semantic_state must be [{B}, {P}, {D_semantic}, {H}, {W}], "
-                f"got {tuple(semantic_state.shape)}"
-            )
-
+        validate_guidance(semantic_state, feature_state, D_semantic)
         bc = B * P
         f_windows = self._window_partition(feature_state.reshape(bc, D, H, W))
-        s_windows = self._window_partition(semantic_state.reshape(bc, D_semantic, H, W))
+        qk_input = f_windows
+        if semantic_state is not None:
+            s_windows = self._window_partition(semantic_state.reshape(bc, D_semantic, H, W))
+            qk_input = torch.cat([s_windows, f_windows], dim=-1)
 
         g_windows = None
         if guidance is not None:
@@ -265,7 +264,6 @@ class WindowSpatialAttention(nn.Module):
             g_windows = self._window_partition(g_flat)
 
         # Q/K from both streams; values from encoder features only.
-        qk_input = torch.cat([s_windows, f_windows], dim=-1)
         if g_windows is not None:
             qk_input = torch.cat([qk_input, g_windows], dim=-1)
 
@@ -320,7 +318,7 @@ class WindowAttentionUpdate(nn.Module):
             guidance_dim=guidance_dim,
         )
         self.norm_feature = nn.LayerNorm(feature_dim)
-        self.norm_semantic = nn.LayerNorm(semantic_dim)
+        self.norm_semantic = nn.LayerNorm(semantic_dim) if semantic_dim else None
         self.norm_guidance = nn.LayerNorm(guidance_dim)
 
     def forward(
@@ -333,9 +331,7 @@ class WindowAttentionUpdate(nn.Module):
             feature_state=apply_layer_norm_bcdhw(
                 feature_state, self.norm_feature
             ),
-            semantic_state=apply_layer_norm_bcdhw(
-                semantic_state, self.norm_semantic
-            ),
+            semantic_state=apply_layer_norm_bcdhw(semantic_state, self.norm_semantic) if self.norm_semantic is not None else None,
             guidance=apply_layer_norm_bcdhw(guidance, self.norm_guidance),
         )
 
@@ -343,14 +339,15 @@ class WindowAttentionUpdate(nn.Module):
 class MultiscaleWindowUpdate(nn.Module):
     """Fuse aligned window updates with learned softmax weights over three scales."""
 
-    def __init__(self, share_weights: bool, **window_kwargs):
+    def __init__(self, share_weights: bool, window_scales=WINDOW_SCALES, **window_kwargs):
         super().__init__()
         self.share_weights = share_weights
+        self.scales = tuple(window_scales)
         self.windows = nn.ModuleList(
             WindowAttentionUpdate(**window_kwargs)
-            for _ in range(1 if share_weights else len(WINDOW_SCALES))
+            for _ in range(1 if share_weights else len(self.scales))
         )
-        self.scale_logits = nn.Parameter(torch.zeros(len(WINDOW_SCALES)))
+        self.scale_logits = nn.Parameter(torch.zeros(len(self.scales))) if len(self.scales) > 1 else None
 
     def forward(
         self,
@@ -358,9 +355,9 @@ class MultiscaleWindowUpdate(nn.Module):
         semantic_scales: tuple[torch.Tensor, ...],
         spatial_scales: tuple[torch.Tensor, ...],
     ) -> torch.Tensor:
-        scale_weights = self.scale_logits.softmax(dim=0)
+        scale_weights = self.scale_logits.softmax(dim=0) if self.scale_logits is not None else (1.0,)
         update_sum = None
-        for index, size in enumerate(WINDOW_SCALES):
+        for index, size in enumerate(self.scales):
             window = self.windows[0 if self.share_weights else index]
             update = window(
                 resize_prompt_features(features, size), semantic_scales[index], spatial_scales[index],
@@ -383,6 +380,9 @@ class AggregationAttentionBlock(nn.Module):
         dropout: float = 0.1,
         guidance_dim: int = 256,
         share_window_weights_across_scales: bool = True,
+        cross_class_mode: str = "all",
+        intra_class_enabled: bool = True,
+        window_scales=WINDOW_SCALES,
     ):
         super().__init__()
         self.cross_attention = CrossClassAttention(
@@ -390,9 +390,10 @@ class AggregationAttentionBlock(nn.Module):
             semantic_dim=semantic_dim,
             num_heads=num_heads,
             dropout=dropout,
+            cross_class_mode=cross_class_mode,
         )
         self.cross_norm_feature = nn.LayerNorm(feature_dim)
-        self.cross_norm_semantic = nn.LayerNorm(semantic_dim)
+        self.cross_norm_semantic = nn.LayerNorm(semantic_dim) if semantic_dim else None
         self.window_update = MultiscaleWindowUpdate(
             feature_dim=feature_dim,
             semantic_dim=semantic_dim,
@@ -401,7 +402,8 @@ class AggregationAttentionBlock(nn.Module):
             dropout=dropout,
             guidance_dim=guidance_dim,
             share_weights=share_window_weights_across_scales,
-        )
+            window_scales=window_scales,
+        ) if intra_class_enabled else None
 
     def forward(
         self,
@@ -411,9 +413,11 @@ class AggregationAttentionBlock(nn.Module):
     ) -> torch.Tensor:
         cross_update = self.cross_attention(
             feature_state=apply_layer_norm_bcdhw(feature_state_36, self.cross_norm_feature),
-            semantic_state=apply_layer_norm_bcdhw(semantic_scales[0], self.cross_norm_semantic),
+            semantic_state=apply_layer_norm_bcdhw(semantic_scales[0], self.cross_norm_semantic) if self.cross_norm_semantic is not None else None,
         )
         feature_state_36 = feature_state_36 + cross_update
+        if self.window_update is None:
+            return feature_state_36
         return feature_state_36 + self.window_update(
             feature_state_36, semantic_scales, spatial_scales
         )

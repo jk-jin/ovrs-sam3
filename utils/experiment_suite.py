@@ -118,6 +118,9 @@ def validation_jobs(suite, only=None, dry_run=False):
         if only and entry["variant"] not in only:
             continue
         source, _ = build_effective_config(resolve(entry["config"]))
+        if entry.get("checkpoint"):
+            source["model"]["checkpoint_path"] = str(resolve(entry["checkpoint"]))
+            source["model"]["load_from_hf"] = False
         if (not source["model"]["pipeline"].startswith("sam3_")
                 or source["experiment"]["variant_id"] != entry["variant"]):
             raise ValueError("Evaluation-only baseline must match its original SAM3 variant.")
@@ -142,6 +145,8 @@ def validation_jobs(suite, only=None, dry_run=False):
             identity = dict(config=config_fingerprint(cfg), checkpoint_sha256=digests[checkpoint])
             signature = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
             jobs.append(dict(key=f"{variant}:{seed}:{dataset}", variant=variant, seed=seed, dataset=dataset,
+                             eval_dataset=cfg["evaluation"]["dataset"],
+                             eval_protocol_id=cfg["evaluation"]["protocol_id"],
                              mode="validate", work=str(work), cfg=cfg, signature=signature,
                              checkpoint=str(checkpoint), checkpoint_sha256=digests[checkpoint], pretrained=pretrained,
                              source_config=None if pretrained else str(checkpoint.parent / "config.json"),
@@ -260,13 +265,41 @@ def write_validation_summary(root, jobs):
             record = read_json(path)
             metrics = record.get("metrics", {})
             rows.append(dict(variant=job["variant"], seed=job["seed"], dataset=job["dataset"],
+                             eval_dataset=job["eval_dataset"], eval_protocol_id=job["eval_protocol_id"],
                              checkpoint=job["checkpoint"], checkpoint_sha256=job["checkpoint_sha256"],
                              miou=metrics.get("miou"), macc=metrics.get("macc"), result=str(path)))
     atomic_write_json(root / "metrics_summary.json", rows)
     with (root / "metrics_summary.csv").open("w", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=["variant", "seed", "dataset", "checkpoint", "checkpoint_sha256", "miou", "macc", "result"])
+        writer = csv.DictWriter(stream, fieldnames=["variant", "seed", "dataset", "eval_dataset", "eval_protocol_id", "checkpoint", "checkpoint_sha256", "miou", "macc", "result"])
         writer.writeheader()
         writer.writerows(rows)
+
+
+def select_jobs(suite, only=None, datasets=None, checkpoint=None, seed=None):
+    """Apply CLI choices before planning; saved training configs remain authoritative."""
+    suite = copy.deepcopy(suite)
+    if seed is not None:
+        suite["seeds"] = [seed]
+        suite["selections"] = [r for r in suite.get("selections", []) if r["seed"] == seed]
+    targets = {p.stem for p in (REPO_ROOT / "configs/test").glob("*.py")}
+    if datasets:
+        if len(set(datasets)) != len(datasets) or set(datasets) - targets:
+            raise ValueError(f"Unknown or duplicate evaluation targets. Choose from {sorted(targets)}")
+        suite["dataset_groups"]["selected"] = datasets
+        for entry in suite["experiments"] + suite.get("baselines", []):
+            entry["datasets"] = "selected"
+    if checkpoint:
+        if not only or len(only) != 1:
+            raise ValueError("--checkpoint requires exactly one variant in --only.")
+        variant = only[0]
+        baseline = next((r for r in suite.get("baselines", []) if r["variant"] == variant), None)
+        if baseline is not None:
+            baseline["checkpoint"] = checkpoint
+        else:
+            if seed is None and len(suite["seeds"]) != 1:
+                raise ValueError("Select --seed for a multi-seed suite.")
+            suite["selections"] = [dict(variant=variant, seed=suite["seeds"][0], checkpoint=checkpoint)]
+    return suite
 
 
 def main(mode):
@@ -276,11 +309,23 @@ def main(mode):
     parser.add_argument("--resume", action="store_true", help="skip completed matching jobs and retry interrupted jobs")
     parser.add_argument("--only", nargs="+", help="variant names to run")
     parser.add_argument("--devices", nargs="+", help="one independent worker per device, e.g. cuda:0 cuda:1")
+    parser.add_argument("--seed", type=int, help="run one seed")
+    if mode == "validate":
+        parser.add_argument("--datasets", nargs="+", help="evaluation target names from configs/test")
+        parser.add_argument("--checkpoint", help="explicit weight for exactly one --only variant")
+        parser.add_argument("--validation-name", help="separate output namespace for a new weight selection")
     args = parser.parse_args()
     suite = load_suite(args.config)
     valid = {e["variant"] for e in suite["experiments"] + suite.get("baselines", [])}
     if args.only and set(args.only) - valid:
         parser.error(f"Unknown variants: {sorted(set(args.only) - valid)}")
+    try:
+        suite = select_jobs(suite, args.only, getattr(args, "datasets", None),
+                            getattr(args, "checkpoint", None), args.seed)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if getattr(args, "validation_name", None):
+        suite["validation_name"] = token(args.validation_name)
     devices = args.devices or suite["devices"]
     if mode == "train":
         jobs, pending = train_jobs(suite, args.only), []
