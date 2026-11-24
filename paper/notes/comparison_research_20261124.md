@@ -1,6 +1,6 @@
 # 对比方法与文献来源核对稿（2026-11-24）
 
-当前选择已用于论文组表；待解决事项见 [comparison_issues_20261124.md](comparison_issues_20261124.md)。排除VLex-SAM3、ConceptSeg。数值为mIoU (%)，--为未报告或待跑。
+当前选择已用于论文组表；待解决事项见 [comparison_issues_20261124.md](comparison_issues_20261124.md)。排除VLex-SAM3、ConceptSeg、GFMR、ConceptBank、PRS-Seg。数值为mIoU (%)，--为未报告或待跑。
 
 ## 主比较：两组
 
@@ -34,17 +34,6 @@
 | SAM 3 Semantic-only | None | -- | -- | -- | -- | -- | -- | -- | -- | N |
 | SAM 3 Semantic × Presence | None | -- | -- | -- | -- | -- | -- | -- | -- | N |
 
-## 不同适配／支持条件参考
-
-| Method | Data / condition | DLRSD | iSAID | LoveDA | Potsdam | Vaihingen | UAVid | UDD5 | VDD | Source |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| **Test-time adaptation** | | | | | | | | | | |
-| GFMR (full) | Online GN | -- | 29.9 | 48.3 | 58.4 | 64.3 | 55.3 | 72.7 | 66.2 | F |
-| **Support-assisted frozen inference** | | | | | | | | | | |
-| ConceptBank (v1, GT support) | GT support | -- | 35.4 | 49.4 | 60.5 | 63.0 | -- | -- | -- | B |
-| **Frozen inference; prototype supervision unresolved** | | | | | | | | | | |
-| PRS-Seg | Unspecified | -- | -- | 48.1 | 53.8 | 59.7 | -- | -- | -- | A |
-
 ## 数值来源
 
 - **R**: [arXiv:2509.12040v3](https://arxiv.org/pdf/2509.12040v3), PDF p.6, Table 1; SHA-256 `6fe6b20ccb7f9fc3d2303da2511792a1cb7d0da650adb2fbc188b6ebf6b28701`.
@@ -55,10 +44,7 @@
 - **P**: [arXiv:2606.21863v2](https://arxiv.org/pdf/2606.21863v2), PDF p.4, Table I; SHA-256 `f21de49839da3a8c7b8e29bbd5be74686d6d5830b44359dba0908c82b89ee11d`.
 - **J**: [arXiv:2606.28410v1](https://arxiv.org/pdf/2606.28410v1), PDF p.6, Table II; SHA-256 `1b4c9ea42fc7f3ccebad4be11e99d7c9f95989633510b01513d1cfaf3b314418`.
 - **O**: [arXiv:2611.28112v1](https://arxiv.org/pdf/2611.28112v1), PDF p.7, Table I; SHA-256 `109d1df4bb393a0b3423ec657abd65bef7e6143b13765db5b051d91341165b5d`.
-- **F**: [arXiv:2610.04300v1](https://arxiv.org/pdf/2610.04300v1), PDF p.15, Table 1; SHA-256 `317e68e5ada8c1b82b7cb90ace7d7de509b483808ab67d39938e170a08267233`.
-- **B**: [arXiv:2602.06333v1 (GT support)](https://arxiv.org/pdf/2602.06333v1), PDF p.6, Table 2; SHA-256 `06a4d763f732938e674c619e53fda34b7321387ae05fbb259cceb226f6e7a39a`.
 - **U**: [UGDMoE publisher HTML Table 2](https://www.mdpi.com/2072-4292/18/9/1349), not a downloaded PDF.
-- **A**: [PRS-Seg publisher abstract](https://ieeexplore.ieee.org/abstract/document/11739897), not an inspected full-text table.
 - **E**: SegEarth-OV CVPR Table 1; source fingerprint retained in literature_results.csv.
 - **N**: local experiment pending.
 

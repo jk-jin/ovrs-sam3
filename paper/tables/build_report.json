@@ -224,56 +224,6 @@
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "gfmr_arxiv_v1_full",
-      "dataset": "DLRSD",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "cb_arxiv_v1_gt_support",
-      "dataset": "DLRSD",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "cb_arxiv_v1_gt_support",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "cb_arxiv_v1_gt_support",
-      "dataset": "UDD5",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "cb_arxiv_v1_gt_support",
-      "dataset": "VDD",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "prs_publisher_abstract",
-      "dataset": "DLRSD",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "prs_publisher_abstract",
-      "dataset": "iSAID",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "prs_publisher_abstract",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "prs_publisher_abstract",
-      "dataset": "UDD5",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "prs_publisher_abstract",
-      "dataset": "VDD",
-      "reason": "planned_or_not_reported"
-    },
-    {
       "row": "full",
       "dataset": "LoveDA",
       "metric": "iou.background",
@@ -741,7 +691,6 @@
   "protocol_locked": false,
   "generated_tables": [
     "main_rskt8.tex",
-    "additional_comparisons.tex",
     "loveda_per_class.tex",
     "ablation_core.tex",
     "ablation_freeze.tex",
@@ -763,10 +712,6 @@
     "cat_seg_dlrsd_large_udd5",
     "cat_seg_dlrsd_large_vaihingen",
     "cat_seg_dlrsd_large_vdd",
-    "cb_arxiv_v1_gt_support_isaid",
-    "cb_arxiv_v1_gt_support_loveda",
-    "cb_arxiv_v1_gt_support_potsdam",
-    "cb_arxiv_v1_gt_support_vaihingen",
     "clear_ov3_report_isaid",
     "clear_ov3_report_loveda",
     "clear_ov3_report_potsdam",
@@ -788,13 +733,6 @@
     "corr_ov3_report_udd5",
     "corr_ov3_report_vaihingen",
     "corr_ov3_report_vdd",
-    "gfmr_arxiv_v1_full_isaid",
-    "gfmr_arxiv_v1_full_loveda",
-    "gfmr_arxiv_v1_full_potsdam",
-    "gfmr_arxiv_v1_full_uavid",
-    "gfmr_arxiv_v1_full_udd5",
-    "gfmr_arxiv_v1_full_vaihingen",
-    "gfmr_arxiv_v1_full_vdd",
     "glop_rose_report_isaid",
     "glop_rose_report_loveda",
     "glop_rose_report_potsdam",
@@ -853,9 +791,6 @@
     "proxy_ov3_report_udd5",
     "proxy_ov3_report_vaihingen",
     "proxy_ov3_report_vdd",
-    "prs_publisher_abstract_loveda",
-    "prs_publisher_abstract_potsdam",
-    "prs_publisher_abstract_vaihingen",
     "rose_arxiv_v1_isaid",
     "rose_arxiv_v1_loveda",
     "rose_arxiv_v1_potsdam",

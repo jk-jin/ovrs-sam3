@@ -1,0 +1,139 @@
+{
+  "date": "2026-11-24",
+  "scope": "Official code inspection; distinguishes intended dataset semantics from unbound historical reported scores.",
+  "commits": {
+    "rskt": "6d79d24b0452f19e8429bae1bcd74135173794a9",
+    "pi": "0c836ba2dfa939b409b046ce6988a5ef8c1f3e34",
+    "ov3": "87e5cc18c8bc9c0b4713b975587281ac1c97c79a",
+    "proc": "00f9d07bf78048397b1ee20dd7044bac0c485d40",
+    "rose": "286396d6832ba93ce9d0dbdcd37d02fabdc0540a",
+    "active": "25b84d8591a595f8bd8bef9ff4fbe1079ade9bfe"
+  },
+  "records": [
+    {
+      "name": "ov3/love",
+      "url": "https://github.com/earth-insights/SegEarth-OV-3/blob/main/configs/cfg_loveda.py",
+      "commit": "87e5cc18c8bc9c0b4713b975587281ac1c97c79a",
+      "findings": "Original 0 is no-data; reduce_zero_label=True; val split."
+    },
+    {
+      "name": "ov3/uav",
+      "url": "https://github.com/earth-insights/SegEarth-OV-3/blob/main/configs/cls_uavid.txt",
+      "commit": "87e5cc18c8bc9c0b4713b975587281ac1c97c79a",
+      "findings": "UAVid seven-class configuration or prompts; car merged."
+    },
+    {
+      "name": "ov3/isaid",
+      "url": "https://github.com/earth-insights/SegEarth-OV-3/blob/main/configs/cfg_iSAID.py",
+      "commit": "87e5cc18c8bc9c0b4713b975587281ac1c97c79a",
+      "findings": "reduce_zero_label=False; no background removal in dataset config."
+    },
+    {
+      "name": "proc/love",
+      "url": "https://github.com/YanghuiSong/ProC-SAM3/blob/main/mmseg/datasets/loveda.py",
+      "commit": "00f9d07bf78048397b1ee20dd7044bac0c485d40",
+      "findings": "Seven classes including background; default reduce_zero_label=True."
+    },
+    {
+      "name": "proc/isaid",
+      "url": "https://github.com/YanghuiSong/ProC-SAM3/blob/main/mmseg/datasets/isaid.py",
+      "commit": "00f9d07bf78048397b1ee20dd7044bac0c485d40",
+      "findings": "16 classes including background; ignore_index=255."
+    },
+    {
+      "name": "proc/uav",
+      "url": "https://github.com/YanghuiSong/ProC-SAM3/blob/main/configs/cls_uavid.txt",
+      "commit": "00f9d07bf78048397b1ee20dd7044bac0c485d40",
+      "findings": "UAVid seven-class configuration or prompts; car merged."
+    },
+    {
+      "name": "rose/love",
+      "url": "https://github.com/YanghuiSong/ROSE-SAM3/blob/main/configs/cfg_loveda.py",
+      "commit": "286396d6832ba93ce9d0dbdcd37d02fabdc0540a",
+      "findings": "Dataset config checked; defaults must be followed through the dataset implementation."
+    },
+    {
+      "name": "rose/isaid",
+      "url": "https://github.com/YanghuiSong/ROSE-SAM3/blob/main/configs/cfg_iSAID.py",
+      "commit": "286396d6832ba93ce9d0dbdcd37d02fabdc0540a",
+      "findings": "Dataset config checked; defaults must be followed through the dataset implementation."
+    },
+    {
+      "name": "rose/uav",
+      "url": "https://github.com/YanghuiSong/ROSE-SAM3/blob/main/calibrated_prompts/final_promptbank/cls_uavid.txt",
+      "commit": "286396d6832ba93ce9d0dbdcd37d02fabdc0540a",
+      "findings": "UAVid seven-class configuration or prompts; car merged."
+    },
+    {
+      "name": "rskt/love",
+      "url": "https://github.com/LiBingyu01/RSKT-Seg/blob/main/RSKT_Seg/data/datasets/register_LoveDA.py",
+      "commit": "6d79d24b0452f19e8429bae1bcd74135173794a9",
+      "findings": "Registers 8 names including no-data; ignore_label=255; reads masks_png. Historical preprocessing/run mapping not established."
+    },
+    {
+      "name": "rskt/isaid",
+      "url": "https://github.com/LiBingyu01/RSKT-Seg/blob/main/RSKT_Seg/data/datasets/register_iSAID.py",
+      "commit": "6d79d24b0452f19e8429bae1bcd74135173794a9",
+      "findings": "15 foreground classes; D2masks; ignore_label=255."
+    },
+    {
+      "name": "rskt/uav",
+      "url": "https://github.com/LiBingyu01/RSKT-Seg/blob/main/RSKT_Seg/data/datasets/register_uavid.py",
+      "commit": "6d79d24b0452f19e8429bae1bcd74135173794a9",
+      "findings": "8 classes; Moving car and Static car separate."
+    },
+    {
+      "name": "pi/love",
+      "url": "https://github.com/LiBingyu01/Pi-Seg/blob/main/cat_seg/data/datasets/register_LoveDA.py",
+      "commit": "0c836ba2dfa939b409b046ce6988a5ef8c1f3e34",
+      "findings": "Registers 7 classes including background, reads masks_png2, ignore_label=255."
+    },
+    {
+      "name": "ov3/custom",
+      "url": "https://github.com/earth-insights/SegEarth-OV-3/blob/main/custom_datasets.py",
+      "commit": "87e5cc18c8bc9c0b4713b975587281ac1c97c79a",
+      "findings": "Seven-class UAVidDataset; moving/static car merged; ignore_index=255."
+    },
+    {
+      "name": "ov3/uavconfig",
+      "url": "https://github.com/earth-insights/SegEarth-OV-3/blob/main/configs/cfg_uavid.py",
+      "commit": "87e5cc18c8bc9c0b4713b975587281ac1c97c79a",
+      "findings": "UAVid seven-class configuration or prompts; car merged."
+    },
+    {
+      "name": "ov3/classes",
+      "url": "https://github.com/earth-insights/SegEarth-OV-3/blob/main/configs/cls_iSAID.txt",
+      "commit": "87e5cc18c8bc9c0b4713b975587281ac1c97c79a",
+      "findings": "16 class prompts including background."
+    },
+    {
+      "name": "rose/custom",
+      "url": "https://github.com/YanghuiSong/ROSE-SAM3/blob/main/custom_datasets.py",
+      "commit": "286396d6832ba93ce9d0dbdcd37d02fabdc0540a",
+      "findings": "Seven-class UAVidDataset; moving/static car merged; ignore_index=255."
+    },
+    {
+      "name": "rskt/train",
+      "url": "https://github.com/LiBingyu01/RSKT-Seg/blob/main/train_net.py",
+      "commit": "6d79d24b0452f19e8429bae1bcd74135173794a9",
+      "findings": "Uses SemSegEvaluator for sem_seg metadata; no LoveDA-specific remapping seen in evaluator selection."
+    }
+  ],
+  "conclusions": {
+    "loveda_standard": "Confirmed: raw 0 ignored; raw 1..7 mapped to 0..6 including background; apply once.",
+    "loveda_historical": "SAM3 release configs confirmed; RSKT historical numbers remain not fully bound to an actual preprocessing/evaluation run.",
+    "uavid": "Known 7-vs-8 taxonomy difference; remap predictions and GT then rescore, never convert a scalar mIoU.",
+    "isaid": "Known GT-background ignored vs scored difference; dropping background IoU from a mean does not reproduce ignore-GT-background evaluation."
+  },
+  "rose_promptbank_check": {
+    "commit": "286396d6832ba93ce9d0dbdcd37d02fabdc0540a",
+    "parser_url": "https://github.com/YanghuiSong/ROSE-SAM3/blob/286396d6832ba93ce9d0dbdcd37d02fabdc0540a/core/prompt_bank.py",
+    "bank_url": "https://github.com/YanghuiSong/ROSE-SAM3/blob/286396d6832ba93ce9d0dbdcd37d02fabdc0540a/calibrated_prompts/final_promptbank/cls_isaid.txt",
+    "parser_sha256": "37874d50bc391acf18e14f875a7dc13e70dd72f0814ad14c3309bedce45db36c",
+    "bank_sha256": "afb2cc933a85c4cbe0d6ca7f233d286aa5389dd812a5b90602c2a2597fef333a",
+    "official_get_cls_idx_queries": 26,
+    "classes": 16,
+    "readme_claim_queries": 25,
+    "conclusion": "Current parser returns 26. README claims 25; previous claim that current release contains only 25 is superseded. Matching count does not validate paper-equivalent prompts, settings, or mIoU."
+  }
+}

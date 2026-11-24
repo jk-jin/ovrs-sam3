@@ -93,7 +93,7 @@ class RendererBoundaries(unittest.TestCase):
             args=SimpleNamespace(spec=paper/'data/table_spec.json',literature=paper/'data/literature_results.csv',
                                  native=Path(d)/'absent.csv',output=Path(d)/'tables',draft=True)
             m.build(args)
-            expected={'main_rskt8.tex','additional_comparisons.tex','loveda_per_class.tex',
+            expected={'main_rskt8.tex','loveda_per_class.tex',
                       'ablation_core.tex','ablation_freeze.tex','efficiency.tex'}
             self.assertEqual({p.name for p in args.output.glob('*.tex')},expected)
             for p in args.output.glob('*.tex'):
@@ -122,8 +122,8 @@ class RendererBoundaries(unittest.TestCase):
             with self.assertRaises(m.DataError):m.build(args)
         audit=json.loads((paper/'data/comparison_audit_20261124.json').read_text())
         config=json.loads((paper/'data/table_spec.json').read_text())
-        selected={rid for r in config['main_rows']+config['additional_rows'] for rid in r.get('literature_record_ids',{}).values()}
-        self.assertEqual(len(selected),170)
+        selected={rid for r in config['main_rows'] for rid in r.get('literature_record_ids',{}).values()}
+        self.assertEqual(len(selected),156)
         self.assertEqual({r['result_id'] for r in audit['records']},selected)
         sources=m.read_literature(paper/'data/literature_results.csv')
         for r in audit['records']:
@@ -144,7 +144,7 @@ class RendererBoundaries(unittest.TestCase):
         self.assertEqual(len(config['freeze_rows']),4)
         self.assertEqual(len(config['ablation_rows']),7)
         chapter=(paper/'sections/experiments.tex').read_text()
-        for name in ('main_rskt8','additional_comparisons','loveda_per_class','ablation_core','ablation_freeze','efficiency'):
+        for name in ('main_rskt8','loveda_per_class','ablation_core','ablation_freeze','efficiency'):
             self.assertIn('\\input{tables/'+name+'}',chapter)
         self.assertNotIn('tab:dataset_protocol',chapter)
         self.assertNotIn('2e-6',chapter)
@@ -158,8 +158,9 @@ class RendererBoundaries(unittest.TestCase):
         bib=(paper/'references.bib').read_text()+(paper/'references_extra.bib').read_text()
         keys=set(re.findall(r'@\w+\{([^,]+)',bib))
         self.assertEqual(len(config['main_rows']),25)
-        self.assertEqual({r['method_id'] for r in config['additional_rows']},{'gfmr','cb','prs'})
-        for row in config['main_rows']+config['additional_rows']:
+        self.assertNotIn('additional_rows',config)
+        self.assertFalse({'gfmr','cb','prs'} & {r['method_id'] for r in config['main_rows']})
+        for row in config['main_rows']:
             if row.get('citekey'):self.assertIn(row['citekey'],keys)
             for rid in row.get('literature_record_ids',{}).values():
                 r=records[rid]

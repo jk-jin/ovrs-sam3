@@ -26,9 +26,6 @@ Training-free 组同时包含 CLIP 系列方法及 SAM 3 系列方法。SCLIP、
 
 所有文献行保留来源协议，不按列混用不同论文或不同训练源的结果。LoveDA 历史单源标签映射尚未完全对齐的数值附加标记；部分来源采用 UAVid 八类，与本文合并 car 后的七类不同。训练数据、类别映射、裁块、图像几何与后处理未完全一致的文献结果不参与同条件排名，也不与本地结果混算跨域平均。
 
-\input{tables/additional_comparisons}
-表~\ref{tab:additional_comparisons} 单列使用不同适配或支持条件的参考结果。GFMR 完整版本对每张测试图像更新 PixelDecoder 的 GroupNorm 参数，属于测试时适配~\cite{wangGeometricTransformationFeatureAdaptiveManifold2026}。ConceptBank 选用 v1 原文中带真实标注目标域支持掩码的版本，不能等同于无标注零样本推理~\cite{peiTamingSAM3Wild2026}。PRS-Seg 的三个成绩仅取自 IEEE 出版方摘要，其原型库监督来源和类别映射未明确，故保留来源与协议标记~\cite{tangPRSSegOpenVocabularyRemote2026}。这些参考行不与 DLRSD 单源适配构成同条件排名。
-
 \subsection{LoveDA 逐类分析}
 \input{tables/loveda_per_class}
 表~\ref{tab:loveda_per_class} 为两个原始 SAM 3 基线与完整模型分别记录 background、building、road、water、barren、forest、agricultural 的 IoU 和七类 mIoU。该表复用主对比中的 LoveDA 评测记录，用于分析各语义类别的变化。LoveDA 已用于模型选择，逐类结果属于开发域分析；目标域泛化依据其他独立目标数据集评测。

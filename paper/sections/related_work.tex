@@ -8,7 +8,7 @@ GSNet 通过类别查询引导通用 CLIP 与遥感专用视觉特征融合，�
 \subsection{SAM 3 与遥感提示适配}
 SAM 3 支持以短名词短语或视觉示例指定待分割概念，并提供实例掩码及概念相关的语义响应~\cite{carionSAM3Segment2026}。SegEarth-OV3 逐类别查询 SAM 3，融合实例与语义响应，并使用概念存在分数抑制缺席类别~\cite{liSegEarthOV3ExploringSAM2026}。ProC-SAM3 构建离线类别提示池、缓存文本嵌入，并通过存在性和置信度校准融合响应~\cite{songPromptCalibratedSAM32026}。ROSE-SAM3 利用无标签图像上的冻结响应离线选择提示，并在预测时进行语义与实例协作~\cite{songROSESAM3ResponseOrientedPrompt2026}。RSGPNet 将初始预测掩码转换为几何框提示，再通过一致性验证细化结果~\cite{wangRSGPNetGeometricPrompting2026}。这些方法在保持模型参数冻结的同时调整提示或推理流程。ActiveSAM 则根据图像中的类别存在性裁剪活动词汇以减少解码开销~\cite{tienActiveSAMFastAccurate2026}。
 
-参数冻结与监督来源需要分别考虑。ConceptBank 的 v1 设置利用带标注的目标域支持掩码构建视觉原型并校准提示嵌入~\cite{peiTamingSAM3Wild2026}；GFMR 的完整版本则在测试时更新少量归一化参数~\cite{wangGeometricTransformationFeatureAdaptiveManifold2026}。本文使用 DLRSD 分割监督学习类别条件特征聚合，并在固定权重下进行目标域推理。
+本文使用 DLRSD 分割监督学习类别条件特征聚合，并在固定权重下进行目标域推理。
 
 上述路径主要调整提示或预测输出。本文在解码前引入可学习的跨提示特征交互，采用源域监督训练聚合和融合模块，并部分适配 RemoteCLIP。SAM 3 参数保持冻结，原始语义路径仅在训练时提供软掩码约束；推理使用学生语义路径。参考掩码为特征适配提供原始空间响应的一致性约束。
 

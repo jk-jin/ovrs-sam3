@@ -7,7 +7,7 @@ python paper/scripts/test_build_experiment_tables.py
 python paper/scripts/build_experiment_tables.py --draft
 ```
 
-输入为 `paper/data/table_spec.json`、文献 CSV 和真实标准结果汇总 `paper/generated/data/results_long.csv`。生成两组八域主比较、不同适配／支持条件参考、LoveDA逐类、核心消融、编码器微调和效率六张表。原数据协议表不再生成。所有未测量的本地单元格为 `--`；文献选择与来源以comparison_audit_20261124.json为准；历史数值记录保留。
+输入为 `paper/data/table_spec.json`、文献 CSV 和真实标准结果汇总 `paper/generated/data/results_long.csv`。生成两组八域主比较、LoveDA逐类、核心消融、编码器微调和效率五张表。原数据协议表不再生成。所有未测量的本地单元格为 `--`；文献选择与来源以comparison_audit_20261124.json为准；历史数值记录保留。
 
 ## 选择真实结果
 

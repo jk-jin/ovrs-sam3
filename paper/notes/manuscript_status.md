@@ -6,7 +6,7 @@
 
 仅重构实验章节与表格：数据与评测协议 → 当前实现与训练细节 → 八域主对比 → LoveDA逐类IoU → 核心消融 → 图文编码器微调 → 效率与定性分析。模型、项目配置、批量训练任务和Zotero文献库未修改。
 
-六张表已在实验章节引用。本地比较只含原始Semantic-only、Semantic × Presence与Full；主表已扩充为22个文献方法，支持的训练行切换到DLRSD；另表列3个不同监督／适配条件的参考方法。历史CSV记录保留。本地成绩及开销全部为 --。
+五张表已在实验章节引用。本地比较只含原始Semantic-only、Semantic × Presence与Full；主表已扩充为22个文献方法，支持的训练行切换到DLRSD；GFMR、ConceptBank、PRS-Seg及其参考表已按最新要求移除。历史CSV记录保留。本地成绩及开销全部为 --。
 
 消融包含十个训练变体：Full、严格提示对角、无RemoteCLIP引导、无类内、单尺度、三尺度独立权重、图文两端冻结、仅图像attention微调、仅文本attention微调、无蒸馏。四组合中的共同微调即Full；不另算或另训。没有中间层引导或移位窗口消融。
 
@@ -27,4 +27,8 @@
 
 ## 本轮对比方法检索
 
-按用户要求删除原 Table I（数据协议表）及生成入口，训练和评测协议保留在正文及配置快照。用户本轮已授权：采用最新文献提交1e4bb76，重组主表与引用并提交master。26条Zotero记录原样保留，10条缺少的方法引用加入references_extra；ConceptBank重复DOI使用canonical key，不擅自删除导出条目。当前取数为170个单元格；GLoP明确转引，PRS明确摘要，缺项不填造。待用户处理的问题集中在comparison_issues_20261124.md。
+按用户要求删除原 Table I（数据协议表）及生成入口，训练和评测协议保留在正文及配置快照。用户本轮已授权：采用最新文献提交1e4bb76，重组主表与引用并提交master。26条Zotero记录原样保留，10条缺少的方法引用加入references_extra；GFMR、ConceptBank、PRS-Seg已移除全部正文引用，导出库中的未使用条目不参与生成参考文献。当前取数为156个单元格；GLoP明确转引，缺项不填造；PRS不再比较。待用户处理的问题集中在comparison_issues_20261124.md。
+
+## 标签与版本补核
+
+LoveDA标准已确认；历史RSKT报分的预处理运行绑定仍待证据。UAVid7/8与iSAID15忽略背景/16含背景已从官方代码确认。推荐双协议子列与同协议补测，但本次未改评测实现。ROSE官方解析器对当前文件返回26查询，README仍称25；旧“当前库只有25”判断已纠正。详情见protocol_evidence_20261124.json和comparison_issues_20261124.md。

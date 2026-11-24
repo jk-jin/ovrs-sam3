@@ -361,7 +361,7 @@ def build(args):
     report = dict(draft=args.draft,literature_records=len(lit),native_records=len(native),
                   missing_cells=missing,protocol_locked=spec['protocol_locked'],
                   generated_tables=list(outputs),
-                  selected_literature_ids=sorted({rid for row in spec['main_rows']+spec['additional_rows'] for rid in row.get('literature_record_ids',{}).values()}),
+                  selected_literature_ids=sorted({rid for row in spec['main_rows'] for rid in row.get('literature_record_ids',{}).values()}),
                   note='Ten planned training variants and two original SAM3 baselines; no synthetic scores.')
     required = {r['row_id'] for r in spec['main_rows'] if r['panel']=='native'}
     required |= {p['variant_id'] for p in spec['ablation_rows'] + spec['freeze_rows']}

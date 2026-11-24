@@ -359,5 +359,12 @@
       "url": "",
       "bib_file": "references_extra.bib"
     }
-  ]
+  ],
+  "excluded_citation_keys": [
+    "peiTamingSAM3Wild2026",
+    "peiTamingSAM3Wild2026a",
+    "wangGeometricTransformationFeatureAdaptiveManifold2026",
+    "tangPRSSegOpenVocabularyRemote2026"
+  ],
+  "excluded_entries_retained_only_in_zotero_database": true
 }
