@@ -15,6 +15,7 @@ python paper/scripts/build_experiment_tables.py --draft
 - 核心消融与编码器微调表共用 `ablation_native_selection[variant_id][dataset]`。Full 的选择器必须与主表一致，不允许在不同表格或目标域重新挑权重。
 - LoveDA 逐类表直接复用主表的 LoveDA 选择器；七类 IoU 与 mIoU 使用同一组种子和 checkpoint。
 - `core_parameter_selection`、`freeze_parameter_selection` 和 `efficiency_selection` 绑定实际标准结果 JSON 中已有的测量。选择器包括 eval_id、checkpoint_sha256、json_path 和 display_scale；不臆造效率 schema，不自动填写零值。
+- iSAID 本地选择键为 `iSAID-15-IgnBG` 与 `iSAID-16-BG`，每方法／种子同一权重、不同协议 ID；真实结果的 eval_dataset 仍为 isaid。
 - `dataset_protocols` 是当前配置的人工核对快照，配置改变后须同步核对类别、提示数量与阈值。
 
 所有训练变体及两个仅评测基线的 ID 见 `paper/data/experiment_plan.csv`。当前十个训练变体中，严格提示对角、无引导、无类内、单尺度仍需工程实现；CSV 不自动生成这些模型。三尺度独立权重、图文冻结组合及关闭蒸馏已有对应配置能力，仍需创建并验证正式实验入口。
@@ -24,3 +25,7 @@ python paper/scripts/build_experiment_tables.py --draft
 ## 文献证据
 
 `evidence_type`区分PDF、出版方HTML表格和出版方摘要。PDF必须有文件指纹、页码、表号；HTML表格必须有出版方URL和表号；摘要只能保留未解决协议，且不能附伪造PDF字段。`method_citekey`和`source_citekey`分别标识方法原文及实际取数来源。
+
+## 排版约束
+
+主表每个数据行固定十一格，iSAID 必须有两个独立格。协议未知时两格为 --，由生成器将原报告值按方法名在表下注释仅列一次；数据行不能使用跨列居中。调整后重新生成并目检 PDF；详见[比较规则](../notes/comparison_policy.md)。已完成事项不在本文件累积，实际待办见[当前状态](../notes/manuscript_status.md)。

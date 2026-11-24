@@ -41,14 +41,8 @@ DLRSD 官方 5601 张训练图像用于适配，1401 张验证图像用于源域
 
 正式填数要求实际 eval_id、seed、checkpoint SHA-256、数据划分与协议，且评测完整。文献与本地分区，不混算综合平均；原报告来源不改写。效率统一设备、精度、输入、提示数量、批量、预热、同步和缓存条件，在未使用的中间层提取代码清理后测量。缺失值为 --，不是0。
 
-## 文献比较的当前选择
+## 比较与双协议结果选择
 
-主表按是否使用遥感分割标注训练分两组；三个本地行以N标记，文献行全部保留各自协议。支持DLRSD训练的比较方法统一取DLRSD版本；SkySense-O仍是Sky-SA。GFMR、ConceptBank、PRS-Seg不再比较或引用。VLex-SAM3和ConceptSeg数据排除。文献直接保留原报告值，不以逐仓库核查／复现作为纳入条件；未知协议注明参考性质，不据此主张同条件提升。详细决定及实施待办见comparison_issues_20261124.md。
+文献引用、iSAID 两列、UAVid 七／八类与未知来源展示统一遵循[comparison_policy.md](comparison_policy.md)，不在此重复维护。主表本地结果的 iSAID 选择键为 iSAID-15-IgnBG 与 iSAID-16-BG；标准结果仍为 eval_dataset=isaid，以不同 eval_protocol_id 区分，复用同一种子／权重。
 
-## iSAID 双协议与 UAVid 原值展示
-
-主表为iSAID增加两个子列：15-IgnBG忽略全部GT背景像素并平均15个前景类；16-BG保留背景像素并平均16类。Full、Semantic-only与Semantic × Presence使用各自同一权重评测两遍，不为协议另选checkpoint。含背景验证入口与背景预测规则尚待实现；本轮没有改动评测配置，原默认阈值不能自动当作新BG协议的最终设置。
-
-表格选择键分别为iSAID-15-IgnBG与iSAID-16-BG；标准结果仍以eval_dataset=isaid、不同eval_protocol_id记录。两列须复用种子／权重，生成器拒绝两个相同协议ID。来源协议未明确的文献值跨两列显示一次并标u。
-
-UAVid本地统一七类，旧八类报告值不重算、不转换，按7／8上标区分；未知协议标u。不同类别协议的结果不直接排序或合并平均。
+含背景验证入口尚未实现，本文件的当前默认阈值不自动等于新 BG 协议的最终设置。实际工程与实验任务只维护于[manuscript_status.md](manuscript_status.md)。

@@ -148,9 +148,11 @@ class RendererBoundaries(unittest.TestCase):
         self.assertIn(r'$^{7}$',cells[6])
         row['reported_protocols']={}
         cells=m.comparison_cells(row,records,{},config,[])
-        self.assertEqual(cells[1],r'\multicolumn{2}{c}{54.32$^{u}$}')
-        self.assertEqual(' & '.join(cells).count('54.32'),1)
-        self.assertIn(r'$^{u}$',cells[5])
+        self.assertEqual(cells[1:3],['--','--'])
+        note=m.isaid_reference_note([row],records,{},config)
+        self.assertIn('RSKT-Seg: 54.32',note)
+        self.assertEqual((' & '.join(cells)+note).count('54.32'),1)
+        self.assertIn(r'$^{u}$',cells[6])
         row['reported_protocols']={'iSAID':'guessed'}
         with self.assertRaises(m.DataError):m.comparison_cells(row,records,{},config,[])
         full=next(r for r in config['main_rows'] if r['row_id']=='full')
@@ -158,6 +160,23 @@ class RendererBoundaries(unittest.TestCase):
         self.assertEqual(m.comparison_cells(full,records,{},config,missing)[1:3],['--','--'])
         self.assertEqual({r['dataset'] for r in missing if r['dataset'].startswith('iSAID')},
                          {'iSAID-15-IgnBG','iSAID-16-BG'})
+
+    def test_every_main_row_has_two_independent_isaid_cells(self):
+        paper=Path(__file__).resolve().parents[1]
+        config=json.loads((paper/'data/table_spec.json').read_text())
+        records=m.read_literature(paper/'data/literature_results.csv')
+        for row in config['main_rows']:
+            cells=m.comparison_cells(row,records,{},config,[])
+            self.assertEqual(len(cells),9,row['row_id'])
+            self.assertNotIn(r'\multicolumn',' & '.join(cells),row['row_id'])
+        note=m.isaid_reference_note(config['main_rows'],records,{},config)
+        for name,value in [('Pi-Seg','53.50'),('UGDMoE','54.38'),('SkySense-O','43.92'),
+                           ('ConInfer','20.08'),('GLoP-SAM3 (ROSE report)','28.00')]:
+            self.assertEqual(note.count(f'{name}: {value}'),1)
+        main=(paper/'tables/main_rskt8.tex').read_text()
+        rows=[line for line in main.splitlines() if ' & ' in line and not line.startswith('Method &')]
+        self.assertEqual(len(rows),25)
+        self.assertTrue(all(line.count(' & ')==10 for line in rows))
 
     def test_isaid_dual_protocol_reuses_weights_but_not_protocol_id(self):
         paper=Path(__file__).resolve().parents[1]

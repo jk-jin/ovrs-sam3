@@ -1,26 +1,27 @@
 # ReCA-SAM3 论文工作区
 
-实验章节以回退后的 `master`（实现标识 `reca-sam3-multiscale-windows`）为源码基准，并采用用户确认的最终实验设计：两层聚合、三尺度普通窗口、主模型共享尺度间权重、唯一 RemoteCLIP score embedding 指导、单方向 SDF。中间层特征不参与模型；当前源码仍提取和缓存这些未使用特征，后续需清理，效率测量在清理后进行。
+正文暂用中文，图表、表题和表注用英文。表格源数据由 data/table_spec.json 与 scripts/build_experiment_tables.py 管理；本地未测量的成绩与开销为 --。
 
-## 实验章节与表格
+## 阅读入口
 
-正文使用中文，表格、表题、表注和图题使用英文。`sections/experiments.tex` 已引用以下五张表，所有未测量的本地成绩及开销均为 `--`：
-
-| 表格源文件 | 内容 |
+| 文件 | 用途 |
 | --- | --- |
-| `tables/main_rskt8.tex` | 按遥感标注训练／Training-free两组排列，22个文献方法与3个待跑本地方法；iSAID双协议子列，UAVid单列标记7/8/u |
-| `tables/loveda_per_class.tex` | 三个本地方法的 LoveDA 七类 IoU 与 mIoU |
-| `tables/ablation_core.tex` | Full、严格提示自交互、无引导、无类内、单尺度、三尺度独立权重、无蒸馏 |
-| `tables/ablation_freeze.tex` | RemoteCLIP 图像／文本 attention 微调的四种组合 |
-| `tables/efficiency.tex` | 两个原始基线、Full、单尺度及独立权重的参数与推理开销 |
+| [notes/comparison_policy.md](notes/comparison_policy.md) | 文献直接引用、双协议 iSAID、单列 UAVid、未知值展示与 Zotero 的长期约定 |
+| [notes/evaluation_protocol.md](notes/evaluation_protocol.md) | DLRSD 训练、LoveDA 开发域、权重选择、十个消融变体与本地推理规则 |
+| [notes/manuscript_status.md](notes/manuscript_status.md) | 只记录未完成的工程、实验、正文和图稿工作 |
+| [notes/zotero_sync.md](notes/zotero_sync.md) | 拉取、重新编译、可选集合整理及自动导出 |
+| [scripts/README.md](scripts/README.md) | 真实评测选择器、生成命令与证据字段 |
+| [notes/review.md](notes/review.md) | 当前主张与证据、验收标准 |
 
-核心消融与微调表共享 Full，合计十个训练变体。两个自跑比较基线均使用原始 SAM 3 权重，不需要 DLRSD 训练。不新增移位窗口或中间层特征消融。`data/experiment_plan.csv` 保存变体 ID、优先级和实现状态；这些计划行不会自动创建训练配置。
+## 五张实验表
 
-## 后续填写数据
-
-表格布局由 `data/table_spec.json` 与 `scripts/build_experiment_tables.py` 管理。完成评测后，将真实标准结果汇总至 `generated/data/results_long.csv`，按 `table_spec.json` 的选择器填写实际 eval_id、种子、checkpoint SHA-256 和协议，再生成表格。主模型在主表、消融表、微调表及逐类表必须复用相同评测和权重。参数与效率选择器只读取实际测量记录，不估算参数量或时间。
-
-也可直接替换 `tables/*.tex` 中的 `--` 进行排版；重新运行生成器会覆盖手工修改，因此正式成绩应同步保存到真实结果记录和选择器。文献 CSV 保留历史记录；新主表明确选择 DLRSD 版本，不覆盖旧 iSAID 数字。所有156个所选文献单元格的数值来源与证据类型登记于 `data/comparison_audit_20261124.json`；出版方摘要不会伪装成已读PDF。
+| 表格 | 内容 |
+| --- | --- |
+| tables/main_rskt8.tex | 22 个文献方法和 3 个本地方法，按遥感标注训练／Training-free 分组；iSAID 两个独立协议格，UAVid 一列 |
+| tables/loveda_per_class.tex | 本地三方法的 LoveDA 七类 IoU 与 mIoU |
+| tables/ablation_core.tex | Full 与六个单因素变体 |
+| tables/ablation_freeze.tex | RemoteCLIP 图像／文本微调四组合；共同微调复用 Full |
+| tables/efficiency.tex | 两个原始基线、Full、单尺度及独立权重的参数与推理开销 |
 
 ```bash
 python paper/scripts/test_build_experiment_tables.py
@@ -29,24 +30,14 @@ cd paper
 latexmk -xelatex -halt-on-error -file-line-error -outdir=build main.tex
 ```
 
-`export_config.json` 同时预留标准结果导出的本地比较、逐类和六个按数据集拆分的消融表，辅助保存 mIoU/mAcc。论文实际引用的布局由上述五个 `tables/*.tex` 文件提供。
+正式成绩填写实际标准结果 generated/data/results_long.csv 与选择器，再生成表格。主模型跨表、跨域复用同一权重；iSAID 两种协议分别登记真实 eval_id 和 eval_protocol_id。协议未知的文献 iSAID 原值只在表注保留一次，不能跨两列居中或硬归类。禁止只手改生成 TeX 而不更新数据与生成器。
 
-## 核对记录
+## 数据与核验索引
 
-- `notes/evaluation_protocol.md`：训练源、开发域、目标域、选权重和统计规则。
-- `notes/experiment_config_snapshot.json`：本轮核对的有效主配置与八个数据集设置。
-- `notes/source_snapshot.json`：基准 commit、源码与论文文件哈希及验证记录。
-- `notes/manuscript_status.md`：实现状态、待跑实验与待修改内容。
-- `notes/review.md`：本轮主张与证据、自审记录。
-- `notes/comparison_issues_20261124.md`：已确认的引用／协议展示方案及剩余实施工作；外部代码差异不再阻塞引用。
-- `data/bibliography_audit_20261124.json`：最新26条Zotero记录、手工补充引用和重复DOI审计。
+- data/literature_results.csv：原报告数值与历史记录；当前 156 项选择见 data/comparison_audit_20261124.json。
+- notes/literature_fill_audit.md：来源 PDF／补充材料的页码与指纹；不再维护旧的填写清单。
+- data/protocol_evidence_20261124.json：已有代码核验记录，不作为逐仓库复现要求。
+- notes/experiment_config_snapshot.json：有效配置快照；notes/source_snapshot.json：源码、论文哈希及最新验证结果。
+- references.bib 保持 Zotero 自动导出；references_extra.bib 保存人工补充。未引用条目不会进入参考文献。
 
-本轮重组实验比较与相关工作中的比较方法引用，删除原数据协议表和额外条件参考表；排除VLex-SAM3、ConceptSeg、GFMR、ConceptBank、PRS-Seg数据。Zotero导出文件保持用户最新版本，缺少的10个比较方法引用加入references_extra.bib。本轮仅修改论文与表格工作流，没有修改模型、训练配置或训练任务。方法章节与架构图仍保留旧版本内容，需要另行同步；本轮不将整篇论文认定为与当前实现完全一致。Zotero 导出的 `references.bib` 保持原样。
-
-## 双协议填数与 Zotero
-
-文献结果直接按已登记来源引用，不要求重跑外部模型。主表iSAID分为15类忽略GT背景与16类含背景两个子列；未知协议跨列标u，数值只出现一次。UAVid仍是一列，以7／8／u标明来源；本地统一七类。
-
-本地Full与两个SAM3基线的`native_selection`使用`iSAID-15-IgnBG`和`iSAID-16-BG`两个键，分别填入真实评测选择器；结果数据集仍为`isaid`，用不同`eval_protocol_id`区分。两种协议复用同一种子／权重，禁止另挑checkpoint或重复引用一个协议的分数。当前含背景评测入口尚待工程实现，本轮只调整论文与组表。
-
-删除正文引用不需要删除Zotero条目；`references.bib`与`references_extra.bib`均保持原样，未引用条目不会进入参考文献。本地拉取、重新编译和可选的集合整理步骤见[notes/zotero_sync.md](notes/zotero_sync.md)。
+当前实现、尚未实现的双协议验证入口与模型／图稿同步工作见 manuscript_status.md。旧的已解决调查、日期式问题清单和重复手抄主表已清理；旧内容通过 Git 历史查阅。

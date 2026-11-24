@@ -4776,7 +4776,7 @@
       "15-IgnBG",
       "16-BG"
     ],
-    "unknown_isaid": "single spanning cell marked u",
+    "unknown_isaid": "two independent empty protocol cells; original value once in the named reference note",
     "uavid": "one column; source superscripts 7,8,u; local 7",
     "native_weights": "shared per method/seed across both iSAID protocols",
     "numeric_values_changed": false

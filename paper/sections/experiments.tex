@@ -24,7 +24,7 @@ SAM 3 特征提取、提示编码、条件编码器、Pixel Decoder 与分割头
 
 Training-free 组同时包含 CLIP 系列方法及 SAM 3 系列方法。SCLIP、ClearCLIP、ProxyCLIP 和 CorrCLIP 的遥感成绩取自 SegEarth-OV3 Table 1~\cite{liSegEarthOV3ExploringSAM2026}；SegEarth-OV 和 ConInfer 采用自身原文成绩~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025,chen2026coninfercontextawareinferencetrainingfree}。SegEarth-OV3、ProC-SAM3 与 ROSE-SAM3 分别保留各自已核对版本的报告值~\cite{liSegEarthOV3ExploringSAM2026,songPromptCalibratedSAM32026,songROSESAM3ResponseOrientedPrompt2026}。ROSE-SAM3 使用无标签目标域图像离线选择提示，模型参数保持冻结。RSGPNet 以预测掩码生成几何提示，采用其自身 Table II 的四数据集结果~\cite{wangRSGPNetGeometricPrompting2026}。ActiveSAM 的遥感成绩来自 ProC-SAM3 的复现行~\cite{tienActiveSAMFastAccurate2026,songPromptCalibratedSAM32026}；GLoP-SAM3 的成绩来自 ROSE-SAM3 的转引行，方法引用与数值来源分别注明~\cite{liuGLoPSAM3DualPostprocessing2026,songROSESAM3ResponseOrientedPrompt2026}。
 
-文献成绩直接引用所列来源的报告值，不要求逐一复现外部模型，也不以当前公开代码替代历史论文设置。iSAID 主表分为十五类 IgnBG 与十六类 BG 两个子列；完整模型与两个原始 SAM 3 基线均报告双协议结果。无法明确归类的文献数值跨两个子列展示并标记，不据训练方式推断协议。UAVid 保留一列，七类与八类来源分别用上标 7 和 8 区分，未明确的来源单独标记；本文及本地基线统一采用七类。协议标记说明已知的来源设置，不表示已独立复现其历史运行。训练数据、划分及评测规则不一致的结果作为文献参考，不据其计算同条件提升幅度或跨协议排名，也不混算跨域平均。
+文献成绩直接引用所列来源的报告值，不要求逐一复现外部模型，也不以当前公开代码替代历史论文设置。iSAID 主表分为十五类 IgnBG 与十六类 BG 两个子列；完整模型与两个原始 SAM 3 基线均报告双协议结果。无法明确归类的文献数值在表下注释中单独列出，两个协议单元格均留空，不据训练方式推断协议。UAVid 保留一列，七类与八类来源分别用上标 7 和 8 区分，未明确的来源单独标记；本文及本地基线统一采用七类。协议标记说明已知的来源设置，不表示已独立复现其历史运行。训练数据、划分及评测规则不一致的结果作为文献参考，不据其计算同条件提升幅度或跨协议排名，也不混算跨域平均。
 
 \subsection{LoveDA 逐类分析}
 \input{tables/loveda_per_class}

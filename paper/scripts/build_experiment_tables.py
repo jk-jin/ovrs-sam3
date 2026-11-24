@@ -281,7 +281,7 @@ def comparison_cells(row, lit, native, spec, missing):
             elif protocol == '16-BG':
                 cells.extend(['--', value])
             elif protocol == 'unspecified':
-                cells.append(r'\multicolumn{2}{c}{' + value + (r'$^{u}$' if value != '--' else '') + '}')
+                cells.extend(['--', '--'])
             else:
                 raise DataError(f'Unknown iSAID display protocol: {protocol}')
             continue
@@ -293,6 +293,18 @@ def comparison_cells(row, lit, native, spec, missing):
             value += r'$^{' + ('u' if protocol == 'unspecified' else str(protocol)) + '}$'
         cells.append(value)
     return cells
+
+
+def isaid_reference_note(rows, lit, native, spec):
+    """Retain unassigned reports below the table, outside either scored protocol."""
+    references = []
+    for row in rows:
+        if row['panel'] != 'reference' or row.get('reported_protocols', {}).get('iSAID', 'unspecified') != 'unspecified':
+            continue
+        value = resolve(row, 'iSAID', lit, native, spec, [])[0]
+        if value != '--':
+            references.append(latex(row['label']) + ': ' + value)
+    return ('iSAID references (protocol unspecified; mIoU, \\%): ' + '; '.join(references) + '.') if references else ''
 
 
 def build(args):
@@ -330,9 +342,11 @@ def build(args):
                 name += r'~\cite{' + row['citekey'] + '}'
             name += r'$^{' + row['resource'] + '}$'
             body.append([name, latex(row['adaptation_data'])] + cells)
+        references = isaid_reference_note(spec[layout['rows']], lit, native, spec)
+        note = layout['note'] + (r'\par ' + references if references else '')
         outputs[layout['file']] = table(
             layout['caption'], layout['label'], ['Method', layout['data_header']] + headers,
-            body, r'@{}L{0.25\linewidth}L{0.08\linewidth}*{9}{C}@{}', True, layout['note'])
+            body, r'@{}L{0.25\linewidth}L{0.08\linewidth}*{9}{C}@{}', True, note)
 
     body = []
     for row in (r for r in spec['main_rows'] if r['panel'] == 'native'):
