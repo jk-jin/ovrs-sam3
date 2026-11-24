@@ -134,6 +134,22 @@
   file = {/home/joker/Zotero/storage/E7PMFWVV/Li 等 - 2025 - SegEarth-OV Towards Training-Free Open-Vocabulary Segmentation for Remote Sensing Images.pdf}
 }
 
+@article{liuGLoPSAM3DualPostprocessing2026,
+  title = {{{GLoP-SAM3}}: {{A Dual Postprocessing Framework With Global}}--{{Local Prior Fusion}} and {{Reliability Gating}} for {{Open-Vocabulary Remote Sensing Segmentation}}},
+  shorttitle = {{{GLoP-SAM3}}},
+  author = {Liu, Chang and Han, Yuzhuo and Kong, Xiangzhe and Li, Mingjie and Li, Yonghua},
+  year = 2026,
+  journal = {IEEE Transactions on Geoscience and Remote Sensing},
+  volume = {64},
+  pages = {5632421--5632421},
+  issn = {1558-0644},
+  doi = {10.1109/TGRS.2026.3713962},
+  urldate = {2026-11-24},
+  abstract = {Open-vocabulary remote sensing semantic segmentation enables pixel-level recognition of arbitrary semantic categories through text prompts, providing an effective way to reduce the dependence of traditional closed-set remote sensing segmentation on fixed category sets and large-scale annotations. However, existing training-free methods in remote sensing scenarios still mainly rely on local responses and sliding-window inference and thus suffer from insufficient utilization of full-image global semantic priors, unstable local predictions, and unreliable prior propagation. To address these issues, we propose GLoP-SAM3, a dual postprocessing framework for open-vocabulary remote sensing semantic segmentation, whose core idea is to enhance performance through two lightweight postprocessing modules rather than introducing a new backbone or complex trainable components. Specifically, we develop a divergence-aware global--local fusion (DGLF) module, which adaptively integrates full-image semantic priors with local predictions by jointly modeling local--global discrepancy and local confidence, and a reliability-gated prediction refinement (RGPR) module, which suppresses erroneous prior propagation and improves segmentation quality in complex and boundary regions through high-confidence preservation, ambiguous-region enhancement, and prior reliability gating. Built upon SAM3 without any additional training, the proposed method introduces only limited computational overhead while significantly improving prediction consistency and segmentation accuracy. Extensive experiments on eight public remote sensing datasets demonstrate that GLoP-SAM3 consistently improves the baseline and achieves state-of-the-art (SOTA) performance under the training-free setting on representative benchmarks such as OpenEarthMap, validating the favorable balance of the proposed dual postprocessing strategy between efficiency and performance. The code, fixed prompts, and configuration files are available at https://github.com/LiorCohen0901/GLoP-SAM},
+  keywords = {Conferences,Costing,Costs,Modeling,Modules (abstract algebra),Open-vocabulary semantic segmentation (OVSS),Pixel,postprocessing,remote sensing,Remote sensing,SAM3,Semantic segmentation,Training,training-free,Vocabulary},
+  file = {/home/joker/Zotero/storage/X88Z7E7E/11612939.html}
+}
+
 @article{liuRemoteCLIPVisionLanguage2024,
   title = {{{RemoteCLIP}}: {{A Vision Language Foundation Model}} for {{Remote Sensing}}},
   shorttitle = {{{RemoteCLIP}}},
@@ -185,6 +201,24 @@
   file = {/home/joker/Zotero/storage/V49EHQML/Pei 等 - 2026 - Taming SAM3 in the Wild A Concept Bank for Open-Vocabulary Segmentation.pdf}
 }
 
+@misc{peiTamingSAM3Wild2026a,
+  title = {Taming {{SAM3}} in the {{Wild}}: {{A Concept Bank}} for {{Open-Vocabulary Segmentation}}},
+  shorttitle = {Taming {{SAM3}} in the {{Wild}}},
+  author = {Pei, Gensheng and Jiang, Xiruo and Yao, Yazhou and Shu, Xiangbo and Shen, Fumin and Jeon, Byeungwoo},
+  year = 2026,
+  month = feb,
+  number = {arXiv:2602.06333},
+  eprint = {2602.06333},
+  primaryclass = {cs.CV},
+  publisher = {arXiv},
+  doi = {10.48550/arXiv.2602.06333},
+  urldate = {2026-11-24},
+  abstract = {The recent introduction of \textbackslash texttt\textbraceleft SAM3\textbraceright{} has revolutionized Open-Vocabulary Segmentation (OVS) through \textbackslash textit\textbraceleft promptable concept segmentation\textbraceright, which grounds pixel predictions in flexible concept prompts. However, this reliance on pre-defined concepts makes the model vulnerable: when visual distributions shift (\textbackslash textit\textbraceleft data drift\textbraceright ) or conditional label distributions evolve (\textbackslash textit\textbraceleft concept drift\textbraceright ) in the target domain, the alignment between visual evidence and prompts breaks down. In this work, we present \textbackslash textsc\textbraceleft ConceptBank\textbraceright, a parameter-free calibration framework to restore this alignment on the fly. Instead of adhering to static prompts, we construct a dataset-specific concept bank from the target statistics. Our approach (\textbackslash textit\textbraceleft i\textbraceright ) anchors target-domain evidence via class-wise visual prototypes, (\textbackslash textit\textbraceleft ii\textbraceright ) mines representative supports to suppress outliers under data drift, and (\textbackslash textit\textbraceleft iii\textbraceright ) fuses candidate concepts to rectify concept drift. We demonstrate that \textbackslash textsc\textbraceleft ConceptBank\textbraceright{} effectively adapts \textbackslash texttt\textbraceleft SAM3\textbraceright{} to distribution drifts, including challenging natural-scene and remote-sensing scenarios, establishing a new baseline for robustness and efficiency in OVS. Code and model are available at https://github.com/pgsmall/ConceptBank.},
+  archiveprefix = {arXiv},
+  keywords = {Computer Science - Computer Vision and Pattern Recognition},
+  file = {/home/joker/Zotero/storage/MXSFYAQL/Pei 等 - 2026 - Taming SAM3 in the Wild A Concept Bank for Open-Vocabulary Segmentation.pdf;/home/joker/Zotero/storage/NDGC2X6J/2602.html}
+}
+
 @misc{PerformanceEvaluationSingleLabel,
   title = {Performance {{Evaluation}} of {{Single-Label}} and {{Multi-Label Remote Sensing Image Retrieval Using}} a {{Dense Labeling Dataset}}},
   urldate = {2026-11-11},
@@ -222,6 +256,74 @@
   file = {/home/joker/Zotero/storage/BLYA4UY8/Song 等 - 2026 - Prompt-Calibrated SAM 3 for Open-Vocabulary Remote-Sensing Semantic Segmentation.pdf}
 }
 
+@misc{songROSESAM3ResponseOrientedPrompt2026,
+  title = {{{ROSE-SAM3}}: {{Response-Oriented Prompt Selection}} for {{Open-Vocabulary Remote Sensing Segmentation}}},
+  shorttitle = {{{ROSE-SAM3}}},
+  author = {Song, Yanghui and Yang, Chengfu and Wen, Yongpeng and Hu, Zhanxuan and Lu, Wei and Ming, Qi and Liu, Nanqing and Li, Heng-Chao},
+  year = 2026,
+  month = nov,
+  number = {arXiv:2611.28112},
+  eprint = {2611.28112},
+  primaryclass = {cs.CV},
+  publisher = {arXiv},
+  doi = {10.48550/arXiv.2611.28112},
+  urldate = {2026-11-24},
+  abstract = {In open-vocabulary semantic segmentation (OVSS) of remote-sensing imagery, class-name prompts can miss objects with varied appearances, while richer descriptions can activate competing classes. We propose Response-Oriented Prompt Selection for SAM 3 (ROSE-SAM3), a training-free framework that selects descriptions using frozen SAM 3 responses on unlabeled target-domain images. We screen candidate descriptions for coverage beyond the native prompts while protecting reliable native class responses, retaining candidates that pass these checks on at least four of five image folds. An offline directed acyclic graph (DAG) search then evaluates candidate combinations and builds a compact PromptBank for each class. Each bank retains the native prompts and adds selected descriptions, which we call residual prompts. At inference, the bank is fixed, and Semantic-Instance Cooperative Head (SICH) uses instance evidence to refine semantic responses before assigning pixel labels. We also introduce RS-OVSS-C to evaluate robustness under six image corruption families across eight remote-sensing datasets, preserving their class vocabularies and reference labels. ROSE-SAM3 achieves 57.3\% mean mIoU across eight clean benchmarks and 54.7\% on RS-OVSS-C, achieving state-of-the-art performance among training-free methods. The code is publicly available at https://github.com/YanghuiSong/ROSE-SAM3.},
+  archiveprefix = {arXiv},
+  keywords = {Computer Science - Computer Vision and Pattern Recognition},
+  file = {/home/joker/Zotero/storage/YZSRWJ89/Song 等 - 2026 - ROSE-SAM3 Response-Oriented Prompt Selection for Open-Vocabulary Remote Sensing Segmentation.pdf;/home/joker/Zotero/storage/2VVYXWU3/2611.html}
+}
+
+@inproceedings{tangPRSSegOpenVocabularyRemote2026,
+  title = {{{PRS-Seg}}: {{Open-Vocabulary Remote Sensing Segmentation}} with {{Prototype Calibration}} and {{Boundary Refinement}}},
+  shorttitle = {{{PRS-Seg}}},
+  booktitle = {2026 {{IEEE}} 6th {{International Conference}} on {{Computer Systems}} ({{ICCS}})},
+  author = {Tang, Zhenghua and Ma, Lili and Chen, Jinguang and Xu, Jingting and Li, Weiqian},
+  year = 2026,
+  month = sep,
+  pages = {33--37},
+  doi = {10.1109/ICCS71313.2026.11739897},
+  urldate = {2026-11-24},
+  abstract = {High-resolution remote sensing image segmentation is often affected by intra-class variations, cross-scene distribution shifts, and ambiguous boundaries. These issues may cause unstable or biased responses to text prompts, i.e., input category names such as "river" or "farmland." To address this, PRS-Seg is proposed for open-vocabulary remote sensing image segmentation. By open-vocabulary, it is meant that the model is not limited to fixed categories seen during training. Instead, segmentation targets can be flexibly specified by users via an external vocabulary at inference time. The method is built on a frozen SAM3 backbone. Category names are used as text prompts, and segmentation targets are defined dynamically during inference. To improve response reliability and boundary quality, OpenCLIP vision-language features and category prototype priors are introduced. A prototype bank is constructed offline. During inference, image-text similarity and image-prototype similarity are jointly computed. These are used to estimate category response confidence, based on which structural responses are adaptively calibrated. In addition, a conflict-aware boundary refinement mechanism is designed. Local inconsistencies between structural and semantic responses in boundary regions are thereby reduced. All calibration and refinement are performed without updating any parameters of SAM3 or OpenCLIP. Experiments on LoveDA, Potsdam, and Vaihingen achieve mIoU scores of 48.1\%, 53.8\%, and 59.7\%, respectively. Improved open-vocabulary segmentation performance and good cross-scene adaptability are demonstrated. Our code is released at https://github.com/TZH123098/PRS-Seg.},
+  keywords = {Banking,boundary refinement,Buildings,Calibration,Equations,Modeling,Open-vocabulary segmentation,Printing,prototype calibration,Prototypes,Remote sensing,remote sensing image semantic segmentation,SAM3,Visualization,Vocabulary},
+  file = {/home/joker/Zotero/storage/U2WS26BW/11739897.html}
+}
+
+@misc{tienActiveSAMFastAccurate2026,
+  title = {{{ActiveSAM}}: {{Fast}} and {{Accurate Open-Vocabulary Semantic Segmentation}} with {{Frozen SAM}} 3},
+  shorttitle = {{{ActiveSAM}}},
+  author = {Tien, Tran Dinh and Shen, Zhiqiang},
+  year = 2026,
+  month = sep,
+  number = {arXiv:2606.16996},
+  eprint = {2606.16996},
+  primaryclass = {cs.CV},
+  publisher = {arXiv},
+  doi = {10.48550/arXiv.2606.16996},
+  urldate = {2026-11-24},
+  abstract = {Segment Anything Model 3 (SAM 3) provides a strong frozen backbone for concept-prompted segmentation, but applying it directly to open-vocabulary semantic segmentation (OVSS) is inefficient: full-resolution decoding is typically run over the entire dataset vocabulary, whereas each image contains only a small active subset of classes. We introduce ActiveSAM, a training-free inference framework that turns SAM 3 into an active-vocabulary segmenter. ActiveSAM first canonicalizes and expands class prompts, then uses evidence-proportional grounding to estimate an image-conditioned active set from a low-resolution presence preview. Only retained prompts receive full-resolution mask prediction, using bucketed prompt multiplexing with the frozen SAM 3 decoder. The preview stage uses only class-presence evidence and skips unnecessary segmentation-head computation. To resolve overlapping concept responses, exclusive concept decoding compares each pixel's joint score vector with class signatures estimated once per vocabulary from unlabeled images. ActiveSAM requires no weight updates, no oracle class-presence labels and no per-dataset hyperparameter tuning. Across eight OVSS benchmarks, ActiveSAM improves the speed-accuracy tradeoff of training-free open-vocabulary semantic segmentation, outperforming the current state-of-the-art SegEarth-OV3 by +2.1 mIoU on average while running much faster, with 7.3-12.2x speedups on large-vocabulary datasets. ActiveSAM also achieves the highest accuracy under image corruptions that simulate real-world distribution shift, making it well-suited for deployment in noisy-input domains such as autonomous driving and embodied AI. Code is available at https://github.com/VILA-Lab/ActiveSAM},
+  archiveprefix = {arXiv},
+  keywords = {Computer Science - Artificial Intelligence,Computer Science - Computer Vision and Pattern Recognition,Computer Science - Machine Learning},
+  file = {/home/joker/Zotero/storage/NB5VU95N/Tien和Shen - 2026 - ActiveSAM Fast and Accurate Open-Vocabulary Semantic Segmentation with Frozen SAM 3.pdf;/home/joker/Zotero/storage/K3FPFGPC/2606.html}
+}
+
+@misc{wangGeometricTransformationFeatureAdaptiveManifold2026,
+  title = {A {{Geometric-Transformation Feature-Adaptive Manifold Restoration Method}} for {{Open-Vocabulary Semantic Segmentation}} of {{Remote Sensing Images}}},
+  author = {Wang, Jianzheng and Ni, Huan and Niu, Xiaonan and Hong, Danfeng and Guan, Haiyan},
+  year = 2026,
+  month = oct,
+  number = {arXiv:2610.04300},
+  eprint = {2610.04300},
+  primaryclass = {cs.CV},
+  publisher = {arXiv},
+  doi = {10.48550/arXiv.2610.04300},
+  urldate = {2026-11-24},
+  abstract = {The semantic information of objects in remote sensing images is typically invariant to geometric transformations from the dihedral group D4. However, SAM3-based open-vocabulary semantic segmentation (OVSS) methods often exhibit inconsistent responses to different geometric transformations. To exploit this property and improve the stability of OVSS for remote sensing images, we propose a feature-adaptive manifold repair method based on dihedral-group geometric transformations. First, we introduce multi-scale harmonic-guided D4 view selection (MH-D4VS) to select complementary candidate views from a set of geometrically transformed views. Next, we propose original-view-anchored adaptive manifold repair (OAMR), which uses the original view as an anchor and reliable cross-view information to selectively repair locally unreliable visual features. Finally, we develop pixel decoder test-time adaptation (PD-TTA) for SAM3, which fine-tunes only the parameters of the GroupNorm layers online during inference, thereby enhancing the model's ability to adapt to sample-level distribution shifts. Experimental results show that the proposed method achieves an average mIoU of 55.6\% across eight remote sensing semantic segmentation benchmarks and delivers consistent performance improvements under different SAM3-based inference frameworks.},
+  archiveprefix = {arXiv},
+  keywords = {Computer Science - Computer Vision and Pattern Recognition},
+  file = {/home/joker/Zotero/storage/JKXYN8LK/Wang 等 - 2026 - A Geometric-Transformation Feature-Adaptive Manifold Restoration Method for Open-Vocabulary Semantic.pdf;/home/joker/Zotero/storage/L5AS6RVF/2610.html}
+}
+
 @misc{wangLoveDARemoteSensing2022,
   title = {{{LoveDA}}: {{A Remote Sensing Land-Cover Dataset}} for {{Domain Adaptive Semantic Segmentation}}},
   shorttitle = {{{LoveDA}}},
@@ -238,6 +340,25 @@
   archiveprefix = {arXiv},
   keywords = {Computer Science - Computer Vision and Pattern Recognition},
   file = {/home/joker/Zotero/storage/P7ZY8T4I/Wang 等 - 2022 - LoveDA A Remote Sensing Land-Cover Dataset for Domain Adaptive Semantic Segmentation.pdf;/home/joker/Zotero/storage/BA9LQL8J/2110.html}
+}
+
+@article{wangRSGPNetGeometricPrompting2026,
+  title = {{{RSGPNet}}: {{Geometric Prompting}} for {{Remote Sensing Open-Vocabulary Semantic Segmentation}}},
+  shorttitle = {{{RSGPNet}}},
+  author = {Wang, Shanwen and Sun, Xin and Wang, Sirui and Zhu, Xiao Xiang},
+  year = 2026,
+  journal = {IEEE Journal of Selected Topics in Applied Earth Observations and Remote Sensing},
+  volume = {19},
+  eprint = {2606.28410},
+  primaryclass = {cs.CV},
+  pages = {28499--28509},
+  issn = {1939-1404, 2151-1535},
+  doi = {10.1109/JSTARS.2026.3725927},
+  urldate = {2026-11-24},
+  abstract = {Open-vocabulary semantic segmentation (OVSS) enables text-guided segmentation of unseen objects, breaking fixed-class limitations to achieve open-world understanding. However, existing OVSS methods primarily focus on modifying the CLIP attention mechanism, which still suffers from unstable local segmentation for remote sensing (RS) domain. To address these limitations, we propose RSGPNet, a training-free geometric prompting framework for RS OVSS that refines segmentation by leveraging object geometric areas and consistency constraints. Specifically, RSGPNet comprises three core modules: a Text-guided Coarse Mask module (TCM), a Geometric Re-prompting Module (GRP), and a Coarse-to-fine Consistency Verification Mechanism (CVM). TCM utilizes text prompts and the input image to construct initial coarse segmentation masks. GRP then converts these coarse masks into geometric box prompts, feeding them back into the segmentation model to generate refined masks. Finally, CVM employs consistency computation to prevent prompting from reinforcing erroneous regions. They allow the model to improve segmentation accuracy in complex areas, such as category boundaries. Extensive experiments on RS datasets demonstrate that RSGPNet significantly outperforms state-of-the-art methods across both quantitative and qualitative metrics while exhibiting excellent interpretability. The code is released at \textbackslash href\textbraceleft https://github.com/wangshanwen001/RSGPNet\textbraceright\textbraceleft https://github.com/wangshanwen001/RSGPNet\textbraceright.},
+  archiveprefix = {arXiv},
+  keywords = {Computer Science - Artificial Intelligence,Computer Science - Computer Vision and Pattern Recognition},
+  file = {/home/joker/Zotero/storage/HKAJYCZU/Wang 等 - 2026 - RSGPNet Geometric Prompting for Remote Sensing Open-Vocabulary Semantic Segmentation.pdf;/home/joker/Zotero/storage/UAFDBBFN/2606.html}
 }
 
 @article{yeOpenVocabularyRemoteSensing2025,
