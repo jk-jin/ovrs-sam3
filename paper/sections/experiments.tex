@@ -1,8 +1,7 @@
 \FloatBarrier
 \section{实验}
 \subsection{数据集与评价指标}
-本文采用 RSKT-Seg 的八数据集评测集合：DLRSD、iSAID、LoveDA、Potsdam、Vaihingen、UAVid、UDD5 和 VDD~\cite{liExploringEfficientOpenVocabulary2026}。DLRSD 保留 OVRSISBench 发布包中的 5601 张训练图像与 1401 张验证图像，分别用于单源监督适配与源域评测。LoveDA 验证集用于模型选择，作为开发域；其余六个数据集用于目标域评测。数据角色、类别数、展开提示数及预测过滤阈值见表~\ref{tab:dataset_protocol}。
-\input{tables/dataset_protocol}
+本文采用 RSKT-Seg 的八数据集评测集合：DLRSD、iSAID、LoveDA、Potsdam、Vaihingen、UAVid、UDD5 和 VDD~\cite{liExploringEfficientOpenVocabulary2026}。DLRSD 保留 OVRSISBench 发布包中的 5601 张训练图像与 1401 张验证图像，分别用于单源监督适配与源域评测。LoveDA 验证集用于模型选择，作为开发域；其余六个数据集用于目标域评测。
 
 所有数据集均对配置中的全部类别执行前向，背景或 clutter 作为已配置类别时也参与预测。同义词展开为独立文本提示，并在输出端按原语义类别逐像素取最大值合并；因此提示数可以多于类别数。Potsdam 与 Vaihingen 的道路类别使用 road 和 pavement，VDD 的屋顶类别使用 roof、rooftop 和 building top。UAVid 合并 moving car 与 static car 为 car，采用含背景的七类评测；LoveDA 同样采用含背景七类，iSAID 背景像素忽略，DLRSD 不另设背景。忽略值统一为 255。LoveDA 原始标签 1--7 仅转换一次为 0--6，原始 0 转为忽略值，前向与评测不再额外删除背景或平移编号。
 
@@ -19,9 +18,16 @@ SAM 3 特征提取、提示编码、条件编码器、Pixel Decoder 与分割头
 
 \subsection{与现有方法的比较}
 \input{tables/main_rskt8}
-表~\ref{tab:main_rskt8} 在本地统一协议区域设置两个原始 SAM 3 基线与完整 ReCA-SAM3。Semantic-only 直接输出原始 SAM 3 语义概率；Semantic $\times$ Presence 执行原始语义与实例查询流程，将每个提示的语义概率乘一次对应的 presence 概率，再按语义类别合并同义提示，不融合实例掩码。两个基线使用同一原始 SAM 3 预训练权重，无 DLRSD 分割适配；完整模型使用 DLRSD 适配。所有本地行采用相同输入、类别提示、标签、背景和后处理设置。
+表~\ref{tab:main_rskt8} 按是否使用遥感分割标注进行训练划分为 Training on remote sensing segmentation data 和 Training-free 两组。ReCA-SAM3 使用 DLRSD 适配，归入前组；两个原始 SAM 3 基线归入后组。Semantic-only 直接输出原始 SAM 3 语义概率；Semantic $\times$ Presence 执行原始语义与实例查询流程，将每个提示的语义概率乘一次对应的 presence 概率，再按语义类别合并同义提示，不融合实例掩码。两个基线使用同一原始 SAM 3 预训练权重。三个本地方法采用相同输入、类别提示、标签、背景和后处理设置，并通过表中来源标记与文献报告值区分。
 
-文献区域保留已登记来源的原报告值。CAT-Seg 与 GSNet 的 iSAID 单源设置来自 RSKT-Seg Table 1，而非本地运行其官方权重~\cite{liExploringEfficientOpenVocabulary2026}；GSNet 原论文与官方训练设置使用 LandDiscover50K~\cite{yeOpenVocabularyRemoteSensing2025}。RSKT-Seg、Pi-Seg、SegEarth-OV、SegEarth-OV3 和 ProC-SAM3 各自保留已核对版本及来源，不按列混入其他论文的复现值。训练资源、类别映射、裁块、图像几何与阈值未完全一致的文献结果不参与同条件排名，也不与本地结果混算跨域平均。
+训练组优先选用 DLRSD 单源设置。SCAN、SAN、SED、CAT-Seg、OVRS、GSNet 和 RSKT-Seg 的大骨干成绩取自 RSKT-Seg Table 1 的 DLRSD 训练区域，其中前六者为该论文重新评测的结果~\cite{liExploringEfficientOpenVocabulary2026}。Pi-Seg 采用其 Table 1 的 DLRSD 单源 ViT-L 设置，不混入多源训练成绩~\cite{liPerturbationRegularizedOpenVocabularyRemote2026}。UGDMoE 使用出版方 HTML Table 2 的 DLRSD 训练结果~\cite{quUGDMoE2026}。GSNet 原论文使用 LandDiscover50K，而本表选用其 DLRSD 重训版本~\cite{yeOpenVocabularyRemoteSensing2025}；SkySense-O 采用 Sky-SA 标注适配，训练资源单独列明~\cite{zhuSkySenseOOpenWorldRemote2025a}。
+
+Training-free 组同时包含 CLIP 系列方法及 SAM 3 系列方法。SCLIP、ClearCLIP、ProxyCLIP 和 CorrCLIP 的遥感成绩取自 SegEarth-OV3 Table 1~\cite{liSegEarthOV3ExploringSAM2026}；SegEarth-OV 和 ConInfer 采用自身原文成绩~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025,chen2026coninfercontextawareinferencetrainingfree}。SegEarth-OV3、ProC-SAM3 与 ROSE-SAM3 分别保留各自已核对版本的报告值~\cite{liSegEarthOV3ExploringSAM2026,songPromptCalibratedSAM32026,songROSESAM3ResponseOrientedPrompt2026}。ROSE-SAM3 使用无标签目标域图像离线选择提示，模型参数保持冻结。RSGPNet 以预测掩码生成几何提示，采用其自身 Table II 的四数据集结果~\cite{wangRSGPNetGeometricPrompting2026}。ActiveSAM 的遥感成绩来自 ProC-SAM3 的复现行~\cite{tienActiveSAMFastAccurate2026,songPromptCalibratedSAM32026}；GLoP-SAM3 的成绩来自 ROSE-SAM3 的转引行，方法引用与数值来源分别注明~\cite{liuGLoPSAM3DualPostprocessing2026,songROSESAM3ResponseOrientedPrompt2026}。
+
+所有文献行保留来源协议，不按列混用不同论文或不同训练源的结果。LoveDA 历史单源标签映射尚未完全对齐的数值附加标记；部分来源采用 UAVid 八类，与本文合并 car 后的七类不同。训练数据、类别映射、裁块、图像几何与后处理未完全一致的文献结果不参与同条件排名，也不与本地结果混算跨域平均。
+
+\input{tables/additional_comparisons}
+表~\ref{tab:additional_comparisons} 单列使用不同适配或支持条件的参考结果。GFMR 完整版本对每张测试图像更新 PixelDecoder 的 GroupNorm 参数，属于测试时适配~\cite{wangGeometricTransformationFeatureAdaptiveManifold2026}。ConceptBank 选用 v1 原文中带真实标注目标域支持掩码的版本，不能等同于无标注零样本推理~\cite{peiTamingSAM3Wild2026}。PRS-Seg 的三个成绩仅取自 IEEE 出版方摘要，其原型库监督来源和类别映射未明确，故保留来源与协议标记~\cite{tangPRSSegOpenVocabularyRemote2026}。这些参考行不与 DLRSD 单源适配构成同条件排名。
 
 \subsection{LoveDA 逐类分析}
 \input{tables/loveda_per_class}

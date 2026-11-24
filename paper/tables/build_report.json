@@ -1,85 +1,30 @@
 {
   "draft": true,
-  "literature_records": 68,
+  "literature_records": 217,
   "native_records": 0,
   "missing_cells": [
     {
-      "row": "semantic_only",
+      "row": "pi_seg_dlrsd_vitl",
       "dataset": "DLRSD",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "semantic_only",
-      "dataset": "iSAID",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "semantic_only",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "semantic_only",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "semantic_only",
-      "dataset": "Vaihingen",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "semantic_only",
-      "dataset": "UAVid",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "semantic_only",
-      "dataset": "UDD5",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "semantic_only",
-      "dataset": "VDD",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "semantic_presence",
+      "row": "sky_cvpr2025",
       "dataset": "DLRSD",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "semantic_presence",
-      "dataset": "iSAID",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "semantic_presence",
-      "dataset": "LoveDA",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "semantic_presence",
-      "dataset": "Potsdam",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "semantic_presence",
-      "dataset": "Vaihingen",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "semantic_presence",
+      "row": "sky_cvpr2025",
       "dataset": "UAVid",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "semantic_presence",
+      "row": "sky_cvpr2025",
       "dataset": "UDD5",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "semantic_presence",
+      "row": "sky_cvpr2025",
       "dataset": "VDD",
       "reason": "planned_or_not_reported"
     },
@@ -121,10 +66,40 @@
     {
       "row": "full",
       "dataset": "VDD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "sclip_ov3_report",
+      "dataset": "DLRSD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "clear_ov3_report",
+      "dataset": "DLRSD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "proxy_ov3_report",
+      "dataset": "DLRSD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "corr_ov3_report",
+      "dataset": "DLRSD",
       "reason": "planned_or_not_reported"
     },
     {
       "row": "ov_original",
+      "dataset": "DLRSD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "coninfer_arxiv_v1",
+      "dataset": "DLRSD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "active_proc_reproduction",
       "dataset": "DLRSD",
       "reason": "planned_or_not_reported"
     },
@@ -134,18 +109,221 @@
       "reason": "planned_or_not_reported"
     },
     {
+      "row": "rsgp_arxiv_v1",
+      "dataset": "DLRSD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "rsgp_arxiv_v1",
+      "dataset": "iSAID",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "rsgp_arxiv_v1",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "rsgp_arxiv_v1",
+      "dataset": "VDD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "glop_rose_report",
+      "dataset": "DLRSD",
+      "reason": "planned_or_not_reported"
+    },
+    {
       "row": "proc_original",
       "dataset": "DLRSD",
       "reason": "planned_or_not_reported"
     },
     {
-      "row": "pi_isaid_l",
+      "row": "rose_arxiv_v1",
+      "dataset": "DLRSD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_only",
+      "dataset": "DLRSD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_only",
       "dataset": "iSAID",
       "reason": "planned_or_not_reported"
     },
     {
       "row": "semantic_only",
       "dataset": "LoveDA",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_only",
+      "dataset": "Potsdam",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_only",
+      "dataset": "Vaihingen",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_only",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_only",
+      "dataset": "UDD5",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_only",
+      "dataset": "VDD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "DLRSD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "iSAID",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "LoveDA",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "Potsdam",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "Vaihingen",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "UDD5",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "VDD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "gfmr_arxiv_v1_full",
+      "dataset": "DLRSD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "cb_arxiv_v1_gt_support",
+      "dataset": "DLRSD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "cb_arxiv_v1_gt_support",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "cb_arxiv_v1_gt_support",
+      "dataset": "UDD5",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "cb_arxiv_v1_gt_support",
+      "dataset": "VDD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "prs_publisher_abstract",
+      "dataset": "DLRSD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "prs_publisher_abstract",
+      "dataset": "iSAID",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "prs_publisher_abstract",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "prs_publisher_abstract",
+      "dataset": "UDD5",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "prs_publisher_abstract",
+      "dataset": "VDD",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "LoveDA",
+      "metric": "iou.background",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "LoveDA",
+      "metric": "iou.building",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "LoveDA",
+      "metric": "iou.road",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "LoveDA",
+      "metric": "iou.water",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "LoveDA",
+      "metric": "iou.barren",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "LoveDA",
+      "metric": "iou.forest",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "LoveDA",
+      "metric": "iou.agricultural",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "LoveDA",
+      "metric": "miou",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_only",
+      "dataset": "LoveDA",
       "metric": "iou.background",
       "reason": "planned_or_not_reported"
     },
@@ -235,54 +413,6 @@
     },
     {
       "row": "semantic_presence",
-      "dataset": "LoveDA",
-      "metric": "miou",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "full",
-      "dataset": "LoveDA",
-      "metric": "iou.background",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "full",
-      "dataset": "LoveDA",
-      "metric": "iou.building",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "full",
-      "dataset": "LoveDA",
-      "metric": "iou.road",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "full",
-      "dataset": "LoveDA",
-      "metric": "iou.water",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "full",
-      "dataset": "LoveDA",
-      "metric": "iou.barren",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "full",
-      "dataset": "LoveDA",
-      "metric": "iou.forest",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "full",
-      "dataset": "LoveDA",
-      "metric": "iou.agricultural",
-      "reason": "planned_or_not_reported"
-    },
-    {
-      "row": "full",
       "dataset": "LoveDA",
       "metric": "miou",
       "reason": "planned_or_not_reported"
@@ -610,12 +740,184 @@
   ],
   "protocol_locked": false,
   "generated_tables": [
-    "dataset_protocol.tex",
     "main_rskt8.tex",
+    "additional_comparisons.tex",
     "loveda_per_class.tex",
     "ablation_core.tex",
     "ablation_freeze.tex",
     "efficiency.tex"
+  ],
+  "selected_literature_ids": [
+    "active_proc_reproduction_isaid",
+    "active_proc_reproduction_loveda",
+    "active_proc_reproduction_potsdam",
+    "active_proc_reproduction_uavid",
+    "active_proc_reproduction_udd5",
+    "active_proc_reproduction_vaihingen",
+    "active_proc_reproduction_vdd",
+    "cat_seg_dlrsd_large_dlrsd",
+    "cat_seg_dlrsd_large_isaid",
+    "cat_seg_dlrsd_large_loveda",
+    "cat_seg_dlrsd_large_potsdam",
+    "cat_seg_dlrsd_large_uavid",
+    "cat_seg_dlrsd_large_udd5",
+    "cat_seg_dlrsd_large_vaihingen",
+    "cat_seg_dlrsd_large_vdd",
+    "cb_arxiv_v1_gt_support_isaid",
+    "cb_arxiv_v1_gt_support_loveda",
+    "cb_arxiv_v1_gt_support_potsdam",
+    "cb_arxiv_v1_gt_support_vaihingen",
+    "clear_ov3_report_isaid",
+    "clear_ov3_report_loveda",
+    "clear_ov3_report_potsdam",
+    "clear_ov3_report_uavid",
+    "clear_ov3_report_udd5",
+    "clear_ov3_report_vaihingen",
+    "clear_ov3_report_vdd",
+    "coninfer_arxiv_v1_isaid",
+    "coninfer_arxiv_v1_loveda",
+    "coninfer_arxiv_v1_potsdam",
+    "coninfer_arxiv_v1_uavid",
+    "coninfer_arxiv_v1_udd5",
+    "coninfer_arxiv_v1_vaihingen",
+    "coninfer_arxiv_v1_vdd",
+    "corr_ov3_report_isaid",
+    "corr_ov3_report_loveda",
+    "corr_ov3_report_potsdam",
+    "corr_ov3_report_uavid",
+    "corr_ov3_report_udd5",
+    "corr_ov3_report_vaihingen",
+    "corr_ov3_report_vdd",
+    "gfmr_arxiv_v1_full_isaid",
+    "gfmr_arxiv_v1_full_loveda",
+    "gfmr_arxiv_v1_full_potsdam",
+    "gfmr_arxiv_v1_full_uavid",
+    "gfmr_arxiv_v1_full_udd5",
+    "gfmr_arxiv_v1_full_vaihingen",
+    "gfmr_arxiv_v1_full_vdd",
+    "glop_rose_report_isaid",
+    "glop_rose_report_loveda",
+    "glop_rose_report_potsdam",
+    "glop_rose_report_uavid",
+    "glop_rose_report_udd5",
+    "glop_rose_report_vaihingen",
+    "glop_rose_report_vdd",
+    "gsnet_dlrsd_large_dlrsd",
+    "gsnet_dlrsd_large_isaid",
+    "gsnet_dlrsd_large_loveda",
+    "gsnet_dlrsd_large_potsdam",
+    "gsnet_dlrsd_large_uavid",
+    "gsnet_dlrsd_large_udd5",
+    "gsnet_dlrsd_large_vaihingen",
+    "gsnet_dlrsd_large_vdd",
+    "ov3_original_isaid",
+    "ov3_original_loveda",
+    "ov3_original_potsdam",
+    "ov3_original_uavid",
+    "ov3_original_udd5",
+    "ov3_original_vaihingen",
+    "ov3_original_vdd",
+    "ov_cvpr_isaid",
+    "ov_cvpr_loveda",
+    "ov_cvpr_potsdam",
+    "ov_cvpr_uavid",
+    "ov_cvpr_udd5",
+    "ov_cvpr_vaihingen",
+    "ov_cvpr_vdd",
+    "ovrs_dlrsd_large_dlrsd",
+    "ovrs_dlrsd_large_isaid",
+    "ovrs_dlrsd_large_loveda",
+    "ovrs_dlrsd_large_potsdam",
+    "ovrs_dlrsd_large_uavid",
+    "ovrs_dlrsd_large_udd5",
+    "ovrs_dlrsd_large_vaihingen",
+    "ovrs_dlrsd_large_vdd",
+    "pi_seg_dlrsd_vitl_isaid",
+    "pi_seg_dlrsd_vitl_loveda",
+    "pi_seg_dlrsd_vitl_potsdam",
+    "pi_seg_dlrsd_vitl_uavid",
+    "pi_seg_dlrsd_vitl_udd5",
+    "pi_seg_dlrsd_vitl_vaihingen",
+    "pi_seg_dlrsd_vitl_vdd",
+    "proc_original_isaid",
+    "proc_original_loveda",
+    "proc_original_potsdam",
+    "proc_original_uavid",
+    "proc_original_udd5",
+    "proc_original_vaihingen",
+    "proc_original_vdd",
+    "proxy_ov3_report_isaid",
+    "proxy_ov3_report_loveda",
+    "proxy_ov3_report_potsdam",
+    "proxy_ov3_report_uavid",
+    "proxy_ov3_report_udd5",
+    "proxy_ov3_report_vaihingen",
+    "proxy_ov3_report_vdd",
+    "prs_publisher_abstract_loveda",
+    "prs_publisher_abstract_potsdam",
+    "prs_publisher_abstract_vaihingen",
+    "rose_arxiv_v1_isaid",
+    "rose_arxiv_v1_loveda",
+    "rose_arxiv_v1_potsdam",
+    "rose_arxiv_v1_uavid",
+    "rose_arxiv_v1_udd5",
+    "rose_arxiv_v1_vaihingen",
+    "rose_arxiv_v1_vdd",
+    "rsgp_arxiv_v1_loveda",
+    "rsgp_arxiv_v1_potsdam",
+    "rsgp_arxiv_v1_udd5",
+    "rsgp_arxiv_v1_vaihingen",
+    "rskt_seg_dlrsd_large_dlrsd",
+    "rskt_seg_dlrsd_large_isaid",
+    "rskt_seg_dlrsd_large_loveda",
+    "rskt_seg_dlrsd_large_potsdam",
+    "rskt_seg_dlrsd_large_uavid",
+    "rskt_seg_dlrsd_large_udd5",
+    "rskt_seg_dlrsd_large_vaihingen",
+    "rskt_seg_dlrsd_large_vdd",
+    "san_dlrsd_large_dlrsd",
+    "san_dlrsd_large_isaid",
+    "san_dlrsd_large_loveda",
+    "san_dlrsd_large_potsdam",
+    "san_dlrsd_large_uavid",
+    "san_dlrsd_large_udd5",
+    "san_dlrsd_large_vaihingen",
+    "san_dlrsd_large_vdd",
+    "scan_dlrsd_large_dlrsd",
+    "scan_dlrsd_large_isaid",
+    "scan_dlrsd_large_loveda",
+    "scan_dlrsd_large_potsdam",
+    "scan_dlrsd_large_uavid",
+    "scan_dlrsd_large_udd5",
+    "scan_dlrsd_large_vaihingen",
+    "scan_dlrsd_large_vdd",
+    "sclip_ov3_report_isaid",
+    "sclip_ov3_report_loveda",
+    "sclip_ov3_report_potsdam",
+    "sclip_ov3_report_uavid",
+    "sclip_ov3_report_udd5",
+    "sclip_ov3_report_vaihingen",
+    "sclip_ov3_report_vdd",
+    "sed_dlrsd_large_dlrsd",
+    "sed_dlrsd_large_isaid",
+    "sed_dlrsd_large_loveda",
+    "sed_dlrsd_large_potsdam",
+    "sed_dlrsd_large_uavid",
+    "sed_dlrsd_large_udd5",
+    "sed_dlrsd_large_vaihingen",
+    "sed_dlrsd_large_vdd",
+    "sky_cvpr2025_isaid",
+    "sky_cvpr2025_loveda",
+    "sky_cvpr2025_potsdam",
+    "sky_cvpr2025_vaihingen",
+    "ugdm_dlrsd_dlrsd",
+    "ugdm_dlrsd_isaid",
+    "ugdm_dlrsd_loveda",
+    "ugdm_dlrsd_potsdam",
+    "ugdm_dlrsd_uavid",
+    "ugdm_dlrsd_udd5",
+    "ugdm_dlrsd_vaihingen",
+    "ugdm_dlrsd_vdd"
   ],
   "note": "Ten planned training variants and two original SAM3 baselines; no synthetic scores."
 }

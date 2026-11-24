@@ -8,8 +8,8 @@
 
 | 表格源文件 | 内容 |
 | --- | --- |
-| `tables/dataset_protocol.tex` | 八数据集角色、类别数、展开提示数、背景与过滤阈值 |
-| `tables/main_rskt8.tex` | Semantic-only、Semantic × Presence、Full 的本地评测及原有文献参考行 |
+| `tables/main_rskt8.tex` | 按遥感标注训练／Training-free两组排列，22个文献方法与3个待跑本地方法 |
+| `tables/additional_comparisons.tex` | GFMR测试时适配、ConceptBank带标注支持、PRS-Seg摘要成绩及协议限制 |
 | `tables/loveda_per_class.tex` | 三个本地方法的 LoveDA 七类 IoU 与 mIoU |
 | `tables/ablation_core.tex` | Full、严格提示自交互、无引导、无类内、单尺度、三尺度独立权重、无蒸馏 |
 | `tables/ablation_freeze.tex` | RemoteCLIP 图像／文本 attention 微调的四种组合 |
@@ -21,7 +21,7 @@
 
 表格布局由 `data/table_spec.json` 与 `scripts/build_experiment_tables.py` 管理。完成评测后，将真实标准结果汇总至 `generated/data/results_long.csv`，按 `table_spec.json` 的选择器填写实际 eval_id、种子、checkpoint SHA-256 和协议，再生成表格。主模型在主表、消融表、微调表及逐类表必须复用相同评测和权重。参数与效率选择器只读取实际测量记录，不估算参数量或时间。
 
-也可直接替换 `tables/*.tex` 中的 `--` 进行排版；重新运行生成器会覆盖手工修改，因此正式成绩应同步保存到真实结果记录和选择器。保留现有文献 CSV 与来源，不用本地未跑成绩替换文献原报告值。
+也可直接替换 `tables/*.tex` 中的 `--` 进行排版；重新运行生成器会覆盖手工修改，因此正式成绩应同步保存到真实结果记录和选择器。文献 CSV 保留历史记录；新主表明确选择 DLRSD 版本，不覆盖旧 iSAID 数字。所有170个所选文献单元格的数值来源与证据类型登记于 `data/comparison_audit_20261124.json`；出版方摘要不会伪装成已读PDF。
 
 ```bash
 python paper/scripts/test_build_experiment_tables.py
@@ -39,5 +39,7 @@ latexmk -xelatex -halt-on-error -file-line-error -outdir=build main.tex
 - `notes/source_snapshot.json`：基准 commit、源码与论文文件哈希及验证记录。
 - `notes/manuscript_status.md`：实现状态、待跑实验与待修改内容。
 - `notes/review.md`：本轮主张与证据、自审记录。
+- `notes/comparison_issues_20261124.md`：待解决的全文、标签协议、支持条件、版本和重复文献问题。
+- `data/bibliography_audit_20261124.json`：最新26条Zotero记录、手工补充引用和重复DOI审计。
 
-本轮仅重构实验章节与表格工作流，没有修改模型、训练配置或训练任务。方法章节与架构图仍保留旧版本内容，需要另行同步；本轮不将整篇论文认定为与当前实现完全一致。Zotero 导出的 `references.bib` 保持原样。
+本轮重组实验比较与相关工作中的比较方法引用，删除原数据协议表；排除VLex-SAM3、ConceptSeg数据。Zotero导出文件保持用户最新版本，缺少的10个比较方法引用加入references_extra.bib。本轮仅修改论文与表格工作流，没有修改模型、训练配置或训练任务。方法章节与架构图仍保留旧版本内容，需要另行同步；本轮不将整篇论文认定为与当前实现完全一致。Zotero 导出的 `references.bib` 保持原样。

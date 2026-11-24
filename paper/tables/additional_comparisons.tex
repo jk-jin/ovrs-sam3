@@ -1,0 +1,26 @@
+% Generated from paper/data; do not hand-edit numeric cells.
+\begin{table*}[!tbp]
+\centering
+\caption{Additional SAM 3 results under different adaptation or support conditions (mIoU, \%).}
+\label{tab:additional_comparisons}
+\footnotesize
+\setlength{\tabcolsep}{2pt}
+\begin{tabularx}{\linewidth}{@{}L{0.27\linewidth}L{0.10\linewidth}*{8}{C}@{}}
+\toprule
+Method & \shortstack{Additional\\information} & \shortstack{DLRSD\\Source} & iSAID & \shortstack{LoveDA\\Dev.} & Potsdam & Vaihingen & UAVid & UDD5 & VDD\\
+\midrule
+\multicolumn{10}{l}{\textbf{Test-time adaptation}}\\
+GFMR (full)~\cite{wangGeometricTransformationFeatureAdaptiveManifold2026}$^{F}$ & Online GN & -- & 29.9 & 48.3 & 58.4 & 64.3 & 55.3 & 72.7 & 66.2\\
+\midrule
+\multicolumn{10}{l}{\textbf{Support-assisted frozen inference}}\\
+ConceptBank (v1, GT support)~\cite{peiTamingSAM3Wild2026}$^{B}$ & GT support & -- & 35.4 & 49.4 & 60.5 & 63.0 & -- & -- & --\\
+\midrule
+\multicolumn{10}{l}{\textbf{Frozen inference; prototype supervision unresolved}}\\
+PRS-Seg~\cite{tangPRSSegOpenVocabularyRemote2026}$^{A}$ & Unspecified & -- & -- & 48.1$^{\dagger}$ & 53.8$^{\dagger}$ & 59.7$^{\dagger}$ & -- & -- & --\\
+\bottomrule
+\end{tabularx}
+\par\vspace{3pt}
+\begin{minipage}{\linewidth}
+\footnotesize F: GFMR v1 Table 1; the full method updates PixelDecoder GroupNorm parameters at test time~\cite{wangGeometricTransformationFeatureAdaptiveManifold2026}. B: ConceptBank v1 Table 2, with ground-truth target support masks~\cite{peiTamingSAM3Wild2026}; iSAID includes background (16 classes). A: PRS-Seg scores from the IEEE publisher abstract, not an inspected full-text table~\cite{tangPRSSegOpenVocabularyRemote2026}; prototype supervision, support split and class/background mapping remain unspecified. $^{\dagger}$ marks these unresolved protocols. These rows are contextual references, not matched comparisons with our DLRSD-only adaptation. -- denotes unavailable results.
+\end{minipage}
+\end{table*}

@@ -93,7 +93,7 @@ class RendererBoundaries(unittest.TestCase):
             args=SimpleNamespace(spec=paper/'data/table_spec.json',literature=paper/'data/literature_results.csv',
                                  native=Path(d)/'absent.csv',output=Path(d)/'tables',draft=True)
             m.build(args)
-            expected={'dataset_protocol.tex','main_rskt8.tex','loveda_per_class.tex',
+            expected={'main_rskt8.tex','additional_comparisons.tex','loveda_per_class.tex',
                       'ablation_core.tex','ablation_freeze.tex','efficiency.tex'}
             self.assertEqual({p.name for p in args.output.glob('*.tex')},expected)
             for p in args.output.glob('*.tex'):
@@ -102,7 +102,13 @@ class RendererBoundaries(unittest.TestCase):
                 self.assertNotIn('Generic CLIP',text)
             main=(args.output/'main_rskt8.tex').read_text()
             self.assertIn('Adaptation',main)
-            self.assertIn('GSNet (RSKT report)',main)
+            self.assertIn('GSNet',main)
+            self.assertIn('Training on remote sensing segmentation data',main)
+            self.assertIn('Training-free',main)
+            self.assertIn('GLoP-SAM3 (ROSE report)',main)
+            self.assertNotIn('GFMR',main)
+            self.assertNotIn('VLex',main)
+            self.assertNotIn('ConceptSeg',main)
             self.assertNotIn('Target\\\\avg.',main)
             core=(args.output/'ablation_core.tex').read_text()
             self.assertIn('Unshared multiscale windows',core)
@@ -114,10 +120,10 @@ class RendererBoundaries(unittest.TestCase):
             self.assertIn('mIoU',per_class)
             args.draft=False
             with self.assertRaises(m.DataError):m.build(args)
-        audit=json.loads((paper/'data/comparison_audit_20261117.json').read_text())
+        audit=json.loads((paper/'data/comparison_audit_20261124.json').read_text())
         config=json.loads((paper/'data/table_spec.json').read_text())
-        selected={rid for r in config['main_rows'] for rid in r.get('literature_record_ids',{}).values()}
-        self.assertEqual(len(selected),52)
+        selected={rid for r in config['main_rows']+config['additional_rows'] for rid in r.get('literature_record_ids',{}).values()}
+        self.assertEqual(len(selected),170)
         self.assertEqual({r['result_id'] for r in audit['records']},selected)
         sources=m.read_literature(paper/'data/literature_results.csv')
         for r in audit['records']:
@@ -138,10 +144,48 @@ class RendererBoundaries(unittest.TestCase):
         self.assertEqual(len(config['freeze_rows']),4)
         self.assertEqual(len(config['ablation_rows']),7)
         chapter=(paper/'sections/experiments.tex').read_text()
-        for name in ('dataset_protocol','main_rskt8','loveda_per_class','ablation_core','ablation_freeze','efficiency'):
+        for name in ('main_rskt8','additional_comparisons','loveda_per_class','ablation_core','ablation_freeze','efficiency'):
             self.assertIn('\\input{tables/'+name+'}',chapter)
+        self.assertNotIn('tab:dataset_protocol',chapter)
         self.assertNotIn('2e-6',chapter)
         self.assertNotIn('四个完整块',chapter)
+
+    def test_source_supervision_and_citations_are_not_silently_relabelled(self):
+        import re
+        paper=Path(__file__).resolve().parents[1]
+        config=json.loads((paper/'data/table_spec.json').read_text())
+        records=m.read_literature(paper/'data/literature_results.csv')
+        bib=(paper/'references.bib').read_text()+(paper/'references_extra.bib').read_text()
+        keys=set(re.findall(r'@\w+\{([^,]+)',bib))
+        self.assertEqual(len(config['main_rows']),25)
+        self.assertEqual({r['method_id'] for r in config['additional_rows']},{'gfmr','cb','prs'})
+        for row in config['main_rows']+config['additional_rows']:
+            if row.get('citekey'):self.assertIn(row['citekey'],keys)
+            for rid in row.get('literature_record_ids',{}).values():
+                r=records[rid]
+                self.assertIn(r['method_citekey'],keys)
+                self.assertIn(r['source_citekey'],keys)
+                if row['method_id']=='glop':
+                    self.assertEqual(r['report_type'],'requoted_by_source')
+                    self.assertEqual(r['source_citekey'],'songROSESAM3ResponseOrientedPrompt2026')
+                if row['method_id']=='active':self.assertEqual(r['report_type'],'reproduced_by_source')
+                if row['resource']=='R':self.assertEqual(r['training_data'],'DLRSD')
+
+    def test_abstract_evidence_cannot_be_presented_as_an_inspected_pdf(self):
+        paper=Path(__file__).resolve().parents[1]
+        with (paper/'data/literature_results.csv').open() as stream:
+            records=list(csv.DictReader(stream))
+        r=next(r for r in records if r.get('evidence_type')=='publisher_abstract')
+        def read(row):
+            with tempfile.TemporaryDirectory() as d:
+                p=Path(d)/'source.csv'
+                with p.open('w',newline='') as f:
+                    w=csv.DictWriter(f,fieldnames=list(row));w.writeheader();w.writerow(row)
+                return m.read_literature(p)
+        self.assertIn(r['result_id'],read(r))
+        with self.assertRaises(m.DataError):read(dict(r,pdf_filename='unread.pdf'))
+        with self.assertRaises(m.DataError):read(dict(r,protocol_status='reference_only'))
+        with self.assertRaises(m.DataError):read(dict(r,source_url='https://example.org/abstract'))
 
     def test_per_class_scores_use_the_same_multiseed_selection(self):
         names=['background','building','road','water','barren','forest','agricultural']

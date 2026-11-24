@@ -1,0 +1,363 @@
+{
+  "date": "2026-11-24",
+  "base_commit": "1e4bb76386c514572883711c3fca8c311e1181cc",
+  "zotero_entries": 26,
+  "manual_entries": 11,
+  "duplicate_dois": {
+    "10.48550/arxiv.2602.06333": [
+      "peiTamingSAM3Wild2026",
+      "peiTamingSAM3Wild2026a"
+    ]
+  },
+  "canonical_conceptbank_key": "peiTamingSAM3Wild2026",
+  "missing_citation_keys": [],
+  "zotero_file_preserved": true,
+  "zotero_sha256": "e958b1908c78762d60ec53f55a8bf92068c98a1ecec15a52610814e57e59113f",
+  "new_manual_keys": [
+    "liu2024openvocabularysegmentationsemanticassistedcalibration",
+    "xu2023adapternetworkopenvocabularysemantic",
+    "xie2024sedsimpleencoderdecoderopenvocabulary",
+    "wang2024scliprethinkingselfattentiondense",
+    "lan2024clearclipdecomposingcliprepresentations",
+    "lan2024proxyclipproxyattentionimproves",
+    "zhang2025corrclipreconstructingpatchcorrelations",
+    "chen2026coninfercontextawareinferencetrainingfree",
+    "caoOVRSHighResolution2025",
+    "quUGDMoE2026"
+  ],
+  "entries": [
+    {
+      "key": "caiVDDVariedDrone2025",
+      "title": "VDD}}: {{Varied Drone Dataset}} for Semantic Segmentation",
+      "author": "Cai, Wenxiao and Jin, Ke and Hou, Jinyan and Guo, Cong and Wu, Letian and Yang, Wankou",
+      "year": "2025",
+      "doi": "10.1016/j.jvcir.2025.104429",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "carionSAM3Segment2026",
+      "title": "SAM}} 3: {{Segment Anything}} with {{Concepts",
+      "author": "Carion, Nicolas and Gustafson, Laura and Hu, Yuan-Ting and Debnath, Shoubhik and Hu, Ronghang and Suris, Didac and Ryali, Chaitanya and Alwala, Kalyan Vasudev and Khedr, Haitham and Huang, Andrew and Lei, Jie and Ma, Tengyu and Guo, Baishan and Kalla, Arpit and Marks, Markus and Greer, Joseph and Wang, Meng and Sun, Peize and R{\\\"a}dle, Roman and Afouras, Triantafyllos and Mavroudi, Effrosyni and Xu, Katherine and Wu, Tsung-Han and Zhou, Yu and Momeni, Liliane and Hazra, Rishi and Ding, Shuangrui and Vaze, Sagar and Porcher, Francois and Li, Feng and Li, Siyuan and Kamath, Aishwarya and Cheng, Ho Kei and Doll{\\'a}r, Piotr and Ravi, Nikhila and Saenko, Kate and Zhang, Pengchuan and Feichtenhofer, Christoph",
+      "year": "2026",
+      "doi": "10.48550/arXiv.2511.16719",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "chenLargeScaleStructureMotion2018",
+      "title": "Large-{{Scale Structure}} from {{Motion}} with {{Semantic Constraints}} of {{Aerial Images",
+      "author": "Chen, Yu and Wang, Yao and Lu, Peng and Chen, Yisong and Wang, Guoping",
+      "year": "2018",
+      "doi": "10.1007/978-3-030-03398-9_30",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "choCATSegCostAggregation2024",
+      "title": "CAT-Seg}}: {{Cost Aggregation}} for {{Open-Vocabulary Semantic Segmentation",
+      "author": "Cho, Seokju and Shin, Heeseong and Hong, Sunghwan and Arnab, Anurag and Seo, Paul Hongsuck and Kim, Seungryong",
+      "year": "2024",
+      "doi": "10.1109/CVPR52733.2024.00394",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "liExploringEfficientOpenVocabulary2026",
+      "title": "Exploring {{Efficient Open-Vocabulary Segmentation}} in the {{Remote Sensing",
+      "author": "Li, Bingyu and Dong, Haocheng and Zhang, Da and Zhao, Zhiyuan and Sun, Hao and Gao, Junyu",
+      "year": "2026",
+      "doi": "10.1609/aaai.v40i8.37521",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "liPerturbationRegularizedOpenVocabularyRemote2026",
+      "title": "Perturbation-{{Regularized Open-Vocabulary Remote Sensing Segmentation}} with {{Unified Multi-Domain Evaluation",
+      "author": "Li, Bingyu and Huo, Tao and Dong, Haocheng and Zhang, Da and Zhao, Zhiyuan and Gao, Junyu and Li, Xuelong",
+      "year": "2026",
+      "doi": "10.48550/arXiv.2604.15652",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "liSegEarthOV3ExploringSAM2026",
+      "title": "SegEarth-OV3}}: {{Exploring SAM}} 3 for {{Open-Vocabulary Semantic Segmentation}} in {{Remote Sensing Images",
+      "author": "Li, Kaiyu and Zhang, Shengqi and Wang, Yujie and Deng, Yupeng and Wang, Zhi and Meng, Deyu and Cao, Xiangyong",
+      "year": "2026",
+      "doi": "10.48550/arXiv.2512.08730",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "liSegEarthOVTrainingFreeOpenVocabulary2025",
+      "title": "SegEarth-OV}}: {{Towards Training-Free Open-Vocabulary Segmentation}} for {{Remote Sensing Images",
+      "author": "Li, Kaiyu and Liu, Ruixun and Cao, Xiangyong and Bai, Xueru and Zhou, Feng and Meng, Deyu and Wang, Zhi",
+      "year": "2025",
+      "doi": "10.1109/CVPR52734.2025.00986",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "liuGLoPSAM3DualPostprocessing2026",
+      "title": "GLoP-SAM3}}: {{A Dual Postprocessing Framework With Global}}--{{Local Prior Fusion}} and {{Reliability Gating}} for {{Open-Vocabulary Remote Sensing Segmentation",
+      "author": "Liu, Chang and Han, Yuzhuo and Kong, Xiangzhe and Li, Mingjie and Li, Yonghua",
+      "year": "2026",
+      "doi": "10.1109/TGRS.2026.3713962",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "liuRemoteCLIPVisionLanguage2024",
+      "title": "RemoteCLIP}}: {{A Vision Language Foundation Model}} for {{Remote Sensing",
+      "author": "Liu, Fan and Chen, Delong and Guan, Zhangqingyun and Zhou, Xiaocong and Zhu, Jiale and Ye, Qiaolin and Fu, Liyong and Zhou, Jun",
+      "year": "2024",
+      "doi": "10.1109/TGRS.2024.3390838",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "lyuUAVidSemanticSegmentation2020",
+      "title": "UAVid}}: {{A}} Semantic Segmentation Dataset for {{UAV}} Imagery",
+      "author": "Lyu, Ye and Vosselman, George and Xia, Gui-Song and Yilmaz, Alper and Yang, Michael Ying",
+      "year": "2020",
+      "doi": "10.1016/j.isprsjprs.2020.05.009",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "peiTamingSAM3Wild2026",
+      "title": "Taming {{SAM3}} in the {{Wild}}: {{A Concept Bank}} for {{Open-Vocabulary Segmentation",
+      "author": "Pei, Gensheng and Jiang, Xiruo and Yao, Yazhou and Shu, Xiangbo and Shen, Fumin and Jeon, Byeungwoo",
+      "year": "2026",
+      "doi": "10.48550/arXiv.2602.06333",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "peiTamingSAM3Wild2026a",
+      "title": "Taming {{SAM3}} in the {{Wild}}: {{A Concept Bank}} for {{Open-Vocabulary Segmentation",
+      "author": "Pei, Gensheng and Jiang, Xiruo and Yao, Yazhou and Shu, Xiangbo and Shen, Fumin and Jeon, Byeungwoo",
+      "year": "2026",
+      "doi": "10.48550/arXiv.2602.06333",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "PerformanceEvaluationSingleLabel",
+      "title": "Performance {{Evaluation}} of {{Single-Label}} and {{Multi-Label Remote Sensing Image Retrieval Using}} a {{Dense Labeling Dataset",
+      "author": "",
+      "year": "",
+      "doi": "",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "radfordLearningTransferableVisual2021",
+      "title": "Learning {{Transferable Visual Models From Natural Language Supervision",
+      "author": "Radford, Alec and Kim, Jong Wook and Hallacy, Chris and Ramesh, Aditya and Goh, Gabriel and Agarwal, Sandhini and Sastry, Girish and Askell, Amanda and Mishkin, Pamela and Clark, Jack and Krueger, Gretchen and Sutskever, Ilya",
+      "year": "2021",
+      "doi": "",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "songPromptCalibratedSAM32026",
+      "title": "Prompt-{{Calibrated SAM}} 3 for {{Open-Vocabulary Remote-Sensing Semantic Segmentation",
+      "author": "Song, Yanghui and Liu, Nanqing and Yin, Haonan and Gao, Yingjie and Yang, Chengfu and Ming, Qi",
+      "year": "2026",
+      "doi": "10.1109/LGRS.2026.3713378",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "songROSESAM3ResponseOrientedPrompt2026",
+      "title": "ROSE-SAM3}}: {{Response-Oriented Prompt Selection}} for {{Open-Vocabulary Remote Sensing Segmentation",
+      "author": "Song, Yanghui and Yang, Chengfu and Wen, Yongpeng and Hu, Zhanxuan and Lu, Wei and Ming, Qi and Liu, Nanqing and Li, Heng-Chao",
+      "year": "2026",
+      "doi": "10.48550/arXiv.2611.28112",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "tangPRSSegOpenVocabularyRemote2026",
+      "title": "PRS-Seg}}: {{Open-Vocabulary Remote Sensing Segmentation}} with {{Prototype Calibration}} and {{Boundary Refinement",
+      "author": "Tang, Zhenghua and Ma, Lili and Chen, Jinguang and Xu, Jingting and Li, Weiqian",
+      "year": "2026",
+      "doi": "10.1109/ICCS71313.2026.11739897",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "tienActiveSAMFastAccurate2026",
+      "title": "ActiveSAM}}: {{Fast}} and {{Accurate Open-Vocabulary Semantic Segmentation}} with {{Frozen SAM}} 3",
+      "author": "Tien, Tran Dinh and Shen, Zhiqiang",
+      "year": "2026",
+      "doi": "10.48550/arXiv.2606.16996",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "wangGeometricTransformationFeatureAdaptiveManifold2026",
+      "title": "A {{Geometric-Transformation Feature-Adaptive Manifold Restoration Method}} for {{Open-Vocabulary Semantic Segmentation}} of {{Remote Sensing Images",
+      "author": "Wang, Jianzheng and Ni, Huan and Niu, Xiaonan and Hong, Danfeng and Guan, Haiyan",
+      "year": "2026",
+      "doi": "10.48550/arXiv.2610.04300",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "wangLoveDARemoteSensing2022",
+      "title": "LoveDA}}: {{A Remote Sensing Land-Cover Dataset}} for {{Domain Adaptive Semantic Segmentation",
+      "author": "Wang, Junjue and Zheng, Zhuo and Ma, Ailong and Lu, Xiaoyan and Zhong, Yanfei",
+      "year": "2022",
+      "doi": "10.48550/arXiv.2110.08733",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "wangRSGPNetGeometricPrompting2026",
+      "title": "RSGPNet}}: {{Geometric Prompting}} for {{Remote Sensing Open-Vocabulary Semantic Segmentation",
+      "author": "Wang, Shanwen and Sun, Xin and Wang, Sirui and Zhu, Xiao Xiang",
+      "year": "2026",
+      "doi": "10.1109/JSTARS.2026.3725927",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "yeOpenVocabularyRemoteSensing2025",
+      "title": "Towards {{Open-Vocabulary Remote Sensing Image Semantic Segmentation",
+      "author": "Ye, Chengyang and Zhuge, Yunzhi and Zhang, Pingping",
+      "year": "2025",
+      "doi": "10.1609/aaai.v39i9.33022",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "yinPCASegRevisitingCost2026",
+      "title": "PCA-Seg}}: {{Revisiting Cost Aggregation}} for {{Open-Vocabulary Semantic}} and {{Part Segmentation",
+      "author": "Yin, Jianjian and Chen, Tao and Chen, Yi and Pei, Gensheng and Shu, Xiangbo and Yao, Yazhou and Shen, Fumin",
+      "year": "2026",
+      "doi": "10.48550/arXiv.2603.17520",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "zamirISAIDLargescaleDataset2019",
+      "title": "iSAID}}: {{A Large}}-Scale {{Dataset}} for {{Instance Segmentation}} in {{Aerial Images",
+      "author": "Zamir, Syed Waqas and Arora, Aditya and Gupta, Akshita and Khan, Salman and Sun, Guolei and Khan, Fahad Shahbaz and Zhu, Fan and Shao, Ling and Xia, Gui-Song and Bai, Xiang",
+      "year": "2019",
+      "doi": "10.48550/arXiv.1905.12886",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "zhuSkySenseOOpenWorldRemote2025a",
+      "title": "SkySense-O}}: {{Towards Open-World Remote Sensing Interpretation}} with {{Vision-Centric Visual-Language Modeling",
+      "author": "Zhu, Qi and Lao, Jiangwei and Ji, Deyi and Luo, Junwei and Wu, Kang and Zhang, Yingying and Ru, Lixiang and Wang, Jian and Chen, Jingdong and Yang, Ming and Liu, Dong and Zhao, Feng",
+      "year": "2025",
+      "doi": "",
+      "url": "",
+      "bib_file": "references.bib"
+    },
+    {
+      "key": "liuGeoSegOV2026",
+      "title": "GeoSeg-OV}: Bridging Geospatial Gaps with Structural Guidance for Open-Vocabulary Remote Sensing Segmentation",
+      "author": "Liu, Ruizhong and Luo, Tingzhang and Zhang, Zaiyan and Chen, Jundong and Chen, Hongruixuan and Huang, Shaoguang and Zhang, Hongyan",
+      "year": "2026",
+      "doi": "10.48550/arXiv.2608.10426",
+      "url": "https://arxiv.org/abs/2608.10426",
+      "bib_file": "references_extra.bib"
+    },
+    {
+      "key": "liu2024openvocabularysegmentationsemanticassistedcalibration",
+      "title": "Open-Vocabulary Segmentation with Semantic-Assisted Calibration",
+      "author": "Yong Liu and Sule Bai and Guanbin Li and Yitong Wang and Yansong Tang",
+      "year": "2024",
+      "doi": "",
+      "url": "https://arxiv.org/abs/2312.04089",
+      "bib_file": "references_extra.bib"
+    },
+    {
+      "key": "xu2023adapternetworkopenvocabularysemantic",
+      "title": "Side Adapter Network for Open-Vocabulary Semantic Segmentation",
+      "author": "Mengde Xu and Zheng Zhang and Fangyun Wei and Han Hu and Xiang Bai",
+      "year": "2023",
+      "doi": "",
+      "url": "https://arxiv.org/abs/2302.12242",
+      "bib_file": "references_extra.bib"
+    },
+    {
+      "key": "xie2024sedsimpleencoderdecoderopenvocabulary",
+      "title": "SED: A Simple Encoder-Decoder for Open-Vocabulary Semantic Segmentation",
+      "author": "Bin Xie and Jiale Cao and Jin Xie and Fahad Shahbaz Khan and Yanwei Pang",
+      "year": "2024",
+      "doi": "",
+      "url": "https://arxiv.org/abs/2311.15537",
+      "bib_file": "references_extra.bib"
+    },
+    {
+      "key": "wang2024scliprethinkingselfattentiondense",
+      "title": "SCLIP: Rethinking Self-Attention for Dense Vision-Language Inference",
+      "author": "Feng Wang and Jieru Mei and Alan Yuille",
+      "year": "2024",
+      "doi": "",
+      "url": "https://arxiv.org/abs/2312.01597",
+      "bib_file": "references_extra.bib"
+    },
+    {
+      "key": "lan2024clearclipdecomposingcliprepresentations",
+      "title": "ClearCLIP: Decomposing CLIP Representations for Dense Vision-Language Inference",
+      "author": "Mengcheng Lan and Chaofeng Chen and Yiping Ke and Xinjiang Wang and Litong Feng and Wayne Zhang",
+      "year": "2024",
+      "doi": "",
+      "url": "https://arxiv.org/abs/2407.12442",
+      "bib_file": "references_extra.bib"
+    },
+    {
+      "key": "lan2024proxyclipproxyattentionimproves",
+      "title": "ProxyCLIP: Proxy Attention Improves CLIP for Open-Vocabulary Segmentation",
+      "author": "Mengcheng Lan and Chaofeng Chen and Yiping Ke and Xinjiang Wang and Litong Feng and Wayne Zhang",
+      "year": "2024",
+      "doi": "",
+      "url": "https://arxiv.org/abs/2408.04883",
+      "bib_file": "references_extra.bib"
+    },
+    {
+      "key": "zhang2025corrclipreconstructingpatchcorrelations",
+      "title": "CorrCLIP: Reconstructing Patch Correlations in CLIP for Open-Vocabulary Semantic Segmentation",
+      "author": "Dengke Zhang and Fagui Liu and Quan Tang",
+      "year": "2025",
+      "doi": "",
+      "url": "https://arxiv.org/abs/2411.10086",
+      "bib_file": "references_extra.bib"
+    },
+    {
+      "key": "chen2026coninfercontextawareinferencetrainingfree",
+      "title": "ConInfer: Context-Aware Inference for Training-Free Open-Vocabulary Remote Sensing Segmentation",
+      "author": "Wenyang Chen and Zhanxuan Hu and Yaping Zhang and Hailong Ning and Yonghang Tai",
+      "year": "2026",
+      "doi": "",
+      "url": "https://arxiv.org/abs/2603.29271",
+      "bib_file": "references_extra.bib"
+    },
+    {
+      "key": "caoOVRSHighResolution2025",
+      "title": "Open-Vocabulary High-Resolution Remote Sensing Image Semantic Segmentation",
+      "author": "Cao, Qinglong and Chen, Yuntian and Ma, Chao and Yang, Xiaokang",
+      "year": "",
+      "doi": "",
+      "url": "https://ieeexplore.ieee.org/document/10962188/",
+      "bib_file": "references_extra.bib"
+    },
+    {
+      "key": "quUGDMoE2026",
+      "title": "UGDMoE}: An Uncertainty-Guided Mixture-of-Experts Decoder for Open-Vocabulary Remote Sensing Segmentation",
+      "author": "Qu, Wenqiu and Jing, Guifei and Yuan, Qiang and Guo, Zhushenyu and Zhang, Jianfeng",
+      "year": "",
+      "doi": "10.3390/rs18091349}, url = {https://www.mdpi.com/2072-4292/18/9/1349",
+      "url": "",
+      "bib_file": "references_extra.bib"
+    }
+  ]
+}

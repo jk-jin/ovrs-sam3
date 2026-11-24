@@ -12,26 +12,219 @@
   ],
   "main_rows": [
     {
-      "row_id": "semantic_only",
-      "method_id": "sam3_semantic",
-      "variant_id": "semantic_only",
-      "label": "SAM 3 Semantic-only",
-      "panel": "native",
-      "resource": "N",
-      "adaptation_data": "None",
-      "training_dataset": "none",
-      "native_selection": {}
+      "row_id": "scan_dlrsd_large",
+      "method_id": "scan",
+      "variant_id": "dlrsd_large",
+      "label": "SCAN",
+      "citekey": "liu2024openvocabularysegmentationsemanticassistedcalibration",
+      "resource": "R",
+      "panel": "reference",
+      "comparison_group": "Training on remote sensing segmentation data",
+      "adaptation_data": "DLRSD",
+      "literature_record_ids": {
+        "DLRSD": "scan_dlrsd_large_dlrsd",
+        "iSAID": "scan_dlrsd_large_isaid",
+        "LoveDA": "scan_dlrsd_large_loveda",
+        "Potsdam": "scan_dlrsd_large_potsdam",
+        "Vaihingen": "scan_dlrsd_large_vaihingen",
+        "UAVid": "scan_dlrsd_large_uavid",
+        "UDD5": "scan_dlrsd_large_udd5",
+        "VDD": "scan_dlrsd_large_vdd"
+      },
+      "source_citekey": "liExploringEfficientOpenVocabulary2026"
     },
     {
-      "row_id": "semantic_presence",
-      "method_id": "sam3_semantic",
-      "variant_id": "semantic_presence",
-      "label": "SAM 3 Semantic × Presence",
-      "panel": "native",
-      "resource": "N",
-      "adaptation_data": "None",
-      "training_dataset": "none",
-      "native_selection": {}
+      "row_id": "san_dlrsd_large",
+      "method_id": "san",
+      "variant_id": "dlrsd_large",
+      "label": "SAN",
+      "citekey": "xu2023adapternetworkopenvocabularysemantic",
+      "resource": "R",
+      "panel": "reference",
+      "comparison_group": "Training on remote sensing segmentation data",
+      "adaptation_data": "DLRSD",
+      "literature_record_ids": {
+        "DLRSD": "san_dlrsd_large_dlrsd",
+        "iSAID": "san_dlrsd_large_isaid",
+        "LoveDA": "san_dlrsd_large_loveda",
+        "Potsdam": "san_dlrsd_large_potsdam",
+        "Vaihingen": "san_dlrsd_large_vaihingen",
+        "UAVid": "san_dlrsd_large_uavid",
+        "UDD5": "san_dlrsd_large_udd5",
+        "VDD": "san_dlrsd_large_vdd"
+      },
+      "source_citekey": "liExploringEfficientOpenVocabulary2026"
+    },
+    {
+      "row_id": "sed_dlrsd_large",
+      "method_id": "sed",
+      "variant_id": "dlrsd_large",
+      "label": "SED",
+      "citekey": "xie2024sedsimpleencoderdecoderopenvocabulary",
+      "resource": "R",
+      "panel": "reference",
+      "comparison_group": "Training on remote sensing segmentation data",
+      "adaptation_data": "DLRSD",
+      "literature_record_ids": {
+        "DLRSD": "sed_dlrsd_large_dlrsd",
+        "iSAID": "sed_dlrsd_large_isaid",
+        "LoveDA": "sed_dlrsd_large_loveda",
+        "Potsdam": "sed_dlrsd_large_potsdam",
+        "Vaihingen": "sed_dlrsd_large_vaihingen",
+        "UAVid": "sed_dlrsd_large_uavid",
+        "UDD5": "sed_dlrsd_large_udd5",
+        "VDD": "sed_dlrsd_large_vdd"
+      },
+      "source_citekey": "liExploringEfficientOpenVocabulary2026"
+    },
+    {
+      "row_id": "cat_seg_dlrsd_large",
+      "method_id": "cat_seg",
+      "variant_id": "dlrsd_large",
+      "label": "CAT-Seg",
+      "citekey": "choCATSegCostAggregation2024",
+      "resource": "R",
+      "panel": "reference",
+      "comparison_group": "Training on remote sensing segmentation data",
+      "adaptation_data": "DLRSD",
+      "literature_record_ids": {
+        "DLRSD": "cat_seg_dlrsd_large_dlrsd",
+        "iSAID": "cat_seg_dlrsd_large_isaid",
+        "LoveDA": "cat_seg_dlrsd_large_loveda",
+        "Potsdam": "cat_seg_dlrsd_large_potsdam",
+        "Vaihingen": "cat_seg_dlrsd_large_vaihingen",
+        "UAVid": "cat_seg_dlrsd_large_uavid",
+        "UDD5": "cat_seg_dlrsd_large_udd5",
+        "VDD": "cat_seg_dlrsd_large_vdd"
+      },
+      "source_citekey": "liExploringEfficientOpenVocabulary2026"
+    },
+    {
+      "row_id": "ovrs_dlrsd_large",
+      "method_id": "ovrs",
+      "variant_id": "dlrsd_large",
+      "label": "OVRS",
+      "citekey": "caoOVRSHighResolution2025",
+      "resource": "R",
+      "panel": "reference",
+      "comparison_group": "Training on remote sensing segmentation data",
+      "adaptation_data": "DLRSD",
+      "literature_record_ids": {
+        "DLRSD": "ovrs_dlrsd_large_dlrsd",
+        "iSAID": "ovrs_dlrsd_large_isaid",
+        "LoveDA": "ovrs_dlrsd_large_loveda",
+        "Potsdam": "ovrs_dlrsd_large_potsdam",
+        "Vaihingen": "ovrs_dlrsd_large_vaihingen",
+        "UAVid": "ovrs_dlrsd_large_uavid",
+        "UDD5": "ovrs_dlrsd_large_udd5",
+        "VDD": "ovrs_dlrsd_large_vdd"
+      },
+      "source_citekey": "liExploringEfficientOpenVocabulary2026"
+    },
+    {
+      "row_id": "gsnet_dlrsd_large",
+      "method_id": "gsnet",
+      "variant_id": "dlrsd_large",
+      "label": "GSNet",
+      "citekey": "yeOpenVocabularyRemoteSensing2025",
+      "resource": "R",
+      "panel": "reference",
+      "comparison_group": "Training on remote sensing segmentation data",
+      "adaptation_data": "DLRSD",
+      "literature_record_ids": {
+        "DLRSD": "gsnet_dlrsd_large_dlrsd",
+        "iSAID": "gsnet_dlrsd_large_isaid",
+        "LoveDA": "gsnet_dlrsd_large_loveda",
+        "Potsdam": "gsnet_dlrsd_large_potsdam",
+        "Vaihingen": "gsnet_dlrsd_large_vaihingen",
+        "UAVid": "gsnet_dlrsd_large_uavid",
+        "UDD5": "gsnet_dlrsd_large_udd5",
+        "VDD": "gsnet_dlrsd_large_vdd"
+      },
+      "source_citekey": "liExploringEfficientOpenVocabulary2026"
+    },
+    {
+      "row_id": "rskt_seg_dlrsd_large",
+      "method_id": "rskt_seg",
+      "variant_id": "dlrsd_large",
+      "label": "RSKT-Seg",
+      "citekey": "liExploringEfficientOpenVocabulary2026",
+      "resource": "R",
+      "panel": "reference",
+      "comparison_group": "Training on remote sensing segmentation data",
+      "adaptation_data": "DLRSD",
+      "literature_record_ids": {
+        "DLRSD": "rskt_seg_dlrsd_large_dlrsd",
+        "iSAID": "rskt_seg_dlrsd_large_isaid",
+        "LoveDA": "rskt_seg_dlrsd_large_loveda",
+        "Potsdam": "rskt_seg_dlrsd_large_potsdam",
+        "Vaihingen": "rskt_seg_dlrsd_large_vaihingen",
+        "UAVid": "rskt_seg_dlrsd_large_uavid",
+        "UDD5": "rskt_seg_dlrsd_large_udd5",
+        "VDD": "rskt_seg_dlrsd_large_vdd"
+      },
+      "source_citekey": "liExploringEfficientOpenVocabulary2026"
+    },
+    {
+      "row_id": "pi_seg_dlrsd_vitl",
+      "method_id": "pi_seg",
+      "variant_id": "dlrsd_vitl",
+      "label": "Pi-Seg",
+      "citekey": "liPerturbationRegularizedOpenVocabularyRemote2026",
+      "resource": "I",
+      "panel": "reference",
+      "comparison_group": "Training on remote sensing segmentation data",
+      "adaptation_data": "DLRSD",
+      "literature_record_ids": {
+        "iSAID": "pi_seg_dlrsd_vitl_isaid",
+        "LoveDA": "pi_seg_dlrsd_vitl_loveda",
+        "Potsdam": "pi_seg_dlrsd_vitl_potsdam",
+        "Vaihingen": "pi_seg_dlrsd_vitl_vaihingen",
+        "UAVid": "pi_seg_dlrsd_vitl_uavid",
+        "UDD5": "pi_seg_dlrsd_vitl_udd5",
+        "VDD": "pi_seg_dlrsd_vitl_vdd"
+      },
+      "source_citekey": "liPerturbationRegularizedOpenVocabularyRemote2026"
+    },
+    {
+      "row_id": "ugdm_dlrsd",
+      "method_id": "ugdm",
+      "variant_id": "dlrsd",
+      "label": "UGDMoE",
+      "citekey": "quUGDMoE2026",
+      "resource": "U",
+      "panel": "reference",
+      "comparison_group": "Training on remote sensing segmentation data",
+      "adaptation_data": "DLRSD",
+      "literature_record_ids": {
+        "DLRSD": "ugdm_dlrsd_dlrsd",
+        "iSAID": "ugdm_dlrsd_isaid",
+        "LoveDA": "ugdm_dlrsd_loveda",
+        "Potsdam": "ugdm_dlrsd_potsdam",
+        "Vaihingen": "ugdm_dlrsd_vaihingen",
+        "UAVid": "ugdm_dlrsd_uavid",
+        "UDD5": "ugdm_dlrsd_udd5",
+        "VDD": "ugdm_dlrsd_vdd"
+      },
+      "source_citekey": "quUGDMoE2026"
+    },
+    {
+      "row_id": "sky_cvpr2025",
+      "method_id": "sky",
+      "variant_id": "cvpr2025",
+      "label": "SkySense-O",
+      "citekey": "zhuSkySenseOOpenWorldRemote2025a",
+      "resource": "H",
+      "panel": "reference",
+      "comparison_group": "Training on remote sensing segmentation data",
+      "adaptation_data": "Sky-SA",
+      "literature_record_ids": {
+        "iSAID": "sky_cvpr2025_isaid",
+        "LoveDA": "sky_cvpr2025_loveda",
+        "Potsdam": "sky_cvpr2025_potsdam",
+        "Vaihingen": "sky_cvpr2025_vaihingen"
+      },
+      "source_citekey": "zhuSkySenseOOpenWorldRemote2025a"
     },
     {
       "row_id": "full",
@@ -42,7 +235,93 @@
       "resource": "N",
       "native_selection": {},
       "adaptation_data": "DLRSD",
-      "training_dataset": "dlrsd"
+      "training_dataset": "dlrsd",
+      "comparison_group": "Training on remote sensing segmentation data",
+      "citekey": ""
+    },
+    {
+      "row_id": "sclip_ov3_report",
+      "method_id": "sclip",
+      "variant_id": "ov3_report",
+      "label": "SCLIP",
+      "citekey": "wang2024scliprethinkingselfattentiondense",
+      "resource": "S",
+      "panel": "reference",
+      "comparison_group": "Training-free",
+      "adaptation_data": "None",
+      "literature_record_ids": {
+        "iSAID": "sclip_ov3_report_isaid",
+        "LoveDA": "sclip_ov3_report_loveda",
+        "Potsdam": "sclip_ov3_report_potsdam",
+        "Vaihingen": "sclip_ov3_report_vaihingen",
+        "UAVid": "sclip_ov3_report_uavid",
+        "UDD5": "sclip_ov3_report_udd5",
+        "VDD": "sclip_ov3_report_vdd"
+      },
+      "source_citekey": "liSegEarthOV3ExploringSAM2026"
+    },
+    {
+      "row_id": "clear_ov3_report",
+      "method_id": "clear",
+      "variant_id": "ov3_report",
+      "label": "ClearCLIP",
+      "citekey": "lan2024clearclipdecomposingcliprepresentations",
+      "resource": "S",
+      "panel": "reference",
+      "comparison_group": "Training-free",
+      "adaptation_data": "None",
+      "literature_record_ids": {
+        "iSAID": "clear_ov3_report_isaid",
+        "LoveDA": "clear_ov3_report_loveda",
+        "Potsdam": "clear_ov3_report_potsdam",
+        "Vaihingen": "clear_ov3_report_vaihingen",
+        "UAVid": "clear_ov3_report_uavid",
+        "UDD5": "clear_ov3_report_udd5",
+        "VDD": "clear_ov3_report_vdd"
+      },
+      "source_citekey": "liSegEarthOV3ExploringSAM2026"
+    },
+    {
+      "row_id": "proxy_ov3_report",
+      "method_id": "proxy",
+      "variant_id": "ov3_report",
+      "label": "ProxyCLIP",
+      "citekey": "lan2024proxyclipproxyattentionimproves",
+      "resource": "S",
+      "panel": "reference",
+      "comparison_group": "Training-free",
+      "adaptation_data": "None",
+      "literature_record_ids": {
+        "iSAID": "proxy_ov3_report_isaid",
+        "LoveDA": "proxy_ov3_report_loveda",
+        "Potsdam": "proxy_ov3_report_potsdam",
+        "Vaihingen": "proxy_ov3_report_vaihingen",
+        "UAVid": "proxy_ov3_report_uavid",
+        "UDD5": "proxy_ov3_report_udd5",
+        "VDD": "proxy_ov3_report_vdd"
+      },
+      "source_citekey": "liSegEarthOV3ExploringSAM2026"
+    },
+    {
+      "row_id": "corr_ov3_report",
+      "method_id": "corr",
+      "variant_id": "ov3_report",
+      "label": "CorrCLIP",
+      "citekey": "zhang2025corrclipreconstructingpatchcorrelations",
+      "resource": "S",
+      "panel": "reference",
+      "comparison_group": "Training-free",
+      "adaptation_data": "None",
+      "literature_record_ids": {
+        "iSAID": "corr_ov3_report_isaid",
+        "LoveDA": "corr_ov3_report_loveda",
+        "Potsdam": "corr_ov3_report_potsdam",
+        "Vaihingen": "corr_ov3_report_vaihingen",
+        "UAVid": "corr_ov3_report_uavid",
+        "UDD5": "corr_ov3_report_udd5",
+        "VDD": "corr_ov3_report_vdd"
+      },
+      "source_citekey": "liSegEarthOV3ExploringSAM2026"
     },
     {
       "row_id": "ov_original",
@@ -62,7 +341,50 @@
         "UDD5": "ov_cvpr_udd5",
         "VDD": "ov_cvpr_vdd"
       },
-      "adaptation_data": "None"
+      "adaptation_data": "None",
+      "comparison_group": "Training-free"
+    },
+    {
+      "row_id": "coninfer_arxiv_v1",
+      "method_id": "coninfer",
+      "variant_id": "arxiv_v1",
+      "label": "ConInfer",
+      "citekey": "chen2026coninfercontextawareinferencetrainingfree",
+      "resource": "C",
+      "panel": "reference",
+      "comparison_group": "Training-free",
+      "adaptation_data": "None",
+      "literature_record_ids": {
+        "iSAID": "coninfer_arxiv_v1_isaid",
+        "LoveDA": "coninfer_arxiv_v1_loveda",
+        "Potsdam": "coninfer_arxiv_v1_potsdam",
+        "Vaihingen": "coninfer_arxiv_v1_vaihingen",
+        "UAVid": "coninfer_arxiv_v1_uavid",
+        "UDD5": "coninfer_arxiv_v1_udd5",
+        "VDD": "coninfer_arxiv_v1_vdd"
+      },
+      "source_citekey": "chen2026coninfercontextawareinferencetrainingfree"
+    },
+    {
+      "row_id": "active_proc_reproduction",
+      "method_id": "active",
+      "variant_id": "proc_reproduction",
+      "label": "ActiveSAM (ProC-SAM3 reproduction)",
+      "citekey": "tienActiveSAMFastAccurate2026",
+      "resource": "P",
+      "panel": "reference",
+      "comparison_group": "Training-free",
+      "adaptation_data": "None",
+      "literature_record_ids": {
+        "iSAID": "active_proc_reproduction_isaid",
+        "LoveDA": "active_proc_reproduction_loveda",
+        "Potsdam": "active_proc_reproduction_potsdam",
+        "Vaihingen": "active_proc_reproduction_vaihingen",
+        "UAVid": "active_proc_reproduction_uavid",
+        "UDD5": "active_proc_reproduction_udd5",
+        "VDD": "active_proc_reproduction_vdd"
+      },
+      "source_citekey": "songPromptCalibratedSAM32026"
     },
     {
       "row_id": "ov3_original",
@@ -82,7 +404,47 @@
         "UDD5": "ov3_original_udd5",
         "VDD": "ov3_original_vdd"
       },
-      "adaptation_data": "None"
+      "adaptation_data": "None",
+      "comparison_group": "Training-free"
+    },
+    {
+      "row_id": "rsgp_arxiv_v1",
+      "method_id": "rsgp",
+      "variant_id": "arxiv_v1",
+      "label": "RSGPNet (own paper)",
+      "citekey": "wangRSGPNetGeometricPrompting2026",
+      "resource": "J",
+      "panel": "reference",
+      "comparison_group": "Training-free",
+      "adaptation_data": "None",
+      "literature_record_ids": {
+        "LoveDA": "rsgp_arxiv_v1_loveda",
+        "Potsdam": "rsgp_arxiv_v1_potsdam",
+        "Vaihingen": "rsgp_arxiv_v1_vaihingen",
+        "UDD5": "rsgp_arxiv_v1_udd5"
+      },
+      "source_citekey": "wangRSGPNetGeometricPrompting2026"
+    },
+    {
+      "row_id": "glop_rose_report",
+      "method_id": "glop",
+      "variant_id": "rose_report",
+      "label": "GLoP-SAM3 (ROSE report)",
+      "citekey": "liuGLoPSAM3DualPostprocessing2026",
+      "resource": "O",
+      "panel": "reference",
+      "comparison_group": "Training-free",
+      "adaptation_data": "None",
+      "literature_record_ids": {
+        "iSAID": "glop_rose_report_isaid",
+        "LoveDA": "glop_rose_report_loveda",
+        "Potsdam": "glop_rose_report_potsdam",
+        "Vaihingen": "glop_rose_report_vaihingen",
+        "UAVid": "glop_rose_report_uavid",
+        "UDD5": "glop_rose_report_udd5",
+        "VDD": "glop_rose_report_vdd"
+      },
+      "source_citekey": "songROSESAM3ResponseOrientedPrompt2026"
     },
     {
       "row_id": "proc_original",
@@ -102,90 +464,53 @@
         "UDD5": "proc_original_udd5",
         "VDD": "proc_original_vdd"
       },
-      "adaptation_data": "None"
+      "adaptation_data": "None",
+      "comparison_group": "Training-free"
     },
     {
-      "row_id": "cat_seg_rskt_isaid_l",
-      "method_id": "cat_seg",
-      "variant_id": "isaid_vitl",
-      "label": "CAT-Seg (RSKT report)",
-      "citekey": "choCATSegCostAggregation2024",
-      "source_citekey": "liExploringEfficientOpenVocabulary2026",
-      "resource": "R",
+      "row_id": "rose_arxiv_v1",
+      "method_id": "rose",
+      "variant_id": "arxiv_v1",
+      "label": "ROSE-SAM3",
+      "citekey": "songROSESAM3ResponseOrientedPrompt2026",
+      "resource": "O",
       "panel": "reference",
+      "comparison_group": "Training-free",
+      "adaptation_data": "Unlabeled",
       "literature_record_ids": {
-        "DLRSD": "cat_seg_rskt_isaid_l_dlrsd",
-        "iSAID": "cat_seg_rskt_isaid_l_isaid",
-        "LoveDA": "cat_seg_rskt_isaid_l_loveda",
-        "Potsdam": "cat_seg_rskt_isaid_l_potsdam",
-        "Vaihingen": "cat_seg_rskt_isaid_l_vaihingen",
-        "UAVid": "cat_seg_rskt_isaid_l_uavid",
-        "UDD5": "cat_seg_rskt_isaid_l_udd5",
-        "VDD": "cat_seg_rskt_isaid_l_vdd"
+        "iSAID": "rose_arxiv_v1_isaid",
+        "LoveDA": "rose_arxiv_v1_loveda",
+        "Potsdam": "rose_arxiv_v1_potsdam",
+        "Vaihingen": "rose_arxiv_v1_vaihingen",
+        "UAVid": "rose_arxiv_v1_uavid",
+        "UDD5": "rose_arxiv_v1_udd5",
+        "VDD": "rose_arxiv_v1_vdd"
       },
-      "adaptation_data": "iSAID"
+      "source_citekey": "songROSESAM3ResponseOrientedPrompt2026"
     },
     {
-      "row_id": "rskt_seg_rskt_isaid_l",
-      "method_id": "rskt_seg",
-      "variant_id": "isaid_vitl",
-      "label": "RSKT-Seg",
-      "citekey": "liExploringEfficientOpenVocabulary2026",
-      "source_citekey": "liExploringEfficientOpenVocabulary2026",
-      "resource": "R",
-      "panel": "reference",
-      "literature_record_ids": {
-        "DLRSD": "rskt_seg_rskt_isaid_l_dlrsd",
-        "iSAID": "rskt_seg_rskt_isaid_l_isaid",
-        "LoveDA": "rskt_seg_rskt_isaid_l_loveda",
-        "Potsdam": "rskt_seg_rskt_isaid_l_potsdam",
-        "Vaihingen": "rskt_seg_rskt_isaid_l_vaihingen",
-        "UAVid": "rskt_seg_rskt_isaid_l_uavid",
-        "UDD5": "rskt_seg_rskt_isaid_l_udd5",
-        "VDD": "rskt_seg_rskt_isaid_l_vdd"
-      },
-      "adaptation_data": "iSAID"
+      "row_id": "semantic_only",
+      "method_id": "sam3_semantic",
+      "variant_id": "semantic_only",
+      "label": "SAM 3 Semantic-only",
+      "panel": "native",
+      "resource": "N",
+      "adaptation_data": "None",
+      "training_dataset": "none",
+      "native_selection": {},
+      "comparison_group": "Training-free"
     },
     {
-      "row_id": "pi_isaid_l",
-      "method_id": "pi_seg",
-      "variant_id": "isaid_vitl",
-      "label": "Pi-Seg",
-      "citekey": "liPerturbationRegularizedOpenVocabularyRemote2026",
-      "source_citekey": "liPerturbationRegularizedOpenVocabularyRemote2026",
-      "resource": "I",
-      "panel": "reference",
-      "literature_record_ids": {
-        "DLRSD": "pi_isaid_l_dlrsd",
-        "LoveDA": "pi_isaid_l_loveda",
-        "Potsdam": "pi_isaid_l_potsdam",
-        "Vaihingen": "pi_isaid_l_vaihingen",
-        "UAVid": "pi_isaid_l_uavid",
-        "UDD5": "pi_isaid_l_udd5",
-        "VDD": "pi_isaid_l_vdd"
-      },
-      "adaptation_data": "iSAID"
-    },
-    {
-      "row_id": "gsnet_rskt_isaid_l",
-      "method_id": "gsnet",
-      "variant_id": "isaid_vitl",
-      "label": "GSNet (RSKT report)",
-      "citekey": "yeOpenVocabularyRemoteSensing2025",
-      "source_citekey": "liExploringEfficientOpenVocabulary2026",
-      "resource": "R",
-      "panel": "reference",
-      "literature_record_ids": {
-        "DLRSD": "gsnet_rskt_isaid_l_dlrsd",
-        "iSAID": "gsnet_rskt_isaid_l_isaid",
-        "LoveDA": "gsnet_rskt_isaid_l_loveda",
-        "Potsdam": "gsnet_rskt_isaid_l_potsdam",
-        "Vaihingen": "gsnet_rskt_isaid_l_vaihingen",
-        "UAVid": "gsnet_rskt_isaid_l_uavid",
-        "UDD5": "gsnet_rskt_isaid_l_udd5",
-        "VDD": "gsnet_rskt_isaid_l_vdd"
-      },
-      "adaptation_data": "iSAID"
+      "row_id": "semantic_presence",
+      "method_id": "sam3_semantic",
+      "variant_id": "semantic_presence",
+      "label": "SAM 3 Semantic × Presence",
+      "panel": "native",
+      "resource": "N",
+      "adaptation_data": "None",
+      "training_dataset": "none",
+      "native_selection": {},
+      "comparison_group": "Training-free"
     }
   ],
   "training_dataset": "dlrsd",
@@ -214,10 +539,17 @@
   "std_ddof": 1,
   "efficiency_selection": {},
   "approved_reported_result_ids": [
-    "cat_seg_rskt_isaid_l_loveda",
-    "gsnet_rskt_isaid_l_loveda",
-    "rskt_seg_rskt_isaid_l_loveda",
-    "pi_isaid_l_loveda"
+    "scan_dlrsd_large_loveda",
+    "san_dlrsd_large_loveda",
+    "sed_dlrsd_large_loveda",
+    "cat_seg_dlrsd_large_loveda",
+    "ovrs_dlrsd_large_loveda",
+    "gsnet_dlrsd_large_loveda",
+    "rskt_seg_dlrsd_large_loveda",
+    "pi_seg_dlrsd_vitl_loveda",
+    "prs_publisher_abstract_loveda",
+    "prs_publisher_abstract_potsdam",
+    "prs_publisher_abstract_vaihingen"
   ],
   "ablation_rows": [
     {
@@ -381,6 +713,82 @@
       "background": "background",
       "prediction_prob_threshold": 0.5,
       "filter_active": true
+    }
+  ],
+  "additional_rows": [
+    {
+      "row_id": "gfmr_arxiv_v1_full",
+      "method_id": "gfmr",
+      "variant_id": "arxiv_v1_full",
+      "label": "GFMR (full)",
+      "citekey": "wangGeometricTransformationFeatureAdaptiveManifold2026",
+      "resource": "F",
+      "panel": "reference",
+      "comparison_group": "Test-time adaptation",
+      "adaptation_data": "Online GN",
+      "literature_record_ids": {
+        "iSAID": "gfmr_arxiv_v1_full_isaid",
+        "LoveDA": "gfmr_arxiv_v1_full_loveda",
+        "Potsdam": "gfmr_arxiv_v1_full_potsdam",
+        "Vaihingen": "gfmr_arxiv_v1_full_vaihingen",
+        "UAVid": "gfmr_arxiv_v1_full_uavid",
+        "UDD5": "gfmr_arxiv_v1_full_udd5",
+        "VDD": "gfmr_arxiv_v1_full_vdd"
+      },
+      "source_citekey": "wangGeometricTransformationFeatureAdaptiveManifold2026"
+    },
+    {
+      "row_id": "cb_arxiv_v1_gt_support",
+      "method_id": "cb",
+      "variant_id": "arxiv_v1_gt_support",
+      "label": "ConceptBank (v1, GT support)",
+      "citekey": "peiTamingSAM3Wild2026",
+      "resource": "B",
+      "panel": "reference",
+      "comparison_group": "Support-assisted frozen inference",
+      "adaptation_data": "GT support",
+      "literature_record_ids": {
+        "iSAID": "cb_arxiv_v1_gt_support_isaid",
+        "LoveDA": "cb_arxiv_v1_gt_support_loveda",
+        "Potsdam": "cb_arxiv_v1_gt_support_potsdam",
+        "Vaihingen": "cb_arxiv_v1_gt_support_vaihingen"
+      },
+      "source_citekey": "peiTamingSAM3Wild2026"
+    },
+    {
+      "row_id": "prs_publisher_abstract",
+      "method_id": "prs",
+      "variant_id": "publisher_abstract",
+      "label": "PRS-Seg",
+      "citekey": "tangPRSSegOpenVocabularyRemote2026",
+      "resource": "A",
+      "panel": "reference",
+      "comparison_group": "Frozen inference; prototype supervision unresolved",
+      "adaptation_data": "Unspecified",
+      "literature_record_ids": {
+        "LoveDA": "prs_publisher_abstract_loveda",
+        "Potsdam": "prs_publisher_abstract_potsdam",
+        "Vaihingen": "prs_publisher_abstract_vaihingen"
+      },
+      "source_citekey": "tangPRSSegOpenVocabularyRemote2026"
+    }
+  ],
+  "comparison_tables": [
+    {
+      "file": "main_rskt8.tex",
+      "caption": "Semantic segmentation results on eight remote sensing datasets (mIoU, \\%).",
+      "label": "tab:main_rskt8",
+      "rows": "main_rows",
+      "data_header": "\\shortstack{Adaptation\\\\data}",
+      "note": "N: local evaluation (not yet measured). R: RSKT-Seg Table 1, DLRSD/large-backbone panel~\\cite{liExploringEfficientOpenVocabulary2026}; I: Pi-Seg v3 Table 1, DLRSD/ViT-L~\\cite{liPerturbationRegularizedOpenVocabularyRemote2026}; S: SegEarth-OV3 v2 Table 1~\\cite{liSegEarthOV3ExploringSAM2026}; P: ProC-SAM3 v2 Table I~\\cite{songPromptCalibratedSAM32026}; O: ROSE-SAM3 v1 Table I~\\cite{songROSESAM3ResponseOrientedPrompt2026}. E, U, H, C and J denote the respective methods\\textquotesingle{} own reports (UGDMoE: publisher HTML Table 2). ActiveSAM is reproduced by ProC-SAM3; GLoP-SAM3 is quoted by ROSE-SAM3, not checked against its original full text. RSGPNet uses only its own four-dataset results. None excludes additional segmentation adaptation, not foundation-model pretraining; SegEarth-OV trains an upsampler on unlabeled Million-AID. Unlabeled denotes target-image prompt calibration. Source and Dev. apply to our method only. All literature rows retain their source protocols; no cross-source ranking or average is implied. $^{\\dagger}$ denotes a reported value with unresolved label/protocol alignment. -- denotes unavailable results."
+    },
+    {
+      "file": "additional_comparisons.tex",
+      "caption": "Additional SAM 3 results under different adaptation or support conditions (mIoU, \\%).",
+      "label": "tab:additional_comparisons",
+      "rows": "additional_rows",
+      "data_header": "\\shortstack{Additional\\\\information}",
+      "note": "F: GFMR v1 Table 1; the full method updates PixelDecoder GroupNorm parameters at test time~\\cite{wangGeometricTransformationFeatureAdaptiveManifold2026}. B: ConceptBank v1 Table 2, with ground-truth target support masks~\\cite{peiTamingSAM3Wild2026}; iSAID includes background (16 classes). A: PRS-Seg scores from the IEEE publisher abstract, not an inspected full-text table~\\cite{tangPRSSegOpenVocabularyRemote2026}; prototype supervision, support split and class/background mapping remain unspecified. $^{\\dagger}$ marks these unresolved protocols. These rows are contextual references, not matched comparisons with our DLRSD-only adaptation. -- denotes unavailable results."
     }
   ]
 }

@@ -42,11 +42,22 @@ def read_literature(path):
         if r['report_type'] not in {'original_reported','reproduced_by_source','requoted_by_source'}:
             raise DataError(f'{rid}: invalid report_type')
         if r['value'].strip():
-            for key in ['method_citekey','source_citekey','source_version','pdf_filename','pdf_sha256','pdf_page','table_id','row_label','column_label']:
+            for key in ['method_citekey','source_citekey','source_version','row_label','column_label']:
                 if not r[key].strip():
                     raise DataError(f'{rid}: missing provenance {key}')
-            if not r['pdf_filename'].lower().endswith('.pdf') or not re.fullmatch('[0-9a-f]{64}',r['pdf_sha256']) or int(r['pdf_page']) < 1:
-                raise DataError(f'{rid}: invalid PDF fingerprint/page')
+            evidence = r.get('evidence_type') or 'pdf'
+            if evidence == 'pdf':
+                if not r['pdf_filename'].lower().endswith('.pdf') or not re.fullmatch('[0-9a-f]{64}',r['pdf_sha256']) or not r['pdf_page'].isdigit() or int(r['pdf_page']) < 1 or not r['table_id']:
+                    raise DataError(f'{rid}: invalid PDF fingerprint/page/table')
+            elif evidence in {'publisher_abstract','publisher_table'}:
+                domain = 'https://ieeexplore.ieee.org/' if evidence == 'publisher_abstract' else 'https://www.mdpi.com/'
+                locator = 'Abstract' if evidence == 'publisher_abstract' else r['table_id']
+                if not r.get('source_url','').startswith(domain) or not locator or r.get('source_locator') != locator or any(r[k] for k in ('pdf_filename','pdf_sha256','pdf_page')) or (evidence == 'publisher_abstract' and r['table_id']):
+                    raise DataError(f'{rid}: publisher evidence must have its own locator, not PDF provenance')
+                if evidence == 'publisher_abstract' and r['protocol_status'] != 'unresolved':
+                    raise DataError(f'{rid}: abstract-only protocol remains unresolved')
+            else:
+                raise DataError(f'{rid}: unsupported evidence_type')
             if r['dataset']=='LoveDA' and r['protocol_status'] in {'matched','reference_only'}:
                 if r['class_count']!='7' or r['include_background']!='true':
                     raise DataError(f'{rid}: LoveDA must explicitly include all 7 classes')
@@ -255,54 +266,26 @@ def build(args):
     validate_shared_selections(spec)
     missing = []
     outputs = {}
-    body = []
-    for protocol in spec['dataset_protocols']:
-        threshold = protocol['prediction_prob_threshold']
-        active = protocol['filter_active'] and threshold is not None
-        body.append([latex(protocol[key]) for key in ('dataset','role','classes','prompts','background')]
-                    + [str(threshold) if active else 'Off'])
-    outputs['dataset_protocol.tex'] = table(
-        'Dataset roles, class prompts, and prediction filtering.', 'tab:dataset_protocol',
-        ['Dataset','Role','Classes','Prompts','Background',r'\shortstack{Prediction\\threshold}'],
-        body, r'@{}L{0.14\linewidth}L{0.10\linewidth}*{2}{C}L{0.20\linewidth}C@{}', True,
-        'Source: DLRSD adaptation and source-domain evaluation. Dev.: LoveDA checkpoint selection. '
-        'Target: independent target-domain evaluation. Every configured class participates in forward inference. '
-        'Aliases expand the prompt count without changing the semantic class count. Off means filtering is inactive. '
-        'The same prompts and dataset-specific threshold are used for all local methods and variants. '
-        'Background fallback uses a separate threshold of 0.0.')
-    body = []
-    panel = None
-    for row in spec['main_rows']:
-        if row['panel'] != panel:
-            panel = row['panel']
-            if body:
-                body.append(r'\midrule')
-            title = 'Evaluated under our protocol' if panel == 'native' else 'Reported under original settings'
-            body.append(r'\multicolumn{10}{l}{' + title + r'}\\')
-        cells = [resolve(row,d,lit,native,spec,missing)[0] for d in spec['datasets']]
-        name = latex(row['label']).replace('×', r'$\times$')
-        if row.get('citekey'):
-            name += r'~\cite{' + row['citekey'] + '}'
-        name += r'$^{' + row['resource'] + '}$'
-        body.append([name, latex(row['adaptation_data'])] + cells)
     headers = [r'\shortstack{' + d + r'\\' + latex(spec['dataset_roles'][d]) + '}'
                if d in spec['dataset_roles'] else d for d in spec['datasets']]
-    outputs['main_rskt8.tex'] = table(
-        r'Semantic segmentation results on eight remote sensing datasets (mIoU, \%).',
-        'tab:main_rskt8', ['Method', r'\shortstack{Adaptation\\data}'] + headers,
-        body, r'@{}L{0.25\linewidth}L{0.09\linewidth}*{8}{C}@{}', True,
-        r'N: local evaluation. S: SegEarth-OV3 v2, Table 1; E: SegEarth-OV (CVPR 2025), Table 1; '
-        r'P: ProC-SAM3 v2, Table I; R: RSKT-Seg, Table 1 (iSAID/ViT-L); I: Pi-Seg v3, Table 1 (iSAID/ViT-L). '
-        r'Method citations identify the methods; numerical sources are SegEarth-OV~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025}, '
-        r'SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026}, ProC-SAM3~\cite{songPromptCalibratedSAM32026}, '
-        r'RSKT-Seg~\cite{liExploringEfficientOpenVocabulary2026}, and Pi-Seg~\cite{liPerturbationRegularizedOpenVocabularyRemote2026}. '
-        r'Adaptation data denotes additional adaptation, not all foundation-model pretraining. None denotes no downstream segmentation adaptation; '
-        r'SegEarth-OV additionally trains its upsampler on unlabeled Million-AID. '
-        r'GSNet (RSKT report) is the iSAID setting reported by RSKT-Seg, not the original LD50K-trained official checkpoint. '
-        r'Source and Dev. refer to ReCA-SAM3: DLRSD is the source; LoveDA is used for model selection. '
-        r'Reference rows retain their original protocols and are not ranked against local results. '
-        r'$^{\dagger}$ marks source-reported LoveDA results whose category mappings are not fully harmonized; '
-        r'unmarked LoveDA reference values use seven classes including background. -- denotes unavailable results.')
+    for layout in spec['comparison_tables']:
+        body = []
+        group = None
+        for row in spec[layout['rows']]:
+            if row['comparison_group'] != group:
+                group = row['comparison_group']
+                if body:
+                    body.append(r'\midrule')
+                body.append(r'\multicolumn{10}{l}{\textbf{' + latex(group) + r'}}\\')
+            cells = [resolve(row,d,lit,native,spec,missing)[0] for d in spec['datasets']]
+            name = latex(row['label']).replace('×', r'$\times$')
+            if row.get('citekey'):
+                name += r'~\cite{' + row['citekey'] + '}'
+            name += r'$^{' + row['resource'] + '}$'
+            body.append([name, latex(row['adaptation_data'])] + cells)
+        outputs[layout['file']] = table(
+            layout['caption'], layout['label'], ['Method', layout['data_header']] + headers,
+            body, r'@{}L{0.27\linewidth}L{0.10\linewidth}*{8}{C}@{}', True, layout['note'])
 
     body = []
     for row in (r for r in spec['main_rows'] if r['panel'] == 'native'):
@@ -378,6 +361,7 @@ def build(args):
     report = dict(draft=args.draft,literature_records=len(lit),native_records=len(native),
                   missing_cells=missing,protocol_locked=spec['protocol_locked'],
                   generated_tables=list(outputs),
+                  selected_literature_ids=sorted({rid for row in spec['main_rows']+spec['additional_rows'] for rid in row.get('literature_record_ids',{}).values()}),
                   note='Ten planned training variants and two original SAM3 baselines; no synthetic scores.')
     required = {r['row_id'] for r in spec['main_rows'] if r['panel']=='native'}
     required |= {p['variant_id'] for p in spec['ablation_rows'] + spec['freeze_rows']}

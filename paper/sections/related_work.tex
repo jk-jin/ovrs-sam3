@@ -6,7 +6,9 @@ CLIP 通过图文对比学习建立视觉与语言的对应关系，为文本指
 GSNet 通过类别查询引导通用 CLIP 与遥感专用视觉特征融合，并以残差信息保留解码器恢复细节；其原始分割适配使用 LandDiscover50K~\cite{yeOpenVocabularyRemoteSensing2025}。RSKT-Seg 聚合多方向图文匹配，并通过 RemoteCLIP 等预训练编码器的中间特征进行领域知识迁移~\cite{liExploringEfficientOpenVocabulary2026}。Pi-Seg 在文本原型和稠密视觉特征中引入可学习扰动，以分割监督约束图文对齐~\cite{liPerturbationRegularizedOpenVocabularyRemote2026}。SegEarth-OV 则利用无标注遥感图像训练特征上采样器，并在推理时削弱局部特征中的全局偏置~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025}。这些方法分别从表征、对齐或空间恢复入手。本文将遥感相似度编码为类别相关指导特征，使其参与 SAM 3 条件特征的注意力更新。
 
 \subsection{SAM 3 与遥感提示适配}
-SAM 3 支持以短名词短语或视觉示例指定待分割概念，并提供实例掩码及概念相关的语义响应~\cite{carionSAM3Segment2026}。SegEarth-OV3 逐类别查询 SAM 3，融合实例与语义响应，并使用概念存在分数抑制缺席类别~\cite{liSegEarthOV3ExploringSAM2026}。ProC-SAM3 构建离线类别提示池、缓存文本嵌入，并通过存在性和置信度校准融合响应~\cite{songPromptCalibratedSAM32026}。两者均不针对遥感分割更新模型参数，但已包含面向该任务的推理设计。ConceptBank 保持 SAM 3 冻结，利用目标数据集训练划分的标注掩码构建视觉原型，进而校准提示嵌入~\cite{peiTamingSAM3Wild2026}。
+SAM 3 支持以短名词短语或视觉示例指定待分割概念，并提供实例掩码及概念相关的语义响应~\cite{carionSAM3Segment2026}。SegEarth-OV3 逐类别查询 SAM 3，融合实例与语义响应，并使用概念存在分数抑制缺席类别~\cite{liSegEarthOV3ExploringSAM2026}。ProC-SAM3 构建离线类别提示池、缓存文本嵌入，并通过存在性和置信度校准融合响应~\cite{songPromptCalibratedSAM32026}。ROSE-SAM3 利用无标签图像上的冻结响应离线选择提示，并在预测时进行语义与实例协作~\cite{songROSESAM3ResponseOrientedPrompt2026}。RSGPNet 将初始预测掩码转换为几何框提示，再通过一致性验证细化结果~\cite{wangRSGPNetGeometricPrompting2026}。这些方法在保持模型参数冻结的同时调整提示或推理流程。ActiveSAM 则根据图像中的类别存在性裁剪活动词汇以减少解码开销~\cite{tienActiveSAMFastAccurate2026}。
+
+参数冻结与监督来源需要分别考虑。ConceptBank 的 v1 设置利用带标注的目标域支持掩码构建视觉原型并校准提示嵌入~\cite{peiTamingSAM3Wild2026}；GFMR 的完整版本则在测试时更新少量归一化参数~\cite{wangGeometricTransformationFeatureAdaptiveManifold2026}。本文使用 DLRSD 分割监督学习类别条件特征聚合，并在固定权重下进行目标域推理。
 
 上述路径主要调整提示或预测输出。本文在解码前引入可学习的跨提示特征交互，采用源域监督训练聚合和融合模块，并部分适配 RemoteCLIP。SAM 3 参数保持冻结，原始语义路径仅在训练时提供软掩码约束；推理使用学生语义路径。参考掩码为特征适配提供原始空间响应的一致性约束。
 
