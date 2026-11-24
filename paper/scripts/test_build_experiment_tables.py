@@ -43,6 +43,9 @@ class RendererBoundaries(unittest.TestCase):
         def resolve():return m.native_value(selector,records,row,'LoveDA',config)
         records={'e1':r}
         self.assertEqual(resolve(),('0.00',0))
+        self.assertEqual(m.native_value(selector,records,row,'LoveDA',config,'iou.road'),('0.00',0))
+        with self.assertRaises(m.DataError):
+            m.native_value(selector,records,row,'LoveDA',config,'iou.missing')
         r['miou_fraction']='0.25';self.assertEqual(resolve(),('25.00',25))
         records['e2']=dict(r,eval_id='e2');selector['eval_ids']=['e1','e2']
         with self.assertRaises(m.DataError):resolve()
@@ -90,7 +93,8 @@ class RendererBoundaries(unittest.TestCase):
             args=SimpleNamespace(spec=paper/'data/table_spec.json',literature=paper/'data/literature_results.csv',
                                  native=Path(d)/'absent.csv',output=Path(d)/'tables',draft=True)
             m.build(args)
-            expected={'main_rskt8.tex','efficiency.tex'}
+            expected={'dataset_protocol.tex','main_rskt8.tex','loveda_per_class.tex',
+                      'ablation_core.tex','ablation_freeze.tex','efficiency.tex'}
             self.assertEqual({p.name for p in args.output.glob('*.tex')},expected)
             for p in args.output.glob('*.tex'):
                 text=p.read_text()
@@ -100,6 +104,14 @@ class RendererBoundaries(unittest.TestCase):
             self.assertIn('Adaptation',main)
             self.assertIn('GSNet (RSKT report)',main)
             self.assertNotIn('Target\\\\avg.',main)
+            core=(args.output/'ablation_core.tex').read_text()
+            self.assertIn('Unshared multiscale windows',core)
+            self.assertIn('Strict prompt self-interaction',core)
+            self.assertNotIn('shifted',core.lower())
+            per_class=(args.output/'loveda_per_class.tex').read_text()
+            self.assertIn('Background',per_class)
+            self.assertIn('Agricultural',per_class)
+            self.assertIn('mIoU',per_class)
             args.draft=False
             with self.assertRaises(m.DataError):m.build(args)
         audit=json.loads((paper/'data/comparison_audit_20261117.json').read_text())
@@ -111,6 +123,41 @@ class RendererBoundaries(unittest.TestCase):
         for r in audit['records']:
             self.assertEqual(r['value'],sources[r['result_id']]['value'])
             self.assertEqual(r['protocol_status'],sources[r['result_id']]['protocol_status'])
+
+    def test_experiment_plan_and_chapter_cover_the_same_design(self):
+        paper=Path(__file__).resolve().parents[1]
+        config=json.loads((paper/'data/table_spec.json').read_text())
+        with (paper/'data/experiment_plan.csv').open() as stream:
+            plan=list(csv.DictReader(stream))
+        training={r['variant_id'] for r in plan if r['retrain']=='true'}
+        displayed={r['variant_id'] for r in config['ablation_rows']+config['freeze_rows']}
+        self.assertEqual(training,displayed)
+        self.assertEqual(len(training),10)
+        self.assertEqual({r['variant_id'] for r in plan if r['kind']=='inference'},
+                         {'semantic_only','semantic_presence'})
+        self.assertEqual(len(config['freeze_rows']),4)
+        self.assertEqual(len(config['ablation_rows']),7)
+        chapter=(paper/'sections/experiments.tex').read_text()
+        for name in ('dataset_protocol','main_rskt8','loveda_per_class','ablation_core','ablation_freeze','efficiency'):
+            self.assertIn('\\input{tables/'+name+'}',chapter)
+        self.assertNotIn('2e-6',chapter)
+        self.assertNotIn('四个完整块',chapter)
+
+    def test_per_class_scores_use_the_same_multiseed_selection(self):
+        names=['background','building','road','water','barren','forest','agricultural']
+        records={}
+        for seed,score in ((1,0.2),(2,0.4)):
+            records[str(seed)]=dict(source='native',record_type='single_run',role='evaluation',status='completed',
+                is_full='true',result_path='/tmp/synthetic/result.json',seed=str(seed),evaluated_samples='2',
+                expected_samples='2',checkpoint_sha256=str(seed)*64,method_id='reca_sam3',variant_id='full',
+                training_dataset='dlrsd',eval_dataset='loveda',eval_protocol_id='p',eval_split='val',
+                miou_fraction=str(score),class_names=json.dumps(names),
+                per_class=json.dumps([dict(class_id=i,class_name=n,iou=score,union=1) for i,n in enumerate(names)]))
+        selector=dict(eval_ids=['1','2'],expected_seeds=[1,2],checkpoint_sha256_by_seed={'1':'1'*64,'2':'2'*64},
+                      eval_protocol_id='p',eval_split='val')
+        config=dict(training_dataset='dlrsd',dataset_aliases={'loveda':'LoveDA'},native_decimals=2,std_ddof=1)
+        result=m.native_value(selector,records,dict(method_id='reca_sam3',variant_id='full'),'LoveDA',config,'iou.road')
+        self.assertEqual(result,(r'30.00 $\pm$ 14.14',30.0))
 
     def test_measurement_from_standard_json(self):
         with tempfile.TemporaryDirectory() as d:

@@ -70,7 +70,7 @@ def read_native(path):
             records[rid]=r
     return records
 
-def native_value(selector, records, row, dataset, spec):
+def native_value(selector, records, row, dataset, spec, metric='miou'):
     ids=selector.get('eval_ids',[])
     if not ids:
         raise DataError('Native selection requires explicit eval_ids')
@@ -117,7 +117,15 @@ def native_value(selector, records, row, dataset, spec):
                 raise DataError(f'{rid}: LoveDA seven-class/background mismatch')
             if any(c.get('union') is None or float(c['union'])<=0 or number(c.get('iou'),1) is None for c in classes):
                 raise DataError(f'{rid}: missing/zero-union LoveDA class')
-        n=number(r['miou_fraction'],1)
+        if metric == 'miou':
+            raw_value = r['miou_fraction']
+        else:
+            class_name = metric.removeprefix('iou.')
+            matches = [c for c in json.loads(r['per_class']) if c['class_name'] == class_name]
+            if not metric.startswith('iou.') or len(matches) != 1:
+                raise DataError(f'{rid}: missing/ambiguous per-class metric {metric}')
+            raw_value = matches[0].get('iou')
+        n=number(raw_value,1)
         if n is None:
             raise DataError(f'{rid}: selected native score is missing')
         values.append(float(n)*100);seen.append(seed)
@@ -239,7 +247,7 @@ def validate_shared_selections(spec):
 def build(args):
     spec = json.loads(args.spec.read_text())
     if spec.get('schema_version') != 2:
-        raise DataError('Expected the four-table specification (schema_version=2)')
+        raise DataError('Expected the paper table specification (schema_version=2)')
     lit = read_literature(args.literature)
     native = read_native(args.native)
     if spec['datasets'] != ['DLRSD','iSAID','LoveDA','Potsdam','Vaihingen','UAVid','UDD5','VDD']:
@@ -247,6 +255,21 @@ def build(args):
     validate_shared_selections(spec)
     missing = []
     outputs = {}
+    body = []
+    for protocol in spec['dataset_protocols']:
+        threshold = protocol['prediction_prob_threshold']
+        active = protocol['filter_active'] and threshold is not None
+        body.append([latex(protocol[key]) for key in ('dataset','role','classes','prompts','background')]
+                    + [str(threshold) if active else 'Off'])
+    outputs['dataset_protocol.tex'] = table(
+        'Dataset roles, class prompts, and prediction filtering.', 'tab:dataset_protocol',
+        ['Dataset','Role','Classes','Prompts','Background',r'\shortstack{Prediction\\threshold}'],
+        body, r'@{}L{0.14\linewidth}L{0.10\linewidth}*{2}{C}L{0.20\linewidth}C@{}', True,
+        'Source: DLRSD adaptation and source-domain evaluation. Dev.: LoveDA checkpoint selection. '
+        'Target: independent target-domain evaluation. Every configured class participates in forward inference. '
+        'Aliases expand the prompt count without changing the semantic class count. Off means filtering is inactive. '
+        'The same prompts and dataset-specific threshold are used for all local methods and variants. '
+        'Background fallback uses a separate threshold of 0.0.')
     body = []
     panel = None
     for row in spec['main_rows']:
@@ -281,9 +304,28 @@ def build(args):
         r'$^{\dagger}$ marks source-reported LoveDA results whose category mappings are not fully harmonized; '
         r'unmarked LoveDA reference values use seven classes including background. -- denotes unavailable results.')
 
+    body = []
+    for row in (r for r in spec['main_rows'] if r['panel'] == 'native'):
+        selector = row.get('native_selection', {}).get('LoveDA')
+        metrics = ['iou.' + name for name in spec['per_class_names']] + ['miou']
+        if selector:
+            values = [native_value(selector,native,row,'LoveDA',spec,metric)[0] for metric in metrics]
+        else:
+            values = ['--'] * len(metrics)
+            missing.extend(dict(row=row['row_id'],dataset='LoveDA',metric=metric,reason='planned_or_not_reported')
+                           for metric in metrics)
+        body.append([latex(row['label']).replace('×',r'$\times$')] + values)
+    outputs['loveda_per_class.tex'] = table(
+        r'Per-class IoU and mIoU on LoveDA (\%).', 'tab:loveda_per_class',
+        ['Method','Background','Building','Road','Water','Barren','Forest','Agricultural','mIoU'],
+        body,r'@{}L{0.25\linewidth}*{8}{C}@{}',True,
+        'All seven classes, including background, contribute to mIoU. '
+        'Each row reuses its LoveDA evaluation and checkpoint from the main comparison. '
+        'LoveDA is the development domain. -- denotes unavailable results.')
+
     for key, filename, label, caption in [
         ('ablation_rows','ablation_core.tex','tab:ablation_core',
-         r'Ablation of feature aggregation, fusion, and supervision (mIoU, \%).'),
+         r'Ablation of prompt interaction, spatial aggregation, and supervision (mIoU, \%).'),
         ('freeze_rows','ablation_freeze.tex','tab:ablation_freeze',
          r'Effect of RemoteCLIP encoder adaptation (mIoU, \%).')]:
         if not spec[key]:
@@ -295,22 +337,28 @@ def build(args):
                        native_selection=spec['ablation_native_selection'].get(variant, {}))
             values = [resolve(row,d,lit,native,spec,missing)[0] for d in spec['ablation_datasets']]
             if key == 'ablation_rows':
-                body.append([latex(p['name'])] + values)
+                parameters = measurement(spec['core_parameter_selection'].get(variant), native,
+                                         'core_params_' + variant, 'trainable_parameters_m', missing)
+                body.append([latex(p['name'])] + values + [parameters])
             else:
                 parameters = measurement(spec['freeze_parameter_selection'].get(variant), native,
                                          'freeze_params_' + variant, 'trainable_parameters_m', missing)
                 body.append([latex(p['text_encoder']), latex(p['image_encoder'])] + values + [parameters])
         if key == 'ablation_rows':
-            columns = ['Variant'] + spec['ablation_datasets']
-            align = r'@{}L{0.48\linewidth}*{3}{C}@{}'
-            note = 'All variants use DLRSD adaptation and the same model-selection and inference rules. LoveDA is the development domain. -- denotes unavailable results.'
+            columns = ['Variant'] + spec['ablation_datasets'] + [r'\shortstack{Trainable\\(M)}']
+            align = r'@{}L{0.43\linewidth}*{4}{C}@{}'
+            note = ('Each row changes one design factor relative to Full. Strict self-interaction uses a diagonal '
+                    'mask over expanded prompts, including aliases. Single scale uses only a 36-by-36 grid '
+                    'with 12-by-12 windows. Unshared windows keep all three scales and Softmax fusion but use '
+                    'separate parameters. All rows use DLRSD adaptation and fixed model-selection and inference rules. '
+                    'LoveDA is the development domain. -- denotes unavailable measurements.')
         else:
             columns = [r'\shortstack{Text\\encoder}',r'\shortstack{Image\\encoder}'] + spec['ablation_datasets'] + [r'\shortstack{Trainable\\(M)}']
             align = r'@{}L{0.17\linewidth}L{0.17\linewidth}*{4}{C}@{}'
             note = ('Attention tuning updates the same attention-related parameter subset as Full; it is not full-encoder fine-tuning. '
                     'Aggregation and SDF remain trainable. The jointly tuned row reuses the Full checkpoint and scores. '
                     'LoveDA is the development domain. -- denotes unavailable results.')
-        outputs[filename] = table(caption,label,columns,body,align,False,note)
+        outputs[filename] = table(caption,label,columns,body,align,True,note)
 
     body = []
     for row in spec['efficiency_rows']:
@@ -330,10 +378,11 @@ def build(args):
     report = dict(draft=args.draft,literature_records=len(lit),native_records=len(native),
                   missing_cells=missing,protocol_locked=spec['protocol_locked'],
                   generated_tables=list(outputs),
-                  note='Current main and efficiency tables; retired ablations are excluded. No synthetic scores.')
+                  note='Ten planned training variants and two original SAM3 baselines; no synthetic scores.')
     required = {r['row_id'] for r in spec['main_rows'] if r['panel']=='native'}
     required |= {p['variant_id'] for p in spec['ablation_rows'] + spec['freeze_rows']}
     required |= {'freeze_params_' + p['variant_id'] for p in spec['freeze_rows']}
+    required |= {'core_params_' + p['variant_id'] for p in spec['ablation_rows']}
     required |= {'cost_' + p['row_id'] for p in spec['efficiency_rows']}
     if not args.draft and (any(m['row'] in required for m in missing) or not spec['protocol_locked']):
         raise DataError('Formal mode: required results/protocol lock are incomplete; use --draft for placeholders')

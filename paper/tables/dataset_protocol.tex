@@ -1,0 +1,26 @@
+% Generated from paper/data; do not hand-edit numeric cells.
+\begin{table*}[!tbp]
+\centering
+\caption{Dataset roles, class prompts, and prediction filtering.}
+\label{tab:dataset_protocol}
+\footnotesize
+\setlength{\tabcolsep}{2pt}
+\begin{tabularx}{\linewidth}{@{}L{0.14\linewidth}L{0.10\linewidth}*{2}{C}L{0.20\linewidth}C@{}}
+\toprule
+Dataset & Role & Classes & Prompts & Background & \shortstack{Prediction\\threshold}\\
+\midrule
+DLRSD & Source & 17 & 17 & None & Off\\
+iSAID & Target & 15 & 15 & Ignored & Off\\
+LoveDA & Dev. & 7 & 7 & background & 0.5\\
+Potsdam & Target & 6 & 7 & clutter & 0.0\\
+Vaihingen & Target & 6 & 7 & clutter & 0.0\\
+UAVid & Target & 7 & 7 & background & 0.3\\
+UDD5 & Target & 5 & 5 & background & 0.4\\
+VDD & Target & 7 & 9 & background & 0.5\\
+\bottomrule
+\end{tabularx}
+\par\vspace{3pt}
+\begin{minipage}{\linewidth}
+\footnotesize Source: DLRSD adaptation and source-domain evaluation. Dev.: LoveDA checkpoint selection. Target: independent target-domain evaluation. Every configured class participates in forward inference. Aliases expand the prompt count without changing the semantic class count. Off means filtering is inactive. The same prompts and dataset-specific threshold are used for all local methods and variants. Background fallback uses a separate threshold of 0.0.
+\end{minipage}
+\end{table*}

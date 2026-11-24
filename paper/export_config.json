@@ -34,7 +34,12 @@
         "miou",
         "macc"
       ],
-      "allowed_varying_fields": [],
+      "allowed_varying_fields": [
+        "training.regime",
+        "training.dataset",
+        "training.split",
+        "training.protocol_id"
+      ],
       "factor_columns": [],
       "display_unit": "percent",
       "decimals": 2,
@@ -78,7 +83,12 @@
         "miou",
         "macc"
       ],
-      "allowed_varying_fields": [],
+      "allowed_varying_fields": [
+        "training.regime",
+        "training.dataset",
+        "training.split",
+        "training.protocol_id"
+      ],
       "factor_columns": [],
       "display_unit": "percent",
       "decimals": 2,
@@ -122,7 +132,12 @@
         "miou",
         "macc"
       ],
-      "allowed_varying_fields": [],
+      "allowed_varying_fields": [
+        "training.regime",
+        "training.dataset",
+        "training.split",
+        "training.protocol_id"
+      ],
       "factor_columns": [],
       "display_unit": "percent",
       "decimals": 2,
@@ -166,7 +181,12 @@
         "miou",
         "macc"
       ],
-      "allowed_varying_fields": [],
+      "allowed_varying_fields": [
+        "training.regime",
+        "training.dataset",
+        "training.split",
+        "training.protocol_id"
+      ],
       "factor_columns": [],
       "display_unit": "percent",
       "decimals": 2,
@@ -210,7 +230,12 @@
         "miou",
         "macc"
       ],
-      "allowed_varying_fields": [],
+      "allowed_varying_fields": [
+        "training.regime",
+        "training.dataset",
+        "training.split",
+        "training.protocol_id"
+      ],
       "factor_columns": [],
       "display_unit": "percent",
       "decimals": 2,
@@ -254,7 +279,12 @@
         "miou",
         "macc"
       ],
-      "allowed_varying_fields": [],
+      "allowed_varying_fields": [
+        "training.regime",
+        "training.dataset",
+        "training.split",
+        "training.protocol_id"
+      ],
       "factor_columns": [],
       "display_unit": "percent",
       "decimals": 2,
@@ -298,7 +328,12 @@
         "miou",
         "macc"
       ],
-      "allowed_varying_fields": [],
+      "allowed_varying_fields": [
+        "training.regime",
+        "training.dataset",
+        "training.split",
+        "training.protocol_id"
+      ],
       "factor_columns": [],
       "display_unit": "percent",
       "decimals": 2,
@@ -342,7 +377,12 @@
         "miou",
         "macc"
       ],
-      "allowed_varying_fields": [],
+      "allowed_varying_fields": [
+        "training.regime",
+        "training.dataset",
+        "training.split",
+        "training.protocol_id"
+      ],
       "factor_columns": [],
       "display_unit": "percent",
       "decimals": 2,
@@ -389,7 +429,84 @@
         "iou.water",
         "iou.barren",
         "iou.forest",
-        "iou.agricultural"
+        "iou.agricultural",
+        "miou"
+      ],
+      "allowed_varying_fields": [
+        "training.regime",
+        "training.dataset",
+        "training.split",
+        "training.protocol_id"
+      ],
+      "factor_columns": [],
+      "display_unit": "percent",
+      "decimals": 2,
+      "aggregate_seeds": true,
+      "std_ddof": 1,
+      "layout": "wide",
+      "caption": "Per-class IoU and mIoU on LoveDA (percent).",
+      "label": "tab:native_loveda_per_class",
+      "bold_best": false
+    },
+    {
+      "name": "ablation_core_loveda",
+      "filter": {
+        "evaluation.dataset": "loveda"
+      },
+      "rows": [
+        {
+          "label": "Full (shared multiscale)",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "full"
+          }
+        },
+        {
+          "label": "Strict prompt self-interaction",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "self_only"
+          }
+        },
+        {
+          "label": "Without RemoteCLIP guidance",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "no_remoteclip_guidance"
+          }
+        },
+        {
+          "label": "Without intra-class attention",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "no_intra"
+          }
+        },
+        {
+          "label": "Single-scale window (36 x 36)",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "single_scale"
+          }
+        },
+        {
+          "label": "Unshared multiscale windows",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "unshared_windows"
+          }
+        },
+        {
+          "label": "Without distillation",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "no_distillation"
+          }
+        }
+      ],
+      "metrics": [
+        "miou",
+        "macc"
       ],
       "allowed_varying_fields": [],
       "factor_columns": [],
@@ -397,9 +514,301 @@
       "decimals": 2,
       "aggregate_seeds": true,
       "std_ddof": 1,
-      "layout": "wide",
-      "caption": "Per-class IoU on LoveDA (percent).",
-      "label": "tab:native_loveda_per_class",
+      "layout": "column",
+      "caption": "Core ablation on loveda (percent).",
+      "label": "tab:ablation_core_loveda",
+      "bold_best": false
+    },
+    {
+      "name": "ablation_freeze_loveda",
+      "filter": {
+        "evaluation.dataset": "loveda"
+      },
+      "rows": [
+        {
+          "label": "Text: Attention; Image: Attention",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "full"
+          }
+        },
+        {
+          "label": "Text: Frozen; Image: Frozen",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "frozen_remoteclip"
+          }
+        },
+        {
+          "label": "Text: Frozen; Image: Attention",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "image_only"
+          }
+        },
+        {
+          "label": "Text: Attention; Image: Frozen",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "text_only"
+          }
+        }
+      ],
+      "metrics": [
+        "miou",
+        "macc"
+      ],
+      "allowed_varying_fields": [],
+      "factor_columns": [],
+      "display_unit": "percent",
+      "decimals": 2,
+      "aggregate_seeds": true,
+      "std_ddof": 1,
+      "layout": "column",
+      "caption": "Freeze ablation on loveda (percent).",
+      "label": "tab:ablation_freeze_loveda",
+      "bold_best": false
+    },
+    {
+      "name": "ablation_core_potsdam",
+      "filter": {
+        "evaluation.dataset": "potsdam"
+      },
+      "rows": [
+        {
+          "label": "Full (shared multiscale)",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "full"
+          }
+        },
+        {
+          "label": "Strict prompt self-interaction",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "self_only"
+          }
+        },
+        {
+          "label": "Without RemoteCLIP guidance",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "no_remoteclip_guidance"
+          }
+        },
+        {
+          "label": "Without intra-class attention",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "no_intra"
+          }
+        },
+        {
+          "label": "Single-scale window (36 x 36)",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "single_scale"
+          }
+        },
+        {
+          "label": "Unshared multiscale windows",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "unshared_windows"
+          }
+        },
+        {
+          "label": "Without distillation",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "no_distillation"
+          }
+        }
+      ],
+      "metrics": [
+        "miou",
+        "macc"
+      ],
+      "allowed_varying_fields": [],
+      "factor_columns": [],
+      "display_unit": "percent",
+      "decimals": 2,
+      "aggregate_seeds": true,
+      "std_ddof": 1,
+      "layout": "column",
+      "caption": "Core ablation on potsdam (percent).",
+      "label": "tab:ablation_core_potsdam",
+      "bold_best": false
+    },
+    {
+      "name": "ablation_freeze_potsdam",
+      "filter": {
+        "evaluation.dataset": "potsdam"
+      },
+      "rows": [
+        {
+          "label": "Text: Attention; Image: Attention",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "full"
+          }
+        },
+        {
+          "label": "Text: Frozen; Image: Frozen",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "frozen_remoteclip"
+          }
+        },
+        {
+          "label": "Text: Frozen; Image: Attention",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "image_only"
+          }
+        },
+        {
+          "label": "Text: Attention; Image: Frozen",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "text_only"
+          }
+        }
+      ],
+      "metrics": [
+        "miou",
+        "macc"
+      ],
+      "allowed_varying_fields": [],
+      "factor_columns": [],
+      "display_unit": "percent",
+      "decimals": 2,
+      "aggregate_seeds": true,
+      "std_ddof": 1,
+      "layout": "column",
+      "caption": "Freeze ablation on potsdam (percent).",
+      "label": "tab:ablation_freeze_potsdam",
+      "bold_best": false
+    },
+    {
+      "name": "ablation_core_uavid",
+      "filter": {
+        "evaluation.dataset": "uavid"
+      },
+      "rows": [
+        {
+          "label": "Full (shared multiscale)",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "full"
+          }
+        },
+        {
+          "label": "Strict prompt self-interaction",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "self_only"
+          }
+        },
+        {
+          "label": "Without RemoteCLIP guidance",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "no_remoteclip_guidance"
+          }
+        },
+        {
+          "label": "Without intra-class attention",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "no_intra"
+          }
+        },
+        {
+          "label": "Single-scale window (36 x 36)",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "single_scale"
+          }
+        },
+        {
+          "label": "Unshared multiscale windows",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "unshared_windows"
+          }
+        },
+        {
+          "label": "Without distillation",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "no_distillation"
+          }
+        }
+      ],
+      "metrics": [
+        "miou",
+        "macc"
+      ],
+      "allowed_varying_fields": [],
+      "factor_columns": [],
+      "display_unit": "percent",
+      "decimals": 2,
+      "aggregate_seeds": true,
+      "std_ddof": 1,
+      "layout": "column",
+      "caption": "Core ablation on uavid (percent).",
+      "label": "tab:ablation_core_uavid",
+      "bold_best": false
+    },
+    {
+      "name": "ablation_freeze_uavid",
+      "filter": {
+        "evaluation.dataset": "uavid"
+      },
+      "rows": [
+        {
+          "label": "Text: Attention; Image: Attention",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "full"
+          }
+        },
+        {
+          "label": "Text: Frozen; Image: Frozen",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "frozen_remoteclip"
+          }
+        },
+        {
+          "label": "Text: Frozen; Image: Attention",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "image_only"
+          }
+        },
+        {
+          "label": "Text: Attention; Image: Frozen",
+          "match": {
+            "experiment.method_id": "reca_sam3",
+            "experiment.variant_id": "text_only"
+          }
+        }
+      ],
+      "metrics": [
+        "miou",
+        "macc"
+      ],
+      "allowed_varying_fields": [],
+      "factor_columns": [],
+      "display_unit": "percent",
+      "decimals": 2,
+      "aggregate_seeds": true,
+      "std_ddof": 1,
+      "layout": "column",
+      "caption": "Freeze ablation on uavid (percent).",
+      "label": "tab:ablation_freeze_uavid",
       "bold_best": false
     }
   ],

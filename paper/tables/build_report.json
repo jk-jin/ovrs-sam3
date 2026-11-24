@@ -144,6 +144,370 @@
       "reason": "planned_or_not_reported"
     },
     {
+      "row": "semantic_only",
+      "dataset": "LoveDA",
+      "metric": "iou.background",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_only",
+      "dataset": "LoveDA",
+      "metric": "iou.building",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_only",
+      "dataset": "LoveDA",
+      "metric": "iou.road",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_only",
+      "dataset": "LoveDA",
+      "metric": "iou.water",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_only",
+      "dataset": "LoveDA",
+      "metric": "iou.barren",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_only",
+      "dataset": "LoveDA",
+      "metric": "iou.forest",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_only",
+      "dataset": "LoveDA",
+      "metric": "iou.agricultural",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_only",
+      "dataset": "LoveDA",
+      "metric": "miou",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "LoveDA",
+      "metric": "iou.background",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "LoveDA",
+      "metric": "iou.building",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "LoveDA",
+      "metric": "iou.road",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "LoveDA",
+      "metric": "iou.water",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "LoveDA",
+      "metric": "iou.barren",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "LoveDA",
+      "metric": "iou.forest",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "LoveDA",
+      "metric": "iou.agricultural",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "LoveDA",
+      "metric": "miou",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "LoveDA",
+      "metric": "iou.background",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "LoveDA",
+      "metric": "iou.building",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "LoveDA",
+      "metric": "iou.road",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "LoveDA",
+      "metric": "iou.water",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "LoveDA",
+      "metric": "iou.barren",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "LoveDA",
+      "metric": "iou.forest",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "LoveDA",
+      "metric": "iou.agricultural",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "LoveDA",
+      "metric": "miou",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "LoveDA",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "Potsdam",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "core_params_full",
+      "metric": "trainable_parameters_m",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "self_only",
+      "dataset": "LoveDA",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "self_only",
+      "dataset": "Potsdam",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "self_only",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "core_params_self_only",
+      "metric": "trainable_parameters_m",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "no_remoteclip_guidance",
+      "dataset": "LoveDA",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "no_remoteclip_guidance",
+      "dataset": "Potsdam",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "no_remoteclip_guidance",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "core_params_no_remoteclip_guidance",
+      "metric": "trainable_parameters_m",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "no_intra",
+      "dataset": "LoveDA",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "no_intra",
+      "dataset": "Potsdam",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "no_intra",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "core_params_no_intra",
+      "metric": "trainable_parameters_m",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "single_scale",
+      "dataset": "LoveDA",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "single_scale",
+      "dataset": "Potsdam",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "single_scale",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "core_params_single_scale",
+      "metric": "trainable_parameters_m",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "unshared_windows",
+      "dataset": "LoveDA",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "unshared_windows",
+      "dataset": "Potsdam",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "unshared_windows",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "core_params_unshared_windows",
+      "metric": "trainable_parameters_m",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "no_distillation",
+      "dataset": "LoveDA",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "no_distillation",
+      "dataset": "Potsdam",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "no_distillation",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "core_params_no_distillation",
+      "metric": "trainable_parameters_m",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "full",
+      "dataset": "LoveDA",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "Potsdam",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "freeze_params_full",
+      "metric": "trainable_parameters_m",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "frozen_remoteclip",
+      "dataset": "LoveDA",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "frozen_remoteclip",
+      "dataset": "Potsdam",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "frozen_remoteclip",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "freeze_params_frozen_remoteclip",
+      "metric": "trainable_parameters_m",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "image_only",
+      "dataset": "LoveDA",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "image_only",
+      "dataset": "Potsdam",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "image_only",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "freeze_params_image_only",
+      "metric": "trainable_parameters_m",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "text_only",
+      "dataset": "LoveDA",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "text_only",
+      "dataset": "Potsdam",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "text_only",
+      "dataset": "UAVid",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "freeze_params_text_only",
+      "metric": "trainable_parameters_m",
+      "reason": "planned_measurement"
+    },
+    {
       "row": "cost_semantic_only",
       "metric": "total_parameters_m",
       "reason": "planned_measurement"
@@ -200,14 +564,58 @@
     },
     {
       "row": "cost_full",
+      "metric": "peak_memory_gb",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "cost_single_scale",
+      "metric": "total_parameters_m",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "cost_single_scale",
+      "metric": "trainable_parameters_m",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "cost_single_scale",
+      "metric": "time_ms",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "cost_single_scale",
+      "metric": "peak_memory_gb",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "cost_unshared_windows",
+      "metric": "total_parameters_m",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "cost_unshared_windows",
+      "metric": "trainable_parameters_m",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "cost_unshared_windows",
+      "metric": "time_ms",
+      "reason": "planned_measurement"
+    },
+    {
+      "row": "cost_unshared_windows",
       "metric": "peak_memory_gb",
       "reason": "planned_measurement"
     }
   ],
   "protocol_locked": false,
   "generated_tables": [
+    "dataset_protocol.tex",
     "main_rskt8.tex",
+    "loveda_per_class.tex",
+    "ablation_core.tex",
+    "ablation_freeze.tex",
     "efficiency.tex"
   ],
-  "note": "Current main and efficiency tables; retired ablations are excluded. No synthetic scores."
+  "note": "Ten planned training variants and two original SAM3 baselines; no synthetic scores."
 }

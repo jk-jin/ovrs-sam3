@@ -219,8 +219,58 @@
     "rskt_seg_rskt_isaid_l_loveda",
     "pi_isaid_l_loveda"
   ],
-  "ablation_rows": [],
-  "freeze_rows": [],
+  "ablation_rows": [
+    {
+      "variant_id": "full",
+      "name": "Full (shared multiscale)"
+    },
+    {
+      "variant_id": "self_only",
+      "name": "Strict prompt self-interaction"
+    },
+    {
+      "variant_id": "no_remoteclip_guidance",
+      "name": "Without RemoteCLIP guidance"
+    },
+    {
+      "variant_id": "no_intra",
+      "name": "Without intra-class attention"
+    },
+    {
+      "variant_id": "single_scale",
+      "name": "Single-scale window (36 x 36)"
+    },
+    {
+      "variant_id": "unshared_windows",
+      "name": "Unshared multiscale windows"
+    },
+    {
+      "variant_id": "no_distillation",
+      "name": "Without distillation"
+    }
+  ],
+  "freeze_rows": [
+    {
+      "variant_id": "full",
+      "text_encoder": "Attention",
+      "image_encoder": "Attention"
+    },
+    {
+      "variant_id": "frozen_remoteclip",
+      "text_encoder": "Frozen",
+      "image_encoder": "Frozen"
+    },
+    {
+      "variant_id": "image_only",
+      "text_encoder": "Frozen",
+      "image_encoder": "Attention"
+    },
+    {
+      "variant_id": "text_only",
+      "text_encoder": "Attention",
+      "image_encoder": "Frozen"
+    }
+  ],
   "efficiency_rows": [
     {
       "row_id": "semantic_only",
@@ -233,6 +283,14 @@
     {
       "row_id": "full",
       "name": "ReCA-SAM3"
+    },
+    {
+      "row_id": "single_scale",
+      "name": "ReCA-SAM3 (single scale)"
+    },
+    {
+      "row_id": "unshared_windows",
+      "name": "ReCA-SAM3 (unshared)"
     }
   ],
   "freeze_parameter_selection": {},
@@ -240,5 +298,89 @@
   "dataset_roles": {
     "DLRSD": "Source",
     "LoveDA": "Dev."
-  }
+  },
+  "core_parameter_selection": {},
+  "per_class_names": [
+    "background",
+    "building",
+    "road",
+    "water",
+    "barren",
+    "forest",
+    "agricultural"
+  ],
+  "dataset_protocols": [
+    {
+      "dataset": "DLRSD",
+      "role": "Source",
+      "classes": 17,
+      "prompts": 17,
+      "background": "None",
+      "prediction_prob_threshold": 0.5,
+      "filter_active": false
+    },
+    {
+      "dataset": "iSAID",
+      "role": "Target",
+      "classes": 15,
+      "prompts": 15,
+      "background": "Ignored",
+      "prediction_prob_threshold": 0.5,
+      "filter_active": false
+    },
+    {
+      "dataset": "LoveDA",
+      "role": "Dev.",
+      "classes": 7,
+      "prompts": 7,
+      "background": "background",
+      "prediction_prob_threshold": 0.5,
+      "filter_active": true
+    },
+    {
+      "dataset": "Potsdam",
+      "role": "Target",
+      "classes": 6,
+      "prompts": 7,
+      "background": "clutter",
+      "prediction_prob_threshold": 0.0,
+      "filter_active": true
+    },
+    {
+      "dataset": "Vaihingen",
+      "role": "Target",
+      "classes": 6,
+      "prompts": 7,
+      "background": "clutter",
+      "prediction_prob_threshold": 0.0,
+      "filter_active": true
+    },
+    {
+      "dataset": "UAVid",
+      "role": "Target",
+      "classes": 7,
+      "prompts": 7,
+      "background": "background",
+      "prediction_prob_threshold": 0.3,
+      "filter_active": true
+    },
+    {
+      "dataset": "UDD5",
+      "role": "Target",
+      "classes": 5,
+      "prompts": 5,
+      "background": "background",
+      "prediction_prob_threshold": 0.4,
+      "filter_active": true
+    },
+    {
+      "dataset": "VDD",
+      "role": "Target",
+      "classes": 7,
+      "prompts": 9,
+      "background": "background",
+      "prediction_prob_threshold": 0.5,
+      "filter_active": true
+    }
+  ]
 }
