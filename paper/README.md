@@ -8,7 +8,7 @@
 
 | 表格源文件 | 内容 |
 | --- | --- |
-| `tables/main_rskt8.tex` | 按遥感标注训练／Training-free两组排列，22个文献方法与3个待跑本地方法 |
+| `tables/main_rskt8.tex` | 按遥感标注训练／Training-free两组排列，22个文献方法与3个待跑本地方法；iSAID双协议子列，UAVid单列标记7/8/u |
 | `tables/loveda_per_class.tex` | 三个本地方法的 LoveDA 七类 IoU 与 mIoU |
 | `tables/ablation_core.tex` | Full、严格提示自交互、无引导、无类内、单尺度、三尺度独立权重、无蒸馏 |
 | `tables/ablation_freeze.tex` | RemoteCLIP 图像／文本 attention 微调的四种组合 |
@@ -38,7 +38,15 @@ latexmk -xelatex -halt-on-error -file-line-error -outdir=build main.tex
 - `notes/source_snapshot.json`：基准 commit、源码与论文文件哈希及验证记录。
 - `notes/manuscript_status.md`：实现状态、待跑实验与待修改内容。
 - `notes/review.md`：本轮主张与证据、自审记录。
-- `notes/comparison_issues_20261124.md`：待解决的全文、标签协议、支持条件、版本和重复文献问题。
+- `notes/comparison_issues_20261124.md`：已确认的引用／协议展示方案及剩余实施工作；外部代码差异不再阻塞引用。
 - `data/bibliography_audit_20261124.json`：最新26条Zotero记录、手工补充引用和重复DOI审计。
 
 本轮重组实验比较与相关工作中的比较方法引用，删除原数据协议表和额外条件参考表；排除VLex-SAM3、ConceptSeg、GFMR、ConceptBank、PRS-Seg数据。Zotero导出文件保持用户最新版本，缺少的10个比较方法引用加入references_extra.bib。本轮仅修改论文与表格工作流，没有修改模型、训练配置或训练任务。方法章节与架构图仍保留旧版本内容，需要另行同步；本轮不将整篇论文认定为与当前实现完全一致。Zotero 导出的 `references.bib` 保持原样。
+
+## 双协议填数与 Zotero
+
+文献结果直接按已登记来源引用，不要求重跑外部模型。主表iSAID分为15类忽略GT背景与16类含背景两个子列；未知协议跨列标u，数值只出现一次。UAVid仍是一列，以7／8／u标明来源；本地统一七类。
+
+本地Full与两个SAM3基线的`native_selection`使用`iSAID-15-IgnBG`和`iSAID-16-BG`两个键，分别填入真实评测选择器；结果数据集仍为`isaid`，用不同`eval_protocol_id`区分。两种协议复用同一种子／权重，禁止另挑checkpoint或重复引用一个协议的分数。当前含背景评测入口尚待工程实现，本轮只调整论文与组表。
+
+删除正文引用不需要删除Zotero条目；`references.bib`与`references_extra.bib`均保持原样，未引用条目不会进入参考文献。本地拉取、重新编译和可选的集合整理步骤见[notes/zotero_sync.md](notes/zotero_sync.md)。

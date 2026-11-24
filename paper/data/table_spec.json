@@ -31,7 +31,11 @@
         "UDD5": "scan_dlrsd_large_udd5",
         "VDD": "scan_dlrsd_large_vdd"
       },
-      "source_citekey": "liExploringEfficientOpenVocabulary2026"
+      "source_citekey": "liExploringEfficientOpenVocabulary2026",
+      "reported_protocols": {
+        "iSAID": "15-IgnBG",
+        "UAVid": 8
+      }
     },
     {
       "row_id": "san_dlrsd_large",
@@ -53,7 +57,11 @@
         "UDD5": "san_dlrsd_large_udd5",
         "VDD": "san_dlrsd_large_vdd"
       },
-      "source_citekey": "liExploringEfficientOpenVocabulary2026"
+      "source_citekey": "liExploringEfficientOpenVocabulary2026",
+      "reported_protocols": {
+        "iSAID": "15-IgnBG",
+        "UAVid": 8
+      }
     },
     {
       "row_id": "sed_dlrsd_large",
@@ -75,7 +83,11 @@
         "UDD5": "sed_dlrsd_large_udd5",
         "VDD": "sed_dlrsd_large_vdd"
       },
-      "source_citekey": "liExploringEfficientOpenVocabulary2026"
+      "source_citekey": "liExploringEfficientOpenVocabulary2026",
+      "reported_protocols": {
+        "iSAID": "15-IgnBG",
+        "UAVid": 8
+      }
     },
     {
       "row_id": "cat_seg_dlrsd_large",
@@ -97,7 +109,11 @@
         "UDD5": "cat_seg_dlrsd_large_udd5",
         "VDD": "cat_seg_dlrsd_large_vdd"
       },
-      "source_citekey": "liExploringEfficientOpenVocabulary2026"
+      "source_citekey": "liExploringEfficientOpenVocabulary2026",
+      "reported_protocols": {
+        "iSAID": "15-IgnBG",
+        "UAVid": 8
+      }
     },
     {
       "row_id": "ovrs_dlrsd_large",
@@ -119,7 +135,11 @@
         "UDD5": "ovrs_dlrsd_large_udd5",
         "VDD": "ovrs_dlrsd_large_vdd"
       },
-      "source_citekey": "liExploringEfficientOpenVocabulary2026"
+      "source_citekey": "liExploringEfficientOpenVocabulary2026",
+      "reported_protocols": {
+        "iSAID": "15-IgnBG",
+        "UAVid": 8
+      }
     },
     {
       "row_id": "gsnet_dlrsd_large",
@@ -141,7 +161,11 @@
         "UDD5": "gsnet_dlrsd_large_udd5",
         "VDD": "gsnet_dlrsd_large_vdd"
       },
-      "source_citekey": "liExploringEfficientOpenVocabulary2026"
+      "source_citekey": "liExploringEfficientOpenVocabulary2026",
+      "reported_protocols": {
+        "iSAID": "15-IgnBG",
+        "UAVid": 8
+      }
     },
     {
       "row_id": "rskt_seg_dlrsd_large",
@@ -163,7 +187,11 @@
         "UDD5": "rskt_seg_dlrsd_large_udd5",
         "VDD": "rskt_seg_dlrsd_large_vdd"
       },
-      "source_citekey": "liExploringEfficientOpenVocabulary2026"
+      "source_citekey": "liExploringEfficientOpenVocabulary2026",
+      "reported_protocols": {
+        "iSAID": "15-IgnBG",
+        "UAVid": 8
+      }
     },
     {
       "row_id": "pi_seg_dlrsd_vitl",
@@ -184,7 +212,11 @@
         "UDD5": "pi_seg_dlrsd_vitl_udd5",
         "VDD": "pi_seg_dlrsd_vitl_vdd"
       },
-      "source_citekey": "liPerturbationRegularizedOpenVocabularyRemote2026"
+      "source_citekey": "liPerturbationRegularizedOpenVocabularyRemote2026",
+      "reported_protocols": {
+        "iSAID": "unspecified",
+        "UAVid": "unspecified"
+      }
     },
     {
       "row_id": "ugdm_dlrsd",
@@ -206,7 +238,11 @@
         "UDD5": "ugdm_dlrsd_udd5",
         "VDD": "ugdm_dlrsd_vdd"
       },
-      "source_citekey": "quUGDMoE2026"
+      "source_citekey": "quUGDMoE2026",
+      "reported_protocols": {
+        "iSAID": "unspecified",
+        "UAVid": 8
+      }
     },
     {
       "row_id": "sky_cvpr2025",
@@ -224,7 +260,11 @@
         "Potsdam": "sky_cvpr2025_potsdam",
         "Vaihingen": "sky_cvpr2025_vaihingen"
       },
-      "source_citekey": "zhuSkySenseOOpenWorldRemote2025a"
+      "source_citekey": "zhuSkySenseOOpenWorldRemote2025a",
+      "reported_protocols": {
+        "iSAID": "unspecified",
+        "UAVid": "unspecified"
+      }
     },
     {
       "row_id": "full",
@@ -258,7 +298,11 @@
         "UDD5": "sclip_ov3_report_udd5",
         "VDD": "sclip_ov3_report_vdd"
       },
-      "source_citekey": "liSegEarthOV3ExploringSAM2026"
+      "source_citekey": "liSegEarthOV3ExploringSAM2026",
+      "reported_protocols": {
+        "iSAID": "16-BG",
+        "UAVid": 7
+      }
     },
     {
       "row_id": "clear_ov3_report",
@@ -279,7 +323,11 @@
         "UDD5": "clear_ov3_report_udd5",
         "VDD": "clear_ov3_report_vdd"
       },
-      "source_citekey": "liSegEarthOV3ExploringSAM2026"
+      "source_citekey": "liSegEarthOV3ExploringSAM2026",
+      "reported_protocols": {
+        "iSAID": "16-BG",
+        "UAVid": 7
+      }
     },
     {
       "row_id": "proxy_ov3_report",
@@ -300,7 +348,11 @@
         "UDD5": "proxy_ov3_report_udd5",
         "VDD": "proxy_ov3_report_vdd"
       },
-      "source_citekey": "liSegEarthOV3ExploringSAM2026"
+      "source_citekey": "liSegEarthOV3ExploringSAM2026",
+      "reported_protocols": {
+        "iSAID": "16-BG",
+        "UAVid": 7
+      }
     },
     {
       "row_id": "corr_ov3_report",
@@ -321,7 +373,11 @@
         "UDD5": "corr_ov3_report_udd5",
         "VDD": "corr_ov3_report_vdd"
       },
-      "source_citekey": "liSegEarthOV3ExploringSAM2026"
+      "source_citekey": "liSegEarthOV3ExploringSAM2026",
+      "reported_protocols": {
+        "iSAID": "16-BG",
+        "UAVid": 7
+      }
     },
     {
       "row_id": "ov_original",
@@ -342,7 +398,11 @@
         "VDD": "ov_cvpr_vdd"
       },
       "adaptation_data": "None",
-      "comparison_group": "Training-free"
+      "comparison_group": "Training-free",
+      "reported_protocols": {
+        "iSAID": "16-BG",
+        "UAVid": 7
+      }
     },
     {
       "row_id": "coninfer_arxiv_v1",
@@ -363,7 +423,11 @@
         "UDD5": "coninfer_arxiv_v1_udd5",
         "VDD": "coninfer_arxiv_v1_vdd"
       },
-      "source_citekey": "chen2026coninfercontextawareinferencetrainingfree"
+      "source_citekey": "chen2026coninfercontextawareinferencetrainingfree",
+      "reported_protocols": {
+        "iSAID": "unspecified",
+        "UAVid": "unspecified"
+      }
     },
     {
       "row_id": "active_proc_reproduction",
@@ -384,7 +448,11 @@
         "UDD5": "active_proc_reproduction_udd5",
         "VDD": "active_proc_reproduction_vdd"
       },
-      "source_citekey": "songPromptCalibratedSAM32026"
+      "source_citekey": "songPromptCalibratedSAM32026",
+      "reported_protocols": {
+        "iSAID": "16-BG",
+        "UAVid": 7
+      }
     },
     {
       "row_id": "ov3_original",
@@ -405,7 +473,11 @@
         "VDD": "ov3_original_vdd"
       },
       "adaptation_data": "None",
-      "comparison_group": "Training-free"
+      "comparison_group": "Training-free",
+      "reported_protocols": {
+        "iSAID": "16-BG",
+        "UAVid": 7
+      }
     },
     {
       "row_id": "rsgp_arxiv_v1",
@@ -423,7 +495,11 @@
         "Vaihingen": "rsgp_arxiv_v1_vaihingen",
         "UDD5": "rsgp_arxiv_v1_udd5"
       },
-      "source_citekey": "wangRSGPNetGeometricPrompting2026"
+      "source_citekey": "wangRSGPNetGeometricPrompting2026",
+      "reported_protocols": {
+        "iSAID": "unspecified",
+        "UAVid": "unspecified"
+      }
     },
     {
       "row_id": "glop_rose_report",
@@ -444,7 +520,11 @@
         "UDD5": "glop_rose_report_udd5",
         "VDD": "glop_rose_report_vdd"
       },
-      "source_citekey": "songROSESAM3ResponseOrientedPrompt2026"
+      "source_citekey": "songROSESAM3ResponseOrientedPrompt2026",
+      "reported_protocols": {
+        "iSAID": "unspecified",
+        "UAVid": "unspecified"
+      }
     },
     {
       "row_id": "proc_original",
@@ -465,7 +545,11 @@
         "VDD": "proc_original_vdd"
       },
       "adaptation_data": "None",
-      "comparison_group": "Training-free"
+      "comparison_group": "Training-free",
+      "reported_protocols": {
+        "iSAID": "16-BG",
+        "UAVid": 7
+      }
     },
     {
       "row_id": "rose_arxiv_v1",
@@ -486,7 +570,11 @@
         "UDD5": "rose_arxiv_v1_udd5",
         "VDD": "rose_arxiv_v1_vdd"
       },
-      "source_citekey": "songROSESAM3ResponseOrientedPrompt2026"
+      "source_citekey": "songROSESAM3ResponseOrientedPrompt2026",
+      "reported_protocols": {
+        "iSAID": "16-BG",
+        "UAVid": 7
+      }
     },
     {
       "row_id": "semantic_only",
@@ -719,7 +807,18 @@
       "label": "tab:main_rskt8",
       "rows": "main_rows",
       "data_header": "\\shortstack{Adaptation\\\\data}",
-      "note": "N: local evaluation (not yet measured). R: RSKT-Seg Table 1, DLRSD/large-backbone panel~\\cite{liExploringEfficientOpenVocabulary2026}; I: Pi-Seg v3 Table 1, DLRSD/ViT-L~\\cite{liPerturbationRegularizedOpenVocabularyRemote2026}; S: SegEarth-OV3 v2 Table 1~\\cite{liSegEarthOV3ExploringSAM2026}; P: ProC-SAM3 v2 Table I~\\cite{songPromptCalibratedSAM32026}; O: ROSE-SAM3 v1 Table I~\\cite{songROSESAM3ResponseOrientedPrompt2026}. E, U, H, C and J denote the respective methods\\textquotesingle{} own reports (UGDMoE: publisher HTML Table 2). ActiveSAM is reproduced by ProC-SAM3; GLoP-SAM3 is quoted by ROSE-SAM3, not checked against its original full text. RSGPNet uses only its own four-dataset results. None excludes additional segmentation adaptation, not foundation-model pretraining; SegEarth-OV trains an upsampler on unlabeled Million-AID. Unlabeled denotes target-image prompt calibration. Source and Dev. apply to our method only. All literature rows retain their source protocols; no cross-source ranking or average is implied. $^{\\dagger}$ denotes a reported value with unresolved label/protocol alignment. -- denotes unavailable results."
+      "note": "N: local evaluation. R: RSKT-Seg Table 1, DLRSD/large-backbone panel~\\cite{liExploringEfficientOpenVocabulary2026}; I: Pi-Seg v3 Table 1, DLRSD/ViT-L~\\cite{liPerturbationRegularizedOpenVocabularyRemote2026}; S: SegEarth-OV3 v2 Table 1~\\cite{liSegEarthOV3ExploringSAM2026}; P: ProC-SAM3 v2 Table I~\\cite{songPromptCalibratedSAM32026}; O: ROSE-SAM3 v1 Table I~\\cite{songROSESAM3ResponseOrientedPrompt2026}. E, U, H, C and J denote the respective methods\\textquotesingle{} own reports (U: publisher HTML Table 2). ActiveSAM is reproduced by ProC-SAM3; GLoP-SAM3 is quoted from ROSE-SAM3. IgnBG excludes GT background pixels and averages 15 foreground classes; BG scores background and averages 16 classes. Our three local methods use both protocols with the same checkpoint per method/seed. UAVid superscripts 7 and 8 indicate merged-car and separate-car protocols; all local methods use seven classes. $^{u}$ indicates an unspecified source protocol; iSAID values spanning both subcolumns are references without an assigned protocol. Annotations identify source benchmark settings, not independently reproduced runs. Literature values are retained as reported; no ranking across different protocols or pooled average is computed. $^{\\dagger}$ marks unresolved source label alignment. None means no adaptation on remote sensing segmentation labels; Unlabeled denotes target-image prompt calibration. Source and Dev. apply to local methods. -- denotes unavailable results."
     }
-  ]
+  ],
+  "comparison_protocol_policy": {
+    "literature": "Retain source-reported values; current external code is not an inclusion gate. Unknown protocols remain unassigned.",
+    "isaid_native_selection_keys": [
+      "iSAID-15-IgnBG",
+      "iSAID-16-BG"
+    ],
+    "isaid_same_checkpoint": true,
+    "uavid_native_classes": 7,
+    "isaid_unknown_display": "One reported value spanning both subcolumns with superscript u; never duplicated.",
+    "display_annotation_evidence": "RSKT benchmark metadata and SegEarth-OV / SegEarth-OV3 / ProC / ROSE settings already recorded in protocol_evidence_20261124.json and literature audits. UGDMoE explicitly reports eight UAVid classes. Other protocols remain unspecified; no classification by training group."
+  }
 }

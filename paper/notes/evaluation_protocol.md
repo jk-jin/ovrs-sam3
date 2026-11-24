@@ -33,7 +33,7 @@ DLRSD 官方 5601 张训练图像用于适配，1401 张验证图像用于源域
 
 ## 标签与推理
 
-全部配置类别参与前向，背景／clutter不再排除。原始标签转换与类别空间保持现有配置：LoveDA原始1..7转为0..6，原始0转255。Potsdam/Vaihingen道路同义提示、VDD屋顶同义提示均固定，所有变体采用一致提示。合并同义提示后过滤；各数据集阈值保持当前配置，不能逐变体重新优化：LoveDA 0.5，Potsdam/Vaihingen 0.0，UAVid 0.3，UDD5 0.4，VDD 0.5；DLRSD/iSAID无背景，预测概率过滤不生效。背景回填阈值为0.0。输入统一Resize到1008×1008，TTA关闭。
+全部配置类别参与前向，背景／clutter不再排除。原始标签转换与类别空间保持现有配置：LoveDA原始1..7转为0..6，原始0转255。Potsdam/Vaihingen道路同义提示、VDD屋顶同义提示均固定，所有变体采用一致提示。合并同义提示后过滤；各数据集阈值保持当前配置，不能逐变体重新优化：LoveDA 0.5，Potsdam/Vaihingen 0.0，UAVid 0.3，UDD5 0.4，VDD 0.5；DLRSD及当前iSAID-IgnBG配置无背景，预测概率过滤不生效。背景回填阈值为0.0。输入统一Resize到1008×1008，TTA关闭。
 
 ## 表格与溯源
 
@@ -43,4 +43,12 @@ DLRSD 官方 5601 张训练图像用于适配，1401 张验证图像用于源域
 
 ## 文献比较的当前选择
 
-主表按是否使用遥感分割标注训练分两组；三个本地行以N标记，文献行全部保留各自协议。支持DLRSD训练的比较方法统一取DLRSD版本；SkySense-O仍是Sky-SA。GFMR、ConceptBank、PRS-Seg不再比较或引用。VLex-SAM3和ConceptSeg数据排除。只在真实本地运行和协议锁定后判断同条件性能，不用训练源相同替代类别／划分／后处理核对。详细待办见comparison_issues_20261124.md。
+主表按是否使用遥感分割标注训练分两组；三个本地行以N标记，文献行全部保留各自协议。支持DLRSD训练的比较方法统一取DLRSD版本；SkySense-O仍是Sky-SA。GFMR、ConceptBank、PRS-Seg不再比较或引用。VLex-SAM3和ConceptSeg数据排除。文献直接保留原报告值，不以逐仓库核查／复现作为纳入条件；未知协议注明参考性质，不据此主张同条件提升。详细决定及实施待办见comparison_issues_20261124.md。
+
+## iSAID 双协议与 UAVid 原值展示
+
+主表为iSAID增加两个子列：15-IgnBG忽略全部GT背景像素并平均15个前景类；16-BG保留背景像素并平均16类。Full、Semantic-only与Semantic × Presence使用各自同一权重评测两遍，不为协议另选checkpoint。含背景验证入口与背景预测规则尚待实现；本轮没有改动评测配置，原默认阈值不能自动当作新BG协议的最终设置。
+
+表格选择键分别为iSAID-15-IgnBG与iSAID-16-BG；标准结果仍以eval_dataset=isaid、不同eval_protocol_id记录。两列须复用种子／权重，生成器拒绝两个相同协议ID。来源协议未明确的文献值跨两列显示一次并标u。
+
+UAVid本地统一七类，旧八类报告值不重算、不转换，按7／8上标区分；未知协议标u。不同类别协议的结果不直接排序或合并平均。

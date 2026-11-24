@@ -250,9 +250,49 @@ def validate_shared_selections(spec):
             if variant in weights and weights[variant] != signature:
                 raise DataError('A variant must share seeds/checkpoints across evaluation datasets')
             weights[variant] = signature
+        selections = row.get('native_selection', {})
+        isaid = [selections[k] for k in ('iSAID-15-IgnBG', 'iSAID-16-BG') if k in selections]
+        if len(isaid) == 2 and isaid[0]['eval_protocol_id'] == isaid[1]['eval_protocol_id']:
+            raise DataError('The two iSAID columns require distinct evaluation protocols')
     if all(v in weights for v in ('semantic_only', 'semantic_presence')):
         if weights['semantic_only'] != weights['semantic_presence']:
             raise DataError('Both original SAM3 baselines must share the pretrained checkpoint')
+
+
+def comparison_cells(row, lit, native, spec, missing):
+    """Keep reported protocols separate without converting or duplicating scores."""
+    cells = []
+    protocols = row.get('reported_protocols', {})
+    for dataset in spec['datasets']:
+        if dataset == 'iSAID':
+            if row['panel'] == 'native':
+                for key in ('iSAID-15-IgnBG', 'iSAID-16-BG'):
+                    selector = row.get('native_selection', {}).get(key)
+                    if selector:
+                        cells.append(native_value(selector, native, row, dataset, spec)[0])
+                    else:
+                        cells.append('--')
+                        missing.append(dict(row=row['row_id'], dataset=key, reason='planned_or_not_reported'))
+                continue
+            value = resolve(row, dataset, lit, native, spec, missing)[0]
+            protocol = protocols.get(dataset, 'unspecified')
+            if protocol == '15-IgnBG':
+                cells.extend([value, '--'])
+            elif protocol == '16-BG':
+                cells.extend(['--', value])
+            elif protocol == 'unspecified':
+                cells.append(r'\multicolumn{2}{c}{' + value + (r'$^{u}$' if value != '--' else '') + '}')
+            else:
+                raise DataError(f'Unknown iSAID display protocol: {protocol}')
+            continue
+        value = resolve(row, dataset, lit, native, spec, missing)[0]
+        if dataset == 'UAVid' and row['panel'] == 'reference' and value != '--':
+            protocol = protocols.get(dataset, 'unspecified')
+            if protocol not in (7, 8, 'unspecified'):
+                raise DataError(f'Unknown UAVid display protocol: {protocol}')
+            value += r'$^{' + ('u' if protocol == 'unspecified' else str(protocol)) + '}$'
+        cells.append(value)
+    return cells
 
 
 def build(args):
@@ -266,8 +306,15 @@ def build(args):
     validate_shared_selections(spec)
     missing = []
     outputs = {}
-    headers = [r'\shortstack{' + d + r'\\' + latex(spec['dataset_roles'][d]) + '}'
-               if d in spec['dataset_roles'] else d for d in spec['datasets']]
+    headers = []
+    for dataset in spec['datasets']:
+        if dataset == 'iSAID':
+            headers.extend([r'\shortstack{iSAID\\15 cls.\\IgnBG}', r'\shortstack{iSAID\\16 cls.\\BG}'])
+        elif dataset in spec['dataset_roles']:
+            headers.append(r'\shortstack{' + dataset + r'\\' + latex(spec['dataset_roles'][dataset]) + '}')
+        else:
+            headers.append(dataset)
+    column_count = len(headers) + 2
     for layout in spec['comparison_tables']:
         body = []
         group = None
@@ -276,8 +323,8 @@ def build(args):
                 group = row['comparison_group']
                 if body:
                     body.append(r'\midrule')
-                body.append(r'\multicolumn{10}{l}{\textbf{' + latex(group) + r'}}\\')
-            cells = [resolve(row,d,lit,native,spec,missing)[0] for d in spec['datasets']]
+                body.append(r'\multicolumn{' + str(column_count) + r'}{l}{\textbf{' + latex(group) + r'}}\\')
+            cells = comparison_cells(row, lit, native, spec, missing)
             name = latex(row['label']).replace('×', r'$\times$')
             if row.get('citekey'):
                 name += r'~\cite{' + row['citekey'] + '}'
@@ -285,7 +332,7 @@ def build(args):
             body.append([name, latex(row['adaptation_data'])] + cells)
         outputs[layout['file']] = table(
             layout['caption'], layout['label'], ['Method', layout['data_header']] + headers,
-            body, r'@{}L{0.27\linewidth}L{0.10\linewidth}*{8}{C}@{}', True, layout['note'])
+            body, r'@{}L{0.25\linewidth}L{0.08\linewidth}*{9}{C}@{}', True, layout['note'])
 
     body = []
     for row in (r for r in spec['main_rows'] if r['panel'] == 'native'):

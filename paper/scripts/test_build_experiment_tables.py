@@ -110,6 +110,10 @@ class RendererBoundaries(unittest.TestCase):
             self.assertNotIn('VLex',main)
             self.assertNotIn('ConceptSeg',main)
             self.assertNotIn('Target\\\\avg.',main)
+            self.assertIn(r'iSAID\\15 cls.\\IgnBG',main)
+            self.assertIn(r'iSAID\\16 cls.\\BG',main)
+            self.assertIn(r'\multicolumn{11}',main)
+            self.assertIn('same checkpoint per method/seed',main)
             core=(args.output/'ablation_core.tex').read_text()
             self.assertIn('Unshared multiscale windows',core)
             self.assertIn('Strict prompt self-interaction',core)
@@ -129,6 +133,45 @@ class RendererBoundaries(unittest.TestCase):
         for r in audit['records']:
             self.assertEqual(r['value'],sources[r['result_id']]['value'])
             self.assertEqual(r['protocol_status'],sources[r['result_id']]['protocol_status'])
+
+    def test_comparison_protocol_columns_preserve_reported_values(self):
+        paper=Path(__file__).resolve().parents[1]
+        config=json.loads((paper/'data/table_spec.json').read_text())
+        records=m.read_literature(paper/'data/literature_results.csv')
+        row=next(r for r in config['main_rows'] if r['row_id']=='rskt_seg_dlrsd_large')
+        cells=m.comparison_cells(row,records,{},config,[])
+        self.assertEqual(cells[1:3],['54.32','--'])
+        self.assertIn(r'$^{8}$',cells[6])
+        row=dict(row,reported_protocols={'iSAID':'16-BG','UAVid':7})
+        cells=m.comparison_cells(row,records,{},config,[])
+        self.assertEqual(cells[1:3],['--','54.32'])
+        self.assertIn(r'$^{7}$',cells[6])
+        row['reported_protocols']={}
+        cells=m.comparison_cells(row,records,{},config,[])
+        self.assertEqual(cells[1],r'\multicolumn{2}{c}{54.32$^{u}$}')
+        self.assertEqual(' & '.join(cells).count('54.32'),1)
+        self.assertIn(r'$^{u}$',cells[5])
+        row['reported_protocols']={'iSAID':'guessed'}
+        with self.assertRaises(m.DataError):m.comparison_cells(row,records,{},config,[])
+        full=next(r for r in config['main_rows'] if r['row_id']=='full')
+        missing=[]
+        self.assertEqual(m.comparison_cells(full,records,{},config,missing)[1:3],['--','--'])
+        self.assertEqual({r['dataset'] for r in missing if r['dataset'].startswith('iSAID')},
+                         {'iSAID-15-IgnBG','iSAID-16-BG'})
+
+    def test_isaid_dual_protocol_reuses_weights_but_not_protocol_id(self):
+        paper=Path(__file__).resolve().parents[1]
+        config=json.loads((paper/'data/table_spec.json').read_text())
+        full=next(r for r in config['main_rows'] if r['row_id']=='full')
+        selector=dict(eval_ids=['one'],expected_seeds=[42],checkpoint_sha256_by_seed={'42':'a'*64},
+                      eval_protocol_id='ignore-bg',eval_split='val')
+        full['native_selection']={'iSAID-15-IgnBG':selector,
+                                  'iSAID-16-BG':dict(selector,eval_ids=['two'],eval_protocol_id='score-bg')}
+        m.validate_shared_selections(config)
+        full['native_selection']['iSAID-16-BG']['checkpoint_sha256_by_seed']={'42':'b'*64}
+        with self.assertRaises(m.DataError):m.validate_shared_selections(config)
+        full['native_selection']['iSAID-16-BG']=dict(selector,eval_ids=['two'])
+        with self.assertRaises(m.DataError):m.validate_shared_selections(config)
 
     def test_experiment_plan_and_chapter_cover_the_same_design(self):
         paper=Path(__file__).resolve().parents[1]

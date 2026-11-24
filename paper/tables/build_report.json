@@ -35,7 +35,12 @@
     },
     {
       "row": "full",
-      "dataset": "iSAID",
+      "dataset": "iSAID-15-IgnBG",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "full",
+      "dataset": "iSAID-16-BG",
       "reason": "planned_or_not_reported"
     },
     {
@@ -150,7 +155,12 @@
     },
     {
       "row": "semantic_only",
-      "dataset": "iSAID",
+      "dataset": "iSAID-15-IgnBG",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_only",
+      "dataset": "iSAID-16-BG",
       "reason": "planned_or_not_reported"
     },
     {
@@ -190,7 +200,12 @@
     },
     {
       "row": "semantic_presence",
-      "dataset": "iSAID",
+      "dataset": "iSAID-15-IgnBG",
+      "reason": "planned_or_not_reported"
+    },
+    {
+      "row": "semantic_presence",
+      "dataset": "iSAID-16-BG",
       "reason": "planned_or_not_reported"
     },
     {

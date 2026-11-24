@@ -4769,5 +4769,16 @@
       "source_url": "https://www.mdpi.com/2072-4292/18/9/1349",
       "source_locator": "Table 2"
     }
-  ]
+  ],
+  "presentation_policy": {
+    "literature": "source reported; no external reproduction required",
+    "isaid_columns": [
+      "15-IgnBG",
+      "16-BG"
+    ],
+    "unknown_isaid": "single spanning cell marked u",
+    "uavid": "one column; source superscripts 7,8,u; local 7",
+    "native_weights": "shared per method/seed across both iSAID protocols",
+    "numeric_values_changed": false
+  }
 }

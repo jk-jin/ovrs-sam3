@@ -3,7 +3,7 @@
 \subsection{数据集与评价指标}
 本文采用 RSKT-Seg 的八数据集评测集合：DLRSD、iSAID、LoveDA、Potsdam、Vaihingen、UAVid、UDD5 和 VDD~\cite{liExploringEfficientOpenVocabulary2026}。DLRSD 保留 OVRSISBench 发布包中的 5601 张训练图像与 1401 张验证图像，分别用于单源监督适配与源域评测。LoveDA 验证集用于模型选择，作为开发域；其余六个数据集用于目标域评测。
 
-所有数据集均对配置中的全部类别执行前向，背景或 clutter 作为已配置类别时也参与预测。同义词展开为独立文本提示，并在输出端按原语义类别逐像素取最大值合并；因此提示数可以多于类别数。Potsdam 与 Vaihingen 的道路类别使用 road 和 pavement，VDD 的屋顶类别使用 roof、rooftop 和 building top。UAVid 合并 moving car 与 static car 为 car，采用含背景的七类评测；LoveDA 同样采用含背景七类，iSAID 背景像素忽略，DLRSD 不另设背景。忽略值统一为 255。LoveDA 原始标签 1--7 仅转换一次为 0--6，原始 0 转为忽略值，前向与评测不再额外删除背景或平移编号。
+所有数据集均对配置中的全部类别执行前向，背景或 clutter 作为已配置类别时也参与预测。同义词展开为独立文本提示，并在输出端按原语义类别逐像素取最大值合并；因此提示数可以多于类别数。Potsdam 与 Vaihingen 的道路类别使用 road 和 pavement，VDD 的屋顶类别使用 roof、rooftop 和 building top。UAVid 合并 moving car 与 static car 为 car，采用含背景的七类评测；LoveDA 同样采用含背景七类，DLRSD 不另设背景。iSAID 分别报告两种协议：IgnBG 忽略真实标签中的背景像素，对十五个前景类计算 mIoU；BG 保留背景像素，将背景计入十六类 mIoU。忽略值统一为 255。LoveDA 原始标签 1--7 仅转换一次为 0--6，原始 0 转为忽略值，前向与评测不再额外删除背景或平移编号。
 
 主要指标为平均交并比（mIoU），辅助保存平均类别准确率（mAcc）与逐类交并比（IoU）。并集为零的类别按评测器规则排除，同时记录有效类别数。跨数据集评测用于考察迁移表现；对训练类别与目标类别的语义重叠另行核对，不将全部目标类别直接视为严格未见类别。
 
@@ -14,7 +14,7 @@ SAM 3 特征提取、提示编码、条件编码器、Pixel Decoder 与分割头
 
 主分割二元交叉熵（BCE）先对每图每提示的有效像素平均，再分别平均存在与不存在提示，默认组权重为 0.8 与 0.2。Dice 权重为零。蒸馏采用冻结 SAM 3 教师的软概率，仅监督存在提示的有效标注像素，固定权重为 0.5；教师解码仅在训练需要蒸馏时执行，评测只运行学生路径。
 
-每个训练变体在同一预算内按 LoveDA 七类 mIoU 选择一份权重，并用于该次训练的全部数据集和全部表格，不按目标数据集分别选择最优 checkpoint。各变体使用相同随机种子集合；多种子结果报告均值与样本标准差，单种子结果只报告单次值。主模型在不同消融表中的结果共用同一次评测，不重复训练。验证直接缩放至 1008×1008，保持当前协议的非等比缩放，默认关闭测试时增强。同一数据集内固定类别提示、标签映射和过滤阈值，不逐变体调参。先合并同义提示，再将低于预测阈值的类别概率置零，阈值边界保留；无背景数据集跳过该过滤。背景回填阈值独立设为 0.0。
+每个训练变体在同一预算内按 LoveDA 七类 mIoU 选择一份权重，并用于该次训练的全部数据集和全部表格，不按目标数据集分别选择最优 checkpoint。各变体使用相同随机种子集合；多种子结果报告均值与样本标准差，单种子结果只报告单次值。主模型在不同消融表中的结果共用同一次评测，不重复训练。验证直接缩放至 1008×1008，保持当前协议的非等比缩放，默认关闭测试时增强。同一数据集及评测协议内固定类别提示、标签映射和过滤阈值，不逐变体调参。先合并同义提示，再将低于预测阈值的类别概率置零，阈值边界保留；无背景数据集跳过该过滤。背景回填阈值独立设为 0.0。iSAID 的两个协议对每个方法及种子复用同一权重；BG 协议使用预先固定的背景预测规则，不以真实标签决定背景预测，也不通过删除背景 IoU 换算 IgnBG 分数。
 
 \subsection{与现有方法的比较}
 \input{tables/main_rskt8}
@@ -24,7 +24,7 @@ SAM 3 特征提取、提示编码、条件编码器、Pixel Decoder 与分割头
 
 Training-free 组同时包含 CLIP 系列方法及 SAM 3 系列方法。SCLIP、ClearCLIP、ProxyCLIP 和 CorrCLIP 的遥感成绩取自 SegEarth-OV3 Table 1~\cite{liSegEarthOV3ExploringSAM2026}；SegEarth-OV 和 ConInfer 采用自身原文成绩~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025,chen2026coninfercontextawareinferencetrainingfree}。SegEarth-OV3、ProC-SAM3 与 ROSE-SAM3 分别保留各自已核对版本的报告值~\cite{liSegEarthOV3ExploringSAM2026,songPromptCalibratedSAM32026,songROSESAM3ResponseOrientedPrompt2026}。ROSE-SAM3 使用无标签目标域图像离线选择提示，模型参数保持冻结。RSGPNet 以预测掩码生成几何提示，采用其自身 Table II 的四数据集结果~\cite{wangRSGPNetGeometricPrompting2026}。ActiveSAM 的遥感成绩来自 ProC-SAM3 的复现行~\cite{tienActiveSAMFastAccurate2026,songPromptCalibratedSAM32026}；GLoP-SAM3 的成绩来自 ROSE-SAM3 的转引行，方法引用与数值来源分别注明~\cite{liuGLoPSAM3DualPostprocessing2026,songROSESAM3ResponseOrientedPrompt2026}。
 
-所有文献行保留来源协议，不按列混用不同论文或不同训练源的结果。LoveDA 历史单源标签映射尚未完全对齐的数值附加标记；部分来源采用 UAVid 八类，与本文合并 car 后的七类不同。训练数据、类别映射、裁块、图像几何与后处理未完全一致的文献结果不参与同条件排名，也不与本地结果混算跨域平均。
+文献成绩直接引用所列来源的报告值，不要求逐一复现外部模型，也不以当前公开代码替代历史论文设置。iSAID 主表分为十五类 IgnBG 与十六类 BG 两个子列；完整模型与两个原始 SAM 3 基线均报告双协议结果。无法明确归类的文献数值跨两个子列展示并标记，不据训练方式推断协议。UAVid 保留一列，七类与八类来源分别用上标 7 和 8 区分，未明确的来源单独标记；本文及本地基线统一采用七类。协议标记说明已知的来源设置，不表示已独立复现其历史运行。训练数据、划分及评测规则不一致的结果作为文献参考，不据其计算同条件提升幅度或跨协议排名，也不混算跨域平均。
 
 \subsection{LoveDA 逐类分析}
 \input{tables/loveda_per_class}
