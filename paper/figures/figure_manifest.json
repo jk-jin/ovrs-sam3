@@ -54,21 +54,6 @@
       "in_figure_title": false
     },
     {
-      "name": "sdf",
-      "width": 675,
-      "height": 336,
-      "native_cells": 107,
-      "editable": true,
-      "source": "src/sdf.drawio",
-      "pdf": "sdf.pdf",
-      "placeholders": 0,
-      "reference": "Figure 4 in the user-approved ReCA-SAM3 five-figure design preview",
-      "source_sha256": "582657e603496ce9187a0b8652b8e952feb479c524020c4cf95e8c34b373a0be",
-      "pdf_sha256": "245eaaf0b8bf4dceca1e7869f118b5f80f6f7e339cff75a1ba32a5e60340dc00",
-      "outer_frame": false,
-      "in_figure_title": false
-    },
-    {
       "name": "qualitative_comparison",
       "width": 1448,
       "height": 302,
@@ -84,7 +69,7 @@
       "in_figure_title": false
     }
   ],
-  "notes": "Native editable draw.io cells with taller content layouts; no outer frame or in-figure title. PDFs are the only standalone output. All image/prediction tiles are placeholders.",
+  "notes": "Four existing editable draw.io sources with matching PDFs. The standalone SDF figure has been removed. Overview and aggregation artwork still require the current-design redraw; a multiscale shared-window detail panel is planned. Image/prediction tiles remain placeholders.",
   "native_cell_count_includes_root": true,
   "color_design": {
     "region_fill": "Reference-specific pale gradients",
