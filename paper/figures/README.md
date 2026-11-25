@@ -1,49 +1,41 @@
 # ReCA-SAM3 可编辑论文图
 
-方法的机制与流程说明暂用中文，公式及符号说明保留英文；图内文字与图注继续使用英文。独立 SDF 图已从正文、源文件、PDF 和导出清单删除，融合模块仍保留在模型与总体框架中，其投影、残差卷积与相加由正文和公式说明。
+四份原生 draw.io 图稿与同名矢量 PDF 已对齐当前模型。图内文字和图注使用英文；没有独立 SDF 图，总体框架仅保留 SDF 模块。所有源图由可编辑形状、文字和连接器组成，无外层虚线框或整图顶部大标题；聚合细节保留两个子图标题。
 
-## 当前文件与重绘范围
+## 文件与正文接入
 
-| 图 | 可编辑源文件 | 论文图片 | 当前状态 |
+| 图 | 可编辑源文件 | 论文图片 | 正文状态 |
 | --- | --- | --- | --- |
-| 动机 | [motivation.drawio](src/motivation.drawio) | [motivation.pdf](motivation.pdf) | 已接入正文；保留信息流对比，统一术语 |
-| 总体框架 | [overview.drawio](src/overview.drawio) | [overview.pdf](overview.pdf) | 已接入正文；图内仍为旧聚合结构，待重绘 |
-| 聚合细节 | [aggregation.drawio](src/aggregation.drawio) | [aggregation.pdf](aggregation.pdf) | 尚未接入正文；旧双状态更新与移位窗口需要重绘 |
-| 定性对比 | [qualitative_comparison.drawio](src/qualitative_comparison.drawio) | [qualitative_comparison.pdf](qualitative_comparison.pdf) | 尚未接入正文；替换旧 Adapter 列，等待真实结果 |
+| 动机 | [motivation.drawio](src/motivation.drawio) | [motivation.pdf](motivation.pdf) | 引言中 Fig. 1，三种信息流对比 |
+| 总体框架 | [overview.drawio](src/overview.drawio) | [overview.pdf](overview.pdf) | 方法中 Fig. 2，两个完整聚合块与训练参考路径 |
+| 聚合／多尺度窗口 | [aggregation.drawio](src/aggregation.drawio) | [aggregation.pdf](aggregation.pdf) | 方法中 Fig. 3，(a) 单块更新，(b) 共享三尺度窗口 |
+| 定性对比模板 | [qualitative_comparison.drawio](src/qualitative_comparison.drawio) | [qualitative_comparison.pdf](qualitative_comparison.pdf) | 未接入正文，等待真实样本和预测替换占位 |
 
-当前只完成方法文字中文化和独立 SDF 图删除，以下为待确认的重绘建议，不代表图稿已经更新。
+## 当前图示定义
 
-## 推荐内容分工
+- 动机图区分匹配表征上的代价聚合、解码后的逐类掩码融合，以及本文解码前的跨提示特征聚合；不使用假想预测展示性能收益。
+- 总体图的 Block 1 与 Block 2 均含类间注意力和多尺度窗口注意力，块后执行最终 LayerNorm。语义引导在两个块中复用，紫色箭头仅表示 Q/K 引导；绿色 FPN 引导用于窗口 Q/K。原始条件特征与 FPN72 接 SDF，高分辨率 FPN 接冻结解码器。训练参考路径用红色虚线区分，推理不运行教师。
+- 聚合图 (a) 将条件特征的 LayerNorm 输出同时用于 Q/K 与 V；语义引导单独归一化，仅经拼接参与 Q/K。图中两个圆形加号分别对应类间残差和多尺度空间残差。
+- 聚合图 (b) 的三路输入均来自类间更新后的同一份特征，分辨率为 36×36、24×24、12×12；普通窗口均为 12×12，对应 9、4、1 个窗口。最小分支仅在其 12×12 网格上做全图注意力。
+- 三个绿色窗口模块在同一个聚合块内共用预归一化、Q/K/V 投影、输出投影和相对位置偏置，不同块独立参数化。引导按尺度缩放，仅接 Q/K，值来自条件特征。
+- 三路输出是特征增量，先对齐到 36×36，再经三个可学习标量的 Softmax 权重求和；组合图 (a) 在融合后执行一次空间残差。尺度权重没有图像输入，也不表示逐像素动态门控。
+- 图中没有语义状态更新、移位窗口、CLIP 中间层引导或 SDF 方向旋转。
 
-1. **动机图**：保留 CLIP 代价聚合、逐类 SAM 3 查询与本文解码前跨提示交互的区别。只展示由结构确认的信息流，不用假想预测证明性能提升。
-2. **总体框架图**：上方为冻结 SAM 3 条件特征与 FPN，下方为 RemoteCLIP 图文编码及 score embedding；中部画两个完整 Aggregation Block，各包含 Cross-class Attention 和 Multiscale Window Attention。语义引导旁路进入两个块，仅连查询和键。末端用一个 SDF 框表示融合，保留原始条件特征与 FPN72 输入；高分辨率 FPN 接解码器。教师与蒸馏置于独立 Training only 区域。
-3. **聚合块与多尺度共享窗口图**：推荐一个跨栏组合图，左侧子图说明单个块的类间残差与多尺度类内残差，右侧子图展开多尺度部分。若缩印后网格或文字不清楚，再拆成两幅独立图；两处不重复完整 Q/K/V 结构。
-4. **定性对比图**：列为 Input、Ground truth、SAM 3 Semantic-only、SAM 3 Semantic × Presence、ReCA-SAM3；数据集行为 LoveDA、Potsdam、UAVid。统一样本、裁块和类别色表，保留局部放大与失败案例。
+定性模板列为 Input、Ground truth、SAM 3 Semantic-only、SAM 3 Semantic × Presence、ReCA-SAM3，数据集行为 LoveDA、Potsdam、UAVid，保留局部放大槽。全部图像／掩码槽都是明确标注的占位，不能作为实验结果；接入正文前需替换为相同样本、裁块和类别色表的真实结果，并纳入失败案例。
 
-组合方案共四幅图；将多尺度图独立成图则共五幅。图号由 LaTeX 生成，细节图准备完毕后再接入正文。
-
-## 多尺度共享窗口子图布局
-
-- 单个块完成类间更新后的 36×36 条件特征，从同一输入分为 36×36、24×24、12×12 三条平行支路。后两路标出 Resize，避免误画为串行更新。
-- 三路均采用 12×12 普通窗口，分别有 3×3、2×2、1×1 个窗口。最小尺度标注 Global on 12×12 grid，避免暗示原分辨率上的稠密全局注意力。
-- 同色窗口模块以虚线括号标注 Shared parameters within each block。共享范围包括 LayerNorm、Q/K/V 与输出投影、相对位置偏置；不同聚合块独立参数化。
-- 语义引导和 SAM 3 FPN 引导按尺度缩放后接 Q/K，V 来自对应尺度的条件特征。窗口输出标为 Feature increment，较小尺度的增量上采样至 36×36。
-- 三路增量乘尺度权重后求和，最后与类间更新后的输入做一次残差相加。权重以 Three learned logits → Softmax 表示，在该块全部提示、通道和空间位置间共享；不画成图像生成的逐像素门控。
-- 不绘制语义状态更新、移位窗口、循环平移或 CLIP 中间层路径。普通窗口的相对位置偏置保留，可在图注中说明。
-
-## 配色与缩印
+## 配色与编辑
 
 | 元素 | 风格 |
 | --- | --- |
-| SAM 3、条件特征与更新路径 | 浅蓝，冻结模块带雪花 |
-| RemoteCLIP | 浅黄，火焰表示 attention tuning |
-| 语义引导 | 浅紫，紫色旁路箭头，只接 Q/K |
-| 窗口注意力与 SDF 框 | 浅绿 |
-| 卷积、投影与缩放 | 浅橙 |
+| SAM 3、条件特征与更新路径 | 浅蓝，冻结模块以文字注明 |
+| RemoteCLIP | 浅黄，标注 Attention tuning |
+| 语义引导 | 浅紫，紫色 Q/K 旁路 |
+| 窗口注意力、FPN 引导和 SDF | 浅绿 |
+| 投影与缩放 | 浅橙 |
 | 输入类别与定性表头 | 浅青 |
 | 训练参考与蒸馏 | 红色虚线 |
 
-继续使用原生 draw.io 矢量形状、特征堆叠与窗口网格，不加整图外层虚线框和顶部大标题。按论文实际宽度检查字号、线宽和网格可辨性；用箭头说明更新对象、共享范围与残差位置，不重复堆砌正文公式。现有影像、GT 与预测槽仍是占位，不代表真实实验结果。
+源图采用 Liberation Serif，PDF 已嵌入常规与粗体字体。源图文字显式分行，几何与 PDF 保持一致；PDF 中图形、窗口网格和文字均为矢量。更改字号、形状或连接后，应按论文实际跨栏宽度检查网格、连线和文字。核对结果与文件哈希维护于 ../notes/source_snapshot.json。
 
 ## 保存源图后生成 PDF
 
@@ -62,4 +54,4 @@ python3 paper/scripts/export_figures.py
 python3 paper/scripts/export_figures.py --force
 ```
 
-更新图时同步提交 .drawio、PDF 和清单。独立多尺度图创建后再加入清单及正文；组合图方案直接更新现有 aggregation 图。
+更新图时同步提交 .drawio、PDF 和清单。定性图准备齐全后再增加正文引用；不要直接把占位模板当作定性实验。

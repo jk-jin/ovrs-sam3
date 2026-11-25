@@ -1,6 +1,6 @@
 \begin{figure*}[!tbp]
 \centering
 \includegraphics[width=\textwidth]{figures/overview.pdf}
-\caption{Overview of ReCA-SAM3. Template similarities and final dense RemoteCLIP features form semantic guidance for attention queries and keys. Each aggregation block updates only SAM 3 conditional features through cross-class attention followed by shared multiscale regular-window attention. Original conditional features and FPN72 enter SDF; high-resolution FPN features reach the frozen decoder. The reference uses original features and shared FPN representations only during training.}
+\caption{Overview of ReCA-SAM3. Template similarities and final dense RemoteCLIP features form semantic guidance for attention queries and keys. Two complete blocks update only SAM 3 conditional features through cross-class attention followed by shared multiscale regular-window attention. LayerNorm (LN) follows the block stack. Original conditional features and FPN72 enter SDF; high-resolution FPN features reach the frozen decoder. The same frozen decoder supplies reference soft masks from original conditional features and shared FPN representations during training only.}
 \label{fig:overview}
 \end{figure*}

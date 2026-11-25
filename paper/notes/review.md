@@ -10,6 +10,7 @@
 | 当前模型与配置 | notes/experiment_config_snapshot.json、notes/source_snapshot.json；当前默认值不称实测最优值 |
 | 聚合正文与公式 | models/aggregation_attention.py 与 models/feature_aggregation.py：两个完整块、语义仅引导 Q/K、条件特征提供 V、块内共享三尺度普通窗口与三个标量 Softmax 融合 |
 | SDF 与推理正文 | models/semantic_detail_fusion.py、models/adapters/semantic_adapter.py 与 engine/evaluator.py：单方向双支路、全配置类别前向、直接类别索引和数据集独立阈值 |
+| 当前结构图 | figures/src/、figure_manifest.json 与对应 PDF：两个完整块、共享三尺度普通窗口、仅条件特征接受残差；组合图接入方法，定性占位不接入正文 |
 | Zotero | 两个 bib 数据库不随表格清理改写；正文引用决定参考文献，集合操作见 zotero_sync.md |
 
 ## 验收标准
@@ -26,6 +27,6 @@
 - 逻辑：从模板分数生成引导，到类间特征更新、多尺度空间增量融合，再到 SDF 与冻结解码器，保持一条条件特征更新路径。
 - 数学：解释新增块索引、尺度集合、插值算子、窗口增量与融合标量；保留普通窗口相对位置偏置，删除移位屏蔽及背景索引恢复。
 - 表达：方法的机制、流程与段落标题采用中文，公式及符号说明保留英文；22 个编号公式保持原样，不保留双状态更新及独立类内／类间块的旧表述。
-- 完整性：独立 SDF 图及其导出项已删除，模型融合模块与正文公式保留；overview 与 aggregation 图内结构仍待重绘，多尺度窗口图的布局建议维护于 figures/README.md。实验表格、本地占位和文献数值保持原样，不将整篇论文视作投稿定稿。
+- 完整性：独立 SDF 图及其导出项已删除，模型融合模块与正文公式保留；动机、总体框架和聚合／多尺度组合图均已重绘并接入正文，原生 draw.io 与矢量 PDF 同步。定性模板列名已对齐两个实际基线，待真实结果替换占位后再接入正文。实验表格与文献数值保持原样，不将整篇论文视作投稿定稿。
 
 架构图和实际实验的剩余工作只在 manuscript_status.md 维护。

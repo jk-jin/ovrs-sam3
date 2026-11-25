@@ -3,80 +3,71 @@
   "figures": [
     {
       "name": "motivation",
-      "width": 1448,
-      "height": 250,
-      "native_cells": 101,
+      "width": 1440,
+      "height": 310,
+      "native_cells": 43,
       "editable": true,
       "source": "src/motivation.drawio",
       "pdf": "motivation.pdf",
-      "placeholders": 5,
-      "reference": "Figure 1 in the user-approved ReCA-SAM3 five-figure design preview",
-      "palette_source": "Reference-specific cyan / blue / purple panels and pastel module fills",
-      "image_tile": "Five embedded square neutral placeholders; editable via Edit Image",
-      "native_vector_stencils": [
-        "encoder",
-        "snowflake",
-        "fire"
-      ],
-      "source_sha256": "b0a6654f71cf45c69f15ea768080acccd3bc7163aa8fef7f0123dc1496ffc84a",
-      "pdf_sha256": "b2d49fc5e76e4d3d63711e9d22cc87095b54492da1ac0f4d51008d0cb6ba7113",
+      "source_sha256": "7c7547d3899de942b0a12b02da994d685abe7a7d46ec73db7865bc80190e4783",
+      "pdf_sha256": "96a8946c24783b6711c8737e346caeb317d9143f06e07340f496e6ab0c791c9b",
       "outer_frame": false,
-      "in_figure_title": false
+      "in_figure_title": false,
+      "placeholders": 0
     },
     {
       "name": "overview",
-      "width": 1448,
-      "height": 504,
-      "native_cells": 135,
+      "width": 1440,
+      "height": 650,
+      "native_cells": 78,
       "editable": true,
       "source": "src/overview.drawio",
       "pdf": "overview.pdf",
-      "placeholders": 2,
-      "reference": "Figure 2 in the user-approved ReCA-SAM3 five-figure design preview",
-      "source_sha256": "9e4f9e91de45c83de23e243d81dc545c17ebb32e4bca6920e0be05c0ba11a56d",
-      "pdf_sha256": "a8278034c388b5331ff6004a9a66b67ccab652c3a8bf4dc1372808d5cb429050",
+      "source_sha256": "3c41d07d0746f6cd0fe79d185f79777eb7d67ae7d45c63dbe35efed1309b9f50",
+      "pdf_sha256": "82fb43410dde6bb5c12de959c0928b5708517b5ddf4a3acec22896ac995f5ce3",
       "outer_frame": false,
-      "in_figure_title": false
+      "in_figure_title": false,
+      "placeholders": 0
     },
     {
       "name": "aggregation",
-      "width": 768,
-      "height": 340,
-      "native_cells": 101,
+      "width": 1440,
+      "height": 750,
+      "native_cells": 83,
       "editable": true,
       "source": "src/aggregation.drawio",
       "pdf": "aggregation.pdf",
-      "placeholders": 0,
-      "reference": "Figure 3 in the user-approved ReCA-SAM3 five-figure design preview",
-      "source_sha256": "9064f74f1813256c748607a74e4e4964ca957929e90daab27a9617f4c373927b",
-      "pdf_sha256": "7052e08ab5e56a58bd36086fd44b5db211e76565e8af3bee7e5db41588f57c88",
+      "source_sha256": "de469e72c62e61648c3550c8c8b671ec938436855e4e1a0340bce95fd97514b6",
+      "pdf_sha256": "c25a9af190d27a86c28bbb2e13fd89173f4b2ad1cfc280d19f3e9909e8f58603",
       "outer_frame": false,
-      "in_figure_title": false
+      "in_figure_title": false,
+      "placeholders": 0
     },
     {
       "name": "qualitative_comparison",
-      "width": 1448,
-      "height": 302,
+      "width": 1440,
+      "height": 625,
       "native_cells": 41,
       "editable": true,
       "source": "src/qualitative_comparison.drawio",
       "pdf": "qualitative_comparison.pdf",
-      "placeholders": 15,
-      "reference": "Figure 5 in the user-approved ReCA-SAM3 five-figure design preview",
-      "source_sha256": "3236d65bb083265b54d23221a46dcd03f47a1c6fff8cfd6c0edf49e7b54a513d",
-      "pdf_sha256": "100e1d7779748a173dd0fddc27fb87be9b5d609618d0eada156501474aba4145",
+      "source_sha256": "27407eacfacf4b9065f6ae6a574b296e2f5048fdb036aad32a3a7b5d841cf840",
+      "pdf_sha256": "ed011c7c75e3404b83e2913945cfbb5705207ec9e6dae80c7615f6d2c2024efa",
       "outer_frame": false,
-      "in_figure_title": false
+      "in_figure_title": false,
+      "placeholders": 15
     }
   ],
-  "notes": "Four existing editable draw.io sources with matching PDFs. The standalone SDF figure has been removed. Overview and aggregation artwork still require the current-design redraw; a multiscale shared-window detail panel is planned. Image/prediction tiles remain placeholders.",
+  "notes": "Current-design native editable diagrams. Aggregation contains block and multiscale-window subpanels. Only the qualitative layout contains placeholders and remains outside the manuscript until real results are available. No standalone SDF figure.",
   "native_cell_count_includes_root": true,
   "color_design": {
-    "region_fill": "Reference-specific pale gradients",
-    "module_fill": "Reference-specific pastel fills",
-    "palette_source": "User-approved ReCA-SAM3 five-figure design preview",
-    "qualitative_headers": "Uniform cyan, as in the reference preview"
+    "feature": "Pale blue",
+    "semantic_guidance": "Pale purple",
+    "spatial_guidance": "Pale green",
+    "projection_and_resize": "Pale orange",
+    "training": "Red dashed connectors"
   },
   "export_format": "pdf",
-  "export_command": "python3 paper/scripts/export_figures.py"
+  "export_command": "python3 paper/scripts/export_figures.py",
+  "renderer": "Vector PDFs generated from the same geometry and explicit text line breaks as the native draw.io sources; sources remain compatible with draw.io Desktop PDF export."
 }

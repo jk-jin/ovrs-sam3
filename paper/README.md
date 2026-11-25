@@ -40,4 +40,4 @@ latexmk -xelatex -halt-on-error -file-line-error -outdir=build main.tex
 - notes/experiment_config_snapshot.json：有效配置快照；notes/source_snapshot.json：源码、论文哈希及最新验证结果。
 - references.bib 保持 Zotero 自动导出；references_extra.bib 保存人工补充。未引用条目不会进入参考文献。
 
-消融与iSAID双协议入口已实现，运行方式见 ../docs/experiment_suites.md。正文、公式和图注已对齐当前两个完整聚合块、固定语义 Q/K 引导、共享三尺度普通窗口及单方向 SDF。方法的非公式说明暂用中文；公式与符号说明保持英文。独立 SDF 图已删除，融合仍保留在模型与正文中；总体框架与聚合细节图的旧设计尚待重绘，多尺度共享窗口图的布局建议见 figures/README.md。实际未运行的实验与图稿工作见 notes/manuscript_status.md，源码与正文哈希及本轮检查见 notes/source_snapshot.json。旧内容通过 Git 历史查阅。
+消融与iSAID双协议入口已实现，运行方式见 ../docs/experiment_suites.md。正文、公式和图注已对齐当前两个完整聚合块、固定语义 Q/K 引导、共享三尺度普通窗口及单方向 SDF。方法的非公式说明暂用中文；公式与符号说明保持英文。动机、总体框架及聚合／多尺度组合图均已重绘并接入正文，原生 draw.io 与嵌入字体的矢量 PDF 同步；独立 SDF 图已删除。定性对比模板已对齐两个实际基线，待真实结果替换占位后再接入正文。图稿定义与编辑方式见 figures/README.md，剩余实验见 notes/manuscript_status.md，文件哈希及本轮检查见 notes/source_snapshot.json。旧内容通过 Git 历史查阅。

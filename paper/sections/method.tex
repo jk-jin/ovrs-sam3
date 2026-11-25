@@ -51,7 +51,7 @@ Brackets denote channel concatenation, and $\mathcal N$ acts independently at ea
 where $\mathcal D$ is bilinear resizing from $72\times72$ to $36\times36$. Stacking and flattening yields $F^0\in\mathbb R^{P\times N\times D}$. Superscript $0$ denotes initialization before aggregation: $S^0$ represents RemoteCLIP alignment information, whereas $F^0$ retains the SAM 3 conditional representation.
 
 \subsection{语义引导特征聚合}
-聚合模块默认包含两个完整聚合块。每个块先通过类间注意力更新条件特征，再融合三个并行普通窗口分支的空间更新，并以残差方式加回条件特征。整个过程中仅更新条件特征，语义引导在各块间复用。所有聚合块结束后，执行一次通道层归一化（LayerNorm），得到最终聚合特征。
+聚合模块默认包含两个完整聚合块，如图~\ref{fig:aggregation}(a) 所示。每个块先通过类间注意力更新条件特征，再融合三个并行普通窗口分支的空间更新，并以残差方式加回条件特征。整个过程中仅更新条件特征，语义引导在各块间复用。所有聚合块结束后，执行一次通道层归一化（LayerNorm），得到最终聚合特征。
 
 代价聚合方法对图文匹配表征进行上下文建模，再解码聚合后的代价表征~\cite{choCATSegCostAggregation2024,liExploringEfficientOpenVocabulary2026}。本文以匹配语义引导 SAM 3 条件分割特征的聚合，再通过 SDF 接入预训练分割解码器。不同聚合块独立学习参数；同一块中的类间注意力与窗口注意力分别参数化，而三个窗口尺度共用一套注意力参数。聚合块不额外设置前馈网络。
 
@@ -108,7 +108,7 @@ The three spatial branches use grid side lengths $a\in\mathcal A=\{36,24,12\}$. 
 
 两种引导的多尺度表示在一次前向中仅生成一次，由全部聚合块复用。
 
-三个尺度的空间分支均从同一份类间更新后的条件特征出发，分别调整分辨率并计算窗口注意力增量：
+三个尺度的空间分支均从同一份类间更新后的条件特征出发，如图~\ref{fig:aggregation}(b) 所示，分别调整分辨率并计算窗口注意力增量：
 \begin{equation}
  \Delta F^{\ell,a}=\mathcal W_\ell\bigl(\mathcal R_a(F^{\ell,c}),S_a,G_a\bigr).
  \label{eq:multiscale_window_update}
@@ -132,6 +132,8 @@ The index $a'$ ranges over the same three scales in the denominator. The coeffic
 每个块独立学习三个尺度融合标量，同一个尺度权重在该块的全部提示、通道与空间位置之间共用。融合参数均从零初始化，Softmax 后三个初始权重各为三分之一。融合对象是三路注意力增量：先将增量对齐回 36×36，再加权求和，最后统一残差加入类间更新后的条件特征。
 
 The final representation is $F^{\mathrm{agg}}=\operatorname{LN}_{\mathrm{out}}(F^L)$, where $\operatorname{LN}_{\mathrm{out}}$ is the final channel-wise LayerNorm.
+
+\input{figures/aggregation}
 
 \subsection{语义—细节融合与解码}
 SDF 在 72×72 分辨率上将聚合特征接回原始解码器。聚合特征先上采样，再分别与原始提示条件特征及 SAM 3 FPN 特征融合，形成独立的语义与细节支路。

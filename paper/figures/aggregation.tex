@@ -1,6 +1,6 @@
 \begin{figure*}[!tbp]
 \centering
 \includegraphics[width=\textwidth]{figures/aggregation.pdf}
-\caption{RemoteCLIP-guided feature aggregation. Each block first performs cross-class attention across expanded prompts, then applies three parallel regular-window branches on 36-by-36, 24-by-24, and 12-by-12 grids with shared parameters and 12-by-12 windows. Aligned branch increments are fused with learned Softmax weights and added to the conditional features. Semantic guidance contributes to queries and keys throughout; SAM 3 FPN additionally guides window attention. Only conditional features supply values and receive residual updates.}
+\caption{RemoteCLIP-guided feature aggregation. (a) Each block applies cross-class attention and a multiscale window update, with two feature residual additions. Pre-normalized conditional features supply all values; semantic guidance contributes to queries and keys, with FPN guidance added for window attention. (b) Parallel 36-by-36, 24-by-24, and 12-by-12 grids contain 9, 4, and 1 regular windows of size 12-by-12. The three green attention modules reuse one parameter set within each block; different blocks have independent parameters. Aligned increments are fused by three learned scalar Softmax weights before the spatial residual addition in (a). LN denotes LayerNorm.}
 \label{fig:aggregation}
 \end{figure*}
