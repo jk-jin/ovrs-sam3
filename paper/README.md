@@ -34,10 +34,12 @@ latexmk -xelatex -halt-on-error -file-line-error -outdir=build main.tex
 
 ## 数据与核验索引
 
+- [figures/STYLE_GUIDE.md](figures/STYLE_GUIDE.md)：后续绘图统一规范，包含布局、配色、图标、留白、叠片、Block 层次及验收标准。
+
 - data/literature_results.csv：原报告数值与历史记录；当前 156 项选择见 data/comparison_audit_20261124.json。
 - notes/literature_fill_audit.md：来源 PDF／补充材料的页码与指纹；不再维护旧的填写清单。
 - data/protocol_evidence_20261124.json：已有代码核验记录，不作为逐仓库复现要求。
 - notes/experiment_config_snapshot.json：有效配置快照；notes/source_snapshot.json：源码、论文哈希及最新验证结果。
 - references.bib 保持 Zotero 自动导出；references_extra.bib 保存人工补充。未引用条目不会进入参考文献。
 
-消融与iSAID双协议入口已实现，运行方式见 ../docs/experiment_suites.md。正文、公式和图注已对齐当前两个完整聚合块、固定语义 Q/K 引导、共享三尺度普通窗口及单方向 SDF。方法的非公式说明暂用中文；公式与符号说明保持英文。overview 已按用户确认的预览重建为白底三板块、浅色内部功能组、图标与特征叠片，蒸馏栏使用灰色；内部卡片已增加留白，类间特征使用分层透视叠片，两个 Block 的顶部、右侧和底部轮廓明确错位；五处真实图像／响应位置保留占位。动机和聚合／多尺度组合图维持原设计，原生 draw.io 与嵌入字体的矢量 PDF 同步；独立 SDF 图已删除。定性模板待真实结果替换占位后再接入正文。图稿定义与编辑方式见 figures/README.md，剩余工作见 notes/manuscript_status.md，哈希及检查见 notes/source_snapshot.json。
+消融与iSAID双协议入口已实现，运行方式见 ../docs/experiment_suites.md。正文、公式和图注已对齐当前两个完整聚合块、固定语义 Q/K 引导、共享三尺度普通窗口及单方向 SDF。方法的非公式说明暂用中文；公式与符号说明保持英文。overview 是已确认的白底三板块、浅色内部功能组与灰色蒸馏栏视觉基准，五处图像／响应保留占位。动机和聚合／多尺度图维持已有图稿；独立 SDF 图已删除。后续新增或重绘统一遵循 [绘图规范](figures/STYLE_GUIDE.md)，文件索引与当前图示定义见 [figures/README.md](figures/README.md)。定性模板待真实结果替换占位后再接入正文；剩余工作见 notes/manuscript_status.md，哈希及检查见 notes/source_snapshot.json。

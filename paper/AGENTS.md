@@ -16,6 +16,11 @@
 - 每节续写前先列提纲，再按段落单一主题写作；更新 notes/review.md 的主张—证据映射和五维自审。
 - 架构或结果变更后更新 README 的核对记录、配置快照和实验协议；不能仅靠 commit 识别带本地改动的实现。
 
+## 论文绘图
+
+- 新增或重绘论文图之前，必须阅读 [figures/STYLE_GUIDE.md](figures/STYLE_GUIDE.md)，并核对 [figures/README.md](figures/README.md) 中的当前图示定义与源码／有效配置。
+- STYLE_GUIDE.md 是视觉规范的唯一维护位置。后续风格调整更新该文档，不另建重复规范；当前图示和可编辑源文件／PDF／清单保持一致。未完成图任务仍只记入 notes/manuscript_status.md。
+
 ## 术语约定
 
 | 用语 | 约定 |

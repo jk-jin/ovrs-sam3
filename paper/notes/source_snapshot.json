@@ -1,9 +1,9 @@
 {
   "date": "2026-11-25",
   "branch": "master",
-  "base_commit": "d2e19e102212d0e058216a325a0384753a90242d",
+  "base_commit": "7d436588d9fd735fcde9b46c2acc2bbb7cf941b1",
   "implementation_id": "reca-sam3-paper-ablation-v1",
-  "scope": "Adjust only overview layout: add internal card/output margins, rebuild cross-class features as four perspective planes separated vertically in depth, and expose the second block top/right/bottom outline with distinct offsets. Increase canvas height to preserve space. Synchronize native draw.io, vector PDF, manifest and existing documentation. Model/configuration, equations, captions, tables, bibliography and other figure artwork are unchanged.",
+  "scope": "Document the approved figure style as the single maintained guide at paper/figures/STYLE_GUIDE.md. Add mandatory reading guidance and README entry points, consolidate duplicated visual rules and update the review mapping. Documentation-only: no artwork/PDF, manifest, caption, model/configuration, equation, table or bibliography changes.",
   "implementation_boundary": {
     "current_unused_mid_extraction": false,
     "final_design_uses_mid_features": false,
@@ -17,32 +17,15 @@
     "qualitative_real_predictions_available": false
   },
   "validation": {
-    "latex": "XeLaTeX + BibTeX + xdvipdfmx completed with existing external TeX support and task-local font configuration.",
-    "pdf_pages": 10,
-    "equation_blocks_unchanged": 22,
-    "figure_manifest_entries": 4,
-    "active_manuscript_figures": [
-      "motivation",
-      "overview",
-      "aggregation"
-    ],
-    "qualitative_template_in_manuscript": false,
-    "figure_geometry": "Overview: 617 unique native cells; all parent/source/target references and compressed custom stencils resolve. Five labeled placeholders. Text bounds verified within 2000 x 1000. Selected functional card objects have at least 15 units of padding; output tiles have 20 units to the stage frame. Four cross-class planes use a 6-unit vertical depth interval with consistent perspective.",
-    "figure_export_check": "All four source/PDF pairs match manifest SHA-256 and pass the existing export check; only overview artwork/PDF changed in this commit.",
-    "vector_pdf_fonts": "Overview uses embedded subset Liberation Sans regular/bold TrueType fonts and contains no raster images. The PDF is generated from the same geometry and explicit text line breaks as the native draw.io source using ReportLab. Other figure PDFs are unchanged.",
-    "pdf_visual_review": "Latest standalone overview, enlarged aggregation-block crop and embedded manuscript page 3 inspected. Verified card padding, perspective slice separation, exposed back-block contours, bottom shared-weight label, output tile margins and unobstructed FPN skip routing.",
-    "overfull_boxes": 0,
-    "missing_characters": 0,
-    "undefined_references": 0,
-    "known_build_warnings": "Existing font-shape substitutions, underfull prose and absent optional font map files in the execution environment.",
-    "native_results": "No measured paper scores or predictions generated; all qualitative tiles remain explicitly labeled placeholders.",
-    "gpu_training": "not run; figure/documentation-only change",
+    "scope": "Documentation links, guide completeness, source hashes and unchanged-artwork check.",
+    "local_markdown_links_checked": 26,
+    "style_guide_sections": 14,
+    "figure_export_check": "Existing four source/PDF pairs checked against manifest; all unchanged.",
+    "paper_pdf_rebuilt_for_this_change": false,
+    "latex": "Not rerun: manuscript and figures are unchanged. Last successful 10-page XeLaTeX build belongs to artwork commit 7d43658.",
+    "gpu_training": "not run; documentation-only change",
     "gpu_evaluation": "not run",
-    "bibliography": "Both BibTeX databases, comparison data, generated tables, model source and configurations unchanged.",
-    "documentation": "Figure README records spacing and depth-stack conventions; paper README/review mapping updated. No new unresolved tasks; five real-image replacement tasks remain in manuscript_status.md.",
-    "paper_pdf_rebuilt_for_this_change": true,
-    "diagram_routing": "RGB feeds the image encoders; prompts feed text/conditional encoding. Semantic guidance joins Q/K only; conditional features supply V and residual updates. SAM FPN spatial guidance joins window Q/K. Scale logits remain image-independent learned scalars.",
-    "block_frame_geometry": "Block 2 starts 25 units right and 55 units above Block 1. The exposed right and bottom contours are separated by 30 and 26 units respectively; verified directly in draw.io geometry and vector PDF."
+    "documentation": "One visual guide, mandatory reading link in paper/AGENTS.md, entry points in both READMEs and review mapping. Unfinished work remains only in manuscript_status.md."
   },
   "sha256": {
     "DESIGN.md": "2fbcf281b7a14cc763da32c508861b93c8fd27b127bc2f08d25e93d0f1bb870f",
@@ -93,8 +76,8 @@
     "paper/scripts/test_build_experiment_tables.py": "39d1e97c70b14edb48abc4db8daf62a24f59c12fc3758920b37bf824cf6e673c",
     "paper/notes/experiment_config_snapshot.json": "fc13f816548c7d054cb585f6b588c0a87b6ae72e1abdbe0eb6c4f939820a8d7d",
     "paper/notes/evaluation_protocol.md": "15f8485817989a438a2b17ddc344b94dfaa28d1f81d626e00c8d37764633054a",
-    "paper/notes/review.md": "dac5f04527ec730c30c86145babb49f79a55f9520c8db0aa5953e03e7d412258",
-    "paper/README.md": "0298f4ec8ad585ad57da1f0eb4f7d64a92b0100a0cb413db4a9ebd20442ca9dc",
+    "paper/notes/review.md": "a5108ec98fc5cd83ccfd0b9c1b8e29aba3b2e3704091bbde89b373eee378e397",
+    "paper/README.md": "03a2b7c6383fc6ecd71d71767ff4c8813569591c6a2252ac4d65bfd65e964efa",
     "paper/tables/ablation_core.tex": "45523e282d20ea3dfe289f7a2b5270e9a25b999011195c72e058797608e1ed66",
     "paper/tables/ablation_freeze.tex": "77b5d324ffa02b850b08cbc332bec60bebeb2cba30579f30f7db1d49f043c5d4",
     "paper/tables/efficiency.tex": "5d657f1f024ea6e5a0fb3a09849251b3e68c3393770a7f4dc2663e2cb62db6b3",
@@ -113,7 +96,7 @@
     "paper/data/protocol_evidence_20261124.json": "2fd5a96677f3541f59e89130986b428062258f229da2bb1f3e83f2db90992a5a",
     "paper/notes/zotero_sync.md": "31457e0419daa3eff173fd10cf292118f3bab0bd0b6095f436ea3ca47fa9b208",
     "paper/references.bib": "e958b1908c78762d60ec53f55a8bf92068c98a1ecec15a52610814e57e59113f",
-    "paper/AGENTS.md": "e5a39a53edecc199334fe965a2efc7eed6dfd93d0c5d4c9d14719844a41ca06c",
+    "paper/AGENTS.md": "c1f0a35f43714b51dd9e81a2c447bd117a6d93becbd3079045b84ee1a95bde4a",
     "paper/notes/comparison_policy.md": "a5cc5213427d34634c7d12df7b7f4962cc2cda28e0ad278c0f74f3c79a2f44b5",
     "README.md": "c706636cde2b03c84b8ad2ade9ebd15f589f27e62c03cd28fd1a15e84bff5d12",
     "configs/baselines/semantic_only.py": "f27f4e26939a5c0be903868ef1ca00c88a0f6b971d372e71741bbc1994b7fb42",
@@ -156,7 +139,7 @@
     "paper/sections/conclusion.tex": "d81801bfc4b33a6cf099fafded693b0fb6c15f51902b6a8cc1dea6edeb837f4a",
     "paper/sections/introduction.tex": "770a2636bebe2be9dd61447938670a431c6e6028a13e3f728e1594510c5d0f06",
     "paper/sections/method.tex": "83e0e793fee65b38dd7b82c2f67ced2e162702af31ed33c0ad77c960b326dc93",
-    "paper/figures/README.md": "a6d7667190dd3ae0ca5fe9541ca3f5ab9e7979dad95597e804f3bb72a171dd71",
+    "paper/figures/README.md": "896dc8021c9a24dfa8372d83d058d6d12f64b9608c459f53465584be3811fe75",
     "paper/figures/figure_manifest.json": "eb0cf0844667004e2e12297a8cc5db27644310a040b57aafd9fd20b71288a945",
     "paper/figures/src/motivation.drawio": "7c7547d3899de942b0a12b02da994d685abe7a7d46ec73db7865bc80190e4783",
     "paper/figures/src/overview.drawio": "7c2625326cfaa7af100f202a2bf9781a8100d653012379f7b18c201494860e09",
@@ -165,9 +148,10 @@
     "paper/figures/aggregation.pdf": "c25a9af190d27a86c28bbb2e13fd89173f4b2ad1cfc280d19f3e9909e8f58603",
     "paper/figures/motivation.pdf": "96a8946c24783b6711c8737e346caeb317d9143f06e07340f496e6ab0c791c9b",
     "paper/figures/qualitative_comparison.pdf": "ed011c7c75e3404b83e2913945cfbb5705207ec9e6dae80c7615f6d2c2024efa",
-    "paper/figures/overview.pdf": "1d0de5ef00a52353ad2e78d74a4974189221e04df315b852564858538a87b0b3"
+    "paper/figures/overview.pdf": "1d0de5ef00a52353ad2e78d74a4974189221e04df315b852564858538a87b0b3",
+    "paper/figures/STYLE_GUIDE.md": "ae7326481000e8983a12c24d71cf5635a4dbcc8e90bf4b4b0ed7fa44a7773b7f"
   },
-  "review_base_commit": "d2e19e102212d0e058216a325a0384753a90242d",
+  "review_base_commit": "7d436588d9fd735fcde9b46c2acc2bbb7cf941b1",
   "implementation_commit": "2067a50dfa5e9b6f233144edc23a88f1ea3572b5",
   "implementation_validation": {
     "commit": "2067a50dfa5e9b6f233144edc23a88f1ea3572b5",
@@ -175,5 +159,16 @@
     "training_variants": 10,
     "planned_full_validation_jobs": 54,
     "note": "Previously recorded implementation checks; model tests were not rerun for this manuscript-only change."
+  },
+  "last_artwork_validation": {
+    "commit": "7d436588d9fd735fcde9b46c2acc2bbb7cf941b1",
+    "overview_native_cells": 617,
+    "overview_canvas": [
+      2000,
+      1000
+    ],
+    "paper_pages": 10,
+    "figure_page_inspected": 3,
+    "result": "Previously verified card/output margins, perspective slice separation, exposed block contours, native graph/stencils, source/PDF hashes and standalone/embedded visual layout; not rerun for this documentation-only change."
   }
 }

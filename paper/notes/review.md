@@ -12,6 +12,7 @@
 | SDF 与推理正文 | models/semantic_detail_fusion.py、models/adapters/semantic_adapter.py 与 engine/evaluator.py：单方向双支路、全配置类别前向、直接类别索引和数据集独立阈值 |
 | 当前结构图 | figures/src/、figure_manifest.json 与对应 PDF：两个完整块、共享三尺度普通窗口、仅条件特征接受残差；组合图接入方法，定性占位不接入正文 |
 | overview 视觉设计 | 用户确认的白底三板块预览：原生梯形编码器、图标、特征叠片与五处占位；灰色训练栏；内部卡片与输出占位留有边距，类间特征沿深度分层，Block 2 顶部、右侧及底部轮廓独立可见。图像／文本输入、Q/K 引导、V 来源与代码核对，同名跨板块端口复用相同张量 |
+| 统一绘图规范 | figures/STYLE_GUIDE.md 集中规定视觉风格与验收；以 7d43658 的 overview 为参考，paper/AGENTS.md 与两级 README 提供入口。本次只整理文档，不改变现有图稿／模型，也不把未统一的旧图写成已完成迁移 |
 | Zotero | 两个 bib 数据库不随表格清理改写；正文引用决定参考文献，集合操作见 zotero_sync.md |
 
 ## 验收标准
