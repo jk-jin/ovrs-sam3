@@ -1,6 +1,6 @@
 \begin{figure*}[!tbp]
 \centering
 \includegraphics[width=\textwidth]{figures/aggregation.pdf}
-\caption{Dual-stream aggregation. The semantic update precedes the feature update; both states construct queries and keys, while the updated state supplies values. Cross-class attention operates across expanded prompts at each position. Intra-class attention uses regular then shifted windows, with RemoteCLIP and SAM 3 spatial guides. Every step includes a residual update.}
+\caption{RemoteCLIP-guided feature aggregation. Each block first performs cross-class attention across expanded prompts, then applies three parallel regular-window branches on 36-by-36, 24-by-24, and 12-by-12 grids with shared parameters and 12-by-12 windows. Aligned branch increments are fused with learned Softmax weights and added to the conditional features. Semantic guidance contributes to queries and keys throughout; SAM 3 FPN additionally guides window attention. Only conditional features supply values and receive residual updates.}
 \label{fig:aggregation}
 \end{figure*}

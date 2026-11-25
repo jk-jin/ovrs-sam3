@@ -1,18 +1,18 @@
 \section{方法}
 \subsection{框架概述}
-ReCA-SAM3 由 SAM 3 特征提取、RemoteCLIP 语义引导、语义引导特征聚合和语义—细节融合四部分组成，如图~\ref{fig:overview} 所示。SAM 3 为各类别提示提取条件特征；RemoteCLIP 的模板级图文相似度与稠密图像特征经卷积融合，形成各提示的指导特征并初始化语义状态。该语义状态与 SAM 3 特征共同构造注意力，聚合模块在低分辨率网格上在每个块内依次建模提示间关系与提示内空间联系，再通过语义—细节融合（Semantic--Detail Fusion，SDF）将更新特征接入冻结的解码器。
+ReCA-SAM3 由 SAM 3 特征提取、RemoteCLIP 语义引导、语义引导特征聚合和语义—细节融合四部分组成，如图~\ref{fig:overview} 所示。SAM 3 为各类别提示提取条件特征；RemoteCLIP 的模板级图文相似度与最终稠密图像特征经 score embedding 编码，形成各提示的语义引导。每个聚合块先沿提示维执行类间注意力，再通过共享权重的多尺度普通窗口注意力建模提示内部的空间联系。语义引导参与查询和键的构造并在各块间保持不变，条件特征提供值并接受残差更新。聚合后的特征通过语义—细节融合（Semantic--Detail Fusion，SDF）接入冻结的解码器。
 
 \input{figures/overview}
 
 \subsection{任务定义与提示映射}
-For an image $I$, let $\mathcal C=\{c_m\}_{m=0}^{M-1}$ denote the $M$ semantic classes represented in the model forward pass. Expanding aliases yields $P$ prompts $\{q_p\}_{p=1}^{P}$, with $\mu(p)\in\{0,\ldots,M-1\}$ mapping prompt $p$ to its forward class. Aliases share binary supervision but interact as separate prompt tokens. Background may participate in the forward pass or be restored afterward, so forward classes and evaluation labels are distinguished.
+For an image $I$, let $\mathcal C=\{c_m\}_{m=0}^{M-1}$ denote all $M$ configured semantic classes, indexed by $m$. Every configured class participates in the forward pass, including background when it is a configured class. Expanding aliases yields $P$ text prompts $\{q_p\}_{p=1}^{P}$, with $\mu(p)\in\{0,\ldots,M-1\}$ mapping prompt index $p$ to its class index. Aliases share binary supervision but interact as separate prompt tokens. Forward outputs and evaluation labels use the same configured class order; raw dataset labels are converted to this order once during preprocessing.
 
 The frozen SAM 3 path supplies $E_p\in\mathbb R^{D\times72\times72}$ for each prompt, where $D=256$. This feature is obtained after the six-layer fusion encoder and the semantic head's prompt cross-attention. Image-level feature pyramid network (FPN) features are denoted by $J^s\in\mathbb R^{D\times s\times s}$ for $s\in\{72,144,288\}$, where $s$ specifies spatial resolution. The image backbone is evaluated once and reused across prompts.
 
-Aggregation equations describe one image unless a batch index is shown. Flattening the $36\times36$ aggregation grid gives $N=36^2$ positions; each state has shape $P\times N\times D$. Cross-class attention acts along the expanded prompt axis, including aliases of the same class. Intra-class attention acts spatially within one prompt. Neither operation mixes images. Parameters are shared across prompt identities, allowing the candidate vocabulary size $P$ to vary.
+Aggregation equations describe one image unless a batch index is shown. Flattening the $36\times36$ aggregation grid gives $N=36^2$ positions; both guidance and conditional features have shape $P\times N\times D$ on this grid. Cross-class attention acts along the expanded prompt axis, including aliases of the same class. Intra-class attention acts spatially within one prompt at each branch resolution. Neither operation mixes images. Parameters are shared across prompt identities, allowing the candidate vocabulary size $P$ to vary.
 
 \subsection{RemoteCLIP 语义引导}
-RemoteCLIP provides local image--text alignment~\cite{liuRemoteCLIPVisionLanguage2024}. SAM 3 uses $1008\times1008$ inputs and RemoteCLIP uses $504\times504$ inputs, each with its own normalization. Let $U\in\mathbb R^{d_c\times36\times36}$ be the projected RemoteCLIP image features, with $d_c=768$, and $u_n$ its vector at position $n$. The vector $t_{pk}\in\mathbb R^{d_c}$ encodes prompt $p$ under template $k$, where $k=1,\ldots,K$ and $K=64$. Define $\mathcal N(v)=v/\max(\|v\|_2,\epsilon)$, where $v$ is a feature vector, $\|\cdot\|_2$ is its Euclidean norm, and $\epsilon=10^{-6}$. The template scores are
+RemoteCLIP provides local image--text alignment~\cite{liuRemoteCLIPVisionLanguage2024}. SAM 3 uses $1008\times1008$ inputs and RemoteCLIP uses $504\times504$ inputs, each with its own normalization. Let $U\in\mathbb R^{d_c\times36\times36}$ be the final projected RemoteCLIP dense image features, with channel width $d_c=768$, and $u_n$ its vector at spatial position $n$. The vector $t_{pk}\in\mathbb R^{d_c}$ encodes prompt $p$ under template $k$, where $k=1,\ldots,K$ and $K=64$. Define $\mathcal N(v)=v/\max(\|v\|_2,\epsilon)$, where $v$ is a feature vector, $\|\cdot\|_2$ is its Euclidean norm, and $\epsilon=10^{-6}$. The template scores are
 \begin{equation}
  C_{pkn}=\gamma\,\mathcal N(u_n)^\top\mathcal N(t_{pk}),
  \qquad \gamma=20.
@@ -29,9 +29,9 @@ The score embedding also incorporates dense image features:
 \end{aligned}
 \label{eq:semantic_embedding}
 \end{equation}
-Brackets denote channel concatenation, and $\mathcal N$ acts independently at each position. The intermediate maps $A_p$ and $B_p$ have $D$ channels. Both $\phi_1$ and $\phi_2$ are a $1\times1$ convolution followed by eight-group GroupNorm and GELU; their input widths are $K$ and $D+d_c$, respectively. The function $\phi_3$ uses two $3\times3$ convolutions, each followed by GroupNorm and GELU, mapping $2D$ input channels to $D$ output channels. Parameters are shared across prompts. Stacking and flattening $S_p^0$ gives the initial semantic state $S^0\in\mathbb R^{P\times N\times D}$.
+Brackets denote channel concatenation, and $\mathcal N$ acts independently at each position. The embedding maps $A_p$ and $B_p$ have $D$ channels. Both $\phi_1$ and $\phi_2$ are a $1\times1$ convolution followed by eight-group GroupNorm and GELU; their input widths are $K$ and $D+d_c$, respectively. The function $\phi_3$ uses two $3\times3$ convolutions, each followed by GroupNorm and GELU, mapping $2D$ input channels to $D$ output channels. Parameters are shared across prompts. Stacking and flattening the prompt-specific output $S_p^0$ gives the semantic guidance $S^0\in\mathbb R^{P\times N\times D}$.
 
-The similarity tensor in Eq.~\eqref{eq:template_scores} is converted into a class-specific guidance representation through Eq.~\eqref{eq:semantic_embedding}. Dense image features are shared across prompts, whereas the template-score input makes $S_p^0$ prompt dependent. For a class with several aliases, each expanded prompt retains its own guidance map. This similarity-derived semantic state remains unchanged during aggregation and supplies guidance to every attention step.
+The similarity tensor in Eq.~\eqref{eq:template_scores} is converted into a class-specific guidance representation through Eq.~\eqref{eq:semantic_embedding}. Dense image features are shared across prompts, whereas the template-score input makes $S_p^0$ prompt dependent. For a class with several aliases, each expanded prompt retains its own guidance map. This similarity-derived guidance remains unchanged during aggregation and supplies queries and keys to every attention step. It is not detached: gradients through attention train the embedding and the selected RemoteCLIP parameters.
 
 The feature state starts from the original conditional features:
 \begin{equation}
@@ -41,12 +41,12 @@ The feature state starts from the original conditional features:
 where $\mathcal D$ is bilinear resizing from $72\times72$ to $36\times36$. Stacking and flattening yields $F^0\in\mathbb R^{P\times N\times D}$. Superscript $0$ denotes initialization before aggregation: $S^0$ represents RemoteCLIP alignment information, whereas $F^0$ retains the SAM 3 conditional representation.
 
 \subsection{语义引导特征聚合}
-The encoder feature state passes through four complete aggregation blocks. Every block applies cross-class attention, regular-window attention, and shifted-window attention in that order. Each step adds a residual increment to the current encoder feature; the next step consumes the updated feature. The RemoteCLIP semantic state remains equal to its initialization throughout the stack. It is not detached, so gradients through queries and keys train its embedding module and the selected RemoteCLIP parameters. After all four blocks, a channel-wise LayerNorm produces the aggregated feature, denoted by $F^{\mathrm{agg}}$.
+The conditional feature passes through $L=2$ complete aggregation blocks, where $L$ is the block count. Each block first updates features through cross-class attention, then adds a fused update from three parallel regular-window branches. Only the conditional feature receives residual updates; the semantic guidance remains $S^0$ throughout the stack. After block $L$, channel-wise LayerNorm produces the aggregated feature $F^{\mathrm{agg}}$.
 
-Cost-aggregation approaches contextualize image--text matching embeddings and decode the aggregated cost representation~\cite{choCATSegCostAggregation2024,liExploringEfficientOpenVocabulary2026}. Here similarity-derived semantics guide the aggregation of SAM 3 conditional segmentation features, which are then reconnected to the pretrained segmentation decoder through SDF. Blocks and attention steps have independent parameters and no additional feed-forward network.
+Cost-aggregation approaches contextualize image--text matching embeddings and decode the aggregated cost representation~\cite{choCATSegCostAggregation2024,liExploringEfficientOpenVocabulary2026}. Here similarity-derived semantics guide the aggregation of SAM 3 conditional segmentation features, which are then reconnected to the pretrained segmentation decoder through SDF. Different blocks have independent parameters. Within a block, cross-class and window attention are separately parameterized, while all three window scales share one set of attention parameters. No additional feed-forward network is used.
 
 \paragraph{Attention formulation.}
-Each sub-update normalizes its current states along channels as $\bar S=\operatorname{LN}_S(S)$ and $\bar F=\operatorname{LN}_F(F)$. An optional spatial guide $G$ is independently normalized as $\bar G=\operatorname{LN}_G(G)$. Queries and keys use
+For one attention operation, let $F$ denote its current conditional feature and $S$ the semantic guidance at the same spatial resolution. Channel-wise LayerNorm operators $\operatorname{LN}_F$ and $\operatorname{LN}_S$ produce $\bar F$ and $\bar S$, respectively. Window attention additionally uses a SAM 3 FPN guide $G$, normalized independently as $\bar G=\operatorname{LN}_G(G)$. Queries and keys use
 \begin{equation}
  X_{\mathrm{qk}}=
  \begin{cases}
@@ -57,32 +57,59 @@ Each sub-update normalizes its current states along channels as $\bar S=\operato
 \end{equation}
 At a fixed spatial position, cross-class attention takes $P$ tokens and an input width $2D$. Within a fixed prompt and window, window attention takes $w^2$ tokens and width $3D$, with window side length $w=12$. Image-level guides are broadcast across prompts before window partitioning.
 
-Only encoder features supply values: $\bar R=\bar F$, where $\bar R$ denotes the normalized value input. Head $h=1,\ldots,n_h$ computes
+Only conditional features supply values:
 \begin{equation}
 \begin{aligned}
  Q_h &= X_{\mathrm{qk}}W_h^Q+b_h^Q,\\
  K_h &= X_{\mathrm{qk}}W_h^K+b_h^K,\\
- V_h &= \bar R W_h^V+b_h^V,\\
+ V_h &= \bar F W_h^V+b_h^V,\\
  A_h &= \operatorname{Drop}_a\!\left[
  \operatorname{softmax}_{\mathrm{key}}\!\left(
- \frac{Q_hK_h^\top}{\sqrt{d_h}}+B_h+M_{\mathrm{sh}}
+ \frac{Q_hK_h^\top}{\sqrt{d_h}}+B_h
  \right)\right].
 \end{aligned}
 \label{eq:attention_heads}
 \end{equation}
-Here $n_h=8$ is the head count and $d_h=D/n_h=32$ is the head width. The matrices $Q_h,K_h,V_h$ are queries, keys, and values. The learned matrices $W_h^Q,W_h^K,W_h^V$ and biases $b_h^Q,b_h^K,b_h^V$ define affine projections, broadcasting biases across tokens. For cross-class/window attention, $W_h^Q$ and $W_h^K$ have size $2D\times d_h$/$3D\times d_h$; $W_h^V$ has size $D\times d_h$, and each head bias has $d_h$ entries. Softmax normalizes key tokens separately for each query. The matrix $B_h$ is a learned window-relative position bias and is zero for cross-class attention. The mask $M_{\mathrm{sh}}$ has large negative entries for disallowed cyclic-boundary interactions in shifted windows; it is zero for regular windows and cross-class attention. The function $\operatorname{Drop}_a$ applies dropout to attention weights, giving $A_h$.
+Here $n_h=8$ is the head count, $h=1,\ldots,n_h$ indexes heads, and $d_h=D/n_h=32$ is the head width. The matrices $Q_h,K_h,V_h$ are queries, keys, and values. The learned matrices $W_h^Q,W_h^K,W_h^V$ and biases $b_h^Q,b_h^K,b_h^V$ define affine projections, broadcasting biases across tokens. For cross-class/window attention, $W_h^Q$ and $W_h^K$ have size $2D\times d_h$/$3D\times d_h$; $W_h^V$ has size $D\times d_h$, and each head bias has $d_h$ entries. Softmax normalizes key tokens separately for each query. The matrix $B_h$ is a learned relative-position bias within a regular window and is zero for cross-class attention. The function $\operatorname{Drop}_a$ applies dropout to attention weights, giving $A_h$.
 
 The residual increment is
 \begin{equation}
- \Delta R=\operatorname{Drop}_o\!\left(
+ \Delta F=\operatorname{Drop}_o\!\left(
  [A_1V_1;\ldots;A_{n_h}V_{n_h}]W^O+b^O
  \right),
  \label{eq:attention_output}
 \end{equation}
-where head outputs are concatenated along channels, $W^O\in\mathbb R^{D\times D}$ and $b^O\in\mathbb R^D$ form the output projection, and $\operatorname{Drop}_o$ is output dropout. Both dropout operations use probability 0.1 during training and are disabled for inference. The raw target state is denoted by $R$, and its increment $\Delta R$ has the same shape. A guide affects Q/K but contributes neither values nor a direct residual. Cross-class, regular-window, shifted-window steps and different blocks each have separate normalization and projection parameters.
+where head outputs are concatenated along channels, $W^O\in\mathbb R^{D\times D}$ and $b^O\in\mathbb R^D$ form the output projection, and $\operatorname{Drop}_o$ is output dropout. Both dropout operations use probability 0.1 during training and are disabled for inference. Restoring token positions gives an increment $\Delta F$ with the same shape as $F$. Guidance affects queries and keys but contributes neither values nor a direct residual.
 
-\paragraph{Cross-class and window updates.}
-Cross-class attention forms a prompt-by-prompt matrix at every spatial position and adds its output to the encoder feature state. Window attention then applies two successive feature updates, first without a shift and then with a six-pixel cyclic shift. The image-level guide is the bilinearly downsampled SAM 3 FPN72 feature. This guide is computed once, broadcast across prompts, and concatenated into window queries and keys only. Regular and shifted windows retain learned relative position bias; the shifted step also masks cyclic-boundary interactions and restores output coordinates before residual addition. RemoteCLIP intermediate features are still extracted and cached by the implementation but are not inputs to these attention updates.
+\paragraph{Cross-class update.}
+Let $F^{\ell-1}$ be the input to block $\ell\in\{1,\ldots,L\}$. Cross-class attention forms a $P\times P$ prompt-interaction matrix at every position on the $36\times36$ grid, including interactions between aliases. Its residual update is
+\begin{equation}
+ F^{\ell,c}=F^{\ell-1}+\mathcal C_\ell(F^{\ell-1},S^0).
+ \label{eq:cross_class_update}
+\end{equation}
+Here $\mathcal C_\ell$ denotes the cross-class attention increment defined by Eqs.~\eqref{eq:attention_input}--\eqref{eq:attention_output}, including pre-normalization, and superscript $c$ marks the feature after this update. Both feature tensors retain shape $P\times N\times D$.
+
+\paragraph{Shared multiscale window update.}
+The three spatial branches use grid side lengths $a\in\mathcal A=\{36,24,12\}$. Define $\mathcal R_a$ as bilinear resizing to $a\times a$, applied independently to each prompt with \texttt{align\_corners=False}; it is the identity when input and output sizes agree. Resizing operates on spatial maps, with flattening or reshaping implicit in the notation. Let $G^{36}\in\mathbb R^{P\times N\times D}$ denote $J^{72}$ downsampled to $36\times36$ and broadcast over prompts. The semantic and spatial guides at scale $a$ are $S_a=\mathcal R_a(S^0)$ and $G_a=\mathcal R_a(G^{36})$. These guide pyramids are computed once per forward pass and reused across blocks.
+
+All branches start from the same post-cross-class feature $F^{\ell,c}$:
+\begin{equation}
+ \Delta F^{\ell,a}=\mathcal W_\ell\bigl(\mathcal R_a(F^{\ell,c}),S_a,G_a\bigr).
+ \label{eq:multiscale_window_update}
+\end{equation}
+Here $\mathcal W_\ell$ denotes the regular-window attention increment in block $\ell$, including pre-normalization, and $\Delta F^{\ell,a}\in\mathbb R^{P\times a^2\times D}$ is its update at scale $a$. Each branch partitions its grid into nonoverlapping $12\times12$ windows, giving 9, 4, and 1 windows at side lengths 36, 24, and 12. The smallest branch therefore attends over its entire grid. Within a block, all scales share LayerNorm, query/key/value projections, the output projection, and the window-relative position bias.
+
+Each block learns three scalar fusion logits $\eta_{\ell,a}$, one for each scale. Their Softmax weights and the block output are
+\begin{equation}
+\begin{aligned}
+ \omega_{\ell,a}&=\frac{\exp(\eta_{\ell,a})}
+ {\sum_{a'\in\mathcal A}\exp(\eta_{\ell,a'})},\\
+ F^\ell&=F^{\ell,c}+\sum_{a\in\mathcal A}
+ \omega_{\ell,a}\,\mathcal R_{36}(\Delta F^{\ell,a}).
+\end{aligned}
+\label{eq:scale_fusion}
+\end{equation}
+The index $a'$ ranges over the same three scales in the denominator. The weight $\omega_{\ell,a}$ is shared across prompts, channels, and positions; it is learned independently in each block. Initializing all $\eta_{\ell,a}$ to zero gives weight $1/3$ to each branch. Only branch increments are aligned and fused before residual addition. The output $F^\ell$ remains on the $36\times36$ grid, and the final aggregated representation is $F^{\mathrm{agg}}=\operatorname{LN}_{\mathrm{out}}(F^L)$, where $\operatorname{LN}_{\mathrm{out}}$ is the final channel-wise LayerNorm.
 
 \subsection{语义—细节融合与解码}
 SDF reconnects aggregated features to the original decoder at $72\times72$, as illustrated in Fig.~\ref{fig:sdf}. With $\mathcal U$ denoting bilinear upsampling from $36\times36$ to $72\times72$, prompt $p$ has branch inputs
@@ -187,9 +214,9 @@ The total objective is
             +\lambda_{\mathrm{KD}}\mathcal L_{\mathrm{KD}},
  \label{eq:total_loss}
 \end{equation}
-where $\mathcal L$ denotes the training loss and $\lambda_{\mathrm{seg}},\lambda_{\mathrm{KD}}$ are fixed nonnegative coefficients, currently 1 and 0.5. The optional Dice term is disabled. Aggregation and SDF are trained; SAM 3 remains frozen. RemoteCLIP image/text branches update attention Q/V projections and positional parameters while keeping stochastic layers in evaluation mode. Prompt chunks share the full-batch denominators in Eqs.~\eqref{eq:group_means} and~\eqref{eq:distillation_loss}; summing their contributions implements the same objective as decoding all prompts together.
+where $\mathcal L$ denotes the training loss and $\lambda_{\mathrm{seg}},\lambda_{\mathrm{KD}}$ are fixed nonnegative coefficients, currently 1 and 0.5. The optional Dice term is disabled. Score embedding, aggregation, and SDF are trained; SAM 3 remains frozen. RemoteCLIP image/text branches update attention Q/V projections and positional parameters while keeping stochastic layers in evaluation mode. Prompt chunks share the full-batch denominators in Eqs.~\eqref{eq:group_means} and~\eqref{eq:distillation_loss}; summing their contributions implements the same objective as decoding all prompts together.
 
-\subsection{推理与标签恢复}
+\subsection{推理与类别决策}
 Inference evaluates only the student path, without reference decoding or instance/presence fusion. Aliases are merged after sigmoid on the decoded grid:
 \begin{equation}
  r_m(x)=\max_{p:\mu(p)=m}\sigma(z_p(x)),
@@ -207,13 +234,13 @@ The response $r_m(x)$ belongs to forward class $m$ at position $x$; the maximum 
 \end{equation}
 Here $\widetilde r_m$ is the filtered response, $e_{\mathrm{bg}}\in\{0,1\}$ indicates enabled background handling, and $\tau_s\in[0,1]$ is the student probability threshold. Disabling the threshold gives the identity. Without background, all class scores are retained for argmax.
 
-Define the winning forward class $m^*(x)=\arg\max_m\widetilde r_m(x)$ and score $r^*(x)=\max_m\widetilde r_m(x)$. Let $\rho$ map forward indices to evaluation labels and $c_{\mathrm{bg}}$ denote the background label. The prediction is
+Define the winning class $m^*(x)=\arg\max_m\widetilde r_m(x)$ and score $r^*(x)=\max_m\widetilde r_m(x)$. Let $c_{\mathrm{bg}}$ denote the configured background class index. The prediction is
 \begin{equation}
  \widehat y(x)=
  \begin{cases}
  c_{\mathrm{bg}}, & e_{\mathrm{bg}}=1\ \text{and}\ r^*(x)\le\tau_b,\\
- \rho(m^*(x)), & \text{otherwise}.
+ m^*(x), & \text{otherwise}.
  \end{cases}
  \label{eq:label_restore}
 \end{equation}
-The map $\widehat y$ is in evaluation label space, and $\tau_b\in[0,1]$ is the background fallback threshold; its first case is omitted when fallback is disabled. If background was excluded from the forward pass, $\rho$ restores its reserved index; otherwise indices are unchanged. Argmax ties select the first forward class index. The current thresholds are $\tau_s=0.5$ and $\tau_b=0$, and test-time augmentation is disabled.
+The map $\widehat y$ uses the configured evaluation class indices, and $\tau_b\in[0,1]$ is the background fallback threshold; its first case is omitted when fallback is disabled. Argmax ties select the first class index. The prediction threshold $\tau_s$ is fixed separately for each dataset and evaluation protocol and shared by the full model, ablations, and local baselines; no filtering is applied when background handling is disabled. The background fallback threshold is $\tau_b=0$, and test-time augmentation is disabled. The two iSAID protocols differ in background treatment and metric computation, as specified in the experimental protocol.

@@ -1,6 +1,6 @@
 \begin{figure*}[!tbp]
 \centering
 \includegraphics[width=\textwidth]{figures/sdf.pdf}
-\caption{Semantic--Detail Fusion. A common upsampled aggregation feature feeds two independently parameterized branches. Each branch combines independently projected inputs, averages inverse-aligned convolutional responses over four orientations, and adds a residual. Branch projections are added and followed by a final output projection.}
+\caption{Semantic--Detail Fusion. A common upsampled aggregation feature feeds two independently parameterized branches. The semantic branch combines it with original conditional features, while the detail branch combines it with FPN72. Each branch uses independent input projections and one convolutional residual block in the original orientation. Branch output projections are added and followed by a final output projection.}
 \label{fig:sdf}
 \end{figure*}
