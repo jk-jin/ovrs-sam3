@@ -18,13 +18,13 @@
     {
       "name": "overview",
       "width": 2000,
-      "height": 900,
-      "native_cells": 608,
+      "height": 1000,
+      "native_cells": 617,
       "editable": true,
       "source": "src/overview.drawio",
       "pdf": "overview.pdf",
-      "source_sha256": "458faca45781f663e82e31445f9b2079ffaa73a96fc1ff583f4cf1176d3044cb",
-      "pdf_sha256": "acaab734c3f5149df52e3a4b97ae444cf297b87fe6af4d7e0e13769473347093",
+      "source_sha256": "7c2625326cfaa7af100f202a2bf9781a8100d653012379f7b18c201494860e09",
+      "pdf_sha256": "1d0de5ef00a52353ad2e78d74a4974189221e04df315b852564858538a87b0b3",
       "outer_frame": false,
       "in_figure_title": false,
       "placeholders": 5,
@@ -47,7 +47,16 @@
         "feature slices",
         "FPN pyramid",
         "image placeholder"
-      ]
+      ],
+      "spacing_design": {
+        "block_frame_offset": {
+          "x": 25,
+          "y": 55,
+          "right_gap": 30,
+          "bottom_gap": 26
+        },
+        "layout_revision": "Roomier internal cards; vertically separated perspective slices; distinct back-block outline"
+      }
     },
     {
       "name": "aggregation",
