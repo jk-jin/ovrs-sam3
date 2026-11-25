@@ -17,17 +17,37 @@
     },
     {
       "name": "overview",
-      "width": 1440,
-      "height": 650,
-      "native_cells": 78,
+      "width": 2000,
+      "height": 900,
+      "native_cells": 608,
       "editable": true,
       "source": "src/overview.drawio",
       "pdf": "overview.pdf",
-      "source_sha256": "3c41d07d0746f6cd0fe79d185f79777eb7d67ae7d45c63dbe35efed1309b9f50",
-      "pdf_sha256": "82fb43410dde6bb5c12de959c0928b5708517b5ddf4a3acec22896ac995f5ce3",
+      "source_sha256": "458faca45781f663e82e31445f9b2079ffaa73a96fc1ff583f4cf1176d3044cb",
+      "pdf_sha256": "acaab734c3f5149df52e3a4b97ae444cf297b87fe6af4d7e0e13769473347093",
       "outer_frame": false,
       "in_figure_title": false,
-      "placeholders": 0
+      "placeholders": 5,
+      "layout": "User-approved three-stage white panels, pastel functional groups, native icons/tensors and neutral-gray distillation",
+      "font": "Liberation Sans",
+      "placeholder_roles": [
+        "rgb",
+        "remoteclip response",
+        "student prediction",
+        "student response",
+        "teacher response"
+      ],
+      "stage_frames": true,
+      "style_reference_sha256": "01a988085ff260e528f63cd728f54948c441d8991808f05661fbd11b2844a4fc",
+      "native_icon_types": [
+        "snowflake",
+        "flame",
+        "neural network",
+        "encoder trapezoid",
+        "feature slices",
+        "FPN pyramid",
+        "image placeholder"
+      ]
     },
     {
       "name": "aggregation",
@@ -58,14 +78,14 @@
       "placeholders": 15
     }
   ],
-  "notes": "Current-design native editable diagrams. Aggregation contains block and multiscale-window subpanels. Only the qualitative layout contains placeholders and remains outside the manuscript until real results are available. No standalone SDF figure.",
+  "notes": "Overview follows the approved three-stage white/pastel design with editable native icons, tensor stacks and five image placeholders. Training-only distillation is neutral gray. Other figures retain their previous design. No standalone SDF figure.",
   "native_cell_count_includes_root": true,
   "color_design": {
     "feature": "Pale blue",
     "semantic_guidance": "Pale purple",
     "spatial_guidance": "Pale green",
     "projection_and_resize": "Pale orange",
-    "training": "Red dashed connectors"
+    "training": "Neutral gray dashed lines and low-contrast supervision"
   },
   "export_format": "pdf",
   "export_command": "python3 paper/scripts/export_figures.py",
