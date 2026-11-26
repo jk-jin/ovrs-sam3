@@ -18,7 +18,7 @@ Let $E_p\in\mathbb R^{D\times72\times72}$ denote the conditional feature for pro
 Flattening the $36\times36$ aggregation grid gives $N=36^2$ spatial positions. Guidance and conditional features on this grid have shape $P\times N\times D$.
 
 \subsection{RemoteCLIP 语义引导}
-RemoteCLIP 提供遥感图像与文本的局部语义对齐~\cite{liuRemoteCLIPVisionLanguage2024}。SAM 3 与 RemoteCLIP 分别使用 1008×1008 和 504×504 输入，并采用各自的归一化方式。本文由最终稠密图像特征与各提示的模板文本特征计算局部匹配分数。
+RemoteCLIP 提供遥感图像与文本的局部语义对齐~\cite{liuRemoteCLIPVisionLanguage2024}。SAM 3 与 RemoteCLIP 分别使用 1008×1008 和 504×504 输入，并采用各自的归一化方式。本文由最终稠密图像特征与各提示的模板文本特征计算局部匹配分数；图~\ref{fig:aggregation} 同时展示该引导的生成及其在单个聚合块中的作用。
 
 Let $U\in\mathbb R^{d_c\times36\times36}$ be the final projected RemoteCLIP dense image features, with channel width $d_c=768$, and $u_n$ its vector at spatial position $n$. The vector $t_{pk}\in\mathbb R^{d_c}$ encodes prompt $p$ under template $k$, where $k=1,\ldots,K$ and $K=64$. Define $\mathcal N(v)=v/\max(\|v\|_2,\epsilon)$, where $v$ is a feature vector, $\|\cdot\|_2$ is its Euclidean norm, and $\epsilon=10^{-6}$. The template scores are
 \begin{equation}
@@ -51,7 +51,7 @@ Brackets denote channel concatenation, and $\mathcal N$ acts independently at ea
 where $\mathcal D$ is bilinear resizing from $72\times72$ to $36\times36$. Stacking and flattening yields $F^0\in\mathbb R^{P\times N\times D}$. Superscript $0$ denotes initialization before aggregation: $S^0$ represents RemoteCLIP alignment information, whereas $F^0$ retains the SAM 3 conditional representation.
 
 \subsection{语义引导特征聚合}
-聚合模块默认包含两个完整聚合块，如图~\ref{fig:aggregation}(a) 所示。每个块先通过类间注意力更新条件特征，再融合三个并行普通窗口分支的空间更新，并以残差方式加回条件特征。整个过程中仅更新条件特征，语义引导在各块间复用。所有聚合块结束后，执行一次通道层归一化（LayerNorm），得到最终聚合特征。
+聚合模块默认包含两个完整聚合块，如图~\ref{fig:aggregation} 所示。每个块先通过类间注意力更新条件特征，再融合三个并行普通窗口分支的空间更新，并以残差方式加回条件特征。整个过程中仅更新条件特征，语义引导在各块间复用。所有聚合块结束后，执行一次通道层归一化（LayerNorm），得到最终聚合特征。
 
 代价聚合方法对图文匹配表征进行上下文建模，再解码聚合后的代价表征~\cite{choCATSegCostAggregation2024,liExploringEfficientOpenVocabulary2026}。本文以匹配语义引导 SAM 3 条件分割特征的聚合，再通过 SDF 接入预训练分割解码器。不同聚合块独立学习参数；同一块中的类间注意力与窗口注意力分别参数化，而三个窗口尺度共用一套注意力参数。聚合块不额外设置前馈网络。
 
@@ -94,7 +94,7 @@ where head outputs are concatenated along channels, $W^O\in\mathbb R^{D\times D}
 注意力权重和输出两处 dropout 在训练时均使用 0.1 的丢弃概率，推理时关闭。语义与空间引导仅影响查询和键，不提供值，也不直接残差加入条件特征。
 
 \paragraph{类间特征更新。}
-如图~\ref{fig:aggregation}(b) 所示，类间注意力在 36×36 网格的每个空间位置，对全部展开提示计算交互，包括同一类别的不同同义提示；其输出直接残差加入当前条件特征。
+如图~\ref{fig:aggregation} 所示，类间注意力在 36×36 网格的每个空间位置，对全部展开提示计算交互，包括同一类别的不同同义提示；其输出直接残差加入当前条件特征。
 
 Let $L=2$ be the block count and $F^{\ell-1}$ the input to block $\ell\in\{1,\ldots,L\}$. The prompt-interaction matrix has size $P\times P$. The residual update is
 \begin{equation}
@@ -108,7 +108,7 @@ The three spatial branches use grid side lengths $a\in\mathcal A=\{36,24,12\}$. 
 
 两种引导的多尺度表示在一次前向中仅生成一次，由全部聚合块复用。
 
-三个尺度的空间分支均从同一份类间更新后的条件特征出发，如图~\ref{fig:aggregation}(c) 所示，分别调整分辨率并计算窗口注意力增量：
+三个尺度的空间分支均从同一份类间更新后的条件特征出发，分别调整分辨率并计算窗口注意力增量；图~\ref{fig:aggregation} 将这些分支简记为一条类内注意力与尺度融合路径：
 \begin{equation}
  \Delta F^{\ell,a}=\mathcal W_\ell\bigl(\mathcal R_a(F^{\ell,c}),S_a,G_a\bigr).
  \label{eq:multiscale_window_update}

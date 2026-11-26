@@ -90,45 +90,28 @@
     {
       "name": "aggregation",
       "width": 2000,
-      "height": 1340,
-      "native_cells": 237,
+      "height": 1100,
+      "native_cells": 179,
       "editable": true,
       "source": "src/aggregation.drawio",
       "pdf": "aggregation.pdf",
-      "source_sha256": "901562352b13c117dbc1b35f756f6552f17b71152980eac59b1855c37e6e7c3c",
-      "pdf_sha256": "4da27953e397f9011477d1c0619197530e782083be17f70fecdb619ec33b3cbc",
+      "source_sha256": "df62a6b4eee22dbea8a05f85062699b481b8580728148de8e8448d67853f4b5f",
+      "pdf_sha256": "3cb6b28b865216c9ae3f559a54961b1dabc5cd665af7e21fbf9bf516a4b23b5d",
       "outer_frame": false,
       "in_figure_title": false,
       "placeholders": 0,
       "font": "Liberation Sans",
-      "stage_frames": true,
-      "layout": "Top: single residual block; bottom: cross-prompt interaction and shared multiscale windows",
-      "subpanels": [
-        "a: block with two residuals",
-        "b: same-position prompt attention and feature-only values",
-        "c: fixed 12x12 windows, shared attention and scalar scale fusion"
+      "stage_frames": false,
+      "layout": "One continuous guidance-preparation path above a single aggregation block, with explicit Q/K versus V routes",
+      "focus": [
+        "64 separate template vectors and score maps",
+        "dense-image feature fusion into score embedding",
+        "shared semantic guidance to both attention types",
+        "feature-only values and two residual updates"
       ],
-      "window_counts": [
-        9,
-        4,
-        1
-      ],
-      "window_grid_cell_size": 32,
-      "window_sizes": [
-        12,
-        12,
-        12
-      ],
-      "feature_scales": [
-        36,
-        24,
-        12
-      ],
-      "weight_label_ports": [
-        "w1",
-        "w2",
-        "w3"
-      ]
+      "guidance_prepared_outside_block": true,
+      "template_count": 64,
+      "semantic_guidance_channels": 256
     },
     {
       "name": "qualitative_comparison",
@@ -145,7 +128,7 @@
       "placeholders": 15
     }
   ],
-  "notes": "Motivation, overview and aggregation use STYLE_GUIDE.md white/pastel layouts with native editable diagrams. Aggregation separates block flow, cross-prompt interaction and shared multiscale attention; all images there are schematic vectors, with no measured attention weights. Qualitative artwork is unchanged. No standalone SDF figure.",
+  "notes": "Figure 3 is a single continuous block-detail diagram focused on RemoteCLIP guidance preparation and Q/K versus V; no lettered subpanels or repeated multiscale branches. Motivation, overview and qualitative artwork are unchanged. Diagrams remain native editable vectors; no standalone SDF figure.",
   "native_cell_count_includes_root": true,
   "color_design": {
     "feature": "Pale blue",
