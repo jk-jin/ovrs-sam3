@@ -15,6 +15,7 @@ python paper/scripts/build_experiment_tables.py --draft
 - 核心消融与编码器微调表共用 `ablation_native_selection[variant_id][dataset]`。Full 的选择器必须与主表一致，不允许在不同表格或目标域重新挑权重。
 - LoveDA 逐类表直接复用主表的 LoveDA 选择器；七类 IoU 与 mIoU 使用同一组种子和 checkpoint。
 - `core_parameter_selection`、`freeze_parameter_selection` 和 `efficiency_selection` 绑定实际标准结果 JSON 中已有的测量。选择器包括 eval_id、checkpoint_sha256、json_path 和 display_scale；不臆造效率 schema，不自动填写零值。
+- `Trainable (M)` 填每个变体实际可更新的参数元素数，单位为百万。计入聚合、score embedding、SDF 和未冻结的 RemoteCLIP 参数，排除冻结 SAM 3／教师；共享参数去重。当前 RemoteCLIP attention 微调只更新 Q/V 和位置参数，融合 QKV 张量的 K 部分被梯度屏蔽，统计时应排除该部分，不能简单把整个 `requires_grad=True` 张量都计入。此数值不是模型总参数量或显存占用。
 - iSAID 本地选择键为 `iSAID-15-IgnBG` 与 `iSAID-16-BG`，每方法／种子同一权重、不同协议 ID；真实结果的 eval_dataset 仍为 isaid。
 - `dataset_protocols` 是当前配置的人工核对快照，配置改变后须同步核对类别、提示数量与阈值。
 
@@ -31,3 +32,5 @@ python paper/scripts/build_experiment_tables.py --draft
 方法原文引用保留在行名后，实际转引来源在主表短注中分组引用；不生成来源字母、UAVid 协议上标或未解决标签标记。其余表注仅保留必要定义和单位，避免重复实验设置。核心消融和图文微调使用单栏 table，主对比与逐类表保留跨栏 table*。
 
 主表每个数据行固定十一格，iSAID 必须有两个独立格。协议未知时两格为 --，由生成器将原报告值按方法名在表下注释仅列一次；数据行不能使用跨列居中。调整后重新生成并目检 PDF；详见[比较规则](../notes/comparison_policy.md)。已完成事项不在本文件累积，实际待办见[当前状态](../notes/manuscript_status.md)。
+
+实验章节末尾的 `FloatBarrier` 用于阻止实验表进入结论和参考文献；跨栏主表在实验文件开头提前声明以减轻章末积压。不要将“减少留白”解释为删除全部章节边界。

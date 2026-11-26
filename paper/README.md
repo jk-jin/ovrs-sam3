@@ -30,7 +30,7 @@ cd paper
 latexmk -xelatex -halt-on-error -file-line-error -outdir=build main.tex
 ```
 
-正式成绩填写实际标准结果 generated/data/results_long.csv 与选择器，再生成表格。主模型跨表、跨域复用同一权重；iSAID 两种协议分别登记真实 eval_id 和 eval_protocol_id。协议未知的文献 iSAID 原值只在表注保留一次，不能跨两列居中或硬归类。禁止只手改生成 TeX 而不更新数据与生成器。Table 3、4 使用单栏；正文不设置章节浮动屏障，栏底对齐与末页平衡由 LaTeX 自动处理。
+正式成绩填写实际标准结果 generated/data/results_long.csv 与选择器，再生成表格。主模型跨表、跨域复用同一权重；iSAID 两种协议分别登记真实 eval_id 和 eval_protocol_id。协议未知的文献 iSAID 原值只在表注保留一次，不能跨两列居中或硬归类。禁止只手改生成 TeX 而不更新数据与生成器。Table 3、4 使用单栏；宽主表提前声明，实验章节末尾保留一次浮动边界，防止表格越过结论进入参考文献。栏底对齐与末页平衡由 LaTeX 自动处理。
 
 ## 数据与核验索引
 

@@ -1,3 +1,5 @@
+% Queue the wide comparison table before the section heading so it can share the first experiment page.
+\input{tables/main_rskt8}
 \section{实验}
 \subsection{数据集与评价指标}
 本文采用 RSKT-Seg 的八数据集评测集合：DLRSD、iSAID、LoveDA、Potsdam、Vaihingen、UAVid、UDD5 和 VDD~\cite{liExploringEfficientOpenVocabulary2026}。DLRSD 保留 OVRSISBench 发布包中的 5601 张训练图像与 1401 张验证图像，分别用于单源监督适配与源域评测。LoveDA 验证集用于模型选择，作为开发域；其余六个数据集用于目标域评测。
@@ -14,7 +16,6 @@ SAM 3 特征提取、提示编码、条件编码器、Pixel Decoder 与分割头
 各训练变体按 LoveDA 七类 mIoU 选择一份权重，用于全部数据集与表格。各变体使用相同随机种子集合；多种子结果报告均值与样本标准差。验证图像统一缩放至 1008×1008，关闭测试时增强，同一数据集固定类别提示与后处理阈值。同义提示按语义类别逐像素取最大值合并；有背景的数据集执行低概率过滤。iSAID 两种评测复用同一方法及种子的权重。
 
 \subsection{与现有方法的比较}
-\input{tables/main_rskt8}
 表~\ref{tab:main_rskt8} 按是否使用遥感分割标注训练分为 Training on remote sensing segmentation data 和 Training-free 两组。ReCA-SAM3 使用 DLRSD 适配，归入前组；两个原始 SAM 3 基线归入后组。Semantic-only 输出原始语义概率；Semantic $\times$ Presence 将每个提示的语义概率乘以对应的 presence 概率，不融合实例掩码。两个基线使用相同的原始 SAM 3 预训练权重。
 
 训练组优先采用 DLRSD 单源设置，其他训练数据在表中列明。文献成绩直接采用所引来源的报告值，转引及第三方复现的数据来源在表注中集中说明。
@@ -40,3 +41,6 @@ SAM 3 特征提取、提示编码、条件编码器、Pixel Decoder 与分割头
 表~\ref{tab:efficiency} 比较两个原始 SAM 3 基线、完整模型、单尺度变体和独立权重变体的参数量、端到端推理时间及峰值显存。各方法在相同硬件、精度、输入尺寸与提示集合下测量完整推理流程，不包含训练教师分支。
 
 定性分析对两个原始基线与完整模型使用相同样本、GT、类别色表及局部放大区域，关注相似类别混淆、密集小目标和大面积目标内部完整性，同时保留失败案例。预测示例与对应定量结果使用同一权重和后处理规则。
+
+% Keep experiment tables before the conclusion and bibliography.
+\FloatBarrier
