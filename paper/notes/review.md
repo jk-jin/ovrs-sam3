@@ -13,6 +13,7 @@
 | 当前结构图 | figures/src/、figure_manifest.json 与对应 PDF：两个完整块、共享三尺度普通窗口、仅条件特征接受残差；组合图接入方法，定性占位不接入正文 |
 | 动机图与引言 | motivation.drawio/PDF 的四个适配位置子图；ROSE 原文 https://arxiv.org/html/2611.28112v1（III-A 至 III-D，含竞争类别保护），ProC 官方说明 https://github.com/YanghuiSong/ProC-SAM3；区分提示构建与响应选择两种离线策略，保留参数冻结／监督适配差异，不声称已有方法没有类别关系 |
 | 聚合图机制与视觉 | aggregation.drawio/PDF 为无字母子图的连续单块图；对照 models/remoteclip_guidance.py 保留 64 独立模板向量、相似度图、稠密图像融合与早期分数短接；对照 aggregation_attention.py 区分 Q/K 指导与特征值，FPN 仅到类内 Q/K。引导每次前向生成一次并在块间复用，梯度保留；两个残差只更新特征，尺度融合与卷积归一化的简写在图注说明 |
+| 聚合图连接器层级 | Figure 3 的真实流程边独立置于顶层 Foreground connectors，底板／节点／文字属于 Artwork；装饰线保留原组。核对源文件父子关系与连接绑定，逐条对照导出 PDF 的箭头端点、跨框路径和交叉处，几何位置与节点文字保持原样 |
 | overview 视觉设计 | 用户确认的白底三板块预览：原生梯形编码器、图标、特征叠片与五处占位；灰色训练栏；内部卡片与输出占位留有边距，类间特征沿深度分层，Block 2 顶部、右侧及底部轮廓独立可见。图像／文本输入、Q/K 引导、V 来源与代码核对，同名跨板块端口复用相同张量 |
 | 统一绘图规范 | figures/STYLE_GUIDE.md 集中规定视觉风格与验收；以 7d43658 的 overview 为参考，paper/AGENTS.md 与两级 README 提供入口。动机图、overview 与聚合图已迁移；定性模板仍保留原图稿 |
 | Zotero | 两个 bib 数据库不随表格清理改写；正文引用决定参考文献，集合操作见 zotero_sync.md |

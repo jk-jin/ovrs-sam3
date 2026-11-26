@@ -1,9 +1,9 @@
 {
   "date": "2026-11-26",
   "branch": "master",
-  "base_commit": "7e0d30b3de9f772c0c23447f271f71bce3c54990",
+  "base_commit": "5eb674801e0a70b6014c57c63c374eef8c20f141",
   "implementation_id": "reca-sam3-paper-ablation-v1",
-  "scope": "Replace the three-subpanel Figure 3 with one continuous RemoteCLIP guidance-preparation path above a single aggregation block. Retain 64 independent template vectors/scores, direct dense-image fusion and the early score-feature shortcut; expand semantic Q/K versus feature-only V inside both attention types. Summarize multiscale processing, retain FPN Q/K and two residuals, and distinguish once-per-forward preparation from repeated blocks. Synchronize native drawing/PDF, caption, method references and the maintained style/docs. Other artwork, model/configs, 22 equations, experiment tables/data and bibliography are unchanged.",
+  "scope": "Fix Figure 3 connector stacking only: move all 34 flow connectors into a foreground root layer above grouped artwork and paint connections last in the synchronized vector PDF. Preserve all node text, geometry, bindings and routes. Record the layer rule in the maintained drawing guide. Other artwork, captions, method text, 22 equations, model/configs, experiment data/tables and bibliography are unchanged.",
   "implementation_boundary": {
     "current_unused_mid_extraction": false,
     "final_design_uses_mid_features": false,
@@ -25,23 +25,29 @@
       2000,
       1100
     ],
-    "aggregation_native_cells": 179,
+    "aggregation_native_cells": 180,
     "image_placeholders": 0,
-    "source_integrity": "Unique cell IDs, parent/source/target references and compressed polygon stencils verified. Selected score-embedding contents have >=25 units of inner margin; attention contents have >=15/25 units; selected block contents have >=20 units.",
+    "source_integrity": "180 unique cells with valid parent/source/target references; Artwork precedes Foreground connectors. All 34 flow connectors belong to the foreground root layer. Decorative lines stay in their original groups. Compared with the parent commit, all existing cell attributes and geometry are identical except the artwork-layer name and flow-edge parents; node order is topologically serialized.",
     "template_check": "64 actual templates confirmed in data/prompt_templates.py. Illustrated satellite/aerial template examples match that source. Diagram retains separate text vectors and score maps without averaging.",
     "diagram_semantics": "Text vectors and final dense features feed similarity; dense features also directly enter convolutional fusion. Both early projected scores and fused features enter spatial encoding. Guidance preparation stays outside the repeated block. Semantic LN joins only Q/K in both attention modules; feature LN feeds Q/K and V. FPN joins intra-class Q/K only. Per-scale resize precedes intra-class LN. Aligned scalar fusion is summarized at Sigma before the second residual. Only conditional features receive residuals.",
-    "source_pdf_consistency": "All 72 nonempty source text lines exactly match the vector PDF. Fonts embedded; no raster images; all text within the canvas. All four source/PDF hash pairs match the manifest.",
+    "source_pdf_consistency": "All 72 nonempty vertex text lines exactly match the vector PDF. Fonts embedded; no raster images. All four source/PDF hash pairs match the manifest. Foreground paths have no intersections with the checked text bounds.",
     "native_editor_check": "draw.io Desktop is unavailable in this environment. Native XML structure, stencils, geometry and PDF/text consistency were checked; no interactive Desktop opening or Desktop re-export is claimed.",
-    "visual_review": "Latest standalone Figure 3 and manuscript page 5 inspected. Checked template-card text, dense fusion routing, guide reuse across the block boundary, Q/K/V separation, per-scale normalization labels and residual-loop clearance.",
+    "visual_review": "Standalone Figure 3 and rebuilt manuscript page 5 inspected after moving connections to the foreground. Checked 34 flow connectors, arrowheads, frame crossings, guide fan-out, Q/K and V endpoints, residual loops and text clearance.",
     "unchanged_equation_blocks": 22,
     "overfull_boxes": 0,
     "missing_characters": 0,
     "undefined_references": 0,
     "known_build_warnings": "Existing font-shape/map warnings and newer figure PDF version warnings from xdvipdfmx.",
-    "scope_check": "Other figure source/PDF assets, model/configs, prompt templates, data/tables and bibliography unchanged relative to master 7e0d30b. Method edits only clarify the diagram and remove obsolete subfigure letters.",
+    "scope_check": "Only Figure 3 source/PDF, manifest and drawing documentation/verification records changed relative to master 5eb6748. All vertex positions/text and connector routes preserved. Other artwork, captions, method/equations, model/configs, experiment data/tables and bibliography unchanged.",
     "gpu_training": "not run; figure/paper-only change",
     "gpu_evaluation": "not run",
-    "documentation": "Replace old three-panel descriptions in README/review and record the approved single-block focus in STYLE_GUIDE.md. Existing unfinished tasks remain only in manuscript_status.md."
+    "documentation": "Maintain foreground-connector ordering in STYLE_GUIDE.md section 12.1 and the Figure 3 entry in figures/README.md; record checks in review.md. No duplicate style document or task list created.",
+    "connector_layer_check": {
+      "foreground_layer": "aggregation_connections",
+      "flow_connectors": 34,
+      "geometry_and_routes_unchanged": true,
+      "text_intersections": 0
+    }
   },
   "sha256": {
     "DESIGN.md": "2fbcf281b7a14cc763da32c508861b93c8fd27b127bc2f08d25e93d0f1bb870f",
@@ -92,7 +98,7 @@
     "paper/scripts/test_build_experiment_tables.py": "39d1e97c70b14edb48abc4db8daf62a24f59c12fc3758920b37bf824cf6e673c",
     "paper/notes/experiment_config_snapshot.json": "fc13f816548c7d054cb585f6b588c0a87b6ae72e1abdbe0eb6c4f939820a8d7d",
     "paper/notes/evaluation_protocol.md": "15f8485817989a438a2b17ddc344b94dfaa28d1f81d626e00c8d37764633054a",
-    "paper/notes/review.md": "7bc51399c331a59a4b37f4048a3171ee5a1aae01040f26c2355a174c06d3472a",
+    "paper/notes/review.md": "ed382e69bad996ec6e060706dd6b713063a376c690f69952f1cc70a890ba7b08",
     "paper/README.md": "d7aeeaa9f6b8707e1ee5f3111e515046afaef102d8a29e8285c5fa62ae07e27e",
     "paper/tables/ablation_core.tex": "45523e282d20ea3dfe289f7a2b5270e9a25b999011195c72e058797608e1ed66",
     "paper/tables/ablation_freeze.tex": "77b5d324ffa02b850b08cbc332bec60bebeb2cba30579f30f7db1d49f043c5d4",
@@ -155,19 +161,19 @@
     "paper/sections/conclusion.tex": "d81801bfc4b33a6cf099fafded693b0fb6c15f51902b6a8cc1dea6edeb837f4a",
     "paper/sections/introduction.tex": "8a643eac563756efe3ea29b1510489aa65b673c8c9aa0f8e80b16a7cb985ed3b",
     "paper/sections/method.tex": "5aaf7e59910d9ca062fdf023b50139a27685c163fae667b1d5afc49598db77e9",
-    "paper/figures/README.md": "16c48d255ee56f734f203cfa64ffdd9b5a5252caa5744130b24101f1a7913951",
-    "paper/figures/figure_manifest.json": "5c556d0b0a5658b5091b6aaa736659087c0aab6218ab503afdca98a82fd4418d",
+    "paper/figures/README.md": "efa1dd6192279f3c775e67982385733f8784a9ea7adf3582c03a83e7b64a9523",
+    "paper/figures/figure_manifest.json": "23c6e452dac412ead69928efb8424617c4607b387d0f1951d0ba5866b4bb5add",
     "paper/figures/src/motivation.drawio": "df487535b28f9330cfad44de6eafba25255867318009e8d19e423daa07db7f95",
     "paper/figures/src/overview.drawio": "66557a9881fe9281a32955248e86deb3b04190017b8c0a46508911134b1ced3a",
     "paper/figures/src/qualitative_comparison.drawio": "27407eacfacf4b9065f6ae6a574b296e2f5048fdb036aad32a3a7b5d841cf840",
-    "paper/figures/src/aggregation.drawio": "df62a6b4eee22dbea8a05f85062699b481b8580728148de8e8448d67853f4b5f",
-    "paper/figures/aggregation.pdf": "3cb6b28b865216c9ae3f559a54961b1dabc5cd665af7e21fbf9bf516a4b23b5d",
+    "paper/figures/src/aggregation.drawio": "ed9058dbeef58968a594d63edeb369e8de255578cbe80f6e5975a4d45b0eb998",
+    "paper/figures/aggregation.pdf": "3951b5e96423352f1b6aef4a114600f7f97fc089d4b46c2041df076b428591ee",
     "paper/figures/motivation.pdf": "5f1afef89ae568530b1267b129df527ba74b036f55516fe03bde095f31f14eb5",
     "paper/figures/qualitative_comparison.pdf": "ed011c7c75e3404b83e2913945cfbb5705207ec9e6dae80c7615f6d2c2024efa",
     "paper/figures/overview.pdf": "f18d7d2e72620da156de6b8ddd2508a1a4e2fa24724b83b4d397470a8913c4fd",
-    "paper/figures/STYLE_GUIDE.md": "adaa18e0819d3fb572b2c1458f7b0e741a5297996fa71c80d4af654148eab46a"
+    "paper/figures/STYLE_GUIDE.md": "eedd733cdc6c86177b2b7f3bf2c329eba1e5996cb3535f04c26a7426b63ec34d"
   },
-  "review_base_commit": "7e0d30b3de9f772c0c23447f271f71bce3c54990",
+  "review_base_commit": "5eb674801e0a70b6014c57c63c374eef8c20f141",
   "implementation_commit": "2067a50dfa5e9b6f233144edc23a88f1ea3572b5",
   "implementation_validation": {
     "commit": "2067a50dfa5e9b6f233144edc23a88f1ea3572b5",
@@ -177,16 +183,16 @@
     "note": "Previously recorded implementation checks; model tests were not rerun for this manuscript-only change."
   },
   "last_artwork_validation": {
-    "base_commit": "7e0d30b3de9f772c0c23447f271f71bce3c54990",
+    "base_commit": "5eb674801e0a70b6014c57c63c374eef8c20f141",
     "figure": "aggregation",
-    "native_cells": 179,
+    "native_cells": 180,
     "canvas": [
       2000,
       1100
     ],
     "paper_pages": 10,
     "figure_page_inspected": 5,
-    "result": "Current single-block change: source graph/stencils, 64-template inputs, dense/score fusion, guide versus value paths, two residuals, PDF text/fonts, hashes and standalone/embedded layout checked."
+    "result": "34 flow connectors moved above all grouped artwork; source bindings/routes/node geometry unchanged. Checked layer hierarchy, 72 source/PDF text lines, vector PDF, manifest hashes, standalone artwork and manuscript page 5. XeLaTeX build passed with no overfull boxes, missing characters or undefined references."
   },
   "overview_validation": {
     "commit": "7d436588d9fd735fcde9b46c2acc2bbb7cf941b1",

@@ -91,12 +91,12 @@
       "name": "aggregation",
       "width": 2000,
       "height": 1100,
-      "native_cells": 179,
+      "native_cells": 180,
       "editable": true,
       "source": "src/aggregation.drawio",
       "pdf": "aggregation.pdf",
-      "source_sha256": "df62a6b4eee22dbea8a05f85062699b481b8580728148de8e8448d67853f4b5f",
-      "pdf_sha256": "3cb6b28b865216c9ae3f559a54961b1dabc5cd665af7e21fbf9bf516a4b23b5d",
+      "source_sha256": "ed9058dbeef58968a594d63edeb369e8de255578cbe80f6e5975a4d45b0eb998",
+      "pdf_sha256": "3951b5e96423352f1b6aef4a114600f7f97fc089d4b46c2041df076b428591ee",
       "outer_frame": false,
       "in_figure_title": false,
       "placeholders": 0,
@@ -111,7 +111,12 @@
       ],
       "guidance_prepared_outside_block": true,
       "template_count": 64,
-      "semantic_guidance_channels": 256
+      "semantic_guidance_channels": 256,
+      "connector_layer": "aggregation_connections",
+      "paint_order": [
+        "Artwork",
+        "Foreground connectors"
+      ]
     },
     {
       "name": "qualitative_comparison",
