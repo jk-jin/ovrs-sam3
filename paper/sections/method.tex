@@ -94,7 +94,7 @@ where head outputs are concatenated along channels, $W^O\in\mathbb R^{D\times D}
 注意力权重和输出两处 dropout 在训练时均使用 0.1 的丢弃概率，推理时关闭。语义与空间引导仅影响查询和键，不提供值，也不直接残差加入条件特征。
 
 \paragraph{类间特征更新。}
-类间注意力在 36×36 网格的每个空间位置，对全部展开提示计算交互，包括同一类别的不同同义提示；其输出直接残差加入当前条件特征。
+如图~\ref{fig:aggregation}(b) 所示，类间注意力在 36×36 网格的每个空间位置，对全部展开提示计算交互，包括同一类别的不同同义提示；其输出直接残差加入当前条件特征。
 
 Let $L=2$ be the block count and $F^{\ell-1}$ the input to block $\ell\in\{1,\ldots,L\}$. The prompt-interaction matrix has size $P\times P$. The residual update is
 \begin{equation}
@@ -108,7 +108,7 @@ The three spatial branches use grid side lengths $a\in\mathcal A=\{36,24,12\}$. 
 
 两种引导的多尺度表示在一次前向中仅生成一次，由全部聚合块复用。
 
-三个尺度的空间分支均从同一份类间更新后的条件特征出发，如图~\ref{fig:aggregation}(b) 所示，分别调整分辨率并计算窗口注意力增量：
+三个尺度的空间分支均从同一份类间更新后的条件特征出发，如图~\ref{fig:aggregation}(c) 所示，分别调整分辨率并计算窗口注意力增量：
 \begin{equation}
  \Delta F^{\ell,a}=\mathcal W_\ell\bigl(\mathcal R_a(F^{\ell,c}),S_a,G_a\bigr).
  \label{eq:multiscale_window_update}

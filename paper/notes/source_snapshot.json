@@ -1,9 +1,9 @@
 {
   "date": "2026-11-26",
   "branch": "master",
-  "base_commit": "d35000dd8146c3b7abfc5bea7ffca9e73c0a8012",
+  "base_commit": "457dc4e7521cf829241590d26f2ffd56e14e45af",
   "implementation_id": "reca-sam3-paper-ablation-v1",
-  "scope": "Redraw Figure 1 as four white/pastel adaptation-location panels in a 2 x 2 layout. Add ProC-SAM3/ROSE-SAM3 prompt/response adaptation, distinguish decoded responses from SAM 3 conditional feature updates and retain training-free versus supervised adaptation labels. Synchronize the editable native source, vector PDF, caption, introduction and existing documentation. Other figure artwork, model/configuration, method equations, comparison tables, measured results and bibliography are unchanged.",
+  "scope": "Redraw only Figure 3 as a full-width residual block above cross-prompt interaction and shared multiscale-window subpanels. Use equal-size visual window units, separate semantic/FPN Q/K guidance, an explicit attention parameter-sharing group, and scalar-weighted fusion with matching output labels. Synchronize native draw.io, vector PDF, caption, method subfigure references and existing style/documentation records. Preserve the user-edited Figure 1/2 assets from master 457dc4e. Model/configuration, 22 equation blocks, experiment data/tables and bibliography are unchanged.",
   "implementation_boundary": {
     "current_unused_mid_extraction": false,
     "final_design_uses_mid_features": false,
@@ -17,29 +17,31 @@
     "qualitative_real_predictions_available": false
   },
   "validation": {
-    "latex": "XeLaTeX + BibTeX + xdvipdfmx completed using existing external TeX support and local font configuration.",
     "paper_pdf_rebuilt_for_this_change": true,
+    "latex": "XeLaTeX + BibTeX + xdvipdfmx completed using existing external TeX support and local font configuration.",
     "pdf_pages": 10,
-    "motivation_page": 2,
-    "motivation_canvas": [
+    "aggregation_page": 5,
+    "aggregation_canvas": [
       2000,
-      1100
+      1340
     ],
-    "motivation_native_cells": 581,
-    "image_placeholders": 8,
-    "source_integrity": "Unique cell IDs; parent/source/target references and all compressed polygon stencils resolve. Functional objects remain inside panel frames with >=20 units of padding; selected offline preparation objects have >=15 units.",
-    "diagram_semantics": "ROSE unlabeled evidence enters response-based selection. ProC and ROSE are separate alternative paths into the prompt pool/bank, not sequential stages. Frozen SAM 3 produces decoded responses in (b)/(c); RemoteCLIP guidance joins feature aggregation before SDF/frozen decoding in (d).",
-    "source_pdf_consistency": "All 80 nonempty source text lines match the vector PDF exactly. Fonts are embedded subset Liberation Sans regular/bold; no raster images; all text lies within the canvas. Figure export hashes match for all four source/PDF pairs.",
-    "native_editor_check": "draw.io Desktop is not installed. Native XML, references, decoded stencils, geometry and PDF text were checked; no successful interactive Desktop opening or Desktop PDF re-export is claimed.",
-    "visual_review": "Latest standalone Figure 1 and embedded manuscript page 2 inspected after final geometry changes. Checked white/pastel hierarchy, line/label separation, offline alternatives, conditional-feature labels and output slots.",
+    "aggregation_native_cells": 237,
+    "image_placeholders": 0,
+    "source_integrity": "Unique native cell IDs, parent/source/target references and all compressed custom polygon stencils checked. Selected contents have at least 20 units to panel frames and attention cards have 25 units inside the common sharing frame.",
+    "window_geometry": "Grid side lengths 96, 64 and 32 use the same 32-unit visual cell size, representing 3x3, 2x2 and 1x1 regular 12x12 windows. Counts are 9, 4 and 1.",
+    "diagram_semantics": "Two feature residuals only. Feature LN feeds Q/K and V; semantic LN feeds Q/K only. FPN guidance enters window Q/K only. Three branches originate at the same post-cross feature. Attention parameter sharing and the three scalar scale weights are distinct. Matching w1/w2/w3 tags refer to the same scalar outputs; the logits have no incoming feature or image edge.",
+    "source_pdf_consistency": "All 92 nonempty native-source text lines exactly match the vector PDF. Fonts embedded; no raster images; all text within canvas. All four source/PDF hash pairs match the manifest.",
+    "native_editor_check": "draw.io Desktop is unavailable in this environment. Native XML structure, stencils, geometry and PDF/text consistency were checked; no interactive Desktop opening or Desktop re-export is claimed.",
+    "visual_review": "Latest standalone Figure 3 and its manuscript page 5 inspected. Verified panel margins, fixed-window geometry, guide/value paths, scalar-card clearance from the feature bus, shared parameter icons, and both residual loops.",
+    "unchanged_equation_blocks": 22,
     "overfull_boxes": 0,
     "missing_characters": 0,
     "undefined_references": 0,
-    "known_build_warnings": "Existing font-shape/map warnings and newer figure PDF version warnings from xdvipdfmx; no added overflow or undefined citations.",
-    "scope_check": "Other figure source/PDF pairs, model/configs, method equations, data/tables and both bibliography files unchanged.",
-    "gpu_training": "not run; paper-only change",
+    "known_build_warnings": "Existing font-shape/map warnings and newer figure PDF version warnings from xdvipdfmx.",
+    "scope_check": "Other figure source/PDF assets, model/configs, data/tables and both bibliography files unchanged relative to master 457dc4e. Method edits only update/add subfigure references.",
+    "gpu_training": "not run; figure/paper-only change",
     "gpu_evaluation": "not run",
-    "documentation": "Figure definition, review mapping and introduction aligned to four adaptation locations. Placeholder replacement tasks remain only in manuscript_status.md."
+    "documentation": "Update figure definitions, style rules for equal-size window cells and scalar label ports, and review mapping. Remaining experiment/image-replacement work stays in manuscript_status.md."
   },
   "sha256": {
     "DESIGN.md": "2fbcf281b7a14cc763da32c508861b93c8fd27b127bc2f08d25e93d0f1bb870f",
@@ -90,8 +92,8 @@
     "paper/scripts/test_build_experiment_tables.py": "39d1e97c70b14edb48abc4db8daf62a24f59c12fc3758920b37bf824cf6e673c",
     "paper/notes/experiment_config_snapshot.json": "fc13f816548c7d054cb585f6b588c0a87b6ae72e1abdbe0eb6c4f939820a8d7d",
     "paper/notes/evaluation_protocol.md": "15f8485817989a438a2b17ddc344b94dfaa28d1f81d626e00c8d37764633054a",
-    "paper/notes/review.md": "94b86de3f64e0fa71f7d8240f0020e25873cfb9346d6c8883605d8b36e9570a8",
-    "paper/README.md": "947f988affe406c51d7d42d449da4ad860d5a73b6a855130af63da1efcdfdb5c",
+    "paper/notes/review.md": "ff95832ecee68f474511cf01b3dae93444f54892945be6cd65bcfe9ab01c4b50",
+    "paper/README.md": "c23502253152c256e48d38ee4050cf1d36ff063747b0b9295dbce90632fceb5e",
     "paper/tables/ablation_core.tex": "45523e282d20ea3dfe289f7a2b5270e9a25b999011195c72e058797608e1ed66",
     "paper/tables/ablation_freeze.tex": "77b5d324ffa02b850b08cbc332bec60bebeb2cba30579f30f7db1d49f043c5d4",
     "paper/tables/efficiency.tex": "5d657f1f024ea6e5a0fb3a09849251b3e68c3393770a7f4dc2663e2cb62db6b3",
@@ -145,27 +147,27 @@
     "configs/test/isaid_16_bg.py": "1d4ded193c0a593bbadcd764502b73f16d862c52f2c1ff5c7c4674b55cb6da38",
     "tests/test_paper_ablation_paths.py": "9a5f32d94112766f0180c65f3e55ccb38ffcb1be4fb0eac7e5c7013f5a2db179",
     "models/semantic_detail_fusion.py": "44614103dd01735359effeacf9744b3a6ece5b453dfe379556525f8e38c78e76",
-    "paper/figures/aggregation.tex": "49c25a3be0adbfca43f2bf15cb75ceceb00d97a1345000ff430d48ddbf5b0f0f",
+    "paper/figures/aggregation.tex": "f6d908d3bdd21555ebffbf21d0dae735d97415b4a68ba9cc3ec1b58c45921ccf",
     "paper/figures/motivation.tex": "9e3feee947276bfc98903908ce52b6ce090b24e73006c36d2bc0aac516d51b25",
     "paper/figures/overview.tex": "4c0f34984db3aa8306c85f27e1ea27768d30de6548f7a1531d70c36b170b9ed0",
     "paper/figures/qualitative_comparison.tex": "8589d2287bbfadd15903e04db25a3100f9c7e56cb3bc8e4204fb39675583e601",
     "paper/sections/abstract.tex": "fe94ef53e3a7c8caf265e8cdc6a7a8e86f4c19e1c5d360ef923752eb329ca7e2",
     "paper/sections/conclusion.tex": "d81801bfc4b33a6cf099fafded693b0fb6c15f51902b6a8cc1dea6edeb837f4a",
     "paper/sections/introduction.tex": "8a643eac563756efe3ea29b1510489aa65b673c8c9aa0f8e80b16a7cb985ed3b",
-    "paper/sections/method.tex": "83e0e793fee65b38dd7b82c2f67ced2e162702af31ed33c0ad77c960b326dc93",
-    "paper/figures/README.md": "2e82a8a9c73ad981c485a308435b53cb979b97875cbbe8a1e690cf4f569554e0",
-    "paper/figures/figure_manifest.json": "411d2e4b1a455e137552726b73a9e422b37c7d354b3d46fb97e1045cadeb0521",
-    "paper/figures/src/motivation.drawio": "e03557a456017358d2d766cb0a57f3873484c75db0eebd7d9290cfe3c50c99da",
-    "paper/figures/src/overview.drawio": "7c2625326cfaa7af100f202a2bf9781a8100d653012379f7b18c201494860e09",
+    "paper/sections/method.tex": "d82481c05a68acac34b51ffd68ae544db19be7b35518d4326737b025a2989622",
+    "paper/figures/README.md": "ad28c58f10d7035b3ae65ac82ea69117abc6ebe5497e7e84b0c626766ecee17f",
+    "paper/figures/figure_manifest.json": "6e63fc93ea052e7e7699e6ae01f52c2d33bb0455574edfc5022dd25e4f933bbc",
+    "paper/figures/src/motivation.drawio": "df487535b28f9330cfad44de6eafba25255867318009e8d19e423daa07db7f95",
+    "paper/figures/src/overview.drawio": "66557a9881fe9281a32955248e86deb3b04190017b8c0a46508911134b1ced3a",
     "paper/figures/src/qualitative_comparison.drawio": "27407eacfacf4b9065f6ae6a574b296e2f5048fdb036aad32a3a7b5d841cf840",
-    "paper/figures/src/aggregation.drawio": "de469e72c62e61648c3550c8c8b671ec938436855e4e1a0340bce95fd97514b6",
-    "paper/figures/aggregation.pdf": "c25a9af190d27a86c28bbb2e13fd89173f4b2ad1cfc280d19f3e9909e8f58603",
-    "paper/figures/motivation.pdf": "06b5a6b4a975aac4f82f0e9aa1366940375c2d53b10786166694ed1742f97a20",
+    "paper/figures/src/aggregation.drawio": "901562352b13c117dbc1b35f756f6552f17b71152980eac59b1855c37e6e7c3c",
+    "paper/figures/aggregation.pdf": "4da27953e397f9011477d1c0619197530e782083be17f70fecdb619ec33b3cbc",
+    "paper/figures/motivation.pdf": "5f1afef89ae568530b1267b129df527ba74b036f55516fe03bde095f31f14eb5",
     "paper/figures/qualitative_comparison.pdf": "ed011c7c75e3404b83e2913945cfbb5705207ec9e6dae80c7615f6d2c2024efa",
-    "paper/figures/overview.pdf": "1d0de5ef00a52353ad2e78d74a4974189221e04df315b852564858538a87b0b3",
-    "paper/figures/STYLE_GUIDE.md": "ae7326481000e8983a12c24d71cf5635a4dbcc8e90bf4b4b0ed7fa44a7773b7f"
+    "paper/figures/overview.pdf": "f18d7d2e72620da156de6b8ddd2508a1a4e2fa24724b83b4d397470a8913c4fd",
+    "paper/figures/STYLE_GUIDE.md": "a210d82e575f8566e6c08829170b1d1c10d18546616f25dcc14d55dc9f10cedd"
   },
-  "review_base_commit": "d35000dd8146c3b7abfc5bea7ffca9e73c0a8012",
+  "review_base_commit": "457dc4e7521cf829241590d26f2ffd56e14e45af",
   "implementation_commit": "2067a50dfa5e9b6f233144edc23a88f1ea3572b5",
   "implementation_validation": {
     "commit": "2067a50dfa5e9b6f233144edc23a88f1ea3572b5",
@@ -175,16 +177,16 @@
     "note": "Previously recorded implementation checks; model tests were not rerun for this manuscript-only change."
   },
   "last_artwork_validation": {
-    "base_commit": "d35000dd8146c3b7abfc5bea7ffca9e73c0a8012",
-    "figure": "motivation",
-    "native_cells": 581,
+    "base_commit": "457dc4e7521cf829241590d26f2ffd56e14e45af",
+    "figure": "aggregation",
+    "native_cells": 237,
     "canvas": [
       2000,
-      1100
+      1340
     ],
     "paper_pages": 10,
-    "figure_page_inspected": 2,
-    "result": "Current change: native-source structure, diagram paths, PDF/text consistency, manifest hashes and standalone/embedded visual layout checked."
+    "figure_page_inspected": 5,
+    "result": "Current change: source graph/stencils, Q/K/V and residual paths, shared window geometry, scalar correspondence tags, PDF text/fonts, manifest hashes and standalone/embedded layout checked."
   },
   "overview_validation": {
     "commit": "7d436588d9fd735fcde9b46c2acc2bbb7cf941b1",
@@ -196,5 +198,17 @@
     "paper_pages": 10,
     "figure_page_inspected": 3,
     "result": "Previously verified card/output margins, perspective slice separation, exposed block contours, native graph/stencils, source/PDF hashes and standalone/embedded visual layout; not rerun for this documentation-only change."
+  },
+  "prior_motivation_validation": {
+    "base_commit": "d35000dd8146c3b7abfc5bea7ffca9e73c0a8012",
+    "figure": "motivation",
+    "native_cells": 581,
+    "canvas": [
+      2000,
+      1100
+    ],
+    "paper_pages": 10,
+    "figure_page_inspected": 2,
+    "result": "Current change: native-source structure, diagram paths, PDF/text consistency, manifest hashes and standalone/embedded visual layout checked."
   }
 }

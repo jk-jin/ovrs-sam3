@@ -89,17 +89,46 @@
     },
     {
       "name": "aggregation",
-      "width": 1440,
-      "height": 750,
-      "native_cells": 83,
+      "width": 2000,
+      "height": 1340,
+      "native_cells": 237,
       "editable": true,
       "source": "src/aggregation.drawio",
       "pdf": "aggregation.pdf",
-      "source_sha256": "de469e72c62e61648c3550c8c8b671ec938436855e4e1a0340bce95fd97514b6",
-      "pdf_sha256": "c25a9af190d27a86c28bbb2e13fd89173f4b2ad1cfc280d19f3e9909e8f58603",
+      "source_sha256": "901562352b13c117dbc1b35f756f6552f17b71152980eac59b1855c37e6e7c3c",
+      "pdf_sha256": "4da27953e397f9011477d1c0619197530e782083be17f70fecdb619ec33b3cbc",
       "outer_frame": false,
       "in_figure_title": false,
-      "placeholders": 0
+      "placeholders": 0,
+      "font": "Liberation Sans",
+      "stage_frames": true,
+      "layout": "Top: single residual block; bottom: cross-prompt interaction and shared multiscale windows",
+      "subpanels": [
+        "a: block with two residuals",
+        "b: same-position prompt attention and feature-only values",
+        "c: fixed 12x12 windows, shared attention and scalar scale fusion"
+      ],
+      "window_counts": [
+        9,
+        4,
+        1
+      ],
+      "window_grid_cell_size": 32,
+      "window_sizes": [
+        12,
+        12,
+        12
+      ],
+      "feature_scales": [
+        36,
+        24,
+        12
+      ],
+      "weight_label_ports": [
+        "w1",
+        "w2",
+        "w3"
+      ]
     },
     {
       "name": "qualitative_comparison",
@@ -116,7 +145,7 @@
       "placeholders": 15
     }
   ],
-  "notes": "Motivation and overview follow STYLE_GUIDE.md with white panels, pastel inner functions and native icons/tensors. Motivation uses four conceptual adaptation-location panels and eight explicit image slots; no measured predictions. Other figure artwork is unchanged. No standalone SDF figure.",
+  "notes": "Motivation, overview and aggregation use STYLE_GUIDE.md white/pastel layouts with native editable diagrams. Aggregation separates block flow, cross-prompt interaction and shared multiscale attention; all images there are schematic vectors, with no measured attention weights. Qualitative artwork is unchanged. No standalone SDF figure.",
   "native_cell_count_includes_root": true,
   "color_design": {
     "feature": "Pale blue",

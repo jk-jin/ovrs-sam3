@@ -12,8 +12,9 @@
 | SDF 与推理正文 | models/semantic_detail_fusion.py、models/adapters/semantic_adapter.py 与 engine/evaluator.py：单方向双支路、全配置类别前向、直接类别索引和数据集独立阈值 |
 | 当前结构图 | figures/src/、figure_manifest.json 与对应 PDF：两个完整块、共享三尺度普通窗口、仅条件特征接受残差；组合图接入方法，定性占位不接入正文 |
 | 动机图与引言 | motivation.drawio/PDF 的四个适配位置子图；ROSE 原文 https://arxiv.org/html/2611.28112v1（III-A 至 III-D，含竞争类别保护），ProC 官方说明 https://github.com/YanghuiSong/ProC-SAM3；区分提示构建与响应选择两种离线策略，保留参数冻结／监督适配差异，不声称已有方法没有类别关系 |
+| 聚合图机制与视觉 | aggregation.drawio/PDF：(a) 两次特征残差，(b) 同位置跨提示交互及 Q/K/V 来源，(c) 等尺寸窗口单元、独立语义/FPN 引导、共享参数组和标量加权；对照 models/aggregation_attention.py 与 models/feature_aggregation.py，不在块内添加最终 LN，不增加图像动态门控或新的实测注意力图 |
 | overview 视觉设计 | 用户确认的白底三板块预览：原生梯形编码器、图标、特征叠片与五处占位；灰色训练栏；内部卡片与输出占位留有边距，类间特征沿深度分层，Block 2 顶部、右侧及底部轮廓独立可见。图像／文本输入、Q/K 引导、V 来源与代码核对，同名跨板块端口复用相同张量 |
-| 统一绘图规范 | figures/STYLE_GUIDE.md 集中规定视觉风格与验收；以 7d43658 的 overview 为参考，paper/AGENTS.md 与两级 README 提供入口。动机图与 overview 已迁移；聚合图和定性模板仍保留原图稿 |
+| 统一绘图规范 | figures/STYLE_GUIDE.md 集中规定视觉风格与验收；以 7d43658 的 overview 为参考，paper/AGENTS.md 与两级 README 提供入口。动机图、overview 与聚合图已迁移；定性模板仍保留原图稿 |
 | Zotero | 两个 bib 数据库不随表格清理改写；正文引用决定参考文献，集合操作见 zotero_sync.md |
 
 ## 验收标准
