@@ -1,6 +1,6 @@
 <mxfile host="Electron">
   <diagram id="motivation" name="Four adaptation locations">
-    <mxGraphModel dx="2054" dy="1192" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="2000" pageHeight="1100" background="#FFFFFF" math="0" shadow="0">
+    <mxGraphModel dx="2977" dy="1728" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="2000" pageHeight="1100" background="#FFFFFF" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -33,11 +33,12 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="motivation_105" edge="1" parent="1" source="motivation_39" style="edgeStyle=none;rounded=1;arcSize=10;html=0;strokeColor=#647180;strokeWidth=2.1;dashed=0;dashPattern=7 5;endArrow=block;endSize=8;endFill=1;exitX=1;exitY=0.5;entryX=0.5;entryY=1;exitPerimeter=0;entryPerimeter=0;jumpStyle=arc;jumpSize=6;" target="motivation_43">
-          <mxGeometry relative="1" as="geometry">
+        <mxCell id="motivation_105" edge="1" parent="1" source="motivation_39" style="edgeStyle=none;rounded=1;arcSize=10;html=0;strokeColor=#647180;strokeWidth=2.1;dashed=0;dashPattern=7 5;endArrow=block;endSize=8;endFill=1;exitX=1;exitY=0.5;entryX=0.549;entryY=0.926;exitPerimeter=0;entryPerimeter=0;jumpStyle=arc;jumpSize=6;entryDx=0;entryDy=0;" target="motivation_44">
+          <mxGeometry relative="1" x="-0.0879" as="geometry">
             <Array as="points">
               <mxPoint x="185" y="340" />
-              <mxPoint x="260" y="340" />
+              <mxPoint x="190" y="350" />
+              <mxPoint x="273.63" y="350" />
             </Array>
           </mxGeometry>
         </mxCell>
@@ -58,11 +59,12 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="motivation_254" edge="1" parent="1" source="motivation_148" style="edgeStyle=none;rounded=1;arcSize=10;html=0;strokeColor=#647180;strokeWidth=2.1;dashed=0;dashPattern=7 5;endArrow=block;endSize=8;endFill=1;exitX=1;exitY=0.5;entryX=0.5;entryY=1;exitPerimeter=0;entryPerimeter=0;jumpStyle=arc;jumpSize=6;" target="motivation_152">
-          <mxGeometry relative="1" as="geometry">
+        <mxCell id="motivation_254" edge="1" parent="1" source="motivation_148" style="edgeStyle=none;rounded=1;arcSize=10;html=0;strokeColor=#647180;strokeWidth=2.1;dashed=0;dashPattern=7 5;endArrow=block;endSize=8;endFill=1;exitX=1;exitY=0.5;entryX=1;entryY=1;exitPerimeter=0;jumpStyle=arc;jumpSize=6;entryDx=0;entryDy=0;" target="motivation_179">
+          <mxGeometry relative="1" x="0.0306" as="geometry">
             <Array as="points">
-              <mxPoint x="1187" y="340" />
-              <mxPoint x="1277.5" y="340" />
+              <mxPoint x="1180" y="340" />
+              <mxPoint x="1190" y="370" />
+              <mxPoint x="1280" y="370" />
             </Array>
           </mxGeometry>
         </mxCell>
