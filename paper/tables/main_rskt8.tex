@@ -7,40 +7,40 @@
 \setlength{\tabcolsep}{2pt}
 \begin{tabularx}{\linewidth}{@{}L{0.25\linewidth}L{0.08\linewidth}*{9}{C}@{}}
 \toprule
-Method & \shortstack{Adaptation\\data} & \shortstack{DLRSD\\Source} & \shortstack{iSAID\\15 cls.\\IgnBG} & \shortstack{iSAID\\16 cls.\\BG} & \shortstack{LoveDA\\Dev.} & Potsdam & Vaihingen & UAVid & UDD5 & VDD\\
+Method & \shortstack{Adaptation\\data} & DLRSD & \shortstack{iSAID\\15 cls.\\IgnBG} & \shortstack{iSAID\\16 cls.\\BG} & LoveDA & Potsdam & Vaihingen & UAVid & UDD5 & VDD\\
 \midrule
 \multicolumn{11}{l}{\textbf{Training on remote sensing segmentation data}}\\
-SCAN~\cite{liu2024openvocabularysegmentationsemanticassistedcalibration}$^{R}$ & DLRSD & 52.42 & 44.28 & -- & 23.17$^{\dagger}$ & 27.45 & 15.23 & 20.28$^{8}$ & 34.14 & 29.24\\
-SAN~\cite{xu2023adapternetworkopenvocabularysemantic}$^{R}$ & DLRSD & 86.45 & 49.56 & -- & 25.33$^{\dagger}$ & 37.25 & 39.22 & 23.53$^{8}$ & 37.23 & 35.83\\
-SED~\cite{xie2024sedsimpleencoderdecoderopenvocabulary}$^{R}$ & DLRSD & 87.68 & 51.23 & -- & 24.55$^{\dagger}$ & 29.35 & 39.02 & 21.33$^{8}$ & 35.73 & 32.53\\
-CAT-Seg~\cite{choCATSegCostAggregation2024}$^{R}$ & DLRSD & 88.68 & 53.34 & -- & 28.64$^{\dagger}$ & 35.75 & 42.30 & 25.73$^{8}$ & 40.24 & 39.14\\
-OVRS~\cite{caoOVRSHighResolution2025}$^{R}$ & DLRSD & 88.85 & 52.65 & -- & 31.53$^{\dagger}$ & 36.44 & 43.50 & 24.13$^{8}$ & 40.82 & 37.23\\
-GSNet~\cite{yeOpenVocabularyRemoteSensing2025}$^{R}$ & DLRSD & 86.02 & 53.73 & -- & 32.52$^{\dagger}$ & 37.85 & 44.13 & 24.22$^{8}$ & 40.92 & 37.34\\
-RSKT-Seg~\cite{liExploringEfficientOpenVocabulary2026}$^{R}$ & DLRSD & 93.49 & 54.32 & -- & 33.23$^{\dagger}$ & 38.44 & 42.69 & 25.72$^{8}$ & 42.10 & 39.69\\
-Pi-Seg~\cite{liPerturbationRegularizedOpenVocabularyRemote2026}$^{I}$ & DLRSD & -- & -- & -- & 39.00$^{\dagger}$ & 35.33 & 44.18 & 33.58$^{u}$ & 59.08 & 47.73\\
-UGDMoE~\cite{quUGDMoE2026}$^{U}$ & DLRSD & 93.35 & -- & -- & 34.17 & 38.21 & 44.92 & 26.85$^{8}$ & 43.78 & 40.12\\
-SkySense-O~\cite{zhuSkySenseOOpenWorldRemote2025a}$^{H}$ & Sky-SA & -- & -- & -- & 38.30 & 54.10 & 51.64 & -- & -- & --\\
-ReCA-SAM3$^{N}$ & DLRSD & -- & -- & -- & -- & -- & -- & -- & -- & --\\
+SCAN~\cite{liu2024openvocabularysegmentationsemanticassistedcalibration} & DLRSD & 52.42 & 44.28 & -- & 23.17 & 27.45 & 15.23 & 20.28 & 34.14 & 29.24\\
+SAN~\cite{xu2023adapternetworkopenvocabularysemantic} & DLRSD & 86.45 & 49.56 & -- & 25.33 & 37.25 & 39.22 & 23.53 & 37.23 & 35.83\\
+SED~\cite{xie2024sedsimpleencoderdecoderopenvocabulary} & DLRSD & 87.68 & 51.23 & -- & 24.55 & 29.35 & 39.02 & 21.33 & 35.73 & 32.53\\
+CAT-Seg~\cite{choCATSegCostAggregation2024} & DLRSD & 88.68 & 53.34 & -- & 28.64 & 35.75 & 42.30 & 25.73 & 40.24 & 39.14\\
+OVRS~\cite{caoOVRSHighResolution2025} & DLRSD & 88.85 & 52.65 & -- & 31.53 & 36.44 & 43.50 & 24.13 & 40.82 & 37.23\\
+GSNet~\cite{yeOpenVocabularyRemoteSensing2025} & DLRSD & 86.02 & 53.73 & -- & 32.52 & 37.85 & 44.13 & 24.22 & 40.92 & 37.34\\
+RSKT-Seg~\cite{liExploringEfficientOpenVocabulary2026} & DLRSD & 93.49 & 54.32 & -- & 33.23 & 38.44 & 42.69 & 25.72 & 42.10 & 39.69\\
+Pi-Seg~\cite{liPerturbationRegularizedOpenVocabularyRemote2026} & DLRSD & -- & -- & -- & 39.00 & 35.33 & 44.18 & 33.58 & 59.08 & 47.73\\
+UGDMoE~\cite{quUGDMoE2026} & DLRSD & 93.35 & -- & -- & 34.17 & 38.21 & 44.92 & 26.85 & 43.78 & 40.12\\
+SkySense-O~\cite{zhuSkySenseOOpenWorldRemote2025a} & Sky-SA & -- & -- & -- & 38.30 & 54.10 & 51.64 & -- & -- & --\\
+ReCA-SAM3 & DLRSD & -- & -- & -- & -- & -- & -- & -- & -- & --\\
 \midrule
 \multicolumn{11}{l}{\textbf{Training-free}}\\
-SCLIP~\cite{wang2024scliprethinkingselfattentiondense}$^{S}$ & None & -- & -- & 16.10 & 30.40 & 39.60 & 35.90 & 31.40$^{7}$ & 38.70 & 37.90\\
-ClearCLIP~\cite{lan2024clearclipdecomposingcliprepresentations}$^{S}$ & None & -- & -- & 18.20 & 32.40 & 42.00 & 36.20 & 36.20$^{7}$ & 41.80 & 39.30\\
-ProxyCLIP~\cite{lan2024proxyclipproxyattentionimproves}$^{S}$ & None & -- & -- & 21.80 & 34.30 & 49.00 & 47.50 & 35.80$^{7}$ & 40.80 & 47.80\\
-CorrCLIP~\cite{zhang2025corrclipreconstructingpatchcorrelations}$^{S}$ & None & -- & -- & 25.50 & 36.90 & 51.90 & 47.00 & 38.30$^{7}$ & 46.10 & 47.30\\
-SegEarth-OV~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025}$^{E}$ & None & -- & -- & 21.7 & 36.9 & 47.1 & 29.1 & 42.5$^{7}$ & 50.6 & 45.3\\
-ConInfer~\cite{chen2026coninfercontextawareinferencetrainingfree}$^{C}$ & None & -- & -- & -- & 39.33 & 49.99 & 31.37 & 46.40$^{u}$ & 46.86 & 50.29\\
-ActiveSAM (ProC-SAM3 reproduction)~\cite{tienActiveSAMFastAccurate2026}$^{P}$ & None & -- & -- & 28.30 & 41.10 & 40.60 & 45.10 & 53.30$^{7}$ & 72.10 & 62.20\\
-SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026}$^{S}$ & None & -- & -- & 27.6 & 47.4 & 57.8 & 60.8 & 54.7$^{7}$ & 71.7 & 64.5\\
-RSGPNet (own paper)~\cite{wangRSGPNetGeometricPrompting2026}$^{J}$ & None & -- & -- & -- & 47.80 & 59.70 & 61.10 & -- & 71.00 & --\\
-GLoP-SAM3 (ROSE report)~\cite{liuGLoPSAM3DualPostprocessing2026}$^{O}$ & None & -- & -- & -- & 46.20 & 57.90 & 62.20 & 55.40$^{u}$ & 72.60 & 64.70\\
-ProC-SAM3~\cite{songPromptCalibratedSAM32026}$^{P}$ & None & -- & -- & 29.5 & 46.1 & 58.8 & 64.5 & 60.0$^{7}$ & 73.4 & 67.5\\
-ROSE-SAM3~\cite{songROSESAM3ResponseOrientedPrompt2026}$^{O}$ & Unlabeled & -- & -- & 35.10 & 48.70 & 58.90 & 65.30 & 59.90$^{7}$ & 73.70 & 67.50\\
-SAM 3 Semantic-only$^{N}$ & None & -- & -- & -- & -- & -- & -- & -- & -- & --\\
-SAM 3 Semantic $\times$ Presence$^{N}$ & None & -- & -- & -- & -- & -- & -- & -- & -- & --\\
+SCLIP~\cite{wang2024scliprethinkingselfattentiondense} & None & -- & -- & 16.10 & 30.40 & 39.60 & 35.90 & 31.40 & 38.70 & 37.90\\
+ClearCLIP~\cite{lan2024clearclipdecomposingcliprepresentations} & None & -- & -- & 18.20 & 32.40 & 42.00 & 36.20 & 36.20 & 41.80 & 39.30\\
+ProxyCLIP~\cite{lan2024proxyclipproxyattentionimproves} & None & -- & -- & 21.80 & 34.30 & 49.00 & 47.50 & 35.80 & 40.80 & 47.80\\
+CorrCLIP~\cite{zhang2025corrclipreconstructingpatchcorrelations} & None & -- & -- & 25.50 & 36.90 & 51.90 & 47.00 & 38.30 & 46.10 & 47.30\\
+SegEarth-OV~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025} & None & -- & -- & 21.7 & 36.9 & 47.1 & 29.1 & 42.5 & 50.6 & 45.3\\
+ConInfer~\cite{chen2026coninfercontextawareinferencetrainingfree} & None & -- & -- & -- & 39.33 & 49.99 & 31.37 & 46.40 & 46.86 & 50.29\\
+ActiveSAM~\cite{tienActiveSAMFastAccurate2026} & None & -- & -- & 28.30 & 41.10 & 40.60 & 45.10 & 53.30 & 72.10 & 62.20\\
+SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026} & None & -- & -- & 27.6 & 47.4 & 57.8 & 60.8 & 54.7 & 71.7 & 64.5\\
+RSGPNet~\cite{wangRSGPNetGeometricPrompting2026} & None & -- & -- & -- & 47.80 & 59.70 & 61.10 & -- & 71.00 & --\\
+GLoP-SAM3~\cite{liuGLoPSAM3DualPostprocessing2026} & None & -- & -- & -- & 46.20 & 57.90 & 62.20 & 55.40 & 72.60 & 64.70\\
+ProC-SAM3~\cite{songPromptCalibratedSAM32026} & None & -- & -- & 29.5 & 46.1 & 58.8 & 64.5 & 60.0 & 73.4 & 67.5\\
+ROSE-SAM3~\cite{songROSESAM3ResponseOrientedPrompt2026} & Unlabeled & -- & -- & 35.10 & 48.70 & 58.90 & 65.30 & 59.90 & 73.70 & 67.50\\
+SAM 3 Semantic-only & None & -- & -- & -- & -- & -- & -- & -- & -- & --\\
+SAM 3 Semantic $\times$ Presence & None & -- & -- & -- & -- & -- & -- & -- & -- & --\\
 \bottomrule
 \end{tabularx}
 \par\vspace{3pt}
 \begin{minipage}{\linewidth}
-\footnotesize N: local evaluation. R: RSKT-Seg Table 1, DLRSD/large-backbone panel~\cite{liExploringEfficientOpenVocabulary2026}; I: Pi-Seg v3 Table 1, DLRSD/ViT-L~\cite{liPerturbationRegularizedOpenVocabularyRemote2026}; S: SegEarth-OV3 v2 Table 1~\cite{liSegEarthOV3ExploringSAM2026}; P: ProC-SAM3 v2 Table I~\cite{songPromptCalibratedSAM32026}; O: ROSE-SAM3 v1 Table I~\cite{songROSESAM3ResponseOrientedPrompt2026}. E, U, H, C and J denote the respective methods\textquotesingle{} own reports (U: publisher HTML Table 2). ActiveSAM is reproduced by ProC-SAM3; GLoP-SAM3 is quoted from ROSE-SAM3. IgnBG excludes GT background pixels and averages 15 foreground classes; BG scores background and averages 16 classes. Our three local methods use both protocols with the same checkpoint per method/seed. UAVid superscripts 7 and 8 indicate merged-car and separate-car protocols; all local methods use seven classes. $^{u}$ indicates an unspecified UAVid protocol. Unassigned iSAID reports are listed below; both protocol cells remain --. Annotations identify source benchmark settings, not independently reproduced runs. Literature values are retained as reported; no ranking across different protocols or pooled average is computed. $^{\dagger}$ marks unresolved source label alignment. None means no adaptation on remote sensing segmentation labels; Unlabeled denotes target-image prompt calibration. Source and Dev. apply to local methods. -- denotes unavailable results.\par iSAID references (protocol unspecified; mIoU, \%): Pi-Seg: 53.50; UGDMoE: 54.38; SkySense-O: 43.92; ConInfer: 20.08; GLoP-SAM3 (ROSE report): 28.00.
+\footnotesize Literature results are taken from the cited papers. SCAN, SAN, SED, CAT-Seg, OVRS and GSNet use the results reported by RSKT-Seg~\cite{liExploringEfficientOpenVocabulary2026}; SCLIP, ClearCLIP, ProxyCLIP and CorrCLIP use SegEarth-OV3~\cite{liSegEarthOV3ExploringSAM2026}. ActiveSAM uses the reproduction in ProC-SAM3~\cite{songPromptCalibratedSAM32026}; GLoP-SAM3 is quoted from ROSE-SAM3~\cite{songROSESAM3ResponseOrientedPrompt2026}. IgnBG: background ignored; BG: background included. --: not reported.\par iSAID references (protocol unspecified; mIoU, \%): Pi-Seg: 53.50; UGDMoE: 54.38; SkySense-O: 43.92; ConInfer: 20.08; GLoP-SAM3: 28.00.
 \end{minipage}
 \end{table*}

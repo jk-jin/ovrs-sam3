@@ -1,50 +1,42 @@
-\FloatBarrier
 \section{实验}
 \subsection{数据集与评价指标}
 本文采用 RSKT-Seg 的八数据集评测集合：DLRSD、iSAID、LoveDA、Potsdam、Vaihingen、UAVid、UDD5 和 VDD~\cite{liExploringEfficientOpenVocabulary2026}。DLRSD 保留 OVRSISBench 发布包中的 5601 张训练图像与 1401 张验证图像，分别用于单源监督适配与源域评测。LoveDA 验证集用于模型选择，作为开发域；其余六个数据集用于目标域评测。
 
-所有数据集均对配置中的全部类别执行前向，背景或 clutter 作为已配置类别时也参与预测。同义词展开为独立文本提示，并在输出端按原语义类别逐像素取最大值合并；因此提示数可以多于类别数。Potsdam 与 Vaihingen 的道路类别使用 road 和 pavement，VDD 的屋顶类别使用 roof、rooftop 和 building top。UAVid 合并 moving car 与 static car 为 car，采用含背景的七类评测；LoveDA 同样采用含背景七类，DLRSD 不另设背景。iSAID 分别报告两种协议：IgnBG 忽略真实标签中的背景像素，对十五个前景类计算 mIoU；BG 保留背景像素，将背景计入十六类 mIoU。忽略值统一为 255。LoveDA 原始标签 1--7 仅转换一次为 0--6，原始 0 转为忽略值，前向与评测不再额外删除背景或平移编号。
+LoveDA 采用含背景的七类评测；UAVid 将 moving car 与 static car 合并为 car，采用七类评测。iSAID 分别报告忽略真实背景像素的十五类 mIoU（IgnBG）和包含背景的十六类 mIoU（BG）。主要指标为平均交并比（mIoU），并保存平均类别准确率（mAcc）与逐类交并比（IoU）。
 
-主要指标为平均交并比（mIoU），辅助保存平均类别准确率（mAcc）与逐类交并比（IoU）。并集为零的类别按评测器规则排除，同时记录有效类别数。跨数据集评测用于考察迁移表现；对训练类别与目标类别的语义重叠另行核对，不将全部目标类别直接视为严格未见类别。
-
-\subsection{实现细节与统一评测协议}
+\subsection{实现细节}
 SAM 3 输入为 1008×1008，RemoteCLIP 输入为 504×504；每个文本提示使用 64 个固定模板。提示条件特征从 72×72 下采样至 36×36，经过两个聚合块。每块先在同一空间位置沿完整提示集合执行类间注意力，再并行计算 36×36、24×24 和 12×12 三个尺度的类内注意力。各分支均使用 12×12 普通窗口，窗口数依次为 9、4 和 1，最小尺度覆盖全图。同一块的三尺度分支共享注意力参数，不同块分别学习参数；三路更新对齐至 36×36 后，以每块独立学习的三个 Softmax 权重融合并残差更新特征。三个尺度融合标量从零初始化，对应初始等权，并在该块的全部提示与空间位置间共用。类内注意力保留 SAM 3 FPN 引导，RemoteCLIP 的最终稠密特征与模板分数经 score embedding 提供语义引导。语义引导仅参与查询和键，聚合仅更新条件特征。注意力使用八个头与 0.1 dropout，最终在 72×72 上执行一次 256 通道单方向语义--细节融合（SDF），提示解码分块大小为 4。
 
 SAM 3 特征提取、提示编码、条件编码器、Pixel Decoder 与分割头冻结；聚合、score embedding 及 SDF 参数训练。主模型对 RemoteCLIP 图像和文本编码器执行 attention 微调。优化采用 AdamW，基础学习率为 \texttt{1e-4}，RemoteCLIP 参数组使用 0.01 倍率。批量为 4，总预算为 10000 步，其中前 500 步线性预热，后 9500 步按参数组比例余弦衰减，最低学习率为各组目标学习率的 0.01 倍，梯度裁剪阈值为 0.01。每 1000 步保存并完整验证。训练使用自动混合精度、随机裁剪或整图缩放、随机直角旋转、颜色增强与水平翻转，两个图像分支与标签共享空间变换。
 
 主分割二元交叉熵（BCE）先对每图每提示的有效像素平均，再分别平均存在与不存在提示，默认组权重为 0.8 与 0.2。Dice 权重为零。蒸馏采用冻结 SAM 3 教师的软概率，仅监督存在提示的有效标注像素，固定权重为 0.5；教师解码仅在训练需要蒸馏时执行，评测只运行学生路径。
 
-每个训练变体在同一预算内按 LoveDA 七类 mIoU 选择一份权重，并用于该次训练的全部数据集和全部表格，不按目标数据集分别选择最优 checkpoint。各变体使用相同随机种子集合；多种子结果报告均值与样本标准差，单种子结果只报告单次值。主模型在不同消融表中的结果共用同一次评测，不重复训练。验证直接缩放至 1008×1008，保持当前协议的非等比缩放，默认关闭测试时增强。同一数据集及评测协议内固定类别提示、标签映射和过滤阈值，不逐变体调参。先合并同义提示，再将低于预测阈值的类别概率置零，阈值边界保留；无背景数据集跳过该过滤。背景回填阈值独立设为 0.0。iSAID 的两个协议对每个方法及种子复用同一权重；BG 协议使用预先固定的背景预测规则，不以真实标签决定背景预测，也不通过删除背景 IoU 换算 IgnBG 分数。
+各训练变体按 LoveDA 七类 mIoU 选择一份权重，用于全部数据集与表格。各变体使用相同随机种子集合；多种子结果报告均值与样本标准差。验证图像统一缩放至 1008×1008，关闭测试时增强，同一数据集固定类别提示与后处理阈值。同义提示按语义类别逐像素取最大值合并；有背景的数据集执行低概率过滤。iSAID 两种评测复用同一方法及种子的权重。
 
 \subsection{与现有方法的比较}
 \input{tables/main_rskt8}
-表~\ref{tab:main_rskt8} 按是否使用遥感分割标注进行训练划分为 Training on remote sensing segmentation data 和 Training-free 两组。ReCA-SAM3 使用 DLRSD 适配，归入前组；两个原始 SAM 3 基线归入后组。Semantic-only 直接输出原始 SAM 3 语义概率；Semantic $\times$ Presence 执行原始语义与实例查询流程，将每个提示的语义概率乘一次对应的 presence 概率，再按语义类别合并同义提示，不融合实例掩码。两个基线使用同一原始 SAM 3 预训练权重。三个本地方法采用相同输入、类别提示、标签、背景和后处理设置，并通过表中来源标记与文献报告值区分。
+表~\ref{tab:main_rskt8} 按是否使用遥感分割标注训练分为 Training on remote sensing segmentation data 和 Training-free 两组。ReCA-SAM3 使用 DLRSD 适配，归入前组；两个原始 SAM 3 基线归入后组。Semantic-only 输出原始语义概率；Semantic $\times$ Presence 将每个提示的语义概率乘以对应的 presence 概率，不融合实例掩码。两个基线使用相同的原始 SAM 3 预训练权重。
 
-训练组优先选用 DLRSD 单源设置。SCAN、SAN、SED、CAT-Seg、OVRS、GSNet 和 RSKT-Seg 的大骨干成绩取自 RSKT-Seg Table 1 的 DLRSD 训练区域，其中前六者为该论文重新评测的结果~\cite{liExploringEfficientOpenVocabulary2026}。Pi-Seg 采用其 Table 1 的 DLRSD 单源 ViT-L 设置，不混入多源训练成绩~\cite{liPerturbationRegularizedOpenVocabularyRemote2026}。UGDMoE 使用出版方 HTML Table 2 的 DLRSD 训练结果~\cite{quUGDMoE2026}。GSNet 原论文使用 LandDiscover50K，而本表选用其 DLRSD 重训版本~\cite{yeOpenVocabularyRemoteSensing2025}；SkySense-O 采用 Sky-SA 标注适配，训练资源单独列明~\cite{zhuSkySenseOOpenWorldRemote2025a}。
-
-Training-free 组同时包含 CLIP 系列方法及 SAM 3 系列方法。SCLIP、ClearCLIP、ProxyCLIP 和 CorrCLIP 的遥感成绩取自 SegEarth-OV3 Table 1~\cite{liSegEarthOV3ExploringSAM2026}；SegEarth-OV 和 ConInfer 采用自身原文成绩~\cite{liSegEarthOVTrainingFreeOpenVocabulary2025,chen2026coninfercontextawareinferencetrainingfree}。SegEarth-OV3、ProC-SAM3 与 ROSE-SAM3 分别保留各自已核对版本的报告值~\cite{liSegEarthOV3ExploringSAM2026,songPromptCalibratedSAM32026,songROSESAM3ResponseOrientedPrompt2026}。ROSE-SAM3 使用无标签目标域图像离线选择提示，模型参数保持冻结。RSGPNet 以预测掩码生成几何提示，采用其自身 Table II 的四数据集结果~\cite{wangRSGPNetGeometricPrompting2026}。ActiveSAM 的遥感成绩来自 ProC-SAM3 的复现行~\cite{tienActiveSAMFastAccurate2026,songPromptCalibratedSAM32026}；GLoP-SAM3 的成绩来自 ROSE-SAM3 的转引行，方法引用与数值来源分别注明~\cite{liuGLoPSAM3DualPostprocessing2026,songROSESAM3ResponseOrientedPrompt2026}。
-
-文献成绩直接引用所列来源的报告值，不要求逐一复现外部模型，也不以当前公开代码替代历史论文设置。iSAID 主表分为十五类 IgnBG 与十六类 BG 两个子列；完整模型与两个原始 SAM 3 基线均报告双协议结果。无法明确归类的文献数值在表下注释中单独列出，两个协议单元格均留空，不据训练方式推断协议。UAVid 保留一列，七类与八类来源分别用上标 7 和 8 区分，未明确的来源单独标记；本文及本地基线统一采用七类。协议标记说明已知的来源设置，不表示已独立复现其历史运行。训练数据、划分及评测规则不一致的结果作为文献参考，不据其计算同条件提升幅度或跨协议排名，也不混算跨域平均。
+训练组优先采用 DLRSD 单源设置，其他训练数据在表中列明。文献成绩直接采用所引来源的报告值，转引及第三方复现的数据来源在表注中集中说明。
 
 \subsection{LoveDA 逐类分析}
 \input{tables/loveda_per_class}
-表~\ref{tab:loveda_per_class} 为两个原始 SAM 3 基线与完整模型分别记录 background、building、road、water、barren、forest、agricultural 的 IoU 和七类 mIoU。该表复用主对比中的 LoveDA 评测记录，用于分析各语义类别的变化。LoveDA 已用于模型选择，逐类结果属于开发域分析；目标域泛化依据其他独立目标数据集评测。
+表~\ref{tab:loveda_per_class} 比较两个原始 SAM 3 基线与完整模型在 LoveDA 上的逐类 IoU，用于分析不同语义类别的分割表现。
 
 \subsection{核心结构与监督消融}
 \input{tables/ablation_core}
-表~\ref{tab:ablation_core} 在 LoveDA、Potsdam 与 UAVid 上比较完整模型及六个单因素变体。所有变体采用相同 DLRSD 训练数据、训练预算和选择规则，并保留最终 SDF。表中同时记录可训练参数量，以区分结构收益与参数容量变化。
+表~\ref{tab:ablation_core} 在 LoveDA、Potsdam 与 UAVid 上比较完整模型及六个单因素变体，并记录可训练参数量。所有变体采用相同训练与模型选择设置。
 
-严格提示自交互对类间注意力执行对角屏蔽：每个展开提示只关注自身，即使两个提示属于同一语义类别也不能互相访问。该变体保留值投影、输出投影和残差路径；由于每个查询只对应一个允许的键，Softmax 阶段的权重恒为 1，用于隔离提示间信息交换。无 RemoteCLIP 引导变体从类内、类间查询和键中移除 score embedding，并移除不再使用的 RemoteCLIP 路径；SAM 3 条件特征与 FPN 引导继续保留。
+严格提示自交互使用对角屏蔽，使每个展开提示仅关注自身，同类别的同义提示之间也不交换信息。无 RemoteCLIP 引导变体从类间、类内注意力的查询和键中移除 score embedding，保留 SAM 3 特征与 FPN 引导。无类内注意力变体只保留类间更新。
 
-无类内注意力变体在每块中跳过全部空间注意力，仅保留类间更新。单尺度变体只在 36×36 特征上执行一次 12×12 普通窗口注意力，移除其余两尺度和尺度融合，输出直接残差。独立权重变体仍保留三个尺度、窗口划分和 Softmax 融合，只将每块共享的一套窗口参数改为三套分别学习；类间注意力不变。无蒸馏变体将蒸馏权重置零并跳过教师解码，其余监督保持不变。
+单尺度变体仅在 36×36 特征上执行 12×12 普通窗口注意力。独立权重变体保留三个尺度与尺度融合，改为分别学习三套窗口注意力参数。无蒸馏变体移除蒸馏损失，其余监督保持不变。
 
 \subsection{RemoteCLIP 图文编码器适配}
 \input{tables/ablation_freeze}
-表~\ref{tab:ablation_freeze} 比较图像与文本编码器的四种组合：两端冻结、仅图像端微调、仅文本端微调以及两端共同微调。微调统一指当前主模型采用的 attention 参数子集，不扩展为整个编码器的全参数训练。四组中聚合、score embedding 和 SDF 始终参与训练，SAM 3 始终冻结。两端共同微调行即完整模型，复用其权重与成绩。核心消融与该四组合合计十个独立训练变体。
+表~\ref{tab:ablation_freeze} 比较 RemoteCLIP 图像与文本编码器的四种组合：两端冻结、仅图像端微调、仅文本端微调及两端共同微调。微调仅更新编码器中的 attention 参数。两端共同微调对应完整模型；与核心消融合计十个独立训练变体。
 
 \subsection{计算开销与定性分析}
 \input{tables/efficiency}
-表~\ref{tab:efficiency} 比较两个原始 SAM 3 基线、完整模型、单尺度变体和三尺度独立权重变体的总参数量、可训练参数量、端到端推理时间及峰值显存。测量统一硬件、精度、输入尺寸、批量、展开提示数量、预热、同步与缓存策略。Semantic $\times$ Presence 计入原始语义与实例查询路径；ReCA-SAM3 计入 SAM 3 条件特征提取、RemoteCLIP 引导、聚合、SDF、学生解码与后处理，不包含训练教师解码。
+表~\ref{tab:efficiency} 比较两个原始 SAM 3 基线、完整模型、单尺度变体和独立权重变体的参数量、端到端推理时间及峰值显存。各方法在相同硬件、精度、输入尺寸与提示集合下测量完整推理流程，不包含训练教师分支。
 
 定性分析对两个原始基线与完整模型使用相同样本、GT、类别色表及局部放大区域，关注相似类别混淆、密集小目标和大面积目标内部完整性，同时保留失败案例。预测示例与对应定量结果使用同一权重和后处理规则。
-\FloatBarrier

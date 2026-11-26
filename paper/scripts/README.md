@@ -28,4 +28,6 @@ python paper/scripts/build_experiment_tables.py --draft
 
 ## 排版约束
 
+方法原文引用保留在行名后，实际转引来源在主表短注中分组引用；不生成来源字母、UAVid 协议上标或未解决标签标记。其余表注仅保留必要定义和单位，避免重复实验设置。核心消融和图文微调使用单栏 table，主对比与逐类表保留跨栏 table*。
+
 主表每个数据行固定十一格，iSAID 必须有两个独立格。协议未知时两格为 --，由生成器将原报告值按方法名在表下注释仅列一次；数据行不能使用跨列居中。调整后重新生成并目检 PDF；详见[比较规则](../notes/comparison_policy.md)。已完成事项不在本文件累积，实际待办见[当前状态](../notes/manuscript_status.md)。

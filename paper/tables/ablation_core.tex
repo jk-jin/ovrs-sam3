@@ -1,5 +1,5 @@
 % Generated from paper/data; do not hand-edit numeric cells.
-\begin{table*}[!tbp]
+\begin{table}[!htbp]
 \centering
 \caption{Ablation of prompt interaction, spatial aggregation, and supervision (mIoU, \%).}
 \label{tab:ablation_core}
@@ -20,6 +20,6 @@ Without distillation & -- & -- & -- & --\\
 \end{tabularx}
 \par\vspace{3pt}
 \begin{minipage}{\linewidth}
-\footnotesize Each row changes one design factor relative to Full. Strict self-interaction uses a diagonal mask over expanded prompts, including aliases. Single scale uses only a 36-by-36 grid with 12-by-12 windows. Unshared windows keep all three scales and Softmax fusion but use separate parameters. All rows use DLRSD adaptation and fixed model-selection and inference rules. LoveDA is the development domain. -- denotes unavailable measurements.
+\footnotesize Each row changes one factor relative to Full. Strict self-interaction allows each prompt to attend only to itself. M: million parameters. --: not reported.
 \end{minipage}
-\end{table*}
+\end{table}

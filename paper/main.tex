@@ -6,7 +6,8 @@
 \setCJKsansfont{Noto Sans CJK SC}
 \setCJKmonofont{Noto Sans Mono CJK SC}
 \usepackage{amsmath,amssymb,booktabs,array,graphicx,tabularx}
-\usepackage{placeins,xurl,stfloats}
+\usepackage{xurl,stfloats}
+\usepackage[checkfloat]{flushend}
 \usepackage[hidelinks,unicode,breaklinks=true]{hyperref}
 \urlstyle{same}
 \renewcommand{\abstractname}{摘要}
@@ -24,7 +25,7 @@
 \title{ReCA-SAM3: RemoteCLIP-Guided Cross-Class Feature Aggregation for Open-Vocabulary Remote Sensing Semantic Segmentation}
 \author{}
 \begin{document}
-\raggedbottom
+\flushbottom
 \maketitle
 \input{sections/abstract}
 \begin{IEEEkeywords}
@@ -35,8 +36,6 @@
 \input{sections/method}
 \input{sections/experiments}
 \input{sections/conclusion}
-% Keep pending figures/tables outside the reference list.
-\FloatBarrier
 \bibliographystyle{IEEEtran}
 \bibliography{references,references_extra}
 \end{document}

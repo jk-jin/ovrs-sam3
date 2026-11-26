@@ -43,6 +43,6 @@ DLRSD 官方 5601 张训练图像用于适配，1401 张验证图像用于源域
 
 ## 比较与双协议结果选择
 
-文献引用、iSAID 两列、UAVid 七／八类与未知来源展示统一遵循[comparison_policy.md](comparison_policy.md)，不在此重复维护。主表本地结果的 iSAID 选择键为 iSAID-15-IgnBG 与 iSAID-16-BG；标准结果仍为 eval_dataset=isaid，以不同 eval_protocol_id 区分，复用同一种子／权重。
+文献引用、iSAID 两列与紧凑表注的展示统一遵循[comparison_policy.md](comparison_policy.md)，不在此重复维护。主表本地结果的 iSAID 选择键为 iSAID-15-IgnBG 与 iSAID-16-BG；标准结果仍为 eval_dataset=isaid，以不同 eval_protocol_id 区分，复用同一种子／权重。
 
 含背景验证入口已实现：configs/test/isaid_16_bg.py，背景参与前向，prediction_prob_threshold=0.5，background_prob_threshold=0.0；15类入口为isaid_15_ignbg.py，背景忽略。两种协议读取相同原始标签，采用各自固定映射。实际工程与实验任务只维护于[manuscript_status.md](manuscript_status.md)。

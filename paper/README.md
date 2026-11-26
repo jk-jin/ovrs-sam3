@@ -1,6 +1,6 @@
 # ReCA-SAM3 论文工作区
 
-正文暂用中文，图表、表题和表注用英文。表格源数据由 data/table_spec.json 与 scripts/build_experiment_tables.py 管理；本地未测量的成绩与开销为 --。
+正文暂用中文，图表、表题和表注用英文。图注只解释核心机制，表注集中说明数据来源及必要标记；外部评测细节不在论文中展开。表格源数据由 data/table_spec.json 与 scripts/build_experiment_tables.py 管理；本地未测量的成绩与开销为 --。
 
 ## 阅读入口
 
@@ -19,8 +19,8 @@
 | --- | --- |
 | tables/main_rskt8.tex | 22 个文献方法和 3 个本地方法，按遥感标注训练／Training-free 分组；iSAID 两个独立协议格，UAVid 一列 |
 | tables/loveda_per_class.tex | 本地三方法的 LoveDA 七类 IoU 与 mIoU |
-| tables/ablation_core.tex | Full 与六个单因素变体 |
-| tables/ablation_freeze.tex | RemoteCLIP 图像／文本微调四组合；共同微调复用 Full |
+| tables/ablation_core.tex | 单栏；Full 与六个单因素变体 |
+| tables/ablation_freeze.tex | 单栏；RemoteCLIP 图像／文本微调四组合；共同微调复用 Full |
 | tables/efficiency.tex | 两个原始基线、Full、单尺度及独立权重的参数与推理开销 |
 
 ```bash
@@ -30,7 +30,7 @@ cd paper
 latexmk -xelatex -halt-on-error -file-line-error -outdir=build main.tex
 ```
 
-正式成绩填写实际标准结果 generated/data/results_long.csv 与选择器，再生成表格。主模型跨表、跨域复用同一权重；iSAID 两种协议分别登记真实 eval_id 和 eval_protocol_id。协议未知的文献 iSAID 原值只在表注保留一次，不能跨两列居中或硬归类。禁止只手改生成 TeX 而不更新数据与生成器。
+正式成绩填写实际标准结果 generated/data/results_long.csv 与选择器，再生成表格。主模型跨表、跨域复用同一权重；iSAID 两种协议分别登记真实 eval_id 和 eval_protocol_id。协议未知的文献 iSAID 原值只在表注保留一次，不能跨两列居中或硬归类。禁止只手改生成 TeX 而不更新数据与生成器。Table 3、4 使用单栏；正文不设置章节浮动屏障，栏底对齐与末页平衡由 LaTeX 自动处理。
 
 ## 数据与核验索引
 

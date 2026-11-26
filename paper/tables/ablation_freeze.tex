@@ -1,5 +1,5 @@
 % Generated from paper/data; do not hand-edit numeric cells.
-\begin{table*}[!tbp]
+\begin{table}[!htbp]
 \centering
 \caption{Effect of RemoteCLIP encoder adaptation (mIoU, \%).}
 \label{tab:ablation_freeze}
@@ -17,6 +17,6 @@ Attention & Frozen & -- & -- & -- & --\\
 \end{tabularx}
 \par\vspace{3pt}
 \begin{minipage}{\linewidth}
-\footnotesize Attention tuning updates the same attention-related parameter subset as Full; it is not full-encoder fine-tuning. Aggregation and SDF remain trainable. The jointly tuned row reuses the Full checkpoint and scores. LoveDA is the development domain. -- denotes unavailable results.
+\footnotesize Attention: attention-parameter tuning; Frozen: no encoder updates. M: million parameters. --: not reported.
 \end{minipage}
-\end{table*}
+\end{table}

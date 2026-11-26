@@ -5,26 +5,27 @@
 | 内容 | 核验依据与边界 |
 | --- | --- |
 | 主表文献值 | data/literature_results.csv 与 data/comparison_audit_20261124.json；引用来源，不代表本地复现 |
-| 双协议 iSAID、单列 UAVid | 用户确认方案与 comparison_policy.md；未知 iSAID 值留在独立表注，数据行不跨列 |
+| 双协议 iSAID、单列 UAVid | 用户确认方案与 comparison_policy.md；未知 iSAID 值保留一条紧凑参考注，数据行不跨列；不再展示 UAVid 协议上标或标签对齐标记 |
 | 本地权重与结果复用 | 生成器检查种子、checkpoint、协议及多表 Full 选择；实际未运行结果保持 -- |
 | 当前模型与配置 | notes/experiment_config_snapshot.json、notes/source_snapshot.json；当前默认值不称实测最优值 |
 | 聚合正文与公式 | models/aggregation_attention.py 与 models/feature_aggregation.py：两个完整块、语义仅引导 Q/K、条件特征提供 V、块内共享三尺度普通窗口与三个标量 Softmax 融合 |
 | SDF 与推理正文 | models/semantic_detail_fusion.py、models/adapters/semantic_adapter.py 与 engine/evaluator.py：单方向双支路、全配置类别前向、直接类别索引和数据集独立阈值 |
 | 当前结构图 | figures/src/、figure_manifest.json 与对应 PDF：两个完整块、共享三尺度普通窗口、仅条件特征接受残差；组合图接入方法，定性占位不接入正文 |
 | 动机图与引言 | motivation.drawio/PDF 的四个适配位置子图；ROSE 原文 https://arxiv.org/html/2611.28112v1（III-A 至 III-D，含竞争类别保护），ProC 官方说明 https://github.com/YanghuiSong/ProC-SAM3；区分提示构建与响应选择两种离线策略，保留参数冻结／监督适配差异，不声称已有方法没有类别关系 |
-| 聚合图机制与视觉 | aggregation.drawio/PDF 为无字母子图的连续单块图；对照 models/remoteclip_guidance.py 保留 64 独立模板向量、相似度图、稠密图像融合与早期分数短接；对照 aggregation_attention.py 区分 Q/K 指导与特征值，FPN 仅到类内 Q/K。引导每次前向生成一次并在块间复用，梯度保留；两个残差只更新特征，尺度融合与卷积归一化的简写在图注说明 |
+| 聚合图机制与视觉 | aggregation.drawio/PDF 为无字母子图的连续单块图；对照 models/remoteclip_guidance.py 保留 64 独立模板向量、相似度图、稠密图像融合与早期分数短接；对照 aggregation_attention.py 区分 Q/K 指导与特征值，FPN 仅到类内 Q/K。引导每次前向生成一次并在块间复用，梯度保留；两个残差只更新特征，图注精简为引导生成、Q/K 与 V 的分工及残差更新，归一化等细节留在方法正文 |
 | 聚合图连接器层级 | Figure 3 的真实流程边独立置于顶层 Foreground connectors，底板／节点／文字属于 Artwork；装饰线保留原组。核对源文件父子关系与连接绑定，逐条对照导出 PDF 的箭头端点、跨框路径和交叉处，几何位置与节点文字保持原样 |
 | overview 视觉设计 | 用户确认的白底三板块预览：原生梯形编码器、图标、特征叠片与五处占位；灰色训练栏；内部卡片与输出占位留有边距，类间特征沿深度分层，Block 2 顶部、右侧及底部轮廓独立可见。图像／文本输入、Q/K 引导、V 来源与代码核对，同名跨板块端口复用相同张量 |
 | 统一绘图规范 | figures/STYLE_GUIDE.md 集中规定视觉风格与验收；以 7d43658 的 overview 为参考，paper/AGENTS.md 与两级 README 提供入口。动机图、overview 与聚合图已迁移；定性模板仍保留原图稿 |
+| 精简说明与单栏表 | 四张图注、五张表注和实验正文同步精简；主表转引来源引用保留，已有数值逐格比对一致。Table 3／4 使用单栏，论文第 8 页左右并排；移除 FloatBarrier、使用 flushbottom 对齐栏底及 flushend 平衡末页，重新编译与逐页查看 9 页 PDF，15 项生成器检查通过 |
 | Zotero | 两个 bib 数据库不随表格清理改写；正文引用决定参考文献，集合操作见 zotero_sync.md |
 
 ## 验收标准
 
 - 事实：区分已有实现、确定的实验设计与实际测量，不编造本地成绩或宣称引用模型已复现。
-- 可比性：训练资源和来源单列；不混算不同类别协议、划分及后处理的提升幅度或平均值。
+- 来源：训练资源列与原论文引用保留，转引和第三方复现只在短表注集中注明实际取数来源；不重复展开外部评测差异。
 - 数值：所选原报告值保持不变；未知 iSAID 分数在表注按方法名只出现一次，全部数据行有两个独立协议格。
 - 文档：comparison_policy.md 保存长期规则，evaluation_protocol.md 保存本地实验协议，manuscript_status.md 只保留真正未完成事项；删除已被取代的日期式问题清单与重复手抄主表。
-- 排版：重新生成、编译并目检主表；检查 iSAID 两列位置、后续列对齐、表注和未定义引用。最终结果记录于 source_snapshot.json。
+- 排版：重新生成并编译；目检主表 iSAID 对齐、Table 3／4 单栏、图注和浮动体衔接。取消节前后强制清空浮动体，减少提前换栏换页；实际结果记录于 source_snapshot.json。
 
 ## 正文更新自审
 
@@ -32,6 +33,7 @@
 - 逻辑：动机图从匹配、响应、提示适配递进到条件特征更新；承认 ROSE 已考虑类别证据。方法从模板分数生成引导，到类间特征更新、多尺度空间增量融合，再到 SDF 与冻结解码器，保持一条条件特征更新路径。
 - 数学：解释新增块索引、尺度集合、插值算子、窗口增量与融合标量；保留普通窗口相对位置偏置，删除移位屏蔽及背景索引恢复。
 - 表达：方法的机制、流程与段落标题采用中文，公式及符号说明保留英文；22 个编号公式保持原样，不保留双状态更新及独立类内／类间块的旧表述。
-- 完整性：独立 SDF 图及其导出项已删除，模型融合模块与正文公式保留；动机、总体框架和单块引导详图均已重绘并接入正文，原生 draw.io 与矢量 PDF 同步。定性模板列名已对齐两个实际基线，待真实结果替换占位后再接入正文。实验表格与文献数值保持原样，不将整篇论文视作投稿定稿。
+- 本轮文字：四张图注与五张表注按核心信息精简，比较正文仅保留分组、基线与来源原则；方法、公式、文献原值及图稿保持不变。生成器与维护规则同步更新。
+- 完整性：独立 SDF 图及其导出项已删除，模型融合模块与正文公式保留；动机、总体框架和单块引导详图均已重绘并接入正文，原生 draw.io 与矢量 PDF 同步。定性模板列名已对齐两个实际基线，待真实结果替换占位后再接入正文。实验集合与文献数值保持不变，不将整篇论文视作投稿定稿。
 
 架构图和实际实验的剩余工作只在 manuscript_status.md 维护。

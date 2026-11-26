@@ -169,7 +169,7 @@ def resolve(row,dataset,lit,native,spec,missing):
             if row.get('panel')!='reference':
                 raise DataError(f'{rid}: approved reported values belong in the reference panel only')
             display,value=scalar_literature(r)
-            return (display+r'$^{\dagger}$' if value is not None else '--'),value,False
+            return display,value,False
         if r['protocol_status'] in {'unresolved','incompatible'}:
             missing.append({'row':row['row_id'],'dataset':dataset,'reason':r['protocol_status'],'result_id':rid})
             return '--',None,False
@@ -222,7 +222,7 @@ def measurement(selection, native, row_id, field, missing):
 def table(caption,label,columns,rows,align,wide=False,note=''):
     env='table*' if wide else 'table'
     align=align.replace('p{','L{')
-    content=[f'\\begin{{{env}}}'+('[!tbp]' if wide else '[!htbp]'),r'\centering',f'\\caption{{{caption}}}',f'\\label{{{label}}}',r'\footnotesize' if wide else r'\small',r'\setlength{\tabcolsep}{2pt}',f'\\begin{{tabularx}}{{\\linewidth}}{{{align}}}',r'\toprule',' & '.join(columns)+r'\\',r'\midrule']
+    content=[f'\\begin{{{env}}}'+('[!tbp]' if wide else '[!htbp]'),r'\centering',f'\\caption{{{caption}}}',f'\\label{{{label}}}',r'\footnotesize',r'\setlength{\tabcolsep}{2pt}',f'\\begin{{tabularx}}{{\\linewidth}}{{{align}}}',r'\toprule',' & '.join(columns)+r'\\',r'\midrule']
     for row in rows:
         if isinstance(row,str):content.append(row)
         else:content.append(' & '.join(row)+r'\\')
@@ -286,11 +286,6 @@ def comparison_cells(row, lit, native, spec, missing):
                 raise DataError(f'Unknown iSAID display protocol: {protocol}')
             continue
         value = resolve(row, dataset, lit, native, spec, missing)[0]
-        if dataset == 'UAVid' and row['panel'] == 'reference' and value != '--':
-            protocol = protocols.get(dataset, 'unspecified')
-            if protocol not in (7, 8, 'unspecified'):
-                raise DataError(f'Unknown UAVid display protocol: {protocol}')
-            value += r'$^{' + ('u' if protocol == 'unspecified' else str(protocol)) + '}$'
         cells.append(value)
     return cells
 
@@ -322,8 +317,6 @@ def build(args):
     for dataset in spec['datasets']:
         if dataset == 'iSAID':
             headers.extend([r'\shortstack{iSAID\\15 cls.\\IgnBG}', r'\shortstack{iSAID\\16 cls.\\BG}'])
-        elif dataset in spec['dataset_roles']:
-            headers.append(r'\shortstack{' + dataset + r'\\' + latex(spec['dataset_roles'][dataset]) + '}')
         else:
             headers.append(dataset)
     column_count = len(headers) + 2
@@ -340,7 +333,6 @@ def build(args):
             name = latex(row['label']).replace('×', r'$\times$')
             if row.get('citekey'):
                 name += r'~\cite{' + row['citekey'] + '}'
-            name += r'$^{' + row['resource'] + '}$'
             body.append([name, latex(row['adaptation_data'])] + cells)
         references = isaid_reference_note(spec[layout['rows']], lit, native, spec)
         note = layout['note'] + (r'\par ' + references if references else '')
@@ -363,9 +355,7 @@ def build(args):
         r'Per-class IoU and mIoU on LoveDA (\%).', 'tab:loveda_per_class',
         ['Method','Background','Building','Road','Water','Barren','Forest','Agricultural','mIoU'],
         body,r'@{}L{0.25\linewidth}*{8}{C}@{}',True,
-        'All seven classes, including background, contribute to mIoU. '
-        'Each row reuses its LoveDA evaluation and checkpoint from the main comparison. '
-        'LoveDA is the development domain. -- denotes unavailable results.')
+        '--: not reported.')
 
     for key, filename, label, caption in [
         ('ablation_rows','ablation_core.tex','tab:ablation_core',
@@ -391,18 +381,13 @@ def build(args):
         if key == 'ablation_rows':
             columns = ['Variant'] + spec['ablation_datasets'] + [r'\shortstack{Trainable\\(M)}']
             align = r'@{}L{0.43\linewidth}*{4}{C}@{}'
-            note = ('Each row changes one design factor relative to Full. Strict self-interaction uses a diagonal '
-                    'mask over expanded prompts, including aliases. Single scale uses only a 36-by-36 grid '
-                    'with 12-by-12 windows. Unshared windows keep all three scales and Softmax fusion but use '
-                    'separate parameters. All rows use DLRSD adaptation and fixed model-selection and inference rules. '
-                    'LoveDA is the development domain. -- denotes unavailable measurements.')
+            note = ('Each row changes one factor relative to Full. Strict self-interaction allows each prompt to attend only to itself. '
+                    'M: million parameters. --: not reported.')
         else:
             columns = [r'\shortstack{Text\\encoder}',r'\shortstack{Image\\encoder}'] + spec['ablation_datasets'] + [r'\shortstack{Trainable\\(M)}']
             align = r'@{}L{0.17\linewidth}L{0.17\linewidth}*{4}{C}@{}'
-            note = ('Attention tuning updates the same attention-related parameter subset as Full; it is not full-encoder fine-tuning. '
-                    'Aggregation and SDF remain trainable. The jointly tuned row reuses the Full checkpoint and scores. '
-                    'LoveDA is the development domain. -- denotes unavailable results.')
-        outputs[filename] = table(caption,label,columns,body,align,True,note)
+            note = 'Attention: attention-parameter tuning; Frozen: no encoder updates. M: million parameters. --: not reported.'
+        outputs[filename] = table(caption,label,columns,body,align,False,note)
 
     body = []
     for row in spec['efficiency_rows']:
@@ -416,9 +401,7 @@ def build(args):
         ['Method',r'\shortstack{Total\\(M)}',r'\shortstack{Trainable\\(M)}',
          r'\shortstack{Latency\\(ms)}',r'\shortstack{Peak\\memory\\(GB)}'],body,
         r'@{}L{0.36\linewidth}*{4}{C}@{}',False,
-        'Measurements share hardware, precision, input size, batch size, prompt count, warm-up, synchronization, and cache policy. '
-        'Semantic × Presence includes both complete semantic and instance paths; ReCA-SAM3 uses student decoding only. '
-        'Parameter counts are in millions. -- denotes unavailable measurements.')
+        'M: million parameters. --: not reported.')
     report = dict(draft=args.draft,literature_records=len(lit),native_records=len(native),
                   missing_cells=missing,protocol_locked=spec['protocol_locked'],
                   generated_tables=list(outputs),

@@ -18,7 +18,7 @@ class RendererBoundaries(unittest.TestCase):
         approved={'approved_reported_result_ids':['reported']}
         display,value,matched=resolve(approved)
         self.assertEqual(value,25.11)
-        self.assertIn('dagger',display)
+        self.assertEqual(display,'25.11')
         self.assertFalse(matched)
         row['panel']='native'
         with self.assertRaises(m.DataError):resolve(approved)
@@ -105,7 +105,7 @@ class RendererBoundaries(unittest.TestCase):
             self.assertIn('GSNet',main)
             self.assertIn('Training on remote sensing segmentation data',main)
             self.assertIn('Training-free',main)
-            self.assertIn('GLoP-SAM3 (ROSE report)',main)
+            self.assertIn('GLoP-SAM3 is quoted from ROSE-SAM3',main)
             self.assertNotIn('GFMR',main)
             self.assertNotIn('VLex',main)
             self.assertNotIn('ConceptSeg',main)
@@ -113,7 +113,7 @@ class RendererBoundaries(unittest.TestCase):
             self.assertIn(r'iSAID\\15 cls.\\IgnBG',main)
             self.assertIn(r'iSAID\\16 cls.\\BG',main)
             self.assertIn(r'\multicolumn{11}',main)
-            self.assertIn('same checkpoint per method/seed',main)
+            self.assertNotIn(r'$^{',main)
             core=(args.output/'ablation_core.tex').read_text()
             self.assertIn('Unshared multiscale windows',core)
             self.assertIn('Strict prompt self-interaction',core)
@@ -141,18 +141,18 @@ class RendererBoundaries(unittest.TestCase):
         row=next(r for r in config['main_rows'] if r['row_id']=='rskt_seg_dlrsd_large')
         cells=m.comparison_cells(row,records,{},config,[])
         self.assertEqual(cells[1:3],['54.32','--'])
-        self.assertIn(r'$^{8}$',cells[6])
+        self.assertEqual(cells[6],'25.72')
         row=dict(row,reported_protocols={'iSAID':'16-BG','UAVid':7})
         cells=m.comparison_cells(row,records,{},config,[])
         self.assertEqual(cells[1:3],['--','54.32'])
-        self.assertIn(r'$^{7}$',cells[6])
+        self.assertEqual(cells[6],'25.72')
         row['reported_protocols']={}
         cells=m.comparison_cells(row,records,{},config,[])
         self.assertEqual(cells[1:3],['--','--'])
         note=m.isaid_reference_note([row],records,{},config)
         self.assertIn('RSKT-Seg: 54.32',note)
         self.assertEqual((' & '.join(cells)+note).count('54.32'),1)
-        self.assertIn(r'$^{u}$',cells[6])
+        self.assertEqual(cells[6],'25.72')
         row['reported_protocols']={'iSAID':'guessed'}
         with self.assertRaises(m.DataError):m.comparison_cells(row,records,{},config,[])
         full=next(r for r in config['main_rows'] if r['row_id']=='full')
@@ -171,7 +171,7 @@ class RendererBoundaries(unittest.TestCase):
             self.assertNotIn(r'\multicolumn',' & '.join(cells),row['row_id'])
         note=m.isaid_reference_note(config['main_rows'],records,{},config)
         for name,value in [('Pi-Seg','53.50'),('UGDMoE','54.38'),('SkySense-O','43.92'),
-                           ('ConInfer','20.08'),('GLoP-SAM3 (ROSE report)','28.00')]:
+                           ('ConInfer','20.08'),('GLoP-SAM3','28.00')]:
             self.assertEqual(note.count(f'{name}: {value}'),1)
         main=(paper/'tables/main_rskt8.tex').read_text()
         rows=[line for line in main.splitlines() if ' & ' in line and not line.startswith('Method &')]
@@ -232,7 +232,7 @@ class RendererBoundaries(unittest.TestCase):
                     self.assertEqual(r['report_type'],'requoted_by_source')
                     self.assertEqual(r['source_citekey'],'songROSESAM3ResponseOrientedPrompt2026')
                 if row['method_id']=='active':self.assertEqual(r['report_type'],'reproduced_by_source')
-                if row['resource']=='R':self.assertEqual(r['training_data'],'DLRSD')
+                if row.get('source_citekey')=='liExploringEfficientOpenVocabulary2026':self.assertEqual(r['training_data'],'DLRSD')
 
     def test_abstract_evidence_cannot_be_presented_as_an_inspected_pdf(self):
         paper=Path(__file__).resolve().parents[1]
