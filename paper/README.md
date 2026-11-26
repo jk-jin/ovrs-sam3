@@ -42,4 +42,4 @@ latexmk -xelatex -halt-on-error -file-line-error -outdir=build main.tex
 - notes/experiment_config_snapshot.json：有效配置快照；notes/source_snapshot.json：源码、论文哈希及最新验证结果。
 - references.bib 保持 Zotero 自动导出；references_extra.bib 保存人工补充。未引用条目不会进入参考文献。
 
-消融与iSAID双协议入口已实现，运行方式见 ../docs/experiment_suites.md。正文、公式和图注已对齐当前两个完整聚合块、固定语义 Q/K 引导、共享三尺度普通窗口及单方向 SDF。方法的非公式说明暂用中文；公式与符号说明保持英文。overview 是已确认的白底三板块、浅色内部功能组与灰色蒸馏栏视觉基准，五处图像／响应保留占位。动机和聚合／多尺度图维持已有图稿；独立 SDF 图已删除。后续新增或重绘统一遵循 [绘图规范](figures/STYLE_GUIDE.md)，文件索引与当前图示定义见 [figures/README.md](figures/README.md)。定性模板待真实结果替换占位后再接入正文；剩余工作见 notes/manuscript_status.md，哈希及检查见 notes/source_snapshot.json。
+消融与iSAID双协议入口已实现，运行方式见 ../docs/experiment_suites.md。正文、公式和图注已对齐当前两个完整聚合块、固定语义 Q/K 引导、共享三尺度普通窗口及单方向 SDF。方法的非公式说明暂用中文；公式与符号说明保持英文。overview 是已确认的白底三板块、浅色内部功能组与灰色蒸馏栏视觉基准，五处图像／响应保留占位。动机图已按同一风格更新为代价聚合、响应融合、提示／响应适配及本文特征聚合四子图，纳入 ProC-SAM3 与 ROSE-SAM3；聚合／多尺度图保留现有图稿；独立 SDF 图已删除。后续新增或重绘统一遵循 [绘图规范](figures/STYLE_GUIDE.md)，文件索引与当前图示定义见 [figures/README.md](figures/README.md)。定性模板待真实结果替换占位后再接入正文；剩余工作见 notes/manuscript_status.md，哈希及检查见 notes/source_snapshot.json。

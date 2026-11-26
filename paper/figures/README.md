@@ -2,20 +2,21 @@
 
 四份原生 draw.io 图稿与同名矢量 PDF 已对齐当前模型。图内文字和图注使用英文；没有独立 SDF 图，总体框架仅保留 SDF 模块。源图由可编辑形状、文字、图标和连接器组成。
 
-后续新绘图和重绘统一遵循 **[论文绘图规范](STYLE_GUIDE.md)**。该文件集中维护布局、色值、字体、留白、特征叠片、Block 层次、图像使用和验收要求；本页维护文件入口与当前模型的图示定义。视觉参考为已修正间距的 overview，其余旧图在后续重绘时迁移，不因本次文档更新自动修改。
+后续新绘图和重绘统一遵循 **[论文绘图规范](STYLE_GUIDE.md)**。该文件集中维护布局、色值、字体、留白、特征叠片、Block 层次、图像使用和验收要求；本页维护文件入口与当前模型的图示定义。视觉参考为已修正间距的 overview；motivation 已按同一风格重绘为四子图，聚合图与定性模板保留现有图稿。
 
 ## 文件与正文接入
 
 | 图 | 可编辑源文件 | 论文图片 | 正文状态 |
 | --- | --- | --- | --- |
-| 动机 | [motivation.drawio](src/motivation.drawio) | [motivation.pdf](motivation.pdf) | 引言中 Fig. 1，三种信息流对比 |
+| 动机 | [motivation.drawio](src/motivation.drawio) | [motivation.pdf](motivation.pdf) | 引言中 Fig. 1，2×2 四种适配位置对比 |
 | 总体框架 | [overview.drawio](src/overview.drawio) | [overview.pdf](overview.pdf) | 方法中 Fig. 2，三板块、特征叠片与灰色训练参考栏 |
 | 聚合／多尺度窗口 | [aggregation.drawio](src/aggregation.drawio) | [aggregation.pdf](aggregation.pdf) | 方法中 Fig. 3，(a) 单块更新，(b) 共享三尺度窗口 |
 | 定性对比模板 | [qualitative_comparison.drawio](src/qualitative_comparison.drawio) | [qualitative_comparison.pdf](qualitative_comparison.pdf) | 未接入正文，等待真实样本和预测替换占位 |
 
 ## 当前图示定义
 
-- 动机图区分匹配表征上的代价聚合、解码后的逐类掩码融合，以及本文解码前的跨提示特征聚合；不使用假想预测展示性能收益。
+- 动机图采用 2×2 白底子图：(a) CAT-Seg／RSKT-Seg 的匹配代价聚合；(b) SegEarth-OV3 的解码响应融合；(c) ProC-SAM3／ROSE-SAM3 的提示与响应适配；(d) ReCA-SAM3 的解码前条件特征聚合。(c) 中两条离线路径是替代策略，ROSE 依据无标签图像冻结响应选提示，不能画成二者串联。
+- 动机图用响应图片槽与蓝色条件特征叠片区分更新对象，保留八处明确图片槽；无标签校准数据仅用图标示意，不伪造实际响应。冻结模块用雪花，(b)/(c) 的免训练与 (d) 的监督适配明确区分；SDF 的跳连及空间细节在图注说明省略。各子图按主要适配位置归类，不表示范式互斥，也不声称已有方法未考虑类别证据。
 - 总体图分为类别条件特征生成、RemoteCLIP 引导聚合、融合与分割三个板块。主推理流程与训练蒸馏栏分开，视觉表达按 STYLE_GUIDE.md 执行。
 - Block 1 与 Block 2 均含类间注意力和多尺度窗口注意力，不同完整块独立参数化，块后执行最终 LayerNorm。类间示意展示同一位置在示例提示间的联系；类内示意展示三个普通窗口尺度及共享参数。语义引导在两个块中复用，仅表示 Q/K 引导，绿色 FPN 引导只用于窗口 Q/K，条件特征提供 V 并接受残差。
 - 原始条件特征与 FPN72 接 SDF，高分辨率 FPN 接冻结解码器。同名 ``to (b)/(c)'' 与 ``from (a)'' 端口表示相同 SAM 3 张量的复用，用于避免额外的跨图长线，不表示新增模型支路。输入图像只接图像编码路径，文本提示接 SAM 3 提示条件路径与 RemoteCLIP 文本编码器。

@@ -3,17 +3,46 @@
   "figures": [
     {
       "name": "motivation",
-      "width": 1440,
-      "height": 310,
-      "native_cells": 43,
+      "width": 2000,
+      "height": 1100,
+      "native_cells": 581,
       "editable": true,
       "source": "src/motivation.drawio",
       "pdf": "motivation.pdf",
-      "source_sha256": "7c7547d3899de942b0a12b02da994d685abe7a7d46ec73db7865bc80190e4783",
-      "pdf_sha256": "96a8946c24783b6711c8737e346caeb317d9143f06e07340f496e6ab0c791c9b",
+      "source_sha256": "e03557a456017358d2d766cb0a57f3873484c75db0eebd7d9290cfe3c50c99da",
+      "pdf_sha256": "06b5a6b4a975aac4f82f0e9aa1366940375c2d53b10786166694ed1742f97a20",
       "outer_frame": false,
       "in_figure_title": false,
-      "placeholders": 0
+      "placeholders": 8,
+      "font": "Liberation Sans",
+      "stage_frames": true,
+      "layout": "2 x 2 white panels: cost aggregation, response fusion, prompt/response adaptation and guided conditional features",
+      "placeholder_roles": [
+        "cost input",
+        "fusion input",
+        "semantic response",
+        "instance response",
+        "prompt inference input",
+        "prompt response",
+        "feature input",
+        "feature output"
+      ],
+      "representative_methods": {
+        "a": [
+          "CAT-Seg",
+          "RSKT-Seg"
+        ],
+        "b": [
+          "SegEarth-OV3"
+        ],
+        "c": [
+          "ProC-SAM3",
+          "ROSE-SAM3"
+        ],
+        "d": [
+          "ReCA-SAM3"
+        ]
+      }
     },
     {
       "name": "overview",
@@ -87,7 +116,7 @@
       "placeholders": 15
     }
   ],
-  "notes": "Overview follows the approved three-stage white/pastel design with editable native icons, tensor stacks and five image placeholders. Training-only distillation is neutral gray. Other figures retain their previous design. No standalone SDF figure.",
+  "notes": "Motivation and overview follow STYLE_GUIDE.md with white panels, pastel inner functions and native icons/tensors. Motivation uses four conceptual adaptation-location panels and eight explicit image slots; no measured predictions. Other figure artwork is unchanged. No standalone SDF figure.",
   "native_cell_count_includes_root": true,
   "color_design": {
     "feature": "Pale blue",

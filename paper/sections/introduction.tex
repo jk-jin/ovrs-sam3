@@ -3,9 +3,9 @@
 
 CLIP 的图文表征为开放词汇识别提供了基础~\cite{radfordLearningTransferableVisual2021}。RemoteCLIP 通过遥感图文预训练引入领域知识~\cite{liuRemoteCLIPVisionLanguage2024}，GSNet 将通用与遥感专用视觉特征融合，并通过专门的解码模块恢复细节~\cite{yeOpenVocabularyRemoteSensing2025}。CAT-Seg 将局部图文相似度编码为代价表征，再进行空间与类别聚合~\cite{choCATSegCostAggregation2024}；RSKT-Seg 将这一方向扩展到遥感，结合多方向匹配、代价融合及领域知识迁移~\cite{liExploringEfficientOpenVocabulary2026}。这些工作说明了领域语义与上下文聚合的价值，同时也提出了进一步的问题：如何将相似度提供的语义证据用于已有分割模型的特征适配，而非仅由聚合后的匹配表征生成掩码？
 
-Segment Anything Model 3（SAM 3）能够根据概念提示生成分割响应，为复用预训练分割表征提供了另一条路径~\cite{carionSAM3Segment2026}。SegEarth-OV3 通过实例与语义掩码融合及存在性过滤，将其免训练地迁移到遥感场景~\cite{liSegEarthOV3ExploringSAM2026}；ProC-SAM3 进一步利用类别提示池与输出校准处理遥感类别的语义覆盖问题~\cite{songPromptCalibratedSAM32026}。这些设计已经针对遥感任务调整推理过程，但主要在提示构造和预测融合层面发挥作用。逐类查询共享图像表征，最终预测也进行类别决策，而不同类别条件特征在解码前仍缺少显式的可学习交互。
+Segment Anything Model 3（SAM 3）能够根据概念提示生成分割响应，为复用预训练分割表征提供了另一条路径~\cite{carionSAM3Segment2026}。SegEarth-OV3 通过实例与语义掩码融合及存在性过滤，将其免训练地迁移到遥感场景~\cite{liSegEarthOV3ExploringSAM2026}。ProC-SAM3 通过离线提示构建、文本特征缓存和存在性引导的残差融合，扩展类别语义覆盖并校准输出响应~\cite{songPromptCalibratedSAM32026}。ROSE-SAM3 则利用无标签目标域图像上的冻结响应选择提示，在保护其他类别可靠响应的同时寻找互补描述，并在推理时进行语义—实例协作~\cite{songROSESAM3ResponseOrientedPrompt2026}。这些方法已在提示选择和响应处理过程中利用类别证据，其主要适配对象是提示集合或解码后的响应；本文关注进一步在解码前学习跨提示条件特征的更新。
 
-图~\ref{fig:motivation} 概括了本文关注的信息流差异。对于不确定区域，其他候选类别的语义证据可作为更新当前类别表征的上下文；遥感图文先验则为这种交互提供领域相关的匹配信息。本文研究如何在冻结 SAM 3 编码与解码参数的条件下，将这些证据转化为类别条件特征的更新。我们将原始 SAM 3 的空间分割表征作为适配基础，并以参考掩码约束预测偏移，使领域适配能够围绕语义与类别关系展开。
+图~\ref{fig:motivation} 从适配位置概括了四类信息流：图文匹配表征上的代价聚合、SAM 3 解码后的响应融合、提示集合与响应的联合适配，以及本文的语义引导条件特征聚合。这些范式可以共享部分操作，区别在于主要更新的对象和位置。对于不确定区域，其他候选提示的语义证据可作为更新当前条件特征的上下文；遥感图文先验则为这种交互提供领域相关的匹配信息。本文使用源域分割监督学习聚合和融合模块，并部分适配 RemoteCLIP，在冻结 SAM 3 编码与解码参数的条件下更新条件特征。原始参考掩码约束预测偏移，使领域适配能够围绕语义与提示关系展开。
 
 \input{figures/motivation}
 
